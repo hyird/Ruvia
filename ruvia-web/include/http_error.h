@@ -22,6 +22,7 @@ class context;
 inline constexpr std::size_t max_validation_text_bytes = 1024;
 
 namespace detail {
+class json_parse_budget;
 
 [[nodiscard]] inline std::string_view bounded_validation_text(std::string_view value) noexcept {
     auto count = std::min(value.size(), max_validation_text_bytes);
@@ -63,6 +64,7 @@ public:
 
 private:
     friend class validator;
+    friend class detail::json_parse_budget;
 
     void swap(validation_issue& other) noexcept;
 

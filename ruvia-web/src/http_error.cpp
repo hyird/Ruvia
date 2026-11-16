@@ -51,20 +51,20 @@ namespace {
     const auto phrase = http_reason_phrase(error.status());
     const auto title = phrase.empty() ? std::string_view("HTTP Error") : phrase;
     const auto issues = error.validation_issues();
-    std::size_t reserve_size = 66U + detail::json_string_size_hint(title) + detail::json_string_size_hint(error.message()) + detail::json_string_size_hint(error.code());
+    std::size_t reserve_size = 66U + json_string_size_hint(title) + json_string_size_hint(error.message()) + json_string_size_hint(error.code());
     for (const auto& issue : issues) {
-        reserve_size += 30U + detail::json_string_size_hint(issue.field()) + detail::json_string_size_hint(issue.code()) + detail::json_string_size_hint(issue.message());
+        reserve_size += 30U + json_string_size_hint(issue.field()) + json_string_size_hint(issue.code()) + json_string_size_hint(issue.message());
     }
     std::string out;
     out.reserve(reserve_size);
     out.append("{\"type\":\"about:blank\",\"title\":");
-    detail::append_json_string(out, title);
+    append_json_string(out, title);
     out.append(",\"status\":");
     append_decimal(out, error.status().value());
     out.append(",\"detail\":");
-    detail::append_json_string(out, error.message());
+    append_json_string(out, error.message());
     out.append(",\"code\":");
-    detail::append_json_string(out, error.code());
+    append_json_string(out, error.code());
     if (!issues.empty()) {
         out.append(",\"errors\":[");
         for (std::size_t i = 0; i < issues.size(); ++i) {
@@ -72,11 +72,11 @@ namespace {
                 out.push_back(',');
             }
             out.append("{\"field\":");
-            detail::append_json_string(out, issues[i].field());
+            append_json_string(out, issues[i].field());
             out.append(",\"code\":");
-            detail::append_json_string(out, issues[i].code());
+            append_json_string(out, issues[i].code());
             out.append(",\"message\":");
-            detail::append_json_string(out, issues[i].message());
+            append_json_string(out, issues[i].message());
             out.push_back('}');
         }
         out.push_back(']');

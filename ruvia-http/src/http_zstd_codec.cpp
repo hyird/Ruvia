@@ -25,15 +25,10 @@ namespace {
 // that window, so it is also the decoder's floor.
 inline constexpr int http_zstd_window_log_max = 23;
 
-[[noreturn]] void fail_zstd_encoding(const zstd_encoder_stream& encoder, std::size_t result_value) {
-    encoder.rethrow_allocation_failure();
-    throw http_content_codec_error(ZSTD_getErrorName(result_value));
-}
-
 }  // namespace
 
-zstd_decoder_stream::zstd_decoder_stream(std::size_t max_memory_bytes) :
-    allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
+zstd_decoder_stream::zstd_decoder_stream(std::size_t max_memory_bytes, http_codec_memory* memory) :
+    allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)(), memory),
     stream_(ZSTD_createDStream_advanced(ZSTD_customMem{&http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_})) {
     if (stream_ != nullptr && (ZSTD_isError(ZSTD_initDStream(stream_)) != 0 || ZSTD_isError(ZSTD_DCtx_setParameter(stream_, ZSTD_d_windowLogMax, http_zstd_window_log_max)) != 0)) {
         (void)ZSTD_freeDStream(stream_);
@@ -50,14 +45,19 @@ zstd_decoder_stream::~zstd_decoder_stream() {
     }
 }
 
-zstd_encoder_stream::zstd_encoder_stream(std::size_t max_memory_bytes) :
-    allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
+bool zstd_decoder_stream::reset() noexcept {
+    allocation_.clear_allocation_failure();
+    return stream_ != nullptr && ZSTD_isError(ZSTD_DCtx_reset(stream_, ZSTD_reset_session_only)) == 0;
+}
+
+zstd_encoder_stream::zstd_encoder_stream(std::size_t max_memory_bytes, http_codec_memory* memory, int level) :
+    allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)(), memory),
     context_(ZSTD_createCCtx_advanced(ZSTD_customMem{&http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_})) {
     // The level picks its own window (and adapts it to a known source size).
     // RFC 9659's 8 MiB is only a ceiling; pinning it would also fix the
     // streaming input buffer at the window size for every pooled encoder.
-    const bool window_exceeds_http_limit = ZSTD_getCParams(ZSTD_CLEVEL_DEFAULT, ZSTD_CONTENTSIZE_UNKNOWN, 0).windowLog > static_cast<unsigned>(http_zstd_window_log_max);
-    if (context_ != nullptr && (ZSTD_isError(ZSTD_CCtx_setParameter(context_, ZSTD_c_compressionLevel, ZSTD_CLEVEL_DEFAULT)) != 0 || (window_exceeds_http_limit && ZSTD_isError(ZSTD_CCtx_setParameter(context_, ZSTD_c_windowLog, http_zstd_window_log_max)) != 0))) {
+    const bool window_exceeds_http_limit = ZSTD_getCParams(level, ZSTD_CONTENTSIZE_UNKNOWN, 0).windowLog > static_cast<unsigned>(http_zstd_window_log_max);
+    if (context_ != nullptr && (ZSTD_isError(ZSTD_CCtx_setParameter(context_, ZSTD_c_compressionLevel, level)) != 0 || (window_exceeds_http_limit && ZSTD_isError(ZSTD_CCtx_setParameter(context_, ZSTD_c_windowLog, http_zstd_window_log_max)) != 0))) {
         (void)ZSTD_freeCCtx(context_);
         context_ = nullptr;
     }
@@ -93,8 +93,9 @@ bool zstd_encoder_stream::encode(std::string_view input, std::string& output, ZS
         ZSTD_outBuffer output_buffer{buffer.data(), writable, 0};
         const auto before_input = input_buffer.pos;
         const auto remaining = ZSTD_compressStream2(context_, &output_buffer, &input_buffer, operation);
+        allocation_.rethrow_if_failed();
         if (ZSTD_isError(remaining) != 0) {
-            fail_zstd_encoding(*this, remaining);
+            throw http_content_codec_error(ZSTD_getErrorName(remaining));
         }
         if (probing && output_buffer.pos != 0) {
             return false;
@@ -109,41 +110,6 @@ bool zstd_encoder_stream::encode(std::string_view input, std::string& output, ZS
         }
         if (output_buffer.pos == 0 && input_buffer.pos == before_input) {
             throw http_content_codec_error("Zstd content encoder made no progress");
-        }
-    }
-}
-
-std::variant<std::string, http_content_decode_error> decode_zstd_content(std::string_view input, std::size_t max_decoded_bytes) {
-    std::string output;
-    zstd_decoder_stream decoder;
-    if (!decoder.initialized()) {
-        throw http_content_codec_error("zstd decoder initialization failed");
-    }
-    auto* stream = decoder.native();
-
-    ZSTD_inBuffer in{input.data(), input.size(), 0};
-    char buffer[16384];
-    for (;;) {
-        const auto before_input = in.pos;
-        ZSTD_outBuffer out{buffer, sizeof(buffer), 0};
-        const auto result_value = ZSTD_decompressStream(stream, &out, &in);
-        if (ZSTD_isError(result_value) != 0) {
-            decoder.rethrow_allocation_failure();
-            if (ZSTD_getErrorCode(result_value) == ZSTD_error_memory_allocation) {
-                throw http_content_codec_error(ZSTD_getErrorName(result_value));
-            }
-            return http_content_decode_error::invalid_content;
-        }
-        if (!append_decoded_bytes(output, buffer, out.pos, max_decoded_bytes)) {
-            return http_content_decode_error::decoded_size_exceeded;
-        }
-        if (result_value == 0 && in.pos == in.size) {
-            return output;
-        }
-        // A zero result with remaining input completed one RFC 8878 frame;
-        // ZSTD_decompressStream is ready to consume the next concatenated frame.
-        if (out.pos == 0 && in.pos == before_input) {
-            return http_content_decode_error::invalid_content;
         }
     }
 }

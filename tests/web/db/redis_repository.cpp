@@ -397,6 +397,52 @@ TEST(Ruvia, redis_repository_insert_owns_input_through_async_handoff) {
     }
 }
 
+TEST(Ruvia, redis_cached_script_owns_source_keys_and_arguments_before_starting) {
+    const std::string source = "return {KEYS[1], ARGV[1]}";
+    const std::string key(160, 'k');
+    const std::string argument("a\0b", 3);
+    for (const bool cached : {true, false}) {
+        redis_command_server server(cached ? std::vector<std::string>{":7\r\n"} : std::vector<std::string>{"-NOSCRIPT No matching script.\r\n", ":7\r\n"});
+        auto& io = ruvia::test::new_test_io_context();
+        redis_test_worker worker(io);
+        ruvia::redis_client client(worker.loop(), make_redis_config(server));
+        exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+            auto operation = [&] {
+                std::string body(source);
+                const ruvia::redis_script script(body);
+                body.assign("not the script");
+                const std::string owned_key(key);
+                const std::string owned_argument(argument);
+                const std::array<std::string_view, 1> keys{owned_key};
+                const std::array<std::string_view, 1> args{owned_argument};
+                return connected.redis().eval_cached(script, keys, args);
+            }();
+            const auto result = co_await std::move(operation);
+            EXPECT_EQ(result.integer(), 7);
+        });
+        const auto& commands = server.commands();
+        ASSERT_EQ(commands.size(), cached ? 1U : 2U);
+        EXPECT_EQ(commands[0], (std::vector<std::string>{"EVALSHA", sha1_hex(source), "1", key, argument}));
+        if (!cached) {
+            EXPECT_EQ(commands[1], (std::vector<std::string>{"EVAL", source, "1", key, argument}));
+        }
+    }
+}
+
+TEST(Ruvia, redis_cached_script_only_reloads_the_noscript_error_token) {
+    redis_command_server server(std::vector<std::string>{"-NOSCRIPTING application error\r\n"});
+    auto& io = ruvia::test::new_test_io_context();
+    redis_test_worker worker(io);
+    ruvia::redis_client client(worker.loop(), make_redis_config(server));
+    exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+        const ruvia::redis_script script("return 1");
+        const auto reply = co_await connected.redis().eval_cached(script);
+        EXPECT_EQ(reply.kind(), ruvia::redis_value::kind_type::error);
+        EXPECT_EQ(reply.error(), "NOSCRIPTING application error");
+    });
+    EXPECT_EQ(server.commands().size(), 1U);
+}
+
 TEST(Ruvia, redis_repository_scripts_run_by_digest_and_reload_on_noscript) {
     // A warm server answers EVALSHA directly; a server whose script cache
     // lacks the script replies NOSCRIPT, and the same operation reloads the

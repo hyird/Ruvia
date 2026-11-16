@@ -14,10 +14,12 @@
 #include <vector>
 
 #include "decimal_text.h"
+#include "http_content_coding.h"
 #include "http_date.h"
 #include "http_field_text.h"
 #include "http_header.h"
 #include "http_proxy_forwarding.h"
+#include "http_representation.h"
 #include "http_response.h"
 #include "http_structured_field.h"
 
@@ -269,8 +271,8 @@ bool cache_control::has_no_cache_field(std::string_view field_name) const noexce
 }
 
 template <typename input_type>
-std::optional<cache_control> parse_targeted_cache_control_from_input(input_type input) noexcept {
-    detail::http_structured_parser<input_type> parser{std::move(input)};
+std::optional<cache_control> parse_targeted_cache_control_from_input(input_type input) {
+    http_structured_parser<input_type> parser{std::move(input)};
     parser.ows();
     if (parser.empty()) {
         return std::nullopt;
@@ -283,8 +285,8 @@ std::optional<cache_control> parse_targeted_cache_control_from_input(input_type 
             return std::nullopt;
         }
         saw_member = true;
-        detail::http_structured_item item{
-            .kind_ = detail::http_structured_item::kind_type::boolean,
+        http_structured_item item{
+            .kind_ = http_structured_item::kind_type::boolean,
             .boolean_ = true,
         };
         if (parser.take('=')) {
@@ -297,7 +299,7 @@ std::optional<cache_control> parse_targeted_cache_control_from_input(input_type 
         }
 
         const auto apply_bool_directive = [&](cache_control_directive dir) noexcept {
-            if (item.kind_ == detail::http_structured_item::kind_type::boolean) {
+            if (item.kind_ == http_structured_item::kind_type::boolean) {
                 if (item.boolean_) {
                     result.set(dir);
                 } else {
@@ -308,14 +310,14 @@ std::optional<cache_control> parse_targeted_cache_control_from_input(input_type 
             }
         };
         const auto apply_delta_directive = [&](std::optional<std::uint64_t>& target) noexcept {
-            if (item.kind_ == detail::http_structured_item::kind_type::integer && item.integer_ >= 0) {
+            if (item.kind_ == http_structured_item::kind_type::integer && item.integer_ >= 0) {
                 target = static_cast<std::uint64_t>(item.integer_);
             } else {
                 target.reset();
             }
         };
         const auto apply_qualified_directive = [&](cache_control_directive flag_dir, cache_control_directive unqual_dir, cache_control::nominated_field_set& fields) noexcept {
-            if (item.kind_ == detail::http_structured_item::kind_type::boolean) {
+            if (item.kind_ == http_structured_item::kind_type::boolean) {
                 fields.clear();
                 if (item.boolean_) {
                     result.set(flag_dir);
@@ -324,16 +326,16 @@ std::optional<cache_control> parse_targeted_cache_control_from_input(input_type 
                     result.clear_directive(flag_dir);
                     result.clear_directive(unqual_dir);
                 }
-            } else if (item.kind_ == detail::http_structured_item::kind_type::string || item.kind_ == detail::http_structured_item::kind_type::token) {
+            } else if (item.kind_ == http_structured_item::kind_type::string || item.kind_ == http_structured_item::kind_type::token) {
                 fields.clear();
                 result.clear_directive(unqual_dir);
                 result.set(flag_dir);
                 std::array<char, 256> unescaped{};
-                std::string_view list_text = item.text_;
-                if (item.kind_ == detail::http_structured_item::kind_type::string && item.has_escapes_) {
+                std::string_view list_text = item.text();
+                if (item.kind_ == http_structured_item::kind_type::string && item.has_escapes_) {
                     std::size_t out_len = 0;
-                    for (std::size_t i = 0; i < item.text_.size(); ++i) {
-                        if (item.text_[i] == '\\' && i + 1U < item.text_.size()) {
+                    for (std::size_t i = 0; i < item.text().size(); ++i) {
+                        if (item.text()[i] == '\\' && i + 1U < item.text().size()) {
                             ++i;
                         }
                         if (out_len >= unescaped.size()) {
@@ -341,7 +343,7 @@ std::optional<cache_control> parse_targeted_cache_control_from_input(input_type 
                             fields.clear();
                             return;
                         }
-                        unescaped[out_len++] = item.text_[i];
+                        unescaped[out_len++] = item.text()[i];
                     }
                     list_text = std::string_view(unescaped.data(), out_len);
                 }
@@ -395,10 +397,10 @@ std::optional<cache_control> parse_targeted_cache_control_from_input(input_type 
         } else if (key == "min-fresh") {
             apply_delta_directive(result.min_fresh_);
         } else if (key == "max-stale") {
-            if (item.kind_ == detail::http_structured_item::kind_type::boolean && item.boolean_) {
+            if (item.kind_ == http_structured_item::kind_type::boolean && item.boolean_) {
                 result.set(cache_control_directive::max_stale_any);
                 result.max_stale_.reset();
-            } else if (item.kind_ == detail::http_structured_item::kind_type::integer && item.integer_ >= 0) {
+            } else if (item.kind_ == http_structured_item::kind_type::integer && item.integer_ >= 0) {
                 result.clear_directive(cache_control_directive::max_stale_any);
                 result.max_stale_ = static_cast<std::uint64_t>(item.integer_);
             } else {
@@ -426,17 +428,17 @@ std::optional<cache_control> parse_targeted_cache_control_from_input(input_type 
 }
 
 std::optional<cache_control> parse_targeted_cache_control(std::string_view value) noexcept {
-    return parse_targeted_cache_control_from_input(detail::http_structured_text_input{value});
+    return parse_targeted_cache_control_from_input(http_structured_text_input{value});
 }
 
-std::optional<cache_control> parse_targeted_cache_control(const http_header_range_view& headers, std::string_view header_name) noexcept {
+std::optional<cache_control> parse_targeted_cache_control(const http_header_range_view& headers, std::string_view header_name) {
     if (header_name.empty()) {
         return std::nullopt;
     }
-    return parse_targeted_cache_control_from_input(detail::http_structured_header_input{headers.begin(), headers.end(), header_name});
+    return parse_targeted_cache_control_from_input(http_structured_header_input{headers.begin(), headers.end(), header_name});
 }
 
-targeted_cache_control_selection resolve_targeted_cache_control(const http_header_range_view& headers, std::span<const std::string_view> target_headers) noexcept {
+targeted_cache_control_selection resolve_targeted_cache_control(const http_header_range_view& headers, std::span<const std::string_view> target_headers) {
     const auto has_cache_control = [&headers]() noexcept {
         for (const auto field : headers) {
             if (http_ascii_equals_ignore_case(field.name(), "Cache-Control")) {
@@ -474,9 +476,14 @@ targeted_cache_control_selection resolve_targeted_cache_control(const http_heade
     };
 }
 
-bool strip_http_cache_private_headers(editable_http_headers headers, const cache_control& control) noexcept {
+bool strip_http_cache_private_headers(editable_http_headers headers, const cache_control& control, std::span<const std::string_view> protected_fields) noexcept {
     if (control.no_store() || control.is_unqualified_private()) {
         return false;
+    }
+    for (const auto name : protected_fields) {
+        if (control.has_private_field(name)) {
+            return false;
+        }
     }
     const auto count = control.private_field_count();
     for (std::size_t i = 0; i < count; ++i) {
@@ -502,7 +509,7 @@ void append_preserved_cache_control_directives(std::string_view field_value, std
     detail::http_visit_comma_separated_quoted(field_value, [&](std::string_view token) {
         const auto eq = token.find('=');
         const auto name = http_trim_ows(eq == std::string_view::npos ? token : token.substr(0, eq));
-        if (name.empty() || http_ascii_equals_ignore_case(name, "max-age") || http_ascii_equals_ignore_case(name, "s-maxage")) {
+        if (name.empty() || http_ascii_equals_ignore_case(name, "max-age")) {
             return true;
         }
         if (!output.empty()) {
@@ -513,12 +520,15 @@ void append_preserved_cache_control_directives(std::string_view field_value, std
     });
 }
 
-void finish_rewritten_cache_control_max_age(std::string& output, std::uint64_t client_max_age) {
+void finish_rewritten_cache_control_max_age(std::string& output, std::optional<std::uint64_t> client_max_age) {
+    if (!client_max_age) {
+        return;
+    }
     if (!output.empty()) {
         output.append(", ");
     }
     output.append("max-age=");
-    append_decimal(output, client_max_age);
+    append_decimal(output, *client_max_age);
 }
 
 [[nodiscard]] std::string normalize_vary_field_value(std::string_view raw) {
@@ -546,14 +556,14 @@ void finish_rewritten_cache_control_max_age(std::string& output, std::uint64_t c
 }
 }  // namespace
 
-std::string rewrite_http_cache_control_max_age(std::string_view field_value, std::uint64_t client_max_age) {
+std::string rewrite_http_cache_control_max_age(std::string_view field_value, std::optional<std::uint64_t> client_max_age) {
     std::string output;
     append_preserved_cache_control_directives(field_value, output);
     finish_rewritten_cache_control_max_age(output, client_max_age);
     return output;
 }
 
-std::string rewrite_http_cache_control_max_age(const http_header_range_view& headers, std::uint64_t client_max_age) {
+std::string rewrite_http_cache_control_max_age(const http_header_range_view& headers, std::optional<std::uint64_t> client_max_age) {
     std::string output;
     for (const auto field : headers) {
         if (http_ascii_equals_ignore_case(field.name(), "Cache-Control")) {
@@ -564,10 +574,18 @@ std::string rewrite_http_cache_control_max_age(const http_header_range_view& hea
     return output;
 }
 
-void rewrite_http_response_cache_max_age(editable_http_headers response_headers, std::uint64_t client_max_age) {
+void rewrite_http_response_cache_max_age(editable_http_headers response_headers, std::optional<std::uint64_t> client_max_age) {
     const auto rewritten = rewrite_http_cache_control_max_age(response_headers.fields(), client_max_age);
-    response_headers.set("Cache-Control", rewritten);
-    response_headers.remove("Expires");
+    response_headers.transact([&](editable_http_headers candidate) {
+        if (rewritten.empty()) {
+            candidate.remove("Cache-Control");
+        } else {
+            candidate.set("Cache-Control", rewritten);
+        }
+        if (client_max_age) {
+            candidate.remove("Expires");
+        }
+    });
 }
 
 void http_vary_spec::update(std::string_view field_value) {
@@ -698,6 +716,88 @@ void sanitize_http_304_response_headers(editable_http_headers headers) noexcept 
 
 namespace {
 
+// Stream the coding stack across field lines without joining or allocating.
+class cache_content_encoding_cursor final {
+public:
+    explicit cache_content_encoding_cursor(const http_header_range_view& headers) noexcept :
+        field_(headers.begin()),
+        end_(headers.end()) {}
+
+    [[nodiscard]] std::string_view next() noexcept {
+        while (true) {
+            if (!remaining_.empty()) {
+                const auto comma = remaining_.find(',');
+                const auto token = http_trim_ows(remaining_.substr(0, comma));
+                remaining_ = comma == std::string_view::npos ? std::string_view{} : remaining_.substr(comma + 1);
+                if (!token.empty()) {
+                    if (!is_valid_http_header_name(token)) {
+                        valid_ = false;
+                        return {};
+                    }
+                    return token;
+                }
+            } else {
+                if (field_ == end_) {
+                    return {};
+                }
+                const auto field = *field_++;
+                if (http_ascii_equals_ignore_case(field.name(), "Content-Encoding")) {
+                    present_ = true;
+                    remaining_ = field.value();
+                }
+            }
+        }
+    }
+
+    bool valid_{true};
+    bool present_{false};
+
+private:
+    http_header_range_view::iterator field_;
+    http_header_range_view::iterator end_;
+    std::string_view remaining_;
+};
+
+[[nodiscard]] bool cache_content_encodings_match(const http_header_range_view& cached, const http_header_range_view& validating) noexcept {
+    cache_content_encoding_cursor left(cached);
+    cache_content_encoding_cursor right(validating);
+    auto right_token = right.next();
+    if (!right.present_) {
+        return true;
+    }
+    while (true) {
+        const auto left_token = left.next();
+        const auto left_coding = http_content_coding_from_token(left_token);
+        const auto right_coding = http_content_coding_from_token(right_token);
+        const bool equal = http_ascii_equals_ignore_case(left_token, right_token) || (left_coding && right_coding && left_coding == right_coding);
+        if (!left.valid_ || !right.valid_ || !equal) {
+            return false;
+        }
+        if (left_token.empty()) {
+            return true;
+        }
+        right_token = right.next();
+    }
+}
+
+struct cache_validator_fields final {
+    http_unique_field_lookup etag_;
+    http_unique_field_lookup modified_;
+    http_unique_field_lookup date_;
+
+    explicit cache_validator_fields(const http_header_range_view& headers) noexcept {
+        for (const auto field : headers) {
+            if (http_ascii_equals_ignore_case(field.name(), "ETag")) {
+                etag_.add_occurrence(http_trim_ows(field.value()));
+            } else if (http_ascii_equals_ignore_case(field.name(), "Last-Modified")) {
+                modified_.add_occurrence(field.value());
+            } else if (http_ascii_equals_ignore_case(field.name(), "Date")) {
+                date_.add_occurrence(field.value());
+            }
+        }
+    }
+};
+
 // Every name the owned 304 lines carry is retired from the stored block, then
 // the lines are written back in order.
 void replace_stored_304_fields(editable_http_headers stored_headers, std::span<const http_header> replacements) {
@@ -726,8 +826,60 @@ void replace_stored_304_fields(editable_http_headers stored_headers, std::span<c
 
 }  // namespace
 
-void merge_http_304_response_headers(editable_http_headers cached_headers, const http_header_range_view& not_modified_headers) {
+http_cache_validator_match match_http_cache_validators(const http_header_range_view& cached_headers, const http_header_range_view& validating_headers) noexcept {
+    if (!cache_content_encodings_match(cached_headers, validating_headers)) {
+        return http_cache_validator_match::none;
+    }
+    const cache_validator_fields cached(cached_headers);
+    const cache_validator_fields validating(validating_headers);
+    if (cached.etag_.status_ == unique_lookup_status::repeated || validating.etag_.status_ == unique_lookup_status::repeated) {
+        return http_cache_validator_match::none;
+    }
+    if (validating.etag_.status_ == unique_lookup_status::found) {
+        if (cached.etag_.status_ != unique_lookup_status::found || !is_valid_http_entity_tag(cached.etag_.value_) || !is_valid_http_entity_tag(validating.etag_.value_) || !http_weak_etag_equals(cached.etag_.value_, validating.etag_.value_)) {
+            return http_cache_validator_match::none;
+        }
+        if (is_strong_http_entity_tag(validating.etag_.value_)) {
+            return http_strong_etag_equals(cached.etag_.value_, validating.etag_.value_) ? http_cache_validator_match::strong : http_cache_validator_match::none;
+        }
+        return http_cache_validator_match::weak;
+    }
+    if (cached.modified_.status_ == unique_lookup_status::repeated || validating.modified_.status_ == unique_lookup_status::repeated) {
+        return http_cache_validator_match::none;
+    }
+    if (validating.modified_.status_ == unique_lookup_status::found) {
+        const auto modified = parse_http_date(cached.modified_.value_);
+        const auto validated = parse_http_date(validating.modified_.value_);
+        if (!modified || !validated || *modified != *validated) {
+            return http_cache_validator_match::none;
+        }
+        const auto date = cached.date_.status_ == unique_lookup_status::found ? parse_http_date(cached.date_.value_) : std::nullopt;
+        const bool strong = date && *date >= *modified && static_cast<std::uint64_t>(*date) - static_cast<std::uint64_t>(*modified) >= 60;
+        return strong ? http_cache_validator_match::strong : http_cache_validator_match::weak;
+    }
+    return cached.etag_.status_ == unique_lookup_status::absent && cached.modified_.status_ == unique_lookup_status::absent ? http_cache_validator_match::unvalidated : http_cache_validator_match::none;
+}
+
+bool weaken_http_cache_etag(editable_http_headers headers) {
+    const auto etag = find_unique_http_header(headers.fields(), "ETag");
+    if (etag.status_ == unique_lookup_status::repeated || (etag.status_ == unique_lookup_status::found && !is_valid_http_entity_tag(etag.value_))) {
+        return false;
+    }
+    if (etag.status_ == unique_lookup_status::found && is_strong_http_entity_tag(etag.value_)) {
+        const auto weak = weaken_http_etag(etag.value_);
+        headers.set("ETag", weak);
+    }
+    return true;
+}
+
+bool merge_http_304_response_headers(editable_http_headers cached_headers, const http_header_range_view& not_modified_headers) {
+    if (match_http_cache_validators(cached_headers.fields(), not_modified_headers) == http_cache_validator_match::none) {
+        return false;
+    }
     const auto nominated = parse_http_connection_nominated_fields(not_modified_headers);
+    if (nominated.status() != http_connection_fields_status::valid) {
+        return false;
+    }
     // The 304 may view the cached block itself, wholly or in part, so the
     // lines to write are copied out before the first cached line is retired.
     std::vector<http_header> replacements;
@@ -737,12 +889,13 @@ void merge_http_304_response_headers(editable_http_headers cached_headers, const
         }
     }
     if (replacements.empty()) {
-        return;
+        return true;
     }
     // Several lines are rewritten: an http_response takes all of them or none.
     cached_headers.transact([&replacements](editable_http_headers candidate) {
         replace_stored_304_fields(candidate, replacements);
     }, replacements.size());
+    return true;
 }
 
 }  // namespace ruvia

@@ -9,6 +9,7 @@ set(ruvia_web_sources
     src/connection_scanner.cpp
     src/context.cpp
     src/controller.cpp
+    src/crypto.cpp
     src/document_root_publisher.cpp
     src/env.cpp
     src/file_response.cpp
@@ -149,6 +150,7 @@ set(ruvia_web_headers
     include/connection_transport.h
     include/context.h
     include/controller.h
+    include/crypto.h
     include/entity_storage.h
     include/env.h
     include/fixed_string.h

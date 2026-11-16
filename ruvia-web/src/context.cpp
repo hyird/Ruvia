@@ -30,7 +30,6 @@
 #include "byte_view.h"
 #include "connection_lifecycle.h"
 #include "context_access.h"
-#include "crypto.h"
 #include "db_executor.h"
 #include "event_loop.h"
 #include "http_cache.h"
@@ -53,6 +52,7 @@
 #include "redis_orm.h"
 #include "response_coding_policy.h"
 #include "route_table.h"
+#include "secret_encoding.h"
 #include "stop_token.h"
 #include "streaming.h"
 #include "task.h"
@@ -498,9 +498,9 @@ http_response make_readiness_response(context&, readiness_response_options optio
 
     static constexpr std::string_view prefix = R"({"status":"not_ready","reason":)";
     std::string body;
-    body.reserve(prefix.size() + detail::json_string_size_hint(reason) + 1U);
+    body.reserve(prefix.size() + json_string_size_hint(reason) + 1U);
     body.append(prefix);
-    detail::append_json_string(body, reason);
+    append_json_string(body, reason);
     body.push_back('}');
     auto response = make_owned_json_response(body, extra);
     response.status(http_status::service_unavailable);
@@ -1458,7 +1458,7 @@ std::optional<std::string_view> context_request::signed_cookie(signed_cookie_loo
     const auto signature = stored.value_.substr(value_size + 1);
     char expected[detail::cookie_signature_size];
     detail::write_cookie_signature(expected, secret, name, value);
-    if (!detail::constant_time_bytes_equal(signature, std::string_view(expected, sizeof(expected)))) {
+    if (!constant_time_bytes_equal(signature, std::string_view(expected, sizeof(expected)))) {
         return std::nullopt;
     }
     return value;

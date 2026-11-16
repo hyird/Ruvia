@@ -389,6 +389,7 @@ enum class http_client_errc : std::uint8_t {
     result_budget_exceeded,
     handshake_rejected,
     message_too_large,
+    websocket_eof_before_close,
 };
 
 [[nodiscard]] const std::error_category& http_client_category() noexcept;

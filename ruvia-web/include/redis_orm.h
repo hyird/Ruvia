@@ -363,14 +363,8 @@ struct redis_predicate_storage final {
 
 using redis_orm_arguments_type = std::vector<std::string>;
 
-// An ORM Lua script and the lowercase hex SHA1 Redis caches it under.
-struct redis_orm_script final {
-    std::string_view body_;
-    std::string_view sha1_;
-};
-
-[[nodiscard]] const redis_orm_script& redis_orm_write_script();
-[[nodiscard]] const redis_orm_script& redis_orm_delete_script();
+[[nodiscard]] const redis_script& redis_orm_write_script();
+[[nodiscard]] const redis_script& redis_orm_delete_script();
 
 // Both argument lists start with EVALSHA and the script digest.
 [[nodiscard]] redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_prefix, std::string_view id, std::string_view mode, redis_write_options options, std::size_t extra_arguments);

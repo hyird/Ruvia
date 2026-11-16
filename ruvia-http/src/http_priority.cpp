@@ -16,10 +16,10 @@
 namespace ruvia {
 
 namespace {
-using item_type = detail::http_structured_item;
+using item_type = http_structured_item;
 
 template <typename input_type>
-std::variant<std::monostate, http_priority_error> parse_priority_members(detail::http_structured_parser<input_type> parser, http_priority_fields& fields_value) noexcept {
+std::variant<std::monostate, http_priority_error> parse_priority_members(http_structured_parser<input_type> parser, http_priority_fields& fields_value) noexcept {
     parser.spaces();
     while (!parser.empty()) {
         const auto key = parser.key();
@@ -29,7 +29,7 @@ std::variant<std::monostate, http_priority_error> parse_priority_members(detail:
         item_type item{.kind_ = item_type::kind_type::boolean, .boolean_ = true};
         if (parser.take('=')) {
             item = {};
-            if (!parser.member(item)) {
+            if (!parser.member(item, false)) {
                 return http_priority_error::invalid_syntax;
             }
         } else if (!parser.parameters()) {
@@ -59,14 +59,14 @@ std::variant<std::monostate, http_priority_error> parse_priority_members(detail:
 
 std::variant<http_priority_fields, http_priority_error> parse_http_priority(std::string_view value) noexcept {
     http_priority_fields fields;
-    if (auto parsed_value = parse_priority_members(detail::http_structured_parser{detail::http_structured_text_input{value}}, fields); parsed_value.index() != 0) {
+    if (auto parsed_value = parse_priority_members(http_structured_parser{http_structured_text_input{value}}, fields); parsed_value.index() != 0) {
         return std::get<1>(parsed_value);
     }
     return fields;
 }
 std::variant<http_priority_fields, http_priority_error> parse_http_priority(const http_header_range_view& headers) noexcept {
     http_priority_fields fields;
-    if (auto parsed_value = parse_priority_members(detail::http_structured_parser{detail::http_structured_header_input{headers.begin(), headers.end(), "priority"}}, fields); parsed_value.index() != 0) {
+    if (auto parsed_value = parse_priority_members(http_structured_parser{http_structured_header_input{headers.begin(), headers.end(), "priority"}}, fields); parsed_value.index() != 0) {
         return std::get<1>(parsed_value);
     }
     return fields;

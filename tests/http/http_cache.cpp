@@ -30,7 +30,7 @@ TEST(RuviaHttpPublicApi, rfc9111_shared_cache_primitives) {
     ruvia::rewrite_http_response_cache_max_age(resp_headers, 45);
     ASSERT_EQ(resp_headers.size(), 1U);
     EXPECT_EQ(resp_headers[0].name(), "Cache-Control");
-    EXPECT_EQ(resp_headers[0].value(), "public, must-revalidate, max-age=45");
+    EXPECT_EQ(resp_headers[0].value(), "public, s-maxage=300, must-revalidate, max-age=45");
 
     // Vary normalization & matching.
     const std::array<ruvia::http_header_view, 2> vary_headers{{
@@ -81,7 +81,7 @@ TEST(RuviaHttpPublicApi, rfc9111_shared_cache_primitives) {
     cached.emplace_back("Cache-Control", "max-age=60");
 
     const std::array<ruvia::http_header_view, 4> not_modified{{
-        {"ETag", "\"v2\""},
+        {"ETag", "\"v1\""},
         {"Cache-Control", "max-age=300"},
         {"Content-Length", "0"},
         {"Connection", "keep-alive"},
@@ -98,7 +98,7 @@ TEST(RuviaHttpPublicApi, rfc9111_shared_cache_primitives) {
         if (field.name() == "Content-Length" && field.value() == "1024") {
             has_len_1024 = true;
         }
-        if (field.name() == "ETag" && field.value() == "\"v2\"") {
+        if (field.name() == "ETag" && field.value() == "\"v1\"") {
             has_etag_v2 = true;
         }
     }
@@ -178,9 +178,10 @@ TEST(RuviaHttpPublicApi, header_rewrites_edit_header_blocks_and_responses_in_pla
     response.header("Expires", "Wed, 21 Oct 2015 07:28:00 GMT");
     response.header("Content-Type", "text/plain");
     response.header("X-User-Secret", "top-secret");
+    response.header("ETag", "\"v2\"");
 
     ruvia::rewrite_http_response_cache_max_age(response, 45);
-    EXPECT_EQ(response.header("Cache-Control"), std::optional<std::string_view>("public, max-age=45"));
+    EXPECT_EQ(response.header("Cache-Control"), std::optional<std::string_view>("public, s-maxage=300, max-age=45"));
     EXPECT_FALSE(response.header("Expires").has_value());
 
     EXPECT_TRUE(ruvia::strip_http_cache_private_headers(response, ruvia::parse_cache_control("private=\"X-User-Secret\"")));
@@ -225,7 +226,7 @@ TEST(RuviaHttpPublicApi, multi_write_header_edit_leaves_an_http_response_unchang
     // The second Server line cannot join the first, so the merge fails after
     // ETag and the first Server line were already written to the candidate.
     const std::array<ruvia::http_header_view, 3> repeated_singleton{{
-        {"ETag", "\"v2\""},
+        {"ETag", "\"v1\""},
         {"Server", "edge-a"},
         {"Server", "edge-b"},
     }};
@@ -432,4 +433,110 @@ TEST(Ruvia, format_http_vary_cache_key_distinguishes_absent_from_empty_header) {
     EXPECT_EQ(*empty_key, *ows_key);
     EXPECT_FALSE(ruvia::http_vary_requests_match(vary, absent, empty_value));
     EXPECT_TRUE(ruvia::http_vary_requests_match(vary, empty_value, ows_only));
+}
+
+TEST(RuviaHttpPublicApi, browser_ttl_removal_preserves_shared_and_explicit_expiry_policy) {
+    EXPECT_EQ(ruvia::rewrite_http_cache_control_max_age("public, max-age=30, s-maxage=900, immutable", std::nullopt), "public, s-maxage=900, immutable");
+    ruvia::http_response response;
+    response.header("Cache-Control", "max-age=30");
+    response.header("Expires", "Wed, 21 Oct 2015 07:28:00 GMT");
+    ruvia::rewrite_http_response_cache_max_age(response, std::nullopt);
+    EXPECT_FALSE(response.header("Cache-Control").has_value());
+    EXPECT_TRUE(response.header("Expires").has_value());
+}
+
+TEST(RuviaHttpPublicApi, private_field_protection_rejects_without_partial_stripping) {
+    ruvia::http_response response;
+    response.header("X-Secret", "secret");
+    response.header("ETag", "\"v1\"");
+    const std::array<std::string_view, 1> protected_fields{"etag"};
+    const auto control = ruvia::parse_cache_control("private=\"X-Secret, ETag\"");
+    EXPECT_FALSE(ruvia::strip_http_cache_private_headers(response, control, protected_fields));
+    EXPECT_TRUE(response.header("X-Secret").has_value());
+    EXPECT_TRUE(response.header("ETag").has_value());
+    EXPECT_TRUE(ruvia::strip_http_cache_private_headers(response, control));
+    EXPECT_FALSE(response.header("X-Secret").has_value());
+    EXPECT_FALSE(response.header("ETag").has_value());
+}
+
+TEST(RuviaHttpPublicApi, cache_freshening_validates_etags_and_content_encoding_before_mutation) {
+    ruvia::http_response cached;
+    cached.header("ETag", "\"v1\"");
+    cached.header("Content-Encoding", "gzip");
+    cached.header("Cache-Control", "max-age=30");
+    const std::array<ruvia::http_header_view, 2> mismatch{{
+        {"ETag", "\"v2\""},
+        {"Cache-Control", "max-age=900"},
+    }};
+    EXPECT_FALSE(ruvia::merge_http_304_response_headers(cached, mismatch));
+    EXPECT_EQ(cached.header("Cache-Control"), std::optional<std::string_view>("max-age=30"));
+    const std::array<ruvia::http_header_view, 2> different_coding{{
+        {"ETag", "\"v1\""},
+        {"Content-Encoding", "br"},
+    }};
+    EXPECT_EQ(ruvia::match_http_cache_validators(cached, different_coding), ruvia::http_cache_validator_match::none);
+    EXPECT_FALSE(ruvia::merge_http_304_response_headers(cached, different_coding));
+    const std::array<ruvia::http_header_view, 3> weak{{
+        {"ETag", "W/\"v1\""},
+        {"Content-Encoding", "GZip"},
+        {"Cache-Control", "max-age=60"},
+    }};
+    EXPECT_EQ(ruvia::match_http_cache_validators(cached, weak), ruvia::http_cache_validator_match::weak);
+    EXPECT_TRUE(ruvia::merge_http_304_response_headers(cached, weak));
+    EXPECT_EQ(cached.header("Cache-Control"), std::optional<std::string_view>("max-age=60"));
+    EXPECT_EQ(cached.header("Content-Encoding"), std::optional<std::string_view>("gzip"));
+    cached.header("ETag", "\"v1\"");
+    EXPECT_TRUE(ruvia::weaken_http_cache_etag(cached));
+    EXPECT_EQ(cached.header("ETag"), std::optional<std::string_view>("W/\"v1\""));
+    EXPECT_TRUE(ruvia::weaken_http_cache_etag(cached));
+    EXPECT_EQ(cached.header("ETag"), std::optional<std::string_view>("W/\"v1\""));
+    const std::array<ruvia::http_header_view, 1> strong{{
+        {"ETag", "\"v1\""},
+    }};
+    EXPECT_EQ(ruvia::match_http_cache_validators(cached, strong), ruvia::http_cache_validator_match::none);
+}
+
+TEST(RuviaHttpPublicApi, cache_date_validators_use_exact_match_and_sixty_second_strength) {
+    ruvia::http_response cached;
+    cached.header("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT");
+    cached.header("Date", "Wed, 21 Oct 2015 07:28:59 GMT");
+    const std::array<ruvia::http_header_view, 1> validated{{
+        {"Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT"},
+    }};
+    EXPECT_EQ(ruvia::match_http_cache_validators(cached, validated), ruvia::http_cache_validator_match::weak);
+    cached.header("Date", "Wed, 21 Oct 2015 07:29:00 GMT");
+    EXPECT_EQ(ruvia::match_http_cache_validators(cached, validated), ruvia::http_cache_validator_match::strong);
+    const std::array<ruvia::http_header_view, 1> changed{{
+        {"Last-Modified", "Wed, 21 Oct 2015 07:27:59 GMT"},
+    }};
+    EXPECT_EQ(ruvia::match_http_cache_validators(cached, changed), ruvia::http_cache_validator_match::none);
+    const std::array<ruvia::http_header_view, 0> no_validator{};
+    EXPECT_FALSE(ruvia::merge_http_304_response_headers(cached, no_validator));
+    ruvia::http_response unvalidated;
+    EXPECT_TRUE(ruvia::merge_http_304_response_headers(unvalidated, no_validator));
+}
+
+TEST(RuviaHttpPublicApi, cache_validators_compare_multiline_coding_stacks_without_reordering) {
+    const std::array<ruvia::http_header_view, 3> cached{{
+        {"ETag", "\"v1\""},
+        {"Content-Encoding", "gzip"},
+        {"Content-Encoding", "br"},
+    }};
+    const std::array<ruvia::http_header_view, 2> same{{
+        {"ETag", "\"v1\""},
+        {"Content-Encoding", "x-gzip, BR"},
+    }};
+    const std::array<ruvia::http_header_view, 2> reordered{{
+        {"ETag", "\"v1\""},
+        {"Content-Encoding", "br, gzip"},
+    }};
+    EXPECT_EQ(ruvia::match_http_cache_validators(cached, same), ruvia::http_cache_validator_match::strong);
+    EXPECT_EQ(ruvia::match_http_cache_validators(cached, reordered), ruvia::http_cache_validator_match::none);
+    std::vector<ruvia::http_header> repeated;
+    repeated.emplace_back("ETag", "\"v1\"");
+    repeated.emplace_back("ETag", "\"v1\"");
+    EXPECT_FALSE(ruvia::weaken_http_cache_etag(repeated));
+    EXPECT_EQ(repeated[0].value(), "\"v1\"");
+    EXPECT_EQ(repeated[1].value(), "\"v1\"");
+    EXPECT_EQ(ruvia::match_http_cache_validators(repeated, same), ruvia::http_cache_validator_match::none);
 }

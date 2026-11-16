@@ -1653,14 +1653,17 @@ TEST(Ruvia, http1_response_storage_remains_worker_owned_after_client_destruction
             co_await client.shutdown();
         }
 
-        const auto headers = response->headers();
+        const auto* header_storage = response->headers().data();
         const auto long_value = response->header("x-long");
         EXPECT_TRUE(long_value.has_value());
         EXPECT_EQ(long_value->size(), long_header.size());
         EXPECT_TRUE(std::ranges::all_of(*long_value, [](char value) {
             return value == 'h';
         }));
+        auto headers = std::move(*response).take_headers();
+        EXPECT_EQ(headers.data(), header_storage);
         EXPECT_TRUE(!headers.empty());
+        EXPECT_TRUE(response->headers().empty());
         const auto text = co_await response->stream().read_text();
         EXPECT_TRUE(!text.has_value());
         EXPECT_TRUE(!(co_await response->stream().read()).has_value());
@@ -1670,10 +1673,14 @@ TEST(Ruvia, http1_response_storage_remains_worker_owned_after_client_destruction
         collected.append(reinterpret_cast<const char*>(retained_view.data()), retained_view.size());
         EXPECT_EQ(collected, expected);
         EXPECT_EQ(response->trailer("x-end"), std::optional<std::string_view>("retained"));
-        response.reset();
-        EXPECT_EQ(retained_body->bytes().size(), retained_view.size());
-        EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(retained_body->bytes().data()), retained_body->bytes().size()), std::string_view(expected).substr(expected.size() - retained_view.size()));
+        auto allocation = std::move(*retained_body).take_bytes();
+        EXPECT_EQ(allocation.get(), retained_view.data());
+        EXPECT_EQ(allocation.get_deleter().size(), retained_view.size());
+        EXPECT_TRUE(retained_body->empty());
         retained_body.reset();
+        response.reset();
+        EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(allocation.get()), allocation.get_deleter().size()), std::string_view(expected).substr(expected.size() - retained_view.size()));
+        EXPECT_EQ(headers.data(), header_storage);
     };
     run_operation(worker, io, operation);
     peer.wait();
@@ -1836,7 +1843,7 @@ TEST(Ruvia, client_shutdown_keeps_incomplete_response_error_observable) {
 }
 
 TEST(Ruvia, client_body_result_uses_pool_budget_after_client_and_worker_teardown) {
-    std::optional<ruvia::http_client_response_bytes> retained;
+    std::optional<ruvia::http_client_response_bytes::owned_allocation> retained;
     std::string expected(
         "\0\xff"
         "data",
@@ -1870,12 +1877,14 @@ TEST(Ruvia, client_body_result_uses_pool_budget_after_client_and_worker_teardown
                     auto send = client.client().get("/").send();
                     auto response = co_await std::move(send);
                     auto bytes_value = co_await response.bytes();
-                    retained.emplace(std::move(bytes_value));
+                    const auto* storage = bytes_value.bytes().data();
+                    retained.emplace(std::move(bytes_value).take_bytes());
+                    EXPECT_EQ(retained->get(), storage);
                     co_await server_done.wait();
                     if (server_failure != nullptr) {
                         std::rethrow_exception(server_failure);
                     }
-                    EXPECT_EQ(retained->bytes().size(), expected.size());
+                    EXPECT_EQ(retained->get_deleter().size(), expected.size());
                     co_await client.shutdown();
                 };
                 run_operation(worker, io, operation);
@@ -1885,12 +1894,43 @@ TEST(Ruvia, client_body_result_uses_pool_budget_after_client_and_worker_teardown
 
     std::atomic_bool contents_matched{false};
     std::thread destroyer([bytes = std::move(*retained), expected = std::move(expected), &contents_matched]() {
-        const auto actual = bytes.bytes();
+        const std::span<const std::byte> actual(bytes.get(), bytes.get_deleter().size());
         const auto wanted = std::as_bytes(std::span(expected.data(), expected.size()));
         contents_matched.store(actual.size() == wanted.size() && std::equal(actual.begin(), actual.end(), wanted.begin()), std::memory_order_release);
     });
     destroyer.join();
     EXPECT_TRUE(contents_matched.load(std::memory_order_acquire));
+}
+
+TEST(Ruvia, client_extracted_body_keeps_its_budget_until_allocation_is_released) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    loopback_response_server server(io, worker.handle_, {"bytes", "bytes", "bytes"});
+    server.start();
+    auto operation = [&]() -> ruvia::task<void> {
+        const std::string url = "http://127.0.0.1:" + std::to_string(server.port());
+        ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(url), {.result_budget_ = {.max_retained_bytes_ = 5}});
+        auto response = co_await client.client().get("/first").send();
+        auto body = co_await response.bytes();
+        auto allocation = std::move(body).take_bytes();
+        EXPECT_TRUE(body.empty());
+        EXPECT_EQ(allocation.get_deleter().size(), 5U);
+        auto blocked = co_await client.client().get("/blocked").send();
+        bool exceeded = false;
+        try {
+            (void)co_await blocked.bytes();
+        } catch (const ruvia::http_client_error& error) {
+            exceeded = error.code() == ruvia::make_error_code(ruvia::http_client_errc::result_budget_exceeded);
+        }
+        EXPECT_TRUE(exceeded);
+        allocation.reset();
+        auto available = co_await client.client().get("/available").send();
+        const auto collected = co_await available.bytes();
+        EXPECT_EQ(collected.text(), "bytes");
+        co_await client.shutdown();
+        co_await server.wait();
+    };
+    run_operation(worker, io, operation);
 }
 
 TEST(Ruvia, client_result_budget_rejects_zero_limit_at_client_startup) {

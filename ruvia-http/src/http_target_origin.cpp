@@ -23,7 +23,7 @@ namespace {
     // An absolute domain name names the same host as its relative spelling.
     const bool trailing_dot = host.size() > 1 && host.back() == '.';
     const auto name = trailing_dot ? host.substr(0, host.size() - 1) : host;
-    if (!detail::is_valid_dns_domain_name(name) || (trailing_dot && detail::parse_ipv4_address(name).has_value())) {
+    if (!is_valid_dns_domain_name(name) || (trailing_dot && detail::parse_ipv4_address(name).has_value())) {
         return http_target_origin::misdirected();
     }
     return decoded ? http_target_origin::decoded_dns_name(name) : http_target_origin::dns_name(name);

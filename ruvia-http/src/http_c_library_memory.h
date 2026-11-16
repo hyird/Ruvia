@@ -4,6 +4,8 @@
 #include <exception>
 #include <limits>
 
+#include "http_codec_memory.h"
+
 namespace ruvia::detail {
 
 // Routes C protocol-library (nghttp2, nghttp3, ngtcp2) and compression-codec
@@ -17,7 +19,7 @@ namespace ruvia::detail {
 // refused and remembered by budget_exceeded().
 class http_c_library_memory final {
 public:
-    explicit http_c_library_memory(std::size_t native_budget = (std::numeric_limits<std::size_t>::max)(), bool throw_on_budget_exceeded = false) noexcept;
+    explicit http_c_library_memory(std::size_t native_budget = (std::numeric_limits<std::size_t>::max)(), bool throw_on_budget_exceeded = false, http_codec_memory* memory = nullptr) noexcept;
     http_c_library_memory(const http_c_library_memory&) = delete;
     http_c_library_memory& operator=(const http_c_library_memory&) = delete;
     void rethrow_if_failed() const;
@@ -48,6 +50,7 @@ private:
     mutable std::exception_ptr failure_;
     bool budget_exceeded_{false};
     bool throw_on_budget_exceeded_{false};
+    http_codec_memory* memory_;
 };
 
 template <typename table_type>

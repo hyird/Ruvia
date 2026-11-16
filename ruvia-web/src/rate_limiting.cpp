@@ -36,7 +36,7 @@ constexpr std::uintptr_t fallback_route_scope = 2;
 
 [[nodiscard]] rate_limit_hash_key random_hash_key() {
     rate_limit_hash_key key{};
-    if (!detail::fill_random_bytes(std::span<unsigned char>(reinterpret_cast<unsigned char*>(key.data()), sizeof(key)))) {
+    if (!fill_random_bytes(std::span<unsigned char>(reinterpret_cast<unsigned char*>(key.data()), sizeof(key)))) {
         throw std::runtime_error("rate limit hash key generation failed");
     }
     return key;

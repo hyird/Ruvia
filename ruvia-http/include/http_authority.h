@@ -25,6 +25,21 @@ enum class http_authority_port_kind : std::uint8_t {
     value,
 };
 
+enum class http_host_kind : std::uint8_t {
+    reg_name,
+    ipv4,
+    ipv6,
+    ipv_future,
+};
+
+// RFC reception preserves IPvFuture, explicit zero, empty ports and leading
+// zeros. Endpoint configuration additionally rejects those four states.
+// Neither policy admits userinfo, zones or a port outside 0..65535.
+enum class http_authority_policy : std::uint8_t {
+    rfc,
+    endpoint,
+};
+
 // A validated, borrowed RFC 3986 authority without userinfo; IP-literal hosts
 // keep their brackets. An explicit empty port stays distinct from an absent one
 // for syntax-preserving parsing; both map to the scheme default when an HTTP
@@ -33,6 +48,16 @@ class http_authority_view final {
 public:
     [[nodiscard]] constexpr std::string_view host() const noexcept {
         return host_;
+    }
+
+    [[nodiscard]] constexpr http_host_kind host_kind() const noexcept {
+        return host_kind_;
+    }
+
+    // Original digits, including leading zeros. port_kind() distinguishes an
+    // absent delimiter from an explicitly empty port.
+    [[nodiscard]] constexpr std::string_view port_text() const noexcept {
+        return port_text_;
     }
 
     [[nodiscard]] constexpr http_authority_port_kind port_kind() const noexcept {
@@ -52,17 +77,21 @@ public:
 private:
     friend struct detail::http_authority_view_access;
 
-    constexpr http_authority_view(std::string_view host, http_authority_port_kind port_kind, std::uint16_t port) noexcept :
+    constexpr http_authority_view(std::string_view host, http_host_kind host_kind, std::string_view port_text, http_authority_port_kind port_kind, std::uint16_t port) noexcept :
         host_(host),
+        port_text_(port_text),
         port_(port),
-        port_kind_(port_kind) {}
+        port_kind_(port_kind),
+        host_kind_(host_kind) {}
 
     std::string_view host_;
+    std::string_view port_text_;
     std::uint16_t port_{0};
     http_authority_port_kind port_kind_{http_authority_port_kind::absent};
+    http_host_kind host_kind_{http_host_kind::reg_name};
 };
 
-[[nodiscard]] std::optional<http_authority_view> parse_http_authority(borrowed_text value) noexcept;
+[[nodiscard]] std::optional<http_authority_view> parse_http_authority(borrowed_text value, http_authority_policy policy = http_authority_policy::rfc) noexcept;
 
 // Parses a Host-field authority without userinfo and borrows its host text.
 // The host retains brackets around an IP literal. An invalid authority has no

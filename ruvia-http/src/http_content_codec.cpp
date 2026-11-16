@@ -4,6 +4,7 @@
 #include <zlib.h>
 #include <zstd.h>
 
+#include <array>
 #include <cstddef>
 #include <initializer_list>
 #include <limits>
@@ -25,22 +26,50 @@ namespace {
 
 using encoder_stream = std::variant<detail::zlib_deflate_stream, detail::brotli_encoder_stream, detail::zstd_encoder_stream>;
 
-void emplace_encoder_stream(std::optional<encoder_stream>& target, http_content_coding coding, std::size_t max_memory_bytes) {
+void emplace_encoder_stream(std::optional<encoder_stream>& target, http_content_coding coding, http_content_encoder_options options) {
     switch (coding) {
         case http_content_coding::gzip:
         case http_content_coding::deflate:
-            target.emplace(std::in_place_type<detail::zlib_deflate_stream>, coding == http_content_coding::gzip ? detail::zlib_content_format::gzip : detail::zlib_content_format::deflate, max_memory_bytes);
+            target.emplace(std::in_place_type<detail::zlib_deflate_stream>, options.compression_level_.value_or(Z_DEFAULT_COMPRESSION), coding == http_content_coding::gzip ? detail::zlib_gzip_window_bits : detail::zlib_deflate_window_bits, detail::zlib_default_mem_level, Z_DEFAULT_STRATEGY, options.max_memory_bytes_, options.memory_);
             return;
         case http_content_coding::brotli:
-            target.emplace(std::in_place_type<detail::brotli_encoder_stream>, detail::brotli_stream_window_bits, max_memory_bytes);
+            target.emplace(std::in_place_type<detail::brotli_encoder_stream>, detail::brotli_stream_window_bits, options.max_memory_bytes_, options.memory_, options.compression_level_.value_or(5));
             return;
         case http_content_coding::zstd:
-            target.emplace(std::in_place_type<detail::zstd_encoder_stream>, max_memory_bytes);
+            target.emplace(std::in_place_type<detail::zstd_encoder_stream>, options.max_memory_bytes_, options.memory_, options.compression_level_.value_or(ZSTD_CLEVEL_DEFAULT));
             return;
         case http_content_coding::identity:
             break;
     }
     throw std::invalid_argument("unsupported HTTP content coding");
+}
+
+void validate_encoder_options(http_content_coding coding, http_content_encoder_options options) {
+    if (http_content_coding_token(coding).empty()) {
+        throw std::invalid_argument("unsupported HTTP content coding");
+    }
+    if (!options.compression_level_.has_value()) {
+        return;
+    }
+    const int level = *options.compression_level_;
+    bool valid = false;
+    switch (coding) {
+        case http_content_coding::gzip:
+        case http_content_coding::deflate:
+            valid = level >= Z_DEFAULT_COMPRESSION && level <= Z_BEST_COMPRESSION;
+            break;
+        case http_content_coding::brotli:
+            valid = level >= BROTLI_MIN_QUALITY && level <= BROTLI_MAX_QUALITY;
+            break;
+        case http_content_coding::zstd:
+            valid = level >= ZSTD_minCLevel() && level <= ZSTD_maxCLevel();
+            break;
+        case http_content_coding::identity:
+            break;
+    }
+    if (!valid) {
+        throw std::invalid_argument("invalid HTTP content compression level");
+    }
 }
 
 [[nodiscard]] const char* initialization_failure(const detail::zlib_deflate_stream&) noexcept {
@@ -76,9 +105,10 @@ void emplace_encoder_stream(std::optional<encoder_stream>& target, http_content_
 // unwinds through the stream destructor, including an exception captured at
 // the C ABI.
 struct http_content_encoder::impl_type final {
-    impl_type(http_content_coding coding, std::size_t max_memory_bytes) :
-        max_memory_bytes_(max_memory_bytes) {
-        emplace_encoder_stream(stream_, coding, max_memory_bytes_);
+    impl_type(http_content_coding coding, http_content_encoder_options options) :
+        coding_(coding),
+        options_(options) {
+        emplace_encoder_stream(stream_, coding_, options_);
         std::visit([](const auto& stream) {
             if (!stream.initialized()) {
                 throw http_content_codec_error(initialization_failure(stream));
@@ -93,37 +123,39 @@ struct http_content_encoder::impl_type final {
         }, *stream_);
     }
 
-    // Reuse native working memory where supported. Brotli rebuilds.
-    // A failed rebuild leaves the variant valueless, which the
-    // owner never touches again until another explicit reset().
     void reset() {
-        if (auto* deflater = std::get_if<detail::zlib_deflate_stream>(&*stream_)) {
-            if (!deflater->reset()) {
-                throw http_content_codec_error("failed to reset zlib content encoder");
+        if (stream_.has_value() && !stream_->valueless_by_exception()) {
+            if (auto* deflater = std::get_if<detail::zlib_deflate_stream>(&*stream_)) {
+                if (!deflater->reset()) {
+                    throw http_content_codec_error("failed to reset zlib content encoder");
+                }
+                return;
             }
-        } else if (auto* encoder = std::get_if<detail::zstd_encoder_stream>(&*stream_)) {
-            if (!encoder->reset()) {
-                throw http_content_codec_error("failed to reset Zstd content encoder");
-            }
-        } else {
-            const auto& rebuilt = stream_->emplace<detail::brotli_encoder_stream>(detail::brotli_stream_window_bits, max_memory_bytes_);
-            if (!rebuilt.initialized()) {
-                throw http_content_codec_error(initialization_failure(rebuilt));
+            if (auto* encoder = std::get_if<detail::zstd_encoder_stream>(&*stream_)) {
+                if (!encoder->reset()) {
+                    throw http_content_codec_error("failed to reset Zstd content encoder");
+                }
+                return;
             }
         }
+        emplace_encoder_stream(stream_, coding_, options_);
+        std::visit([](const auto& stream) {
+            if (!stream.initialized()) {
+                throw http_content_codec_error(initialization_failure(stream));
+            }
+        }, *stream_);
     }
 
     std::optional<encoder_stream> stream_;
-    std::size_t max_memory_bytes_;
+    http_content_coding coding_;
+    http_content_encoder_options options_;
 };
 
-http_content_encoder::http_content_encoder(http_content_coding coding, std::size_t max_memory_bytes) :
+http_content_encoder::http_content_encoder(http_content_coding coding, http_content_encoder_options options) :
     coding_(coding) {
-    if (http_content_coding_token(coding_).empty()) {
-        throw std::invalid_argument("unsupported HTTP content coding");
-    }
+    validate_encoder_options(coding_, options);
     if (coding_ != http_content_coding::identity) {
-        impl_ = new impl_type(coding_, max_memory_bytes);
+        impl_ = new impl_type(coding_, options);
     }
 }
 
@@ -267,32 +299,44 @@ void http_worker_codecs::destroy_encoder(http_content_encoder& encoder) noexcept
 namespace {
 
 [[nodiscard]] std::variant<std::string, http_content_decode_error> decode_content_stage(http_content_coding coding, std::string_view input, http_content_decode_options options) {
-    // A zero-length coded representation carries no content: user agents treat
-    // it as empty rather than as a truncated coding stream. An out-of-range coding
-    // has no token and stays unsupported even for empty input.
-    if (input.empty() && !http_content_coding_token(coding).empty()) {
+    if (http_content_coding_token(coding).empty()) {
+        return http_content_decode_error::unsupported_coding;
+    }
+    // Keep the empty-representation exception allocation-free.
+    if (input.empty()) {
         return std::string{};
     }
-    switch (coding) {
-        case http_content_coding::gzip:
-            return detail::decode_gzip_content(input, options.max_decoded_bytes_);
-        case http_content_coding::deflate:
-            return detail::decode_deflate_content(input, options.max_decoded_bytes_);
-        case http_content_coding::brotli:
-            return detail::decode_brotli_content(input, options.max_decoded_bytes_);
-        case http_content_coding::zstd:
-            return detail::decode_zstd_content(input, options.max_decoded_bytes_);
-        case http_content_coding::identity:
-            // Identity stages are skipped by decode_http_content.
-            break;
+    detail::http_content_decoder_stream decoder(coding, options);
+    std::string output;
+    std::array<char, 16384> scratch;
+    for (;;) {
+        const auto step = decoder.decode(input, scratch);
+        input.remove_prefix(step.consumed_bytes());
+        if (const auto* bytes = step.get_if<decode_output>()) {
+            output.append(bytes->bytes());
+            continue;
+        }
+        if (const auto* failure = step.get_if<http_content_decode_failure>()) {
+            return failure->error();
+        }
+        if (step.holds<decode_complete>()) {
+            return output;
+        }
+        if (!input.empty()) {
+            continue;
+        }
+        const auto end = decoder.finish_input();
+        if (const auto* failure = end.get_if<http_content_decode_failure>()) {
+            return failure->error();
+        }
+        return output;
     }
-    return http_content_decode_error::unsupported_coding;
 }
 
 }  // namespace
 
-std::optional<std::string> encode_http_content(http_content_coding coding, std::string_view input, http_content_encode_options options) {
-    http_content_encoder encoder(coding);
+std::optional<std::string> encode_http_content(http_content_coding coding, std::string_view input, http_content_encode_options options, http_content_encoder_options encoder_options) {
+    http_content_encoder encoder(coding, encoder_options);
     return encoder.encode(input, options);
 }
 

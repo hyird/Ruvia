@@ -26,6 +26,17 @@ http_io_buffer::http_io_buffer(http_io_buffer&& other) noexcept :
     begin_(std::exchange(other.begin_, 0)),
     end_(std::exchange(other.end_, 0)) {}
 
+http_io_buffer& http_io_buffer::operator=(http_io_buffer&& other) noexcept {
+    if (this != &other) {
+        http_io_buffer retired(std::move(*this));
+        storage_ = std::exchange(other.storage_, nullptr);
+        capacity_ = std::exchange(other.capacity_, 0);
+        begin_ = std::exchange(other.begin_, 0);
+        end_ = std::exchange(other.end_, 0);
+    }
+    return *this;
+}
+
 http_io_buffer::~http_io_buffer() {
     release();
 }

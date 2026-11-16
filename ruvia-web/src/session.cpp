@@ -13,7 +13,6 @@
 
 #include "context.h"
 #include "context_access.h"
-#include "crypto.h"
 #include "decimal_text.h"
 #include "http_error.h"
 #include "http_header.h"
@@ -21,6 +20,7 @@
 #include "inline_storage.h"
 #include "middleware.h"
 #include "redis_orm.h"
+#include "secret_encoding.h"
 #include "task.h"
 
 namespace ruvia {

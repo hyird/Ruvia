@@ -74,6 +74,7 @@ if(RUVIA_BUILD_HTTP)
         http/content_coding.cpp
         http/cookie.cpp
         http/cors.cpp
+        http/header_adapter.cpp
         http/http1_parser.cpp
         http/http_cache.cpp
         http/io_buffer.cpp
@@ -243,6 +244,7 @@ if(RUVIA_BUILD_WEB)
         web/client/response_body.cpp
         web/client/websocket.cpp
         web/http/context_request_lookups.cpp
+        web/http/crypto.cpp
         web/http/model_json.cpp
         web/http/model_values.cpp
         web/http/response_stream.cpp

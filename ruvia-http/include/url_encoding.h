@@ -20,18 +20,20 @@ namespace ruvia {
 // path-scoped middleware, which split on literal '/' only, never saw.
 // form: application/x-www-form-urlencoded; '+' is a space and, like the WHATWG
 // percent-decode algorithm, a '%' that starts no valid escape stays literal.
+// strict_form: the same '+' conversion, but malformed escapes fail.
 enum class url_decode_mode : std::uint8_t { percent,
     path,
-    form };
+    form,
+    strict_form };
 
-// Percent and path modes treat '+' literally; form mode decodes '+' as a space.
+// Percent and path modes treat '+' literally; both form modes decode it.
 [[nodiscard]] inline bool has_url_encoding(std::string_view value, url_decode_mode mode) noexcept {
     // Keep short components and early escapes on the scalar path; library searches
     // can scan the remaining literal text in larger chunks.
     constexpr std::size_t scalar_scan_limit = 64;
     constexpr std::size_t scalar_prefix_size = 32;
     const auto prefix = value.substr(0, value.size() <= scalar_scan_limit ? value.size() : scalar_prefix_size);
-    const bool encoded = mode == url_decode_mode::form
+    const bool encoded = (mode == url_decode_mode::form || mode == url_decode_mode::strict_form)
         ? std::ranges::any_of(prefix, [](char c) noexcept {
         return c == '%' || c == '+';
     })
@@ -45,7 +47,7 @@ enum class url_decode_mode : std::uint8_t { percent,
         return false;
     }
     value.remove_prefix(prefix.size());
-    return (mode == url_decode_mode::form ? value.find_first_of("%+") : value.find('%')) != std::string_view::npos;
+    return ((mode == url_decode_mode::form || mode == url_decode_mode::strict_form) ? value.find_first_of("%+") : value.find('%')) != std::string_view::npos;
 }
 
 // Decodes the pct-encoded triplet starting at input[index] (RFC 3986 2.1):
@@ -76,6 +78,12 @@ inline void http_append_percent_byte(std::string& output, unsigned char byte) {
     const char triplet[]{'%', http_upper_hex_digit(byte >> 4), http_upper_hex_digit(byte)};
     output.append(triplet, sizeof(triplet));
 }
+
+// Encodes one component: only RFC 3986 unreserved octets remain literal;
+// every other octet (including '%' and '+') becomes uppercase %XX.
+// Borrows unchanged input, otherwise replaces storage. Input may alias storage.
+// Allocation/length failure preserves storage. Owning temporaries are rejected.
+[[nodiscard]] std::string_view percent_encode_url_component(borrowed_text text, std::string& storage);
 
 // Repairs an application-supplied RFC 3986 URI-reference (for example a
 // Location field value) by percent-encoding every byte that cannot appear
@@ -130,7 +138,7 @@ template <typename visitor_type>
     std::size_t size = 0;
     for (std::size_t i = 0; i < input.size(); ++i) {
         char c = input[i];
-        if (mode == url_decode_mode::form && c == '+') {
+        if ((mode == url_decode_mode::form || mode == url_decode_mode::strict_form) && c == '+') {
             c = ' ';
         } else if (c == '%') {
             if (const auto byte = http_try_decode_percent_byte(input, i)) {
@@ -224,20 +232,22 @@ inline constexpr int uri_path_separator_unit = 0x100;
     return left_index == left.size() && right_index == right.size();
 }
 
-// Visit raw, borrowed name/value views for each non-empty pair, preserving repeated
-// names in input order. A bool-returning visitor returning false stops iteration
-// and makes this return false; a void visitor always traverses all pairs. Pair
-// traversal does not validate percent escapes. Input storage must outlive each view.
+enum class url_empty_pair_policy : std::uint8_t { skip,
+    preserve };
+
+// Visits raw, borrowed name/value views in order, including repeated names.
+// Empty segments are skipped by default. preserve emits ("", "") for every
+// empty segment, including the trailing one and one for empty input.
+// A false visitor result stops traversal and returns false; void visits all.
+// Percent escapes are not validated. Input must outlive the borrowed views.
 template <typename visitor_type>
-[[nodiscard]] bool visit_url_encoded_pairs(std::string_view input, visitor_type&& visitor) {
+[[nodiscard]] bool visit_url_encoded_pairs(std::string_view input, visitor_type&& visitor, url_empty_pair_policy empty_pairs = url_empty_pair_policy::skip) {
     auto& visitor_ref = visitor;
-    while (!input.empty()) {
+    for (;;) {
         const auto pair_end = input.find('&');
         const auto pair = pair_end == std::string_view::npos ? input : input.substr(0, pair_end);
 
-        // Skip empty segments ("&&", leading/trailing "&") rather than emitting a phantom
-        // ("", "") pair : a segment with no bytes carries no field.
-        if (!pair.empty()) {
+        if (!pair.empty() || empty_pairs == url_empty_pair_policy::preserve) {
             const auto equals = pair.find('=');
             const auto name = equals == std::string_view::npos ? pair : pair.substr(0, equals);
             const auto value = equals == std::string_view::npos ? std::string_view{} : pair.substr(equals + 1);
@@ -251,7 +261,6 @@ template <typename visitor_type>
         }
         input.remove_prefix(pair_end + 1);
     }
-    return true;
 }
 
 }  // namespace ruvia

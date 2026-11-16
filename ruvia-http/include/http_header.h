@@ -602,7 +602,7 @@ concept http_header_field = requires(const std::remove_reference_t<field_type>& 
 };
 
 template <typename range_type>
-concept http_header_field_range = std::ranges::contiguous_range<const std::remove_cvref_t<range_type>> && http_header_field<std::ranges::range_reference_t<const std::remove_cvref_t<range_type>>>;
+concept http_header_field_range = std::ranges::forward_range<const std::remove_cvref_t<range_type>> && std::ranges::sized_range<const std::remove_cvref_t<range_type>> && http_header_field<std::ranges::range_reference_t<const std::remove_cvref_t<range_type>>>;
 
 // Outcome of looking up one name in a collection that permits repeated names
 // (received fields, JSON object members, SQL result columns). A repeated name
@@ -642,10 +642,8 @@ concept http_header_field_message = !http_header_field_range<message_type> && re
     { message.headers() } -> http_header_field_range;
 };
 
-// Anything a function can read header fields from: a contiguous range of
-// fields (std::vector<http_header>, std::span<const http_header_view>,
-// http_response_headers, ...), a message exposing one through headers(), or
-// an http_header_range_view already bound to either.
+// Anything a function can read header fields from: a sized forward range of
+// fields, a message exposing one through headers(), or an already bound view.
 template <typename source_type>
 concept http_header_field_source = std::same_as<std::remove_cvref_t<source_type>, http_header_range_view> || http_header_field_range<source_type> || http_header_field_message<source_type>;
 
@@ -664,16 +662,47 @@ public:
 
     template <http_header_field_range range_type>
     constexpr http_header_range_view(const range_type& fields) noexcept :
-        data_(std::ranges::data(fields)),
-        size_(std::ranges::size(fields)),
-        at_(+[](const void* base, std::size_t index) noexcept -> http_header_view {
-            const auto& field = static_cast<const std::remove_cv_t<std::ranges::range_value_t<const range_type>>*>(base)[index];
-            return {field.name(), field.value()};
-        }) {}
+        size_(std::ranges::size(fields)) {
+        if constexpr (std::ranges::contiguous_range<const range_type>) {
+            data_ = std::ranges::data(fields);
+            at_ = +[](const void* base, std::size_t index) noexcept -> http_header_view {
+                const auto& field = static_cast<const std::ranges::range_value_t<const range_type>*>(base)[index];
+                return {field.name(), field.value()};
+            };
+        } else {
+            using cursor_type = std::ranges::iterator_t<const range_type>;
+            static_assert(std::is_trivially_copyable_v<cursor_type> && sizeof(cursor_type) <= cursor_bytes,
+                "Non-contiguous header iterators must fit the allocation-free cursor");
+            data_ = &fields;
+            at_ = +[](const void* base, std::size_t index) noexcept -> http_header_view {
+                const auto& field = *std::ranges::next(std::ranges::begin(*static_cast<const range_type*>(base)), static_cast<std::ranges::range_difference_t<const range_type>>(index));
+                return {field.name(), field.value()};
+            };
+            begin_cursor_ = +[](const void* base, std::byte* storage) noexcept {
+                const auto cursor = std::ranges::begin(*static_cast<const range_type*>(base));
+                std::memcpy(storage, &cursor, sizeof(cursor));
+            };
+            read_cursor_ = +[](const std::byte* storage) noexcept -> http_header_view {
+                cursor_type cursor;
+                std::memcpy(&cursor, storage, sizeof(cursor));
+                const auto& field = *cursor;
+                return {field.name(), field.value()};
+            };
+            next_cursor_ = +[](std::byte* storage) noexcept {
+                cursor_type cursor;
+                std::memcpy(&cursor, storage, sizeof(cursor));
+                ++cursor;
+                std::memcpy(storage, &cursor, sizeof(cursor));
+            };
+        }
+    }
 
     template <http_header_field_message message_type>
     constexpr http_header_range_view(const message_type& message) noexcept :
-        http_header_range_view(message.headers()) {}
+        http_header_range_view(message.headers()) {
+        static_assert(std::ranges::contiguous_range<decltype(message.headers())> || std::is_lvalue_reference_v<decltype(message.headers())>,
+            "A non-contiguous message header range must be returned by reference");
+    }
 
     http_header_range_view(const http_header_range_view&) = delete;
     http_header_range_view& operator=(const http_header_range_view&) = delete;
@@ -690,6 +719,9 @@ public:
         return at_(data_, index);
     }
 
+    // Iteration is linear for every source; indexed access to a forward-only
+    // source advances from its beginning.
+
     class iterator final {
     public:
         using iterator_concept = std::forward_iterator_tag;
@@ -703,10 +735,23 @@ public:
             at_(at),
             index_(index) {}
 
+        iterator(const void* data, accessor_type at, std::size_t index,
+            void (*begin_cursor)(const void*, std::byte*) noexcept,
+            http_header_view (*read_cursor)(const std::byte*) noexcept,
+            void (*next_cursor)(std::byte*) noexcept) noexcept :
+            iterator(data, at, index) {
+            read_cursor_ = read_cursor;
+            next_cursor_ = next_cursor;
+            begin_cursor(data, cursor_.data());
+        }
+
         [[nodiscard]] constexpr http_header_view operator*() const noexcept {
-            return at_(data_, index_);
+            return read_cursor_ != nullptr ? read_cursor_(cursor_.data()) : at_(data_, index_);
         }
         constexpr iterator& operator++() noexcept {
+            if (next_cursor_ != nullptr) {
+                next_cursor_(cursor_.data());
+            }
             ++index_;
             return *this;
         }
@@ -723,9 +768,15 @@ public:
         const void* data_{nullptr};
         accessor_type at_{nullptr};
         std::size_t index_{0};
+        std::array<std::byte, 4 * sizeof(void*)> cursor_{};
+        http_header_view (*read_cursor_)(const std::byte*) noexcept {nullptr};
+        void (*next_cursor_)(std::byte*) noexcept {nullptr};
     };
 
     [[nodiscard]] constexpr iterator begin() const noexcept {
+        if (begin_cursor_ != nullptr) {
+            return {data_, at_, 0, begin_cursor_, read_cursor_, next_cursor_};
+        }
         return {data_, at_, 0};
     }
 
@@ -735,8 +786,12 @@ public:
 
 private:
     const void* data_{nullptr};
+    static constexpr std::size_t cursor_bytes = 4 * sizeof(void*);
     std::size_t size_{0};
     accessor_type at_{nullptr};
+    void (*begin_cursor_)(const void*, std::byte*) noexcept {nullptr};
+    http_header_view (*read_cursor_)(const std::byte*) noexcept {nullptr};
+    void (*next_cursor_)(std::byte*) noexcept {nullptr};
 };
 
 namespace detail {
@@ -804,6 +859,32 @@ public:
     editable_http_headers(http_response& response) noexcept :
         target_(&response) {}
 
+    // A caller-owned candidate with set/append/remove operations can be edited
+    // directly, without materializing owned http_header objects. Each mutation
+    // must be atomic; remove must not throw and must accept a borrowed name.
+    template <http_header_field_range range_type>
+        requires requires(range_type& fields, std::string_view name, std::string_view value) {
+            fields.set(name, value);
+            fields.append(name, value);
+            { fields.remove(name) } noexcept;
+        }
+    editable_http_headers(range_type& fields) noexcept :
+        target_(custom_target{
+            &fields,
+            +[](const void* target) noexcept -> http_header_range_view {
+                return http_header_range_view(*static_cast<const range_type*>(target));
+            },
+            +[](void* target, std::string_view name) noexcept {
+                static_cast<range_type*>(target)->remove(name);
+            },
+            +[](void* target, std::string_view name, std::string_view value) {
+                static_cast<range_type*>(target)->set(name, value);
+            },
+            +[](void* target, std::string_view name, std::string_view value) {
+                static_cast<range_type*>(target)->append(name, value);
+            }
+        }) {}
+
     // Current field lines. Any mutation below invalidates the view.
     [[nodiscard]] http_header_range_view fields() const noexcept;
     // Erases every line named `name` (case-insensitive); a name no field can
@@ -835,7 +916,15 @@ public:
 private:
     void run_transaction(void (*edit)(void* callable, editable_http_headers candidate), void* callable, std::size_t additional_fields);
 
-    std::variant<std::vector<http_header>*, http_response_headers*, http_response*> target_;
+    struct custom_target final {
+        void* object_;
+        http_header_range_view (*fields_)(const void*) noexcept;
+        void (*remove_)(void*, std::string_view) noexcept;
+        void (*set_)(void*, std::string_view, std::string_view);
+        void (*append_)(void*, std::string_view, std::string_view);
+    };
+
+    std::variant<std::vector<http_header>*, http_response_headers*, http_response*, custom_target> target_;
 };
 
 }  // namespace ruvia

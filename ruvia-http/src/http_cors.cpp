@@ -311,7 +311,7 @@ bool http_cors_policy::allows_origin(std::string_view origin) const noexcept {
         if (!rule.subdomain_only_ && http_ascii_equals_ignore_case(host, suffix)) {
             return true;
         }
-        if (detail::is_dns_subdomain_of(host, suffix)) {
+        if (is_dns_subdomain_of(host, suffix)) {
             return true;
         }
     }
@@ -342,35 +342,59 @@ bool http_cors_policy::allows_request_header(std::string_view name) const noexce
     });
 }
 
-http_cors_preflight_result http_cors_policy::evaluate_preflight(http_cors_preflight_input input) const {
-    const auto method = input.method_.view();
-    const auto origin = input.origin_.view();
-    const auto requested_method = http_trim_ows(input.access_control_request_method_.view());
-    const auto requested_headers = input.access_control_request_headers_.view();
-
-    if (method != "OPTIONS" || origin.empty() || !allows_origin(origin) || requested_method.empty() || !allows_method(requested_method)) {
-        return http_cors_preflight_result();
-    }
-
-    std::string reflected_headers;
-    if (!http_trim_ows(requested_headers).empty()) {
-        http_field_name_list names(requested_headers);
+bool http_cors_policy::collect_requested_headers(const http_header_range_view& fields, std::size_t maximum, std::string* reflected) const {
+    std::size_t count = 0;
+    for (const auto field : fields) {
+        if (!http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
+            continue;
+        }
+        http_field_name_list names(field.value());
         bool saw_name = false;
-        while (const auto header_name = names.next()) {
+        while (const auto name = names.next()) {
             saw_name = true;
-            if (!allows_request_header(*header_name)) {
-                return http_cors_preflight_result();
+            if (count == maximum || *name == "*" || !allows_request_header(*name)) {
+                return false;
             }
-            if (reflect_request_headers_) {
-                if (!reflected_headers.empty()) {
-                    reflected_headers.append(", ");
+            ++count;
+            if (reflected != nullptr) {
+                if (!reflected->empty()) {
+                    reflected->append(", ");
                 }
-                reflected_headers.append(*header_name);
+                reflected->append(*name);
             }
         }
         if (!saw_name || !names.valid()) {
-            return http_cors_preflight_result();
+            return false;
         }
+    }
+    return true;
+}
+
+http_cors_preflight_result http_cors_policy::evaluate_preflight(http_cors_preflight_input input, std::size_t max_requested_headers) const {
+    const std::array fields{
+        http_header_view("Origin", input.origin_.view()),
+        http_header_view("Access-Control-Request-Method", input.access_control_request_method_.view()),
+        http_header_view("Access-Control-Request-Headers", input.access_control_request_headers_.view()),
+    };
+    const auto count = http_trim_ows(input.access_control_request_headers_.view()).empty() ? 2U : 3U;
+    return evaluate_preflight(input.method_, std::span(fields).first(count), max_requested_headers);
+}
+
+http_cors_preflight_result http_cors_policy::evaluate_preflight(borrowed_text method, const http_header_range_view& fields, std::size_t max_requested_headers) const {
+    const auto origin_field = find_unique_http_header(fields, "Origin");
+    const auto method_field = find_unique_http_header(fields, "Access-Control-Request-Method");
+    if (method.view() != "OPTIONS" || origin_field.status_ != unique_lookup_status::found || method_field.status_ != unique_lookup_status::found) {
+        return {};
+    }
+    const auto origin = origin_field.value_;
+    const auto requested_method = http_trim_ows(method_field.value_);
+    if (origin.empty() || !allows_origin(origin) || requested_method.empty() || !allows_method(requested_method)) {
+        return {};
+    }
+
+    std::string reflected_headers;
+    if (!collect_requested_headers(fields, max_requested_headers, reflect_request_headers_ ? &reflected_headers : nullptr)) {
+        return {};
     }
 
     std::vector<http_header> headers;
@@ -397,31 +421,8 @@ http_cors_preflight_result http_cors_policy::evaluate_preflight(http_cors_prefli
     return http_cors_preflight_result(true, std::move(headers));
 }
 
-http_cors_preflight_result http_cors_policy::evaluate_preflight(const http_request& request) const {
-    const auto origin = request.header("Origin");
-    const auto requested_method = request.header("Access-Control-Request-Method");
-    if (!origin.has_value() || !requested_method.has_value()) {
-        return http_cors_preflight_result();
-    }
-    std::string combined_headers;
-    for (const auto& field : request.headers()) {
-        if (!http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
-            continue;
-        }
-        if (http_trim_ows(field.value()).empty()) {
-            return http_cors_preflight_result();
-        }
-        if (!combined_headers.empty()) {
-            combined_headers.append(", ");
-        }
-        combined_headers.append(field.value());
-    }
-    return evaluate_preflight({
-        .method_ = request.method(),
-        .origin_ = *origin,
-        .access_control_request_method_ = *requested_method,
-        .access_control_request_headers_ = combined_headers,
-    });
+http_cors_preflight_result http_cors_policy::evaluate_preflight(const http_request& request, std::size_t max_requested_headers) const {
+    return evaluate_preflight(request.method(), request.headers(), max_requested_headers);
 }
 
 bool http_cors_policy::rewrite_response_headers(borrowed_text request_origin, editable_http_headers response_headers) const {
@@ -460,47 +461,24 @@ bool http_cors_policy::apply_response_headers(const http_request& request, http_
         response.add_vary_token("Origin");
     }
 
-    const auto origin = request.header("Origin");
+    const auto origin_field = find_unique_http_header(request, "Origin");
+    const auto method_field = find_unique_http_header(request, "Access-Control-Request-Method");
+    if (origin_field.status_ == unique_lookup_status::repeated || (options && method_field.status_ == unique_lookup_status::repeated)) {
+        return false;
+    }
+    const auto origin = origin_field.status_ == unique_lookup_status::found ? std::optional(origin_field.value_) : std::nullopt;
     if (origin.has_value() && !allows_origin(*origin)) {
         return false;
     }
-    const auto requested_method = options ? request.header("Access-Control-Request-Method") : std::nullopt;
+    const auto requested_method = options && method_field.status_ == unique_lookup_status::found ? std::optional(method_field.value_) : std::nullopt;
     if (requested_method.has_value() && !allows_method(http_trim_ows(*requested_method))) {
         return false;
     }
     const bool preflight = options && origin.has_value() && requested_method.has_value();
     const bool reflect_headers = preflight && reflect_request_headers_ && !response.header("Access-Control-Allow-Headers").has_value();
     std::string reflected_headers;
-    if (options && request.header("Access-Control-Request-Headers").has_value()) {
-        std::size_t request_header_names_size = 0;
-        for (const auto& field : request.headers()) {
-            if (field.name().size() != 30U || !http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
-                continue;
-            }
-            http_field_name_list names(field.value());
-            bool saw_name = false;
-            while (const auto header_name = names.next()) {
-                saw_name = true;
-                if (!allows_request_header(*header_name)) {
-                    return false;
-                }
-                const auto separator_size = request_header_names_size == 0 ? std::size_t{0} : std::size_t{2};
-                const auto maximum = (std::numeric_limits<std::size_t>::max)();
-                if (header_name->size() > maximum - separator_size || request_header_names_size > maximum - separator_size - header_name->size()) {
-                    return false;
-                }
-                request_header_names_size += separator_size + header_name->size();
-                if (reflect_headers) {
-                    if (!reflected_headers.empty()) {
-                        reflected_headers.append(", ");
-                    }
-                    reflected_headers.append(*header_name);
-                }
-            }
-            if (!saw_name || !names.valid()) {
-                return false;
-            }
-        }
+    if (options && !collect_requested_headers(request.headers(), (std::numeric_limits<std::size_t>::max)(), reflect_headers ? &reflected_headers : nullptr)) {
+        return false;
     }
 
     if (!response.header("Access-Control-Allow-Origin").has_value()) {

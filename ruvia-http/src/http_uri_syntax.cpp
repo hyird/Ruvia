@@ -62,11 +62,12 @@ inline constexpr std::array<bool, 256> reg_name_char_table = [] {
 }
 
 template <typename is_allowed_type>
-[[nodiscard]] bool is_valid_percent_encoded(std::string_view value, is_allowed_type is_allowed) noexcept {
+[[nodiscard]] bool is_valid_percent_encoded(std::string_view value, is_allowed_type is_allowed, bool reject_encoded_nul = false) noexcept {
     for (std::size_t index = 0; index < value.size(); ++index) {
         const auto byte = static_cast<unsigned char>(value[index]);
         if (byte == '%') {
-            if (!http_try_decode_percent_byte(value, index)) {
+            const auto decoded = http_try_decode_percent_byte(value, index);
+            if (!decoded || (reject_encoded_nul && *decoded == 0)) {
                 return false;
             }
             index += 2;
@@ -89,12 +90,16 @@ bool is_valid_uri_port(std::string_view value) noexcept {
     return std::ranges::all_of(value, is_decimal_digit);
 }
 
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
 bool split_uri_host_port(std::string_view value, std::string_view& host, std::string_view& port, bool& has_port) noexcept {
     port = {};
     has_port = false;
     if (!value.empty() && value.front() == '[') {
-        const auto close = value.find(']');
-        if (close == std::string_view::npos) {
+        const auto close = value.find_first_of("[]", 1);
+        if (close == std::string_view::npos || value[close] != ']') {
             return false;
         }
         host = value.substr(0, close + 1);
@@ -107,27 +112,34 @@ bool split_uri_host_port(std::string_view value, std::string_view& host, std::st
         }
         has_port = true;
         port = remainder.substr(1);
-        return true;
+        return port.find_first_of(":[]") == std::string_view::npos;
     }
-    const auto delimiter = value.find(':');
+    const auto delimiter = value.find_first_of(":[]");
     if (delimiter == std::string_view::npos) {
         host = value;
         return true;
     }
+    if (value[delimiter] != ':') {
+        return false;
+    }
     host = value.substr(0, delimiter);
     has_port = true;
     port = value.substr(delimiter + 1);
-    return port.find(':') == std::string_view::npos;
+    return port.find_first_of(":[]") == std::string_view::npos;
 }
+
+}  // namespace ruvia
+
+namespace ruvia::detail {
 
 [[nodiscard]] bool is_uri_pchar(unsigned char byte) noexcept {
     return is_uri_userinfo_literal(byte) || byte == '@';
 }
 
-[[nodiscard]] bool is_valid_uri_component(std::string_view value, bool allow_slash, bool allow_question) noexcept {
+[[nodiscard]] bool is_valid_uri_component(std::string_view value, bool allow_slash, bool allow_question, bool reject_encoded_nul) noexcept {
     return is_valid_percent_encoded(value, [allow_slash, allow_question](unsigned char byte) noexcept {
         return is_uri_pchar(byte) || (allow_slash && byte == '/') || (allow_question && byte == '?');
-    });
+    }, reject_encoded_nul);
 }
 
 std::optional<std::array<std::uint8_t, 4>> parse_ipv4_address(std::string_view value) noexcept {
@@ -261,6 +273,10 @@ std::optional<std::array<std::uint16_t, 8>> parse_ipv6_address(std::string_view 
     });
 }
 
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
 [[nodiscard]] bool is_valid_dns_domain_name(std::string_view name) noexcept {
     if (name.empty() || name.size() > 253) {
         return false;
@@ -269,7 +285,7 @@ std::optional<std::array<std::uint16_t, 8>> parse_ipv6_address(std::string_view 
     bool label_ends_with_alnum = false;
     for (const char c : name) {
         const auto byte = static_cast<unsigned char>(c);
-        const bool alnum = is_uri_alpha(byte) || is_decimal_digit(c);
+        const bool alnum = detail::is_uri_alpha(byte) || detail::is_decimal_digit(c);
         if (c == '.') {
             if (label_length == 0 || !label_ends_with_alnum) {
                 return false;
@@ -286,6 +302,10 @@ std::optional<std::array<std::uint16_t, 8>> parse_ipv6_address(std::string_view 
     }
     return label_length != 0 && label_ends_with_alnum;
 }
+
+}  // namespace ruvia
+
+namespace ruvia::detail {
 
 bool is_valid_uri_authority(std::string_view value) noexcept {
     auto host_and_port = value;
@@ -341,3 +361,45 @@ std::uint16_t http_uri_scheme_default_port(std::string_view scheme) noexcept {
 }
 
 }  // namespace ruvia::detail
+
+namespace ruvia {
+
+std::optional<http_url_view> parse_http_url(borrowed_text input, http_authority_policy policy) noexcept {
+    const auto value = input.view();
+    const auto scheme_end = value.find(':');
+    if (scheme_end == std::string_view::npos) {
+        return std::nullopt;
+    }
+    const auto scheme = value.substr(0, scheme_end);
+    if (!http_ascii_equals_ignore_case(scheme, "http") && !http_ascii_equals_ignore_case(scheme, "https") && !http_ascii_equals_ignore_case(scheme, "ws") && !http_ascii_equals_ignore_case(scheme, "wss")) {
+        return std::nullopt;
+    }
+    const auto rest = value.substr(scheme_end + 1);
+    if (!rest.starts_with("//")) {
+        return std::nullopt;
+    }
+    const auto authority_end = rest.find_first_of("/?#", 2);
+    const auto authority_text = rest.substr(2, authority_end == std::string_view::npos ? std::string_view::npos : authority_end - 2);
+    const auto authority = parse_http_authority(authority_text, policy);
+    if (!authority) {
+        return std::nullopt;
+    }
+    auto target = authority_end == std::string_view::npos ? rest.substr(rest.size()) : rest.substr(authority_end);
+    std::optional<std::string_view> fragment;
+    if (const auto hash = target.find('#'); hash != std::string_view::npos) {
+        fragment = target.substr(hash + 1);
+        target = target.substr(0, hash);
+        if (!detail::is_valid_uri_component(*fragment, true, true)) {
+            return std::nullopt;
+        }
+    }
+    const auto question = target.find('?');
+    const auto path = target.substr(0, question);
+    const auto query = question == std::string_view::npos ? std::nullopt : std::optional(target.substr(question + 1));
+    if (!detail::is_valid_uri_component(path, true, false, true) || (query && !detail::is_valid_uri_component(*query, true, true))) {
+        return std::nullopt;
+    }
+    return http_url_view(scheme, authority_text, *authority, path, query, fragment, target);
+}
+
+}  // namespace ruvia

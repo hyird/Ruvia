@@ -94,51 +94,42 @@ struct uri_reference_layout final {
     }
 }
 
-}  // namespace
-
-std::string_view percent_encode_uri_reference(borrowed_text text, std::string& storage) {
-    const auto reference = text.view();
-    const auto layout = find_uri_reference_layout(reference);
-    bool fragment_seen = false;
+template <typename literal_width_type>
+[[nodiscard]] std::string_view percent_encode_text(std::string_view input, std::string& storage, literal_width_type literal_width) {
     const bool initially_empty = storage.empty();
     std::string staged;
     std::string* encoded = nullptr;
     try {
-        for (std::size_t i = 0; i < reference.size(); ++i) {
-            const auto byte = static_cast<unsigned char>(reference[i]);
-            // A lone or malformed '%' is not an escape and is encoded like any
-            // other octet the reference cannot carry literally.
-            const bool escape = byte == '%' && http_try_decode_percent_byte(reference, i).has_value();
-            if (escape || (byte != '%' && uri_reference_keeps_literal(byte, i, layout, fragment_seen))) {
-                const std::size_t width = escape ? 3 : 1;
+        for (std::size_t i = 0; i < input.size(); ++i) {
+            const auto width = literal_width(i);
+            if (width != 0) {
                 if (encoded != nullptr) {
                     if (width > encoded->max_size() - encoded->size()) {
-                        throw std::length_error("URI reference exceeds string capacity");
+                        throw std::length_error("percent-encoded text exceeds string capacity");
                     }
                     detail::reserve_geometric(*encoded, encoded->size() + width);
-                    encoded->append(reference.substr(i, width));
+                    encoded->append(input.substr(i, width));
                 }
                 i += width - 1;
                 continue;
             }
             if (encoded == nullptr) {
-                // Nonempty storage can be overwritten only when every possible
-                // triplet fits without another allocation. Empty storage rolls back
-                // by clearing; aliased input always needs independent storage.
-                const bool can_reuse = (initially_empty || reference.size() <= storage.capacity() / 3) && !detail::http_text_aliases_string(reference, storage);
+                // Preserve nonempty storage through every throwing path.
+                // Aliased input always needs independent storage.
+                const bool can_reuse = (initially_empty || input.size() <= storage.capacity() / 3) && !detail::http_text_aliases_string(input, storage);
                 encoded = can_reuse ? &storage : &staged;
-                if (reference.size() > encoded->max_size() - 2) {
-                    throw std::length_error("URI reference exceeds string capacity");
+                if (input.size() > encoded->max_size() - 2) {
+                    throw std::length_error("percent-encoded text exceeds string capacity");
                 }
-                detail::reserve_geometric(*encoded, reference.size() + 2);
+                detail::reserve_geometric(*encoded, input.size() + 2);
                 encoded->clear();
-                encoded->append(reference.substr(0, i));
+                encoded->append(input.substr(0, i));
             }
             if (encoded->size() > encoded->max_size() - 3) {
-                throw std::length_error("URI reference exceeds string capacity");
+                throw std::length_error("percent-encoded text exceeds string capacity");
             }
             detail::reserve_geometric(*encoded, encoded->size() + 3);
-            http_append_percent_byte(*encoded, byte);
+            http_append_percent_byte(*encoded, static_cast<unsigned char>(input[i]));
         }
     } catch (...) {
         if (initially_empty && encoded == &storage) {
@@ -147,12 +138,34 @@ std::string_view percent_encode_uri_reference(borrowed_text text, std::string& s
         throw;
     }
     if (encoded == nullptr) {
-        return reference;
+        return input;
     }
     if (encoded == &staged) {
         storage = std::move(staged);
     }
     return storage;
+}
+
+}  // namespace
+
+std::string_view percent_encode_uri_reference(borrowed_text text, std::string& storage) {
+    const auto reference = text.view();
+    const auto layout = find_uri_reference_layout(reference);
+    bool fragment_seen = false;
+    return percent_encode_text(reference, storage, [&](std::size_t i) noexcept -> std::size_t {
+        const auto byte = static_cast<unsigned char>(reference[i]);
+        if (byte == '%') {
+            return http_try_decode_percent_byte(reference, i) ? 3 : 0;
+        }
+        return uri_reference_keeps_literal(byte, i, layout, fragment_seen) ? 1 : 0;
+    });
+}
+
+std::string_view percent_encode_url_component(borrowed_text text, std::string& storage) {
+    const auto input = text.view();
+    return percent_encode_text(input, storage, [input](std::size_t i) noexcept -> std::size_t {
+        return is_uri_unreserved_byte(static_cast<unsigned char>(input[i])) ? 1 : 0;
+    });
 }
 
 std::optional<std::string_view> decode_url_component(borrowed_text text, std::string& storage, url_decode_mode mode) {
@@ -162,7 +175,7 @@ std::optional<std::string_view> decode_url_component(borrowed_text text, std::st
     std::size_t first = 0;
     for (; first < input.size(); ++first) {
         const char c = input[first];
-        if ((c == '+' && mode == url_decode_mode::form) || (c == '%' && (mode != url_decode_mode::form || http_try_decode_percent_byte(input, first)))) {
+        if ((c == '+' && (mode == url_decode_mode::form || mode == url_decode_mode::strict_form)) || (c == '%' && (mode != url_decode_mode::form || http_try_decode_percent_byte(input, first)))) {
             break;
         }
     }

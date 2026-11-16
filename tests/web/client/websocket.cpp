@@ -120,7 +120,7 @@ void check_peer_exchange(bool reply_close, bool truncated_frame = false) {
         peer_failure = failure;
     });
     bool succeeded = false;
-    bool returned_eof = false;
+    bool eof_error = false;
     ruvia::websocket_termination termination{};
     std::uint64_t bytes_received = 0;
     std::uint64_t bytes_sent = 0;
@@ -133,7 +133,7 @@ void check_peer_exchange(bool reply_close, bool truncated_frame = false) {
             websocket.emplace(co_await client.client().websocket("/").connect());
             const auto greeting = co_await websocket->read();
             if (truncated_frame) {
-                returned_eof = !greeting.has_value();
+                ADD_FAILURE() << "truncated WebSocket frame returned instead of reporting EOF";
             } else {
                 EXPECT_TRUE(greeting.has_value());
                 if (greeting) {
@@ -152,6 +152,12 @@ void check_peer_exchange(bool reply_close, bool truncated_frame = false) {
                     co_await websocket->close({});
                 }
                 succeeded = true;
+            }
+        } catch (const ruvia::http_client_error& error) {
+            if (error.code() == ruvia::make_error_code(ruvia::http_client_errc::websocket_eof_before_close)) {
+                eof_error = true;
+            } else {
+                failure = std::current_exception();
             }
         } catch (...) {
             failure = std::current_exception();
@@ -176,12 +182,13 @@ void check_peer_exchange(bool reply_close, bool truncated_frame = false) {
         std::rethrow_exception(peer_failure);
     }
     if (truncated_frame) {
-        EXPECT_TRUE(returned_eof);
+        EXPECT_TRUE(eof_error);
         EXPECT_TRUE(termination == ruvia::websocket_termination::eof);
         EXPECT_EQ(bytes_received, 0U);
     } else {
         EXPECT_TRUE(saw_close);
-        EXPECT_TRUE(succeeded);
+        EXPECT_EQ(succeeded, reply_close);
+        EXPECT_EQ(eof_error, !reply_close);
         // The peer answering Close completes the client's own handshake;
         // otherwise its EOF ends the session.
         EXPECT_TRUE(termination == (reply_close ? ruvia::websocket_termination::local_close : ruvia::websocket_termination::eof));

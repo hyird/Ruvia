@@ -1081,6 +1081,45 @@ concept db_copyable_surface = std::same_as<surface_type, db_executor> || std::sa
 template <typename surface_type>
 class db_command_set {
 public:
+    // Compiles and owns SQL and bound values before returning the cold task.
+    // Pooled reads honor query cache policy; transactions bypass shared caches.
+    [[nodiscard]] task<db_rows> query(const db_query& query) const&
+        requires detail::db_copyable_surface<surface_type>
+    {
+        return surface().registration_.attach(surface().query_task(query));
+    }
+    [[nodiscard]] task<db_rows> query(const db_query& query) &
+        requires(!detail::db_copyable_surface<surface_type>)
+    {
+        return surface().registration_.attach(surface().query_task(query));
+    }
+    [[nodiscard]] task<db_exec_result> execute(const db_query& query) const&
+        requires detail::db_copyable_surface<surface_type>
+    {
+        return execute_query(surface(), query);
+    }
+    [[nodiscard]] task<db_exec_result> execute(const db_query& query) &
+        requires(!detail::db_copyable_surface<surface_type>)
+    {
+        return execute_query(surface(), query);
+    }
+    // The count statement returns one non-NULL uint64-compatible "count" column.
+    // Both statements share the operation deadline and transaction lease.
+    [[nodiscard]] task<std::pair<db_rows, std::uint64_t>> query_and_count(const db_query& query, const db_query& count) const&
+        requires detail::db_copyable_surface<surface_type>
+    {
+        return query_mapped_and_count<db_rows>(surface(), query, count, [](db_rows rows) {
+            return rows;
+        });
+    }
+    [[nodiscard]] task<std::pair<db_rows, std::uint64_t>> query_and_count(const db_query& query, const db_query& count) &
+        requires(!detail::db_copyable_surface<surface_type>)
+    {
+        return query_mapped_and_count<db_rows>(surface(), query, count, [](db_rows rows) {
+            return rows;
+        });
+    }
+
     [[nodiscard]] task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) const&
         requires detail::db_copyable_surface<surface_type>
     {

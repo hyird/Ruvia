@@ -1667,6 +1667,19 @@ static_assert(!incrementable_field<decltype(computed_entity_type::column<"name_l
 static_assert(!incrementable_field<decltype(entity_type::column<"name">())>);
 static_assert(incrementable_field<decltype(entity_type::column<"id">())>);
 
+template <typename executor_type>
+concept accepts_direct_query = requires(executor_type&& executor, const db_query& query) {
+    { std::forward<executor_type>(executor).query(query) } -> std::same_as<task<db_rows>>;
+    { std::forward<executor_type>(executor).execute(query) } -> std::same_as<task<db_exec_result>>;
+    { std::forward<executor_type>(executor).query_and_count(query, query) } -> std::same_as<task<std::pair<db_rows, std::uint64_t>>>;
+};
+static_assert(accepts_direct_query<const db_executor&>);
+static_assert(accepts_direct_query<db_executor>);
+static_assert(accepts_direct_query<db_transaction&>);
+static_assert(!accepts_direct_query<const db_transaction&>);
+static_assert(!accepts_direct_query<db_transaction>);
+static_assert(accepts_direct_query<db_transaction_operations>);
+
 }  // namespace db_repository_test
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
@@ -1682,10 +1695,13 @@ TEST(Ruvia, db_postgresql_declares_float8_for_doubles_and_leaves_other_parameter
         const std::array<db_value, 4> params{db_value{5}, db_value{5.0}, db_value{true}, db_value{"text"}};
         (void)co_await handle.query("SELECT $1, $2, $3, $4", std::span<const db_value>(params));
         // Untyped, json_build_object's variadic "any" arguments cannot be resolved.
-        db_query query;
-        query.select(db_expr::call("json_build_object", {db_expr::value("k"), db_expr::value(5)})).from("records");
-        const auto compiled = query.compile(db_driver::postgresql);
-        (void)co_await handle.query(compiled.sql(), compiled.params());
+        auto operation = [&] {
+            db_query query;
+            query.select(db_expr::call("json_build_object", {db_expr::value("k"), db_expr::value(5)})).from("records");
+            return handle.query(query);
+        }();
+        // The query and its expression graph are gone before the task starts.
+        (void)co_await std::move(operation);
     });
     const auto statements = peer.postgres_parses();
     EXPECT_EQ(statements.size(), std::size_t{2});

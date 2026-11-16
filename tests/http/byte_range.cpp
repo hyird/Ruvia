@@ -50,6 +50,9 @@ TEST(RuviaHttpPublicApi, strict_byte_ranges_content_range_and_streaming_slicer) 
     EXPECT_FALSE(ruvia::parse_http_content_range("bytes 20-10/100").has_value());
     EXPECT_FALSE(ruvia::parse_http_content_range("bytes 0-100/100").has_value());
     EXPECT_FALSE(ruvia::parse_http_content_range("bytes */100").has_value());
+    for (const auto invalid : {"bytes\t0-1/2", "bytes  0-1/2", " bytes 0-1/2", "bytes 0-1/2 ", "bytes 0-1/2\t"}) {
+        EXPECT_FALSE(ruvia::parse_http_content_range(invalid).has_value()) << invalid;
+    }
 
     // Streaming slicer for multipart/byteranges (including offset-based feeding).
     constexpr std::string_view payload = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -222,4 +225,17 @@ TEST(Ruvia, multipart_range_plan_moved_from_and_empty_file_path_are_rejected_cle
         moved_plan_rejected = true;
     }
     EXPECT_TRUE(moved_plan_rejected);
+}
+
+TEST(RuviaHttpPublicApi, empty_representations_still_validate_the_entire_range_syntax) {
+    for (const auto value : {"bytes=0-", "bytes=0-0", "bytes=-1", "bytes=0-1, -2", "bytes=-0"}) {
+        const auto parsed = ruvia::resolve_http_byte_range_set(value, 0);
+        EXPECT_FALSE(parsed.ignored()) << value;
+        EXPECT_TRUE(parsed.unsatisfiable()) << value;
+    }
+    for (const auto value : {"bytes=0-1, nonsense", "bytes=1-0", "bytes=0-0, -x", "bytes=, ,", "bytes=-", "bytes=0--1"}) {
+        const auto parsed = ruvia::resolve_http_byte_range_set(value, 0);
+        EXPECT_TRUE(parsed.ignored()) << value;
+        EXPECT_FALSE(parsed.unsatisfiable()) << value;
+    }
 }

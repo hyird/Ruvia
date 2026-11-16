@@ -132,7 +132,7 @@ struct http_media_type_parameters final {
 
     // A quality output selects Accept semantics: q is parsed as a weight,
     // including an invalid weight's zero quality, rather than a media parameter.
-    [[nodiscard]] bool parse(std::string_view value, int* quality = nullptr) noexcept {
+    [[nodiscard]] bool parse(std::string_view value, int* quality = nullptr, bool reject_invalid_quality = false) noexcept {
         size_ = 0;
         if (quality != nullptr) {
             *quality = 1000;
@@ -154,8 +154,11 @@ struct http_media_type_parameters final {
                 return false;
             }
             if (quality != nullptr && http_ascii_equals_ignore_case(name, "q")) {
-                const auto parsed = http_parse_quality_value(parameter_value);
-                *quality = parsed < 0 ? 0 : parsed;
+                const auto parsed = parse_http_quality_value(parameter_value);
+                if (!parsed && reject_invalid_quality) {
+                    return false;
+                }
+                *quality = parsed.value_or(0);
             } else if (!is_http_token_or_quoted_string(parameter_value)) {
                 return false;
             }
@@ -312,6 +315,36 @@ void http_accumulate_media_type_acceptance(std::string_view accept, std::string_
 }  // namespace
 }  // namespace ruvia::detail
 namespace ruvia {
+
+std::optional<int> parse_http_quality_value(std::string_view value) noexcept {
+    if (value == "0" || value == "1") {
+        return value.front() == '1' ? 1000 : 0;
+    }
+    if (value.size() < 2 || value.size() > 5 || value[1] != '.' || (value[0] != '0' && value[0] != '1')) {
+        return std::nullopt;
+    }
+    int quality = value[0] == '1' ? 1000 : 0;
+    int scale = 100;
+    for (std::size_t index = 2; index < value.size(); ++index) {
+        if (value[index] < '0' || value[index] > '9' || (value[0] == '1' && value[index] != '0')) {
+            return std::nullopt;
+        }
+        quality += (value[index] - '0') * scale;
+        scale /= 10;
+    }
+    return quality;
+}
+
+std::optional<http_media_range> parse_http_media_range(borrowed_text value) noexcept {
+    detail::http_media_type_parts parts;
+    detail::http_media_type_parameters parameters;
+    int quality = 1000;
+    if (!detail::http_parse_media_type_parts(value.view(), true, parts) || !parameters.parse(value.view(), &quality, true)) {
+        return std::nullopt;
+    }
+    const bool has_quality = parameters.find("q").has_value();
+    return http_media_range{parts.type_, parts.subtype_, quality, parameters.size_ - static_cast<std::size_t>(has_quality)};
+}
 
 std::string_view http_media_type_only(borrowed_text value) noexcept {
     return detail::http_header_token_before_parameters(value.view());

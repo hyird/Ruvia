@@ -15,6 +15,7 @@ set(ruvia_http_sources
     src/http_connect_udp.cpp
     src/http_connection_advertisement.cpp
     src/http_content_codec.cpp
+    src/http_content_decoder.cpp
     src/http_content_coding.cpp
     src/http_content_negotiation.cpp
     src/http_cookie.cpp
@@ -110,6 +111,7 @@ set(ruvia_http_headers
     include/http2_frame.h
     include/http2_push.h
     include/http_authority.h
+    include/http_codec_memory.h
     include/http_cache.h
     include/http_capsule.h
     include/http_client_ip.h
@@ -147,6 +149,8 @@ set(ruvia_http_headers
     include/http_response_stream.h
     include/http_server_sent_events.h
     include/http_status.h
+    include/http_structured_field.h
+    include/http_uri.h
     include/http_target_origin.h
     include/http_transfer_coding.h
     include/ip_address.h

@@ -285,8 +285,8 @@ bool is_valid_http_serialized_origin(std::string_view value) noexcept {
 namespace detail {
 
 struct http_authority_view_access final {
-    [[nodiscard]] static constexpr http_authority_view make(std::string_view host, http_authority_port_kind port_kind, std::uint16_t port = 0) noexcept {
-        return http_authority_view(host, port_kind, port);
+    [[nodiscard]] static constexpr http_authority_view make(std::string_view host, http_host_kind host_kind, std::string_view port_text, http_authority_port_kind port_kind, std::uint16_t port = 0) noexcept {
+        return http_authority_view(host, host_kind, port_text, port_kind, port);
     }
 };
 
@@ -394,7 +394,7 @@ bool is_valid_http_ipv6_literal(std::string_view value) noexcept {
     return detail::parse_ipv6_address(value).has_value();
 }
 
-std::optional<http_authority_view> parse_http_authority(borrowed_text text) noexcept {
+std::optional<http_authority_view> parse_http_authority(borrowed_text text, http_authority_policy policy) noexcept {
     const auto value = text.view();
     if (value.empty()) {
         return std::nullopt;
@@ -403,25 +403,40 @@ std::optional<http_authority_view> parse_http_authority(borrowed_text text) noex
     std::string_view host;
     std::string_view port_text;
     bool has_port_delimiter = false;
-    if (!detail::split_uri_host_port(value, host, port_text, has_port_delimiter)) {
+    if (!split_uri_host_port(value, host, port_text, has_port_delimiter) || host.empty()) {
         return std::nullopt;
     }
 
-    if (!detail::is_valid_http_host(host)) {
+    http_host_kind host_kind = http_host_kind::reg_name;
+    if (host.front() == '[') {
+        const auto literal = host.substr(1, host.size() - 2);
+        if (literal.starts_with('v') || literal.starts_with('V')) {
+            if (policy == http_authority_policy::endpoint || !detail::is_valid_ipv_future(literal)) {
+                return std::nullopt;
+            }
+            host_kind = http_host_kind::ipv_future;
+        } else {
+            if (!detail::parse_ipv6_address(literal)) {
+                return std::nullopt;
+            }
+            host_kind = http_host_kind::ipv6;
+        }
+    } else if (detail::parse_ipv4_address(host)) {
+        host_kind = http_host_kind::ipv4;
+    } else if (!detail::is_valid_reg_name(host)) {
         return std::nullopt;
     }
     if (!has_port_delimiter) {
-        return detail::http_authority_view_access::make(host, http_authority_port_kind::absent);
+        return detail::http_authority_view_access::make(host, host_kind, port_text, http_authority_port_kind::absent);
     }
     if (port_text.empty()) {
-        return detail::http_authority_view_access::make(host, http_authority_port_kind::empty);
+        return policy == http_authority_policy::endpoint ? std::nullopt : std::optional(detail::http_authority_view_access::make(host, host_kind, port_text, http_authority_port_kind::empty));
     }
-
     const auto port = parse_integer<std::uint16_t>(port_text);
-    if (!port) {
+    if (!port || (policy == http_authority_policy::endpoint && (*port == 0 || (port_text.size() > 1 && port_text.front() == '0')))) {
         return std::nullopt;
     }
-    return detail::http_authority_view_access::make(host, http_authority_port_kind::value, *port);
+    return detail::http_authority_view_access::make(host, host_kind, port_text, http_authority_port_kind::value, *port);
 }
 
 std::optional<std::string_view> parse_http_authority_host(borrowed_text value) noexcept {

@@ -196,15 +196,20 @@ http_header_range_view editable_http_headers::fields() const noexcept {
     if (const auto* const block = std::get_if<http_response_headers*>(&target_)) {
         return http_header_range_view(**block);
     }
+    if (const auto* const custom = std::get_if<custom_target>(&target_)) {
+        return custom->fields_(custom->object_);
+    }
     return http_header_range_view(*std::get<http_response*>(target_));
 }
 
 void editable_http_headers::remove(std::string_view name) noexcept {
-    std::visit([name](auto* target) noexcept {
+    std::visit([name](auto target) noexcept {
         if constexpr (http_header_vector_target<decltype(target)>) {
             std::erase_if(*target, [name](const http_header& field) noexcept {
                 return http_ascii_equals_ignore_case(field.name(), name);
             });
+        } else if constexpr (std::same_as<decltype(target), custom_target>) {
+            target.remove_(target.object_, name);
         } else if (is_valid_http_header_name(name) && detail::response_header_storage_size_fits(name.size(), 0)) {
             // A response block rejects a name no field can carry; no line has
             // such a name, so there is nothing to erase.
@@ -236,7 +241,7 @@ void editable_http_headers::remove_if(bool (*matches)(std::string_view field_nam
 }
 
 void editable_http_headers::set(std::string_view name, std::string_view value) {
-    std::visit([name, value](auto* target) {
+    std::visit([name, value](auto target) {
         if constexpr (http_header_vector_target<decltype(target)>) {
             // Built before any line is retired: name and value may borrow one.
             http_header replacement(name, value);
@@ -253,6 +258,8 @@ void editable_http_headers::set(std::string_view name, std::string_view value) {
                 return http_ascii_equals_ignore_case(field.name(), retained_name);
             }),
                 target->end());
+        } else if constexpr (std::same_as<decltype(target), custom_target>) {
+            target.set_(target.object_, name, value);
         } else {
             target->header(name, value);
         }
@@ -260,9 +267,11 @@ void editable_http_headers::set(std::string_view name, std::string_view value) {
 }
 
 void editable_http_headers::append(std::string_view name, std::string_view value) {
-    std::visit([name, value](auto* target) {
+    std::visit([name, value](auto target) {
         if constexpr (http_header_vector_target<decltype(target)>) {
             target->emplace_back(name, value);
+        } else if constexpr (std::same_as<decltype(target), custom_target>) {
+            target.append_(target.object_, name, value);
         } else {
             target->header(name, value, {.mode_ = http_response_header_mode::append});
         }

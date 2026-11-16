@@ -1,7 +1,9 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -95,8 +97,11 @@ public:
     [[nodiscard]] bool allows_method(std::string_view method) const noexcept;
     [[nodiscard]] bool allows_request_header(std::string_view name) const noexcept;
 
-    [[nodiscard]] http_cors_preflight_result evaluate_preflight(http_cors_preflight_input input) const;
-    [[nodiscard]] http_cors_preflight_result evaluate_preflight(const http_request& request) const;
+    // Counts every requested field-name across all field lines, including
+    // repeats. A wildcard request name is rejected, never reflected.
+    [[nodiscard]] http_cors_preflight_result evaluate_preflight(http_cors_preflight_input input, std::size_t max_requested_headers = (std::numeric_limits<std::size_t>::max)()) const;
+    [[nodiscard]] http_cors_preflight_result evaluate_preflight(borrowed_text method, const http_header_range_view& headers, std::size_t max_requested_headers = (std::numeric_limits<std::size_t>::max)()) const;
+    [[nodiscard]] http_cors_preflight_result evaluate_preflight(const http_request& request, std::size_t max_requested_headers = (std::numeric_limits<std::size_t>::max)()) const;
 
     // Removes controlled Access-Control-* headers from the existing response,
     // writes computed CORS headers when the origin is permitted, and merges
@@ -107,6 +112,8 @@ public:
     bool apply_response_headers(const http_request& request, http_response& response) const;
 
 private:
+    [[nodiscard]] bool collect_requested_headers(const http_header_range_view& fields, std::size_t maximum, std::string* reflected) const;
+
     struct suffix_rule final {
         std::string scheme_;
         std::string host_suffix_;

@@ -52,14 +52,57 @@ namespace detail {
     return "0123456789ABCDEF"[value & 0x0F];
 }
 
-// The single byte-sequence to lowercase hex encoder: writes exactly
-// 2 * bytes.size() digits starting at `output` and returns the end. `output`
-// may overlap `bytes` anywhere, including in place.
-constexpr char* http_encode_lower_hex(char* output, std::span<const unsigned char> bytes) noexcept {
+// Allocation-free bulk decoding. Requires an even digit count and enough
+// output space. Invalid input may leave a decoded prefix in output. In-place
+// decoding is supported; output beginning inside unread input is rejected.
+[[nodiscard]] constexpr std::optional<std::size_t> http_decode_hex(std::string_view input, std::span<std::uint8_t> output) noexcept {
+    if (input.size() % 2 != 0 || input.size() / 2 > output.size()) {
+        return std::nullopt;
+    }
+    if (!std::is_constant_evaluated() && !input.empty()) {
+        const auto first = reinterpret_cast<std::uintptr_t>(input.data());
+        const auto target = reinterpret_cast<std::uintptr_t>(output.data());
+        if (target > first && target - first < input.size()) {
+            return std::nullopt;
+        }
+    }
+    for (std::size_t i = 0; i < input.size() / 2; ++i) {
+        const auto high = http_decode_hex_nibble(input[2 * i]);
+        const auto low = http_decode_hex_nibble(input[2 * i + 1]);
+        if ((high | low) < 0) {
+            return std::nullopt;
+        }
+        output[i] = static_cast<std::uint8_t>((high << 4) | low);
+    }
+    return input.size() / 2;
+}
+
+// The required length counts hex digits, not decoded bytes.
+[[nodiscard]] constexpr bool http_is_lower_hex(std::string_view input, std::size_t required_length) noexcept {
+    if (input.size() != required_length) {
+        return false;
+    }
+    for (const char c : input) {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+namespace detail {
+
+template <bool uppercase>
+constexpr char* http_encode_hex(char* output, std::span<const unsigned char> bytes) noexcept {
     const auto encode_byte = [output, bytes](std::size_t index) noexcept {
         const auto byte = bytes[index];
-        output[2 * index] = http_lower_hex_digit(byte >> 4);
-        output[2 * index + 1] = http_lower_hex_digit(byte);
+        if constexpr (uppercase) {
+            output[2 * index] = http_upper_hex_digit(byte >> 4);
+            output[2 * index + 1] = http_upper_hex_digit(byte);
+        } else {
+            output[2 * index] = http_lower_hex_digit(byte >> 4);
+            output[2 * index + 1] = http_lower_hex_digit(byte);
+        }
     };
     // Constant evaluation cannot make char output alias unsigned char input.
     auto forward_bytes = bytes.size();
@@ -75,16 +118,8 @@ constexpr char* http_encode_lower_hex(char* output, std::span<const unsigned cha
     return output + 2 * bytes.size();
 }
 
-// Text is encoded byte by byte, like its unsigned char representation.
-inline char* http_encode_lower_hex(char* output, std::string_view bytes) noexcept {
-    return http_encode_lower_hex(output, std::span(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()));
-}
-
-// `bytes` may alias `output`, up to and including its terminating NUL at
-// output.data()[output.size()]; an aliased input is rebased by offset after
-// the resize, which may reallocate. Throws std::length_error when the result
-// cannot fit the string.
-inline void http_append_lower_hex(std::string& output, std::span<const unsigned char> bytes) {
+template <bool uppercase>
+inline void http_append_hex(std::string& output, std::span<const unsigned char> bytes) {
     const auto start = output.size();
     if (bytes.size() > (output.max_size() - start) / 2) {
         throw std::length_error("hex output length is not representable");
@@ -97,11 +132,45 @@ inline void http_append_lower_hex(std::string& output, std::span<const unsigned 
     // An aliased source ends at the latest at the old terminating NUL, index
     // start, which resize rewrote with the same NUL.
     const auto source = aliased ? std::span(reinterpret_cast<const unsigned char*>(output.data()) + offset, bytes.size()) : bytes;
-    http_encode_lower_hex(output.data() + start, source);
+    http_encode_hex<uppercase>(output.data() + start, source);
+}
+
+}  // namespace detail
+
+// Writes exactly 2 * bytes.size() digits and returns the end. Output may
+// overlap input anywhere, including in place.
+constexpr char* http_encode_lower_hex(char* output, std::span<const unsigned char> bytes) noexcept {
+    return detail::http_encode_hex<false>(output, bytes);
+}
+
+constexpr char* http_encode_upper_hex(char* output, std::span<const unsigned char> bytes) noexcept {
+    return detail::http_encode_hex<true>(output, bytes);
+}
+
+inline char* http_encode_lower_hex(char* output, std::string_view bytes) noexcept {
+    return http_encode_lower_hex(output, std::span(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()));
+}
+
+inline char* http_encode_upper_hex(char* output, std::string_view bytes) noexcept {
+    return http_encode_upper_hex(output, std::span(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()));
+}
+
+// Input may alias output, including its terminating NUL. Length overflow
+// throws std::length_error without modifying output.
+inline void http_append_lower_hex(std::string& output, std::span<const unsigned char> bytes) {
+    detail::http_append_hex<false>(output, bytes);
+}
+
+inline void http_append_upper_hex(std::string& output, std::span<const unsigned char> bytes) {
+    detail::http_append_hex<true>(output, bytes);
 }
 
 inline void http_append_lower_hex(std::string& output, std::string_view bytes) {
     http_append_lower_hex(output, std::span(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()));
+}
+
+inline void http_append_upper_hex(std::string& output, std::string_view bytes) {
+    http_append_upper_hex(output, std::span(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()));
 }
 
 // RFC 4648 section 4 (standard) and section 5 (URL-safe) alphabets.
@@ -111,15 +180,21 @@ inline constexpr std::string_view http_base64_url_alphabet = "ABCDEFGHIJKLMNOPQR
 enum class http_base64_charset : std::uint8_t {
     standard,  // RFC 4648 section 4: '+' and '/'
     url_safe,  // RFC 4648 section 5: '-' and '_'
+    both,      // Decode only: accept either alphabet, including mixed input.
 };
 
 enum class http_base64_padding : std::uint8_t {
     required,   // '=' completes the final quantum; length is a multiple of 4
     forbidden,  // unpadded (RFC 4648 section 3.2), e.g. JWS base64url
+    optional,   // Decode only: accept either complete padding or no padding.
 };
 
-// Throws std::length_error when the output length cannot fit std::size_t.
+// Throws std::length_error on length overflow, std::invalid_argument for
+// decode-only or invalid padding options.
 [[nodiscard]] constexpr std::size_t http_base64_encoded_size(std::size_t input_size, http_base64_padding padding = http_base64_padding::required) {
+    if (padding != http_base64_padding::required && padding != http_base64_padding::forbidden) {
+        throw std::invalid_argument("base64 encoding requires an explicit padding policy");
+    }
     const auto groups = input_size / 3;
     const auto remainder = input_size % 3;
     const std::size_t tail = remainder == 0 ? 0 : (padding == http_base64_padding::required ? 4 : remainder + 1);
@@ -131,8 +206,12 @@ enum class http_base64_padding : std::uint8_t {
 
 // The single base64 encoder. `output` must have room for
 // http_base64_encoded_size(input.size(), padding) characters and may overlap
-// `input` anywhere, including in place.
-inline void http_base64_encode(char* output, std::span<const std::uint8_t> input, http_base64_charset charset = http_base64_charset::standard, http_base64_padding padding = http_base64_padding::required) noexcept {
+// `input` anywhere, including in place. Decode-only or invalid options throw
+// std::invalid_argument before any output is written.
+inline void http_base64_encode(char* output, std::span<const std::uint8_t> input, http_base64_charset charset = http_base64_charset::standard, http_base64_padding padding = http_base64_padding::required) {
+    if ((charset != http_base64_charset::standard && charset != http_base64_charset::url_safe) || (padding != http_base64_padding::required && padding != http_base64_padding::forbidden)) {
+        throw std::invalid_argument("base64 decode-only options cannot encode");
+    }
     const auto alphabet = charset == http_base64_charset::url_safe ? http_base64_url_alphabet : http_base64_alphabet;
     const bool padded = padding == http_base64_padding::required;
     // Group k reads input[3k, 3k + 3) before writing output[4k, 4k + 4).
@@ -219,8 +298,11 @@ inline void http_base64_encode(char* output, std::span<const std::uint8_t> input
 // unread input and is rejected with nullopt before any write. Length and
 // ownership policy belongs to the caller.
 [[nodiscard]] constexpr std::optional<std::size_t> http_base64_decode(std::string_view input, std::span<std::uint8_t> output, http_base64_charset charset, http_base64_padding padding) noexcept {
+    if ((charset != http_base64_charset::standard && charset != http_base64_charset::url_safe && charset != http_base64_charset::both) || (padding != http_base64_padding::required && padding != http_base64_padding::forbidden && padding != http_base64_padding::optional)) {
+        return std::nullopt;
+    }
     auto data = input;
-    if (padding == http_base64_padding::required) {
+    if (padding == http_base64_padding::required || (padding == http_base64_padding::optional && input.ends_with('='))) {
         if (input.size() % 4 != 0) {
             return std::nullopt;
         }
@@ -251,6 +333,9 @@ inline void http_base64_encode(char* output, std::span<const std::uint8_t> input
         }
     }
     const auto value_of = [charset](char c) noexcept {
+        if (charset == http_base64_charset::both && (c == '-' || c == '_')) {
+            return c == '-' ? 62 : 63;
+        }
         return charset == http_base64_charset::url_safe ? http_base64_url_decode_char(c) : http_base64_decode_char(c);
     };
     std::size_t out = 0;

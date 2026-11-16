@@ -1,7 +1,5 @@
 #include "http_transfer_coding.h"
 
-#include <zlib.h>
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -18,191 +16,6 @@
 
 namespace ruvia {
 
-namespace detail {
-
-// One zlib stage is an implementation detail of the coding sequence, not a
-// second public decoder. Its address must stay fixed for the pinned zlib stream.
-class transfer_coding_decoder final {
-public:
-    transfer_coding_decoder(http_content_coding coding, protocol_byte_limit decoded_limit);
-    transfer_coding_decoder(const transfer_coding_decoder&) = delete;
-    transfer_coding_decoder& operator=(const transfer_coding_decoder&) = delete;
-    [[nodiscard]] http_transfer_coding_decode_result decode(std::string_view input, std::span<char> output);
-    [[nodiscard]] http_transfer_coding_decode_result finish_input() noexcept;
-    [[nodiscard]] bool received_input() const noexcept {
-        return received_input_;
-    }
-    void reset();
-
-private:
-    struct inflate_step_result {
-        std::size_t consumed_{0};
-        std::size_t produced_{0};
-        int status_{Z_OK};
-    };
-    struct active final {};
-    struct gzip_member_boundary final {};
-    struct completed final {};
-    using state = std::variant<active, gzip_member_boundary, completed>;
-    [[nodiscard]] inflate_step_result inflate_step(std::string_view input, std::span<char> output) noexcept;
-    [[nodiscard]] static http_transfer_coding_decode_result need_input(std::size_t consumed) noexcept;
-    [[nodiscard]] static http_transfer_coding_decode_result output(std::size_t consumed, std::string_view bytes) noexcept;
-    [[nodiscard]] static http_transfer_coding_decode_result complete(std::size_t consumed) noexcept;
-    [[nodiscard]] static http_transfer_coding_decode_result fail(std::size_t consumed, http_content_decode_error error) noexcept;
-    zlib_inflate_stream stream_;
-    state state_{active{}};
-    protocol_byte_limit body_limit_;
-    std::size_t decoded_bytes_{0};
-    // An empty coded body carries no content and completes at framing EOF.
-    bool received_input_{false};
-    http_content_coding coding_;
-};
-
-namespace {
-
-[[nodiscard]] int transfer_coding_window_bits(http_content_coding coding) {
-    if (!is_http_transfer_coding(coding)) {
-        throw std::invalid_argument("unsupported HTTP transfer coding");
-    }
-    return coding == http_content_coding::gzip ? 15 + 16 : 15;
-}
-
-}  // namespace
-
-transfer_coding_decoder::transfer_coding_decoder(http_content_coding coding, protocol_byte_limit decoded_limit) :
-    stream_(transfer_coding_window_bits(coding)),
-    body_limit_(decoded_limit),
-    coding_(coding) {
-    if (!stream_.initialized()) {
-        throw http_content_codec_error("failed to initialize transfer-coding decoder");
-    }
-}
-
-http_transfer_coding_decode_result transfer_coding_decoder::decode(std::string_view input, std::span<char> output_buffer) {
-    if (std::holds_alternative<completed>(state_)) {
-        return input.empty() ? complete(0) : fail(0, http_content_decode_error::invalid_content);
-    }
-
-    std::size_t consumed = 0;
-    std::size_t produced = 0;
-    for (;;) {
-        if (std::holds_alternative<gzip_member_boundary>(state_)) {
-            if (consumed == input.size()) {
-                return produced != 0 ? output(consumed, std::string_view(output_buffer.data(), produced)) : need_input(consumed);
-            }
-            if (!stream_.reset()) {
-                throw http_content_codec_error("failed to reset transfer-coding decoder");
-            }
-            state_.emplace<active>();
-        }
-
-        const auto window_bytes = std::min<std::size_t>(input.size() - consumed, (std::numeric_limits<uInt>::max)());
-        const auto step = inflate_step(input.substr(consumed), output_buffer.subspan(produced));
-        consumed += step.consumed_;
-        received_input_ = received_input_ || step.consumed_ != 0;
-        if (body_limit_.addition_exceeds(decoded_bytes_, step.produced_)) {
-            return fail(consumed, http_content_decode_error::decoded_size_exceeded);
-        }
-        decoded_bytes_ += step.produced_;
-        produced += step.produced_;
-
-        if (step.status_ == Z_STREAM_END) {
-            if (coding_ != http_content_coding::gzip) {
-                if (consumed != input.size()) {
-                    return fail(consumed, http_content_decode_error::invalid_content);
-                }
-                state_.emplace<completed>();
-                return produced != 0 ? output(consumed, std::string_view(output_buffer.data(), produced)) : complete(consumed);
-            }
-
-            // RFC 1952 gzip data is a series of members. A member boundary is
-            // not the end of the transfer coding: another member can arrive in
-            // the same HTTP chunk or in a later one. Only framing EOF, reported
-            // through finish_input(), commits this boundary as complete.
-            state_.emplace<gzip_member_boundary>();
-            if (produced == output_buffer.size()) {
-                return output(consumed, std::string_view(output_buffer.data(), produced));
-            }
-            continue;
-        }
-
-        if (step.status_ != Z_OK && step.status_ != Z_BUF_ERROR) {
-            if (step.status_ == Z_DATA_ERROR || step.status_ == Z_NEED_DICT) {
-                return fail(consumed, http_content_decode_error::invalid_content);
-            }
-            throw http_content_codec_error("transfer-coding decoder failed");
-        }
-
-        if (produced != 0) {
-            return output(consumed, std::string_view(output_buffer.data(), produced));
-        }
-        if (consumed != input.size()) {
-            // zlib sees at most one uInt window per step; a window that was
-            // consumed without output (RFC 1952 FNAME/FCOMMENT bytes) is not
-            // corrupt, the remaining input needs another step.
-            if (step.consumed_ == window_bytes) {
-                continue;
-            }
-            return fail(consumed, http_content_decode_error::invalid_content);
-        }
-        return need_input(consumed);
-    }
-}
-
-http_transfer_coding_decode_result transfer_coding_decoder::finish_input() noexcept {
-    if (std::holds_alternative<completed>(state_) || std::holds_alternative<gzip_member_boundary>(state_) || (std::holds_alternative<active>(state_) && !received_input_)) {
-        state_.emplace<completed>();
-        return complete(0);
-    }
-    return fail(0, http_content_decode_error::invalid_content);
-}
-
-transfer_coding_decoder::inflate_step_result transfer_coding_decoder::inflate_step(std::string_view input, std::span<char> output) noexcept {
-    const auto input_bytes = std::min<std::size_t>(input.size(), (std::numeric_limits<uInt>::max)());
-    auto& stream = stream_.native();
-    stream.next_in = input_bytes == 0 ? Z_NULL : reinterpret_cast<Bytef*>(const_cast<char*>(input.data()));
-    stream.avail_in = static_cast<uInt>(input_bytes);
-    const auto output_bytes = std::min<std::size_t>(output.size(), (std::numeric_limits<uInt>::max)());
-    stream.next_out = reinterpret_cast<Bytef*>(output.data());
-    stream.avail_out = static_cast<uInt>(output_bytes);
-
-    const auto status = inflate(&stream, Z_NO_FLUSH);
-    const auto consumed = input_bytes - stream.avail_in;
-    const auto produced = output_bytes - stream.avail_out;
-    stream.next_in = Z_NULL;
-    stream.avail_in = 0;
-    stream.next_out = Z_NULL;
-    stream.avail_out = 0;
-    return inflate_step_result{consumed, produced, status};
-}
-
-void transfer_coding_decoder::reset() {
-    if (!stream_.reset()) {
-        throw http_content_codec_error("failed to reset transfer-coding decoder");
-    }
-    state_.emplace<active>();
-    decoded_bytes_ = 0;
-    received_input_ = false;
-}
-
-http_transfer_coding_decode_result transfer_coding_decoder::need_input(std::size_t consumed) noexcept {
-    return http_transfer_coding_decode_result(consumed, decode_need_input{});
-}
-
-http_transfer_coding_decode_result transfer_coding_decoder::output(std::size_t consumed, std::string_view bytes_value) noexcept {
-    return http_transfer_coding_decode_result(consumed, decode_output(bytes_value));
-}
-
-http_transfer_coding_decode_result transfer_coding_decoder::complete(std::size_t consumed) noexcept {
-    return http_transfer_coding_decode_result(consumed, decode_complete{});
-}
-
-http_transfer_coding_decode_result transfer_coding_decoder::fail(std::size_t consumed, http_content_decode_error error) noexcept {
-    return http_transfer_coding_decode_result(consumed, http_transfer_coding_decode_failure(error));
-}
-
-}  // namespace detail
-
 namespace {
 
 constexpr std::size_t transfer_coding_scratch_bytes = 4096;
@@ -213,24 +26,32 @@ struct transfer_coding_scratch_buffer final {
     std::array<char, transfer_coding_scratch_bytes> bytes_;
 };
 
-struct transfer_coding_stage final {
-    transfer_coding_stage(http_content_coding coding, protocol_byte_limit decoded_limit) :
-        decoder_(coding, decoded_limit) {}
+[[nodiscard]] http_content_coding checked_transfer_coding(http_content_coding coding) {
+    if (!is_http_transfer_coding(coding)) {
+        throw std::invalid_argument("unsupported HTTP transfer coding");
+    }
+    return coding;
+}
 
-    detail::transfer_coding_decoder decoder_;
+struct transfer_coding_stage final {
+    transfer_coding_stage(http_content_coding coding, protocol_byte_limit decoded_limit, http_codec_memory* memory) :
+        decoder_(checked_transfer_coding(coding), {.max_decoded_bytes_ = decoded_limit.read_ceiling(), .memory_ = memory}) {}
+
+    detail::http_content_decoder_stream decoder_;
     std::size_t begin_{0};
     std::size_t end_{0};
     bool complete_{false};
+    bool received_input_{false};
 };
 
 }  // namespace
 
 struct http_transfer_coding_stack_decoder::impl_type final {
-    impl_type(std::span<const http_content_coding> codings, protocol_byte_limit decoded_limit) :
+    impl_type(std::span<const http_content_coding> codings, protocol_byte_limit decoded_limit, http_codec_memory* memory) :
         stage_count_(codings.size()) {
         std::size_t index = 0;
         for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {
-            stages_[index++].emplace(*coding, decoded_limit);
+            stages_[index++].emplace(*coding, decoded_limit, memory);
         }
     }
     std::array<std::optional<transfer_coding_stage>, max_content_codings> stages_{};
@@ -241,11 +62,11 @@ struct http_transfer_coding_stack_decoder::impl_type final {
     std::optional<http_content_decode_error> failure_;
 };
 
-http_transfer_coding_stack_decoder::http_transfer_coding_stack_decoder(std::span<const http_content_coding> codings, protocol_byte_limit decoded_limit) {
+http_transfer_coding_stack_decoder::http_transfer_coding_stack_decoder(std::span<const http_content_coding> codings, protocol_byte_limit decoded_limit, http_codec_memory* memory) {
     if (codings.empty() || codings.size() > max_content_codings) {
         throw std::invalid_argument("invalid transfer-coding stack length");
     }
-    impl_ = new impl_type(codings, decoded_limit);
+    impl_ = new impl_type(codings, decoded_limit, memory);
 }
 
 http_transfer_coding_stack_decoder::~http_transfer_coding_stack_decoder() {
@@ -291,6 +112,7 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(st
             const auto output = index + 1 == impl_->stage_count_ ? output_buffer : std::span<char>(impl_->buffers_[index].bytes_);
             const auto decoded = stage.decoder_.decode(layer_input, output);
             const auto consumed = decoded.consumed_bytes();
+            stage.received_input_ = stage.received_input_ || consumed != 0;
             if (index == 0) {
                 wire_consumed += consumed;
             } else {
@@ -357,6 +179,7 @@ void http_transfer_coding_stack_decoder::reset() {
         stage.begin_ = 0;
         stage.end_ = 0;
         stage.complete_ = false;
+        stage.received_input_ = false;
     }
     impl_->failure_.reset();
 }
@@ -365,7 +188,7 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::finish_in
     if (impl_->failure_.has_value()) {
         return http_transfer_coding_decode_result(0, http_transfer_coding_decode_failure(*impl_->failure_));
     }
-    const bool wire_received_input = impl_->stages_[0]->decoder_.received_input();
+    const bool wire_received_input = impl_->stages_[0]->received_input_;
     for (std::size_t index = 0; index < impl_->stage_count_; ++index) {
         auto& stage = *impl_->stages_[index];
         if (index + 1 < impl_->stage_count_ && stage.begin_ != stage.end_) {
@@ -374,7 +197,7 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::finish_in
         if (stage.complete_) {
             continue;
         }
-        if (index > 0 && wire_received_input && !stage.decoder_.received_input()) {
+        if (index > 0 && wire_received_input && !stage.received_input_) {
             impl_->failure_ = http_content_decode_error::invalid_content;
             return http_transfer_coding_decode_result(0, http_transfer_coding_decode_failure(*impl_->failure_));
         }

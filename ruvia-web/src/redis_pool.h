@@ -459,7 +459,7 @@ private:
 // Runs an EVALSHA argument list for `script`; a NOSCRIPT reply loads the body
 // through EVAL once within the same operation. `io_metrics` is the request's
 // counter block, or null outside a request.
-[[nodiscard]] task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_script& script, redis_orm_arguments_type args, request_io_metrics* io_metrics, operation_options options);
+[[nodiscard]] task<redis_value> execute_redis_script(redis_pool& pool, redis_script script, std::vector<std::string> args, request_io_metrics* io_metrics, operation_options options);
 
 }  // namespace ruvia::detail
 

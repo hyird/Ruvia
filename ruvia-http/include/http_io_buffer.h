@@ -46,7 +46,9 @@ public:
     http_io_buffer(const http_io_buffer&) = delete;
     http_io_buffer& operator=(const http_io_buffer&) = delete;
     http_io_buffer(http_io_buffer&& other) noexcept;
-    http_io_buffer& operator=(http_io_buffer&&) = delete;
+    // Releases existing storage, then takes the readable window and capacity.
+    // The source becomes empty and reusable; self-assignment has no effect.
+    http_io_buffer& operator=(http_io_buffer&& other) noexcept;
     ~http_io_buffer();
 
     // Readable bytes.

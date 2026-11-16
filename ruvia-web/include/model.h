@@ -43,6 +43,8 @@ struct model_parse_options final {
     // Totals across the complete typed or dynamic JSON document, including nested arrays.
     std::size_t max_array_elements_{64 * 1024};
     std::size_t max_representation_bytes_{16 * 1024 * 1024};
+    // Reject unknown schema fields at every typed model nesting level.
+    bool reject_unknown_fields_{false};
 };
 
 // 不可信输入错误属于模型领域；HTTP 状态仅由请求边界决定。
@@ -1760,9 +1762,44 @@ template <typename t_type>
 // A parse-local, conservative representation budget.
 class json_parse_budget final {
 public:
-    explicit json_parse_budget(model_parse_options options = {}) noexcept :
+    explicit json_parse_budget(model_parse_options options = {}, std::vector<validation_issue>* issues = nullptr) noexcept :
         elements_(options.max_array_elements_),
-        bytes_(options.max_representation_bytes_) {}
+        bytes_(options.max_representation_bytes_),
+        reject_unknown_fields_(options.reject_unknown_fields_),
+        issues_(issues) {}
+
+    class path_scope final {
+    public:
+        path_scope(json_parse_budget& budget, const model::model_path& path) noexcept :
+            budget_(budget),
+            previous_(std::exchange(budget.path_, &path)) {}
+        path_scope(const path_scope&) = delete;
+        path_scope& operator=(const path_scope&) = delete;
+        ~path_scope() {
+            budget_.path_ = previous_;
+        }
+
+    private:
+        json_parse_budget& budget_;
+        const model::model_path* previous_;
+    };
+
+    [[nodiscard]] const model::model_path& path() const noexcept {
+        return *path_;
+    }
+
+    [[nodiscard]] bool reject_unknown_field() {
+        if (!reject_unknown_fields_) {
+            return false;
+        }
+        rejected_ = true;
+        if (issues_ != nullptr) {
+            std::string field;
+            path().render(field);
+            issues_->push_back(validation_issue({.field_ = field, .code_ = "unknown_field", .message_ = "is not declared"}));
+        }
+        return true;
+    }
 
     [[nodiscard]] bool consume_bytes(std::size_t bytes_value) noexcept {
         if (bytes_value > bytes_) {
@@ -1796,7 +1833,7 @@ public:
     }
 
     [[nodiscard]] bool exhausted() const noexcept {
-        return exhausted_;
+        return exhausted_ || rejected_;
     }
 
     [[nodiscard]] std::size_t element_checkpoint() const noexcept {
@@ -1818,6 +1855,11 @@ private:
     std::size_t elements_;
     std::size_t bytes_;
     bool exhausted_{false};
+    bool reject_unknown_fields_;
+    bool rejected_{false};
+    std::vector<validation_issue>* issues_;
+    model::model_path root_path_;
+    const model::model_path* path_{&root_path_};
 };
 
 template <typename t_type>
@@ -1898,10 +1940,12 @@ private:
     template <typename model_type>
     [[nodiscard]] static bool visit_json_field(model_type& value, std::string_view key, std::string_view& value_input, std::size_t depth, model_string_storage string_storage, json_parse_budget& budget) {
         bool field_result = true;
+        const model::model_path field_path(budget.path(), key);
+        const json_parse_budget::path_scope scope(budget, field_path);
         const bool matched = model::visit_model_field_by_wire_name(value, model::model_access::schema<model_type>(), key, field_result, [&](auto& slot) -> bool {
             return parse_json_field_slot(slot, value_input, depth, string_storage, budget);
         });
-        return matched ? field_result : budget.skip_value(value_input, depth + 1);
+        return matched ? field_result : !budget.reject_unknown_field() && budget.skip_value(value_input, depth + 1);
     }
 
     template <typename model_type>
@@ -2008,7 +2052,8 @@ template <typename sequence_type>
     using element_type = typename traits_type::value_type;
 
     sequence_type value;
-    const bool consumed = consume_json_array_elements(input, depth, [&value, depth, string_storage, &budget](std::string_view& element_input) {
+    std::size_t index = 0;
+    const bool consumed = consume_json_array_elements(input, depth, [&value, &index, depth, string_storage, &budget](std::string_view& element_input) {
         if (!budget.consume_element()) {
             return false;
         }
@@ -2018,6 +2063,8 @@ template <typename sequence_type>
         if (!budget.consume_bytes(element_bytes)) {
             return false;
         }
+        const model::model_path item_path(budget.path(), index++);
+        const json_parse_budget::path_scope scope(budget, item_path);
         auto element = parse_json_value<element_type>(element_input, depth + 1, string_storage, budget);
         if (!element.has_value()) {
             return false;
@@ -2124,8 +2171,8 @@ template <typename t_type>
 // representation budget of `options`. Field structure inside the value is not
 // checked; see parse_json_document.
 template <typename t_type>
-[[nodiscard]] std::optional<t_type> parse_complete_json_value(std::string_view input, model_string_storage string_storage, model_parse_options options = {}) {
-    json_parse_budget budget(options);
+[[nodiscard]] std::optional<t_type> parse_complete_json_value(std::string_view input, model_string_storage string_storage, model_parse_options options = {}, std::vector<validation_issue>* issues = nullptr) {
+    json_parse_budget budget(options, issues);
     if (!budget.consume_bytes(sizeof(t_type))) {
         return std::nullopt;
     }
@@ -2712,6 +2759,15 @@ protected:
     explicit json_token_base(model_text_storage&& storage) noexcept :
         storage_(std::move(storage)) {}
 
+    template <typename model_type>
+        requires is_model<model_type>
+    explicit json_token_base(const model_type& value) {
+        std::string output;
+        output.reserve(json_size_hint_value(value) + 1);
+        model_json_access::append(output, value);
+        storage_.assign_owned(std::move(output));
+    }
+
     [[nodiscard]] static model_parse_result<derived_type> parse_token(std::string_view body, model_parse_options options, bool require_object, const char* error_message) {
         if (!is_complete_json_value(body, options, require_object)) {
             return model_parse_result<derived_type>(model_parse_error(model_parse_error::code_type::invalid_format, error_message));
@@ -2752,6 +2808,11 @@ public:
     json_value() noexcept :
         base_type(detail::borrowed_model_token_tag{}, "null") {}
 
+    template <typename model_type>
+        requires detail::is_model<model_type>
+    explicit json_value(const model_type& value) :
+        base_type(value) {}
+
     [[nodiscard]] static model_parse_result<json_value> parse(std::string_view body, model_parse_options options = {});
 
     template <typename traits_type, typename allocator_type>
@@ -2767,7 +2828,7 @@ public:
 
     [[nodiscard]] kind_type kind() const noexcept {
         auto input = view();
-        detail::skip_json_whitespace(input);
+        skip_json_whitespace(input);
         if (input.empty()) {
             return kind_type::null;
         }
@@ -2856,6 +2917,11 @@ public:
     json_object() noexcept :
         base_type(detail::borrowed_model_token_tag{}, "{}") {}
 
+    template <typename model_type>
+        requires detail::is_model<model_type>
+    explicit json_object(const model_type& value) :
+        base_type(value) {}
+
     [[nodiscard]] static model_parse_result<json_object> parse(std::string_view body, model_parse_options options = {});
 
     template <typename traits_type, typename allocator_type>
@@ -2907,9 +2973,9 @@ template <typename visitor_type>
         return false;
     }
     auto input = view();
-    if (!detail::consume_json_array_elements(input, 0, [&visitor](std::string_view& element_input) {
+    if (!consume_json_array_elements(input, 0, [&visitor](std::string_view& element_input) {
         const auto start = element_input;
-        if (!detail::skip_json_value(element_input, 1)) {
+        if (!skip_json_value(element_input, 1)) {
             return false;
         }
         json_value value(detail::borrowed_model_token_tag{}, start.substr(0, start.size() - element_input.size()));
@@ -2917,7 +2983,7 @@ template <typename visitor_type>
     })) {
         return false;
     }
-    detail::skip_json_whitespace(input);
+    skip_json_whitespace(input);
     return input.empty();
 }
 
@@ -2987,6 +3053,20 @@ template <typename t_type>
     }
     detail::append_json_value(output, value);
     return output;
+}
+
+// Dynamic tokens retain JSON text, so conversion writes their owned storage
+// directly through the model writer, without parsing the generated token.
+template <typename model_type>
+    requires detail::is_model<model_type>
+[[nodiscard]] json_value to_json_value(const model_type& value) {
+    return json_value(value);
+}
+
+template <typename model_type>
+    requires detail::is_model<model_type>
+[[nodiscard]] json_object to_json_object(const model_type& value) {
+    return json_object(value);
 }
 
 }  // namespace ruvia
@@ -3167,11 +3247,20 @@ template <typename t_type>
 template <typename t_type>
     requires detail::is_model_json_value<t_type>
 [[nodiscard]] model_parse_result<t_type> parse_json(std::string_view body, model_parse_options options = {}) {
-    auto parsed_value = detail::parse_complete_json_value<t_type>(body, detail::model_string_storage::owned, options);
+    std::vector<validation_issue> issues;
+    auto parsed_value = detail::parse_complete_json_value<t_type>(body, detail::model_string_storage::owned, options, &issues);
     if (!parsed_value) {
-        return model_parse_result<t_type>(model_parse_error(model_parse_error::code_type::invalid_format, "invalid JSON value"));
+        return model_parse_result<t_type>(model_parse_error(model_parse_error::code_type::invalid_format, "invalid JSON value", std::move(issues)));
     }
     return detail::finish_model_parse(std::move(*parsed_value));
+}
+
+// Consume the retained token directly through the typed model parser. The
+// result owns its strings and dynamic fields independently of the source.
+template <typename model_type, typename token_type>
+    requires(detail::is_model<model_type> && (detail::is_ruvia_json_value<token_type> || detail::is_ruvia_json_object<token_type>))
+[[nodiscard]] model_parse_result<model_type> from_json(const token_type& value, model_parse_options options = {}) {
+    return parse_json<model_type>(value.view(), options);
 }
 
 template <typename t_type>
@@ -3198,7 +3287,7 @@ template <typename t_type>
     requires detail::is_model_field<t_type>
 [[nodiscard]] inline json_field_lookup<t_type> json_object::get(std::string_view field) const& {
     std::optional<std::string_view> match;
-    const auto visited = detail::visit_json_object_fields(view(), [&match, field](std::string_view key, std::string_view value_view) {
+    const auto visited = visit_json_object_fields(view(), [&match, field](std::string_view key, std::string_view value_view) {
         if (key != field) {
             return true;
         }
@@ -3209,18 +3298,18 @@ template <typename t_type>
         return true;
     });
     switch (visited) {
-        case detail::json_object_visit_result::stopped:
+        case json_object_visit_result::stopped:
             return json_field_lookup<t_type>(unique_lookup_status::repeated);
-        case detail::json_object_visit_result::invalid:
+        case json_object_visit_result::invalid:
             // Every construction path validates the complete object.
             throw std::logic_error("json_object token is not a complete JSON object");
-        case detail::json_object_visit_result::complete:
+        case json_object_visit_result::complete:
             break;
     }
     if (!match) {
         return json_field_lookup<t_type>(unique_lookup_status::absent);
     }
-    detail::skip_json_whitespace(*match);
+    skip_json_whitespace(*match);
     const json_value value(detail::borrowed_model_token_tag{}, *match);
     return json_field_lookup<t_type>(value.get<t_type>());
 }
@@ -3282,12 +3371,13 @@ template <validation_target target>
 }
 
 template <validation_target target, typename model_type>
-[[nodiscard]] model_type parse_and_validate_request_model(std::conditional_t<target == validation_target::json || target == validation_target::form, std::string_view, std::span<const http_header_view>> input) {
+[[nodiscard]] model_type parse_and_validate_request_model(std::conditional_t<target == validation_target::json || target == validation_target::form, std::string_view, std::span<const http_header_view>> input, model_parse_options options = {}) {
     auto parsed = [&]() -> model_parse_result<model_type> {
         if constexpr (target == validation_target::json) {
-            auto value = parse_complete_json_value<model_type>(input, model_string_storage::borrowed);
+            std::vector<validation_issue> issues;
+            auto value = parse_complete_json_value<model_type>(input, model_string_storage::borrowed, options, &issues);
             if (!value) {
-                return model_parse_result<model_type>(model_parse_error(model_parse_error::code_type::invalid_format, "invalid JSON body"));
+                return model_parse_result<model_type>(model_parse_error(model_parse_error::code_type::invalid_format, "invalid JSON body", std::move(issues)));
             }
             return finish_model_parse(std::move(*value));
         } else if constexpr (target == validation_target::form) {
@@ -3308,7 +3398,7 @@ template <validation_target target, typename model_type>
 
 // One validating middleware per request source: parses the model from `target`,
 // runs its declared rules, binds it for the handler, then continues the chain.
-template <validation_target target, typename body_type>
+template <validation_target target, typename body_type, bool reject_unknown_fields = false>
 class model_validation_middleware final {
 public:
     static_assert(is_model<body_type>, "request validation middleware requires a RUVIA_MODEL");
@@ -3320,8 +3410,8 @@ public:
 
 }  // namespace detail
 
-template <typename body_type>
-using json_body = detail::model_validation_middleware<validation_target::json, body_type>;
+template <typename body_type, bool reject_unknown_fields = false>
+using json_body = detail::model_validation_middleware<validation_target::json, body_type, reject_unknown_fields>;
 
 template <typename body_type>
 using form_body = detail::model_validation_middleware<validation_target::form, body_type>;

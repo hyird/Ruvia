@@ -19,6 +19,7 @@
 #include "app.h"
 #include "controller.h"
 #include "http_request.h"
+#include "json_codec.h"
 #include "middleware.h"
 #include "model.h"
 #include "test_app.h"
@@ -338,6 +339,110 @@ TEST(Ruvia, model_json_codec_handles_presence_defaults_and_serialization_options
     auto values = ruvia::parse_json<codec_presence>(R"({"required":"x","nullable":null,"empty":""})").take_value();
     EXPECT_TRUE(values.is_present<"nullable">() && values.is_null<"nullable">());
     EXPECT_EQ(std::string_view(ruvia::to_json(values)), std::string_view(R"({"required":"x","nullable":null,"defaulted":7,"emitted":null})"));
+}
+
+TEST(Ruvia, public_json_primitives_escape_parse_and_consume_one_cursor) {
+    std::string escaped;
+    escaped.reserve(ruvia::json_string_size_hint("line\n\""));
+    ruvia::append_json_string(escaped, "line\n\"");
+    EXPECT_EQ(escaped, R"("line\n\"")");
+    std::string_view input = escaped;
+    std::string decoded;
+    const auto token = ruvia::parse_json_string(input, &decoded);
+    ASSERT_TRUE(token.has_value());
+    EXPECT_EQ(ruvia::json_string_text(*token, decoded), "line\n\"");
+    EXPECT_TRUE(input.empty());
+
+    input = R"({"na\u006de":[1,2],"flag":true} trailing)";
+    std::size_t fields = 0;
+    std::size_t elements = 0;
+    ASSERT_TRUE(ruvia::consume_json_object_fields(input, 0, [&](std::string_view key, std::string_view& value) {
+        ++fields;
+        if (key == "name") {
+            return ruvia::consume_json_array_elements(value, 1, [&](std::string_view& element) {
+                int number = 0;
+                if (!ruvia::parse_json_number_value(element, number)) {
+                    return false;
+                }
+                elements += static_cast<std::size_t>(number);
+                return true;
+            });
+        }
+        return key == "flag" && ruvia::consume_json_literal(value, "true");
+    }));
+    EXPECT_EQ(fields, std::size_t{2});
+    EXPECT_EQ(elements, std::size_t{3});
+    EXPECT_EQ(input, " trailing");
+    EXPECT_EQ(ruvia::visit_json_object_fields(R"({"x":null})", [](std::string_view key, std::string_view value) {
+        return key == "x" && value == "null";
+    }),
+        ruvia::json_object_visit_result::complete);
+}
+
+TEST(Ruvia, model_json_strict_fields_reject_unknown_names_recursively_in_one_parse) {
+    constexpr ruvia::model_parse_options strict{.reject_unknown_fields_ = true};
+    const auto check_unknown = [](const auto& result, std::string_view expected) {
+        ASSERT_FALSE(result.has_value());
+        EXPECT_EQ(result.error().code(), ruvia::model_parse_error::code_type::invalid_format);
+        ASSERT_EQ(result.error().issues().size(), std::size_t{1});
+        EXPECT_EQ(result.error().issues()[0].field(), expected);
+        EXPECT_EQ(result.error().issues()[0].code(), "unknown_field");
+    };
+    const auto root = ruvia::parse_json<codec_empty>(R"({"extra":null})", strict);
+    check_unknown(root, "extra");
+    const auto escaped = ruvia::parse_json<codec_empty>(R"({"ex\u0074ra":null})", strict);
+    check_unknown(escaped, "extra");
+    const auto nested = ruvia::parse_json<ruvia::test::nested_model_envelope>(R"({"primary":{"id":1,"extra":true},"items":[]})", strict);
+    check_unknown(nested, "primary.extra");
+    const auto array = ruvia::parse_json<ruvia::test::nested_model_envelope>(R"({"primary":{"id":1},"items":[{"id":2,"extra":true}]})", strict);
+    check_unknown(array, "items[0].extra");
+    const auto root_array = ruvia::parse_json<ruvia::array<ruvia::test::nested_model_item>>(R"([{"id":2,"extra":true}])", strict);
+    check_unknown(root_array, "[0].extra");
+    const auto boxed = ruvia::parse_json<codec_node>(R"({"name":"root","children":[{"name":"leaf","extra":true}]})", strict);
+    check_unknown(boxed, "children[0].extra");
+    EXPECT_TRUE(ruvia::parse_json<codec_dynamic>(R"({"value":{"arbitrary":true},"object":{"arbitrary":null}})", strict).has_value());
+    EXPECT_TRUE(ruvia::parse_json<codec_empty>(R"({"extra":null})").has_value());
+    default_evaluations = 0;
+    const auto rejected_before_defaults = ruvia::parse_json<codec_presence>(R"({"extra":null,"required":"x"})", strict);
+    check_unknown(rejected_before_defaults, "extra");
+    EXPECT_EQ(default_evaluations, std::size_t{0});
+}
+
+TEST(Ruvia, models_convert_directly_to_owned_dynamic_tokens_and_back_with_schema_diagnostics) {
+    auto model = ruvia::parse_json<codec_presence>(R"({"required":"retained","nullable":null,"empty":""})").take_value();
+    default_evaluations = 0;
+    const auto object = ruvia::to_json_object(model);
+    const auto value = ruvia::to_json_value(model);
+    const ruvia::json_object constructed_object(model);
+    const ruvia::json_value constructed_value(model);
+    EXPECT_EQ(default_evaluations, std::size_t{0});
+    model.set<"required">("changed");
+    EXPECT_EQ(object.view(), R"({"required":"retained","nullable":null,"defaulted":7,"emitted":null})");
+    EXPECT_EQ(value.view(), object.view());
+    EXPECT_EQ(constructed_object.view(), object.view());
+    EXPECT_EQ(constructed_value.view(), object.view());
+    const auto owned = [&] {
+        const auto token = ruvia::to_json_object(model);
+        return ruvia::from_json<codec_presence>(token).take_value();
+    }();
+    EXPECT_EQ(owned.get<"required">().view(), "changed");
+    EXPECT_TRUE(owned.is_null<"nullable">());
+    EXPECT_TRUE(owned.is_null<"emitted">());
+    EXPECT_EQ(owned.get<"defaulted">()->value_, 7);
+    EXPECT_TRUE(ruvia::from_json<codec_presence>(value).has_value());
+    const auto unknown = ruvia::json_object::parse(R"({"required":"x","extra":null})").take_value();
+    const auto rejected = ruvia::from_json<codec_presence>(unknown, {.reject_unknown_fields_ = true});
+    ASSERT_FALSE(rejected.has_value());
+    EXPECT_EQ(rejected.error().issues()[0].field(), "extra");
+    const auto invalid = ruvia::json_value::parse(R"({"value":"invalid"})").take_value();
+    const auto rules = ruvia::from_json<codec_rules>(invalid);
+    ASSERT_FALSE(rules.has_value());
+    EXPECT_EQ(rules.error().code(), ruvia::model_parse_error::code_type::validation_failed);
+    EXPECT_EQ(rules.error().issues()[0].field(), "value");
+    const auto nested = ruvia::json_object::parse(R"({"primary":{},"items":[]})").take_value();
+    const auto structure = ruvia::from_json<ruvia::test::nested_model_envelope>(nested);
+    ASSERT_FALSE(structure.has_value());
+    EXPECT_EQ(structure.error().issues()[0].field(), "primary.id");
 }
 
 TEST(Ruvia, model_json_codec_validates_on_parse_and_serializes_without_running_validation_rules) {
@@ -1198,6 +1303,9 @@ RUVIA_MODEL(dynamic_binding_body, RUVIA_OPTIONAL_FIELD(payload, ruvia::json_valu
 
 RUVIA_MODEL(tags_binding_input, RUVIA_OPTIONAL_FIELD(tags, ruvia::array<ruvia::string>));
 
+using strict_binding_json = ruvia::json_body<request_binding_body, true>;
+using strict_nested_json = ruvia::json_body<ruvia::test::nested_model_envelope, true>;
+
 namespace {
 
 ruvia::task<request_binding_out> make_response(std::string_view id, std::string_view name) {
@@ -1216,6 +1324,8 @@ public:
     RUVIA_PATCH("/request-binding-patch", patch, ruvia::json_body<patch_binding_body>);
     RUVIA_POST("/request-binding-echo", echo, ruvia::json_body<request_binding_body>);
     RUVIA_POST("/request-binding-dynamic", dynamic, ruvia::json_body<dynamic_binding_body>);
+    RUVIA_POST("/request-binding-strict", echo, strict_binding_json);
+    RUVIA_POST("/request-binding-strict-nested", strict_nested, strict_nested_json);
     RUVIA_POST("/request-binding-form", echo, ruvia::form_body<request_binding_body>);
     RUVIA_GET("/request-binding-query-tags", tags, ruvia::query_model<tags_binding_input>);
     RUVIA_GET("/request-binding-header-tags", tags, ruvia::header_model<tags_binding_input>);
@@ -1232,6 +1342,10 @@ public:
 
     ruvia::task<ruvia::http_response> echo(ruvia::context& c) {
         co_return c.json(c.req().validated<request_binding_body>());
+    }
+
+    ruvia::task<ruvia::http_response> strict_nested(ruvia::context& c) {
+        co_return c.json(c.req().validated<ruvia::test::nested_model_envelope>());
     }
 
     ruvia::task<ruvia::http_response> patch(ruvia::context& c) {
@@ -1278,6 +1392,23 @@ TEST(Ruvia, request_binding_serializes_the_validated_model_without_copying_field
         const auto rejected = app.request(ruvia::test_request::post("/request-binding-echo").json(body));
         EXPECT_TRUE(rejected.status() == ruvia::http_status::bad_request);
     }
+}
+
+TEST(Ruvia, json_body_strict_mode_rejects_unknown_fields_without_affecting_other_sources) {
+    ruvia::test_app app;
+    app.controllers<request_binding_controller>();
+    const auto accepted = app.request(ruvia::test_request::post("/request-binding-strict").json(R"({"name":"Al"})"));
+    EXPECT_EQ(accepted.status(), ruvia::http_status::ok);
+    const auto rejected = app.request(ruvia::test_request::post("/request-binding-strict").json(R"({"name":"Al","extra":true})"));
+    EXPECT_EQ(rejected.status(), ruvia::http_status::bad_request);
+    EXPECT_NE(rejected.body().find("unknown_field"), std::string_view::npos);
+    const auto nested = app.request(ruvia::test_request::post("/request-binding-strict-nested").json(R"({"primary":{"id":1},"items":[{"id":2,"extra":true}]})"));
+    EXPECT_EQ(nested.status(), ruvia::http_status::bad_request);
+    EXPECT_NE(nested.body().find("items[0].extra"), std::string_view::npos);
+    const auto permissive = app.request(ruvia::test_request::post("/request-binding-echo").json(R"({"name":"Al","extra":true})"));
+    EXPECT_EQ(permissive.status(), ruvia::http_status::ok);
+    const auto form = app.request(ruvia::test_request::post("/request-binding-form").form("name=Al&extra=true"));
+    EXPECT_EQ(form.status(), ruvia::http_status::ok);
 }
 
 TEST(Ruvia, request_binding_form_keeps_malformed_percent_sequences_literally) {

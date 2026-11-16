@@ -97,6 +97,25 @@ public:
     http_client_response_bytes& operator=(http_client_response_bytes&&) noexcept;
     ~http_client_response_bytes();
 
+    class allocation_deleter final {
+    public:
+        allocation_deleter() noexcept = default;
+        void operator()(std::byte* bytes) const noexcept;
+        [[nodiscard]] std::size_t size() const noexcept {
+            return size_;
+        }
+
+    private:
+        friend class http_client_response_bytes;
+        std::shared_ptr<detail::http_client_result_budget_domain> budget_domain_;
+        std::size_t size_{0};
+        std::size_t reserved_{0};
+    };
+    using owned_allocation = std::unique_ptr<std::byte[], allocation_deleter>;
+
+    // Transfers the backing allocation together with its retained-byte budget.
+    [[nodiscard]] owned_allocation take_bytes() && noexcept;
+
     [[nodiscard]] std::size_t size() const noexcept {
         return size_;
     }
@@ -228,6 +247,8 @@ public:
     void reprioritize(http_priority) && = delete;
     [[nodiscard]] std::span<const http_header> headers() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const http_header> headers() const&& = delete;
+    // Transfers the existing field storage; metadata borrows are invalidated.
+    [[nodiscard]] std::vector<http_header> take_headers() &&;
     [[nodiscard]] std::span<const http_header> trailers() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const http_header> trailers() const&& = delete;
     // Case-insensitive; the first field line wins. unique_header() reports a

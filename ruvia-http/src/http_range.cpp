@@ -251,12 +251,11 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, ht
 }
 
 std::optional<http_content_range> parse_http_content_range(std::string_view field_value) noexcept {
-    field_value = http_trim_ows(field_value);
     constexpr std::string_view unit = "bytes";
-    if (!http_ascii_starts_with_ignore_case(field_value, unit) || field_value.size() == unit.size() || !is_http_ows_char(field_value[unit.size()])) {
+    if (!http_ascii_starts_with_ignore_case(field_value, unit) || field_value.size() == unit.size() || field_value[unit.size()] != ' ') {
         return std::nullopt;
     }
-    const auto spec = http_trim_ows(field_value.substr(unit.size()));
+    const auto spec = field_value.substr(unit.size() + 1);
     const auto dash = spec.find('-');
     if (dash == std::string_view::npos) {
         return std::nullopt;

@@ -332,7 +332,7 @@ void append_migration_id(std::vector<std::string>& ids, std::string_view id) {
 // known collisions costs nothing here and leaves no judgement call.
 [[nodiscard]] std::string migration_checksum(std::string_view sql) {
     std::string hex;
-    http_append_lower_hex(hex, detail::sha256_of(sql));
+    http_append_lower_hex(hex, sha256_of(sql));
     return hex;
 }
 

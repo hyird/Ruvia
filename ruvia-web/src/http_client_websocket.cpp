@@ -179,6 +179,21 @@ public:
             report_unhandled_failure("WebSocket client session", failure);
         }
     }
+    static task<std::optional<websocket_message>> read(void* target, operation_options options) {
+        auto& connection = *static_cast<websocket_session_connection<http_client_websocket_transport>*>(target);
+        auto message = co_await connection.read(std::move(options));
+        if (!message && connection.protocol().termination() == websocket_termination::eof) {
+            throw http_client_error(make_error_code(http_client_errc::websocket_eof_before_close), "WebSocket EOF before Close");
+        }
+        co_return message;
+    }
+    static task<void> close(void* target, websocket_close_options options, operation_options operation) {
+        auto& connection = *static_cast<websocket_session_connection<http_client_websocket_transport>*>(target);
+        co_await connection.close(options, std::move(operation));
+        if (connection.protocol().termination() == websocket_termination::eof) {
+            throw http_client_error(make_error_code(http_client_errc::websocket_eof_before_close), "WebSocket EOF before Close");
+        }
+    }
 
 private:
     static connection_scanner_options scanner_options(const websocket_lifecycle_options& lifecycle) {
@@ -354,6 +369,8 @@ task<websocket> http_client_websocket_request::connect_owned(http_client_websock
     }
     auto owner = std::make_shared<detail::client_websocket_session>(pool, std::move(*tunnel), *handshake, request.deflate_, request.lifecycle_, request.max_message_bytes_);
     auto result = detail::make_websocket_facade(owner->connection_);
+    result.state_->read_ = &detail::client_websocket_session::read;
+    result.state_->close_ = &detail::client_websocket_session::close;
     pool.tasks().spawn(detail::client_websocket_session::run(owner, pool.pool_stop_token()));
     result.state_->owner_ = owner;
     result.state_->retire_ = &detail::client_websocket_session::retire;

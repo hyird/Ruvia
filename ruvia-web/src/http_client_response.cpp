@@ -510,6 +510,21 @@ http_client_response_bytes::~http_client_response_bytes() {
     release();
 }
 
+void http_client_response_bytes::allocation_deleter::operator()(std::byte* bytes) const noexcept {
+    delete[] bytes;
+    if (budget_domain_ != nullptr) {
+        budget_domain_->release(reserved_);
+    }
+}
+
+http_client_response_bytes::owned_allocation http_client_response_bytes::take_bytes() && noexcept {
+    allocation_deleter deleter;
+    deleter.budget_domain_ = std::move(budget_domain_);
+    deleter.size_ = std::exchange(size_, 0);
+    deleter.reserved_ = std::exchange(reserved_, 0);
+    return owned_allocation(data_.release(), std::move(deleter));
+}
+
 void http_client_response_bytes::release() noexcept {
     // Free the owned byte buffer before making its reservation available to another result.
     data_.reset();
@@ -564,6 +579,8 @@ const std::error_category& http_client_category() noexcept {
                     return "HTTP handshake rejected";
                 case http_client_errc::message_too_large:
                     return "WebSocket message too large";
+                case http_client_errc::websocket_eof_before_close:
+                    return "WebSocket EOF before Close";
             }
             return "unknown HTTP client error";
         }
@@ -600,6 +617,9 @@ void prepare_forwarded_response_head(const detail::http_client_response_state& s
     auto& head = detail::context_access::mutable_stream_head(output.context_);
     const auto fields = std::span<const http_header>(state.headers_);
     const auto nominated = parse_http_connection_nominated_fields(fields);
+    if (nominated.status() != http_connection_fields_status::valid) {
+        throw http_client_error(make_error_code(http_client_errc::protocol_error), "invalid or oversized HTTP response Connection field");
+    }
     auto staged = head.headers().clone();
     staged.remove_header("content-length");
     staged.remove_header("transfer-encoding");
@@ -744,6 +764,11 @@ void http_client_response::reprioritize(http_priority priority) & {
 }
 std::span<const http_header> http_client_response::headers() const& {
     return require_response_state(state_).headers_;
+}
+std::vector<http_header> http_client_response::take_headers() && {
+    auto& state_value = require_response_state(state_);
+    check_response_operation_affinity(&state_value);
+    return std::exchange(state_value.headers_, {});
 }
 std::span<const http_header> http_client_response::trailers() const& {
     return require_response_state(state_).trailers_;
@@ -1041,6 +1066,9 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
                     std::vector<http_header_view> trailers;
                     trailers.reserve(state_value.trailers_.size());
                     const auto nominated = parse_http_connection_nominated_fields(state_value.headers_);
+                    if (nominated.status() != http_connection_fields_status::valid) {
+                        throw http_client_error(make_error_code(http_client_errc::protocol_error), "invalid or oversized HTTP response Connection field");
+                    }
                     for (const auto& field : state_value.trailers_) {
                         if (!is_http_hop_by_hop_trailer_field(field.name(), nominated)) {
                             trailers.emplace_back(field.name(), field.value());

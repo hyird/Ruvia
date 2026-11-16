@@ -19,18 +19,6 @@ namespace {
     return *authority->port() != 0;
 }
 
-// An encoded NUL in the path would decode into route matching, static file
-// lookup and handler parameters; reject it with the target. Callers validate
-// the path first, so every '%' starts a complete two-hex-digit escape.
-[[nodiscard]] bool has_encoded_nul(std::string_view path) noexcept {
-    for (auto escape = path.find('%'); escape != std::string_view::npos; escape = path.find('%', escape + 3)) {
-        if (path[escape + 1] == '0' && path[escape + 2] == '0') {
-            return true;
-        }
-    }
-    return false;
-}
-
 // Splits origin-form = absolute-path [ "?" query ] and validates both parts.
 [[nodiscard]] bool split_origin_form_target(std::string_view target, std::string_view& path, std::string_view& query) noexcept {
     if (target.empty() || target.front() != '/') {
@@ -39,7 +27,7 @@ namespace {
     const auto separator = target.find('?');
     path = separator == std::string_view::npos ? target : target.substr(0, separator);
     query = separator == std::string_view::npos ? std::string_view{} : target.substr(separator + 1);
-    return is_valid_uri_component(path, true, false) && !has_encoded_nul(path) && is_valid_uri_component(query, true, true);
+    return is_valid_uri_component(path, true, false, true) && is_valid_uri_component(query, true, true);
 }
 
 }  // namespace
@@ -82,56 +70,16 @@ bool is_valid_origin_or_asterisk_form_target(http_known_method method, std::stri
 namespace {
 
 [[nodiscard]] bool parse_absolute_target(http_known_method method, std::string_view target, request_target_view& output) noexcept {
-    // RFC 9112 section 3.2.2 defines absolute-form as an absolute-URI, but
-    // every caller is an origin server (or builds one of its requests). An
-    // origin only serves http(s) resources (RFC 9110 sections 4.2.1-4.2.2),
-    // and accepting other schemes would let a front proxy that recognises
-    // only http(s) URIs see a different target than the one routed here.
-    const auto scheme_end = target.find(':');
-    if (scheme_end == std::string_view::npos) {
+    const auto url = parse_http_url(target);
+    if (!url || url->fragment() || (!http_ascii_equals_ignore_case(url->scheme(), "http") && !http_ascii_equals_ignore_case(url->scheme(), "https"))) {
         return false;
     }
-    const auto scheme = target.substr(0, scheme_end);
-    if (!http_ascii_equals_ignore_case(scheme, "http") && !http_ascii_equals_ignore_case(scheme, "https")) {
-        return false;
-    }
-
-    const auto remainder = target.substr(scheme_end + 1);
-    const auto query_separator = remainder.find('?');
-    const auto hierarchy = query_separator == std::string_view::npos ? remainder : remainder.substr(0, query_separator);
-    const auto query = query_separator == std::string_view::npos ? std::string_view{} : remainder.substr(query_separator + 1);
-    // HTTP(S) URIs have a mandatory "//" authority.
-    if (!hierarchy.starts_with("//") || !is_valid_uri_component(query, true, true)) {
-        return false;
-    }
-
-    const auto authority_and_path = hierarchy.substr(2);
-    const auto path_separator = authority_and_path.find('/');
-    const auto authority = path_separator == std::string_view::npos ? authority_and_path : authority_and_path.substr(0, path_separator);
-    const auto path = path_separator == std::string_view::npos ? std::string_view{} : authority_and_path.substr(path_separator);
-    // The authority becomes the authoritative Host value, so it must be a
-    // non-empty HTTP Host. Userinfo is rejected at this trust boundary (RFC
-    // 9110 section 4.2.4) instead of being silently stripped.
-    if (authority.empty() || !is_valid_host_header(authority) || !is_valid_uri_component(path, true, false) || has_encoded_nul(path)) {
-        return false;
-    }
-
-    if (path.empty() && method == http_known_method::options && query_separator == std::string_view::npos) {
-        // RFC 9112 section 3.2.4: a proxy forwarding an absolute-form
-        // OPTIONS target with an empty path and no query to the final origin
-        // must use asterisk-form. Expose that route semantic directly even
-        // when this parser itself is the origin-facing recipient.
-        output.path_ = "*";
-    } else if (path.empty()) {
-        // RFC 9110 section 4.2.3; an OPTIONS target with a query remains
-        // distinct from server-wide "*".
-        output.path_ = "/";
-    } else {
-        output.path_ = path;
-    }
-    output.scheme_ = scheme;
-    output.query_ = query;
-    output.authority_ = authority;
+    // RFC 9112 section 3.2.4 preserves server-wide OPTIONS semantics only
+    // when both the path and query are absent.
+    output.path_ = !url->has_path() && method == http_known_method::options && !url->query() ? std::string_view("*") : url->path();
+    output.scheme_ = url->scheme();
+    output.query_ = url->query().value_or(std::string_view{});
+    output.authority_ = url->authority_text();
     output.form_ = http_request_target_form::absolute;
     return true;
 }
@@ -176,9 +124,6 @@ bool parse_request_target(http_known_method method, std::string_view target, req
         output.authority_ = {};
         output.form_ = http_request_target_form::origin;
         return true;
-    }
-    if (!is_valid_request_target_bytes(target)) {
-        return false;
     }
     return parse_absolute_target(method, target, output);
 }

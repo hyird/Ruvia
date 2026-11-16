@@ -8,11 +8,57 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
 #include "http_header.h"
 #include "http_priority.h"
+#include "http_structured_field.h"
+
+TEST(Ruvia, http_structured_scanner_borrows_contiguous_tokens_and_resets_reused_items) {
+    const std::string_view source = R"("escaped\"value";note=token, ?1, ?0, 1.25)";
+    ruvia::http_structured_parser parser{ruvia::http_structured_text_input{source}};
+    ruvia::http_structured_item item;
+    ASSERT_TRUE(parser.member(item));
+    EXPECT_EQ(item.kind_, ruvia::http_structured_item::kind_type::string);
+    EXPECT_EQ(item.text(), R"(escaped\"value)");
+    EXPECT_EQ(item.text().data(), source.data() + 1);
+    EXPECT_TRUE(item.has_escapes_);
+    ASSERT_TRUE(parser.take(','));
+    parser.ows();
+    ASSERT_TRUE(parser.member(item));
+    EXPECT_TRUE(item.boolean_);
+    EXPECT_FALSE(item.has_escapes_);
+    ASSERT_TRUE(parser.take(','));
+    parser.ows();
+    ASSERT_TRUE(parser.member(item));
+    EXPECT_FALSE(item.boolean_);
+    ASSERT_TRUE(parser.take(','));
+    parser.ows();
+    ASSERT_TRUE(parser.member(item));
+    EXPECT_EQ(item.kind_, ruvia::http_structured_item::kind_type::other);
+    EXPECT_TRUE(item.text().empty());
+    EXPECT_TRUE(parser.empty());
+}
+
+TEST(Ruvia, http_structured_scanner_retains_folded_quoted_strings_and_escapes) {
+    const std::string first = R"("alpha)";
+    const std::string second = R"(beta\"tail";note=?1)";
+    const std::array headers{ruvia::http_header_view{"Example", first}, ruvia::http_header_view{"Other", "ignored"}, ruvia::http_header_view{"example", second}};
+    ruvia::http_structured_parser parser{ruvia::http_structured_header_input{headers.begin(), headers.end(), "EXAMPLE"}};
+    ruvia::http_structured_item item;
+    ASSERT_TRUE(parser.member(item));
+    EXPECT_EQ(item.text(), R"(alpha, beta\"tail)");
+    EXPECT_TRUE(item.has_escapes_);
+    EXPECT_TRUE(parser.empty());
+    auto moved = std::move(item);
+    EXPECT_EQ(moved.text(), R"(alpha, beta\"tail)");
+
+    const std::array invalid{ruvia::http_header_view{"Example", R"("alpha\)"}, ruvia::http_header_view{"Example", R"("tail")"}};
+    ruvia::http_structured_parser invalid_parser{ruvia::http_structured_header_input{invalid.begin(), invalid.end(), "Example"}};
+    EXPECT_FALSE(invalid_parser.member(item));
+}
 
 TEST(Ruvia, http_priority_structured_dictionary_types_duplicates_and_parameters) {
     const auto parsed_value = ruvia::parse_http_priority("u=5;note=\"x\", i, extra=(token :YWJj:);p=?0");

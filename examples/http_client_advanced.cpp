@@ -33,7 +33,9 @@ ruvia::task<void> follow_redirect(const ruvia::http_client_ref& origin) {
         auto response = co_await origin.get(target).redirects(0).send();
         if (!ruvia::is_http_redirect_status(response.status())) {
             auto bytes_value = co_await response.bytes();
-            std::cout << "redirected bytes=" << bytes_value.bytes().size() << '\n';
+            auto allocation = std::move(bytes_value).take_bytes();
+            auto fields = std::move(response).take_headers();
+            std::cout << "redirected bytes=" << allocation.get_deleter().size() << " fields=" << fields.size() << '\n';
             co_return;
         }
         // A repeated Location cannot be recovered interoperably (RFC 9110 section 10.2.2).

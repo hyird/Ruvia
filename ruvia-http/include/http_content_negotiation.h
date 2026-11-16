@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string_view>
@@ -20,6 +21,21 @@ class http_request;
 // without whitespace around '='. A value with more than 64 nonempty parameters
 // is invalid.
 [[nodiscard]] bool is_valid_http_content_type_field_value(std::string_view value) noexcept;
+
+// Parses exactly one RFC 9110 qvalue (no surrounding whitespace), on the
+// thousand-point scale. Invalid syntax is distinct from the valid weight zero.
+[[nodiscard]] std::optional<int> parse_http_quality_value(std::string_view value) noexcept;
+
+// A validated Accept member. Views borrow the original input; parameters are
+// validated using the same bounded parser as representation negotiation.
+struct http_media_range final {
+    std::string_view type_;
+    std::string_view subtype_;
+    int quality_{1000};
+    std::size_t parameter_count_{0};
+};
+
+[[nodiscard]] std::optional<http_media_range> parse_http_media_range(borrowed_text value) noexcept;
 
 enum class http_accept_token_match_mode : std::uint8_t {
     exact,

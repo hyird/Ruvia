@@ -17,6 +17,19 @@
 
 using namespace ruvia::test;
 
+TEST(RuviaHttpPublicApi, transfer_codec_stages_share_request_native_budget_and_unwind_failed_construction) {
+    std::size_t stage_bytes = 0;
+    {
+        ruvia::http_codec_memory measuring;
+        http_transfer_coding_stack_decoder decoder(std::array{http_content_coding::gzip}, protocol_byte_limit::limited(1024), &measuring);
+        stage_bytes = measuring.live_bytes();
+    }
+    ASSERT_GT(stage_bytes, 0U);
+    ruvia::http_codec_memory memory(stage_bytes);
+    EXPECT_THROW((void)http_transfer_coding_stack_decoder((std::array{http_content_coding::gzip, http_content_coding::gzip}), protocol_byte_limit::limited(1024), &memory), std::bad_alloc);
+    EXPECT_EQ(memory.live_bytes(), 0U);
+}
+
 // Decoding a transfer-coded (chunked, then coded) request body.
 
 TEST(Ruvia, transfer_coding_stack_decodes_reverse_order_with_tiny_scratch) {

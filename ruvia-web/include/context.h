@@ -1097,14 +1097,14 @@ template <validation_target target>
     }
 }
 
-template <validation_target target, typename body_type>
-task<void> model_validation_middleware<target, body_type>::invoke(context& c, next& next_value) {
+template <validation_target target, typename body_type, bool reject_unknown_fields>
+task<void> model_validation_middleware<target, body_type, reject_unknown_fields>::invoke(context& c, next& next_value) {
     if constexpr (target == validation_target::json || target == validation_target::form) {
         if (!request_has_body_media_type<target>(c.req().header("Content-Type"))) {
             throw_invalid_content_type<target>();
         }
         const auto request_body = co_await c.req().text();
-        auto body = parse_and_validate_request_model<target, body_type>(request_body);
+        auto body = parse_and_validate_request_model<target, body_type>(request_body, {.reject_unknown_fields_ = reject_unknown_fields});
         auto binding = bind_validated_model(c, body);
         co_await next_value();
     } else {

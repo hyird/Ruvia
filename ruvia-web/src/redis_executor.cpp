@@ -1,3 +1,5 @@
+#include "redis_executor.h"
+
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -11,17 +13,37 @@
 #include <utility>
 #include <vector>
 
+#include <openssl/evp.h>
+
+#include "binary_text_encoding.h"
 #include "borrowed_text.h"
 #include "connection_lifecycle.h"
 #include "http_client_pool.h"
 #include "http_header.h"
 #include "io_operation.h"
 #include "redis_codec.h"
-#include "redis_orm.h"
 #include "redis_pool.h"
 #include "stop_token.h"
 
 namespace ruvia::detail {
+task<redis_value> execute_redis_script(redis_pool& pool, redis_script script, std::vector<std::string> args, request_io_metrics* io_metrics, operation_options options) {
+    scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
+    const operation_deadline deadline(options.timeout_);
+    {
+        auto reply = co_await pool.execute_borrowed(redis_command_args_view{args}, options, deadline);
+        if (reply.kind() != redis_value::kind_type::error || (reply.error() != "NOSCRIPT" && !reply.error().starts_with("NOSCRIPT "))) {
+            co_return reply;
+        }
+        // The error is consumed by this decision; release its storage before
+        // the fallback waits for its connection and response.
+    }
+    // The server's script cache was flushed or never loaded this script:
+    // EVAL runs the body and caches it under the same digest for later calls.
+    args[0].assign("EVAL");
+    args[1].assign(script.body());
+    co_return co_await pool.execute_owned(std::move(args), std::move(options), std::nullopt, nullptr, deadline);
+}
+
 // Classifies a raw pooled command before it is encoded. Connection-stateful
 // commands are rejected; WAIT/WAITAOF are accepted only where a barrier is
 // allowed. Returns whether the command needs the blocking pool; a blocking
@@ -183,6 +205,36 @@ void require_bounded_redis_wait(const operation_options& options, const char* me
 }  // namespace ruvia::detail
 
 namespace ruvia {
+
+struct redis_script::storage_type final {
+    explicit storage_type(std::string body) :
+        body_(std::move(body)) {
+        std::array<unsigned char, 20> digest;
+        std::size_t size = 0;
+        if (EVP_Q_digest(nullptr, "SHA1", nullptr, body_.data(), body_.size(), digest.data(), &size) != 1 || size != digest.size()) {
+            throw std::runtime_error("Redis script SHA1 computation failed");
+        }
+        http_encode_lower_hex(sha1_.data(), std::span<const unsigned char>(digest));
+    }
+    std::string body_;
+    std::array<char, 40> sha1_;
+};
+
+redis_script::redis_script(std::string_view body) :
+    storage_(own(std::string(body))) {}
+
+std::shared_ptr<const redis_script::storage_type> redis_script::own(std::string body) {
+    return std::make_shared<const storage_type>(std::move(body));
+}
+
+std::string_view redis_script::body() const& noexcept {
+    return storage_->body_;
+}
+
+std::string_view redis_script::sha1() const& noexcept {
+    return {storage_->sha1_.data(), storage_->sha1_.size()};
+}
+
 namespace {
 
 template <typename duration_type>
@@ -310,11 +362,31 @@ task<redis_value> redis_executor::command_owned(std::vector<std::string>&& args)
     });
 }
 
-task<redis_value> redis_executor::script_owned(const detail::redis_orm_script& script, std::vector<std::string>&& args) const {
+task<redis_value> redis_executor::script_owned(redis_script script, std::vector<std::string>&& args) const {
     registration_.require_active();
-    return detail::start_request_linked(operation_options_, request_stop_, [pool = &pool(), script = &script, args = std::move(args), io_metrics = io_metrics_](const operation_options& options) mutable {
-        return detail::execute_redis_orm_script(*pool, *script, std::move(args), io_metrics, options);
+    return detail::start_request_linked(operation_options_, request_stop_, [pool = &pool(), script = std::move(script), args = std::move(args), io_metrics = io_metrics_](const operation_options& options) mutable {
+        return detail::execute_redis_script(*pool, std::move(script), std::move(args), io_metrics, options);
     });
+}
+
+task<redis_value> redis_executor::eval_cached(const redis_script& script, std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
+    registration_.require_active();
+    std::vector<std::string> command;
+    if (keys.size() > command.max_size() - 3 || args.size() > command.max_size() - 3 - keys.size()) {
+        throw std::length_error("Redis script argument count is not representable");
+    }
+    command.reserve(3 + keys.size() + args.size());
+    command.emplace_back("EVALSHA");
+    command.emplace_back(script.sha1());
+    std::array<char, max_decimal_size> key_count{};
+    command.emplace_back(format_decimal(key_count, keys.size()));
+    for (const auto key : keys) {
+        command.emplace_back(key);
+    }
+    for (const auto arg : args) {
+        command.emplace_back(arg);
+    }
+    return registration_.attach(script_owned(script, std::move(command)));
 }
 
 task<std::optional<redis_key_value>> redis_executor::blpop(std::span<const std::string_view> keys, redis_block_wait wait) const {

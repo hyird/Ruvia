@@ -28,11 +28,13 @@ using ruvia::http_content_encoder;
 #include <span>
 #include <vector>
 
+#include "binary_text_encoding.h"
 #include "borrowed_text.h"
 #include "http_header.h"
 #include "http_request_body_failure.h"
 #include "http_response.h"
 #include "url_encoding.h"
+#include "utf8.h"
 
 namespace {
 
@@ -43,7 +45,357 @@ public:
     }
 };
 
+struct codec_allocation_probe final {
+    std::size_t live_bytes_{0};
+    std::size_t allocations_{0};
+    std::size_t fail_after_{(std::numeric_limits<std::size_t>::max)()};
+
+    static void* allocate(std::size_t bytes, std::size_t alignment, void* context) {
+        auto& self = *static_cast<codec_allocation_probe*>(context);
+        if (self.allocations_ == self.fail_after_) {
+            throw codec_test_allocation_error();
+        }
+        void* pointer = ::operator new(bytes, std::align_val_t{alignment});
+        ++self.allocations_;
+        self.live_bytes_ += bytes;
+        return pointer;
+    }
+
+    static void deallocate(void* pointer, std::size_t bytes, std::size_t alignment, void* context) noexcept {
+        auto& self = *static_cast<codec_allocation_probe*>(context);
+        self.live_bytes_ -= bytes;
+        ::operator delete(pointer, bytes, std::align_val_t{alignment});
+    }
+
+    [[nodiscard]] ruvia::http_codec_allocation_callbacks callbacks() noexcept {
+        return {this, &allocate, &deallocate};
+    }
+};
+
+[[nodiscard]] std::optional<http_content_decode_error> append_content_decoded(ruvia::http_content_decoder& decoder, std::string_view input, std::string& output, std::size_t scratch_bytes = 3) {
+    std::array<char, 17> scratch;
+    for (;;) {
+        const auto step = decoder.decode(input, std::span(scratch).first(scratch_bytes));
+        EXPECT_LE(step.consumed_bytes(), input.size());
+        input.remove_prefix(step.consumed_bytes());
+        if (const auto* bytes = step.get_if<ruvia::decode_output>()) {
+            EXPECT_FALSE(bytes->bytes().empty());
+            EXPECT_LE(bytes->bytes().size(), scratch_bytes);
+            output.append(bytes->bytes());
+            continue;
+        }
+        if (const auto* failure = step.get_if<ruvia::http_content_decode_failure>()) {
+            return failure->error();
+        }
+        EXPECT_TRUE(input.empty());
+        return std::nullopt;
+    }
+}
+
 }  // namespace
+
+TEST(RuviaHttpPublicApi, identity_content_decoder_borrows_input_without_touching_scratch) {
+    constexpr std::string_view input = "identity";
+    ruvia::http_content_decoder decoder(http_content_coding::identity, {.max_decoded_bytes_ = input.size()});
+    std::array<char, 3> scratch{'k', 'e', 'p'};
+    const auto step = decoder.decode(input, scratch);
+    ASSERT_TRUE(step.holds<ruvia::decode_output>());
+    EXPECT_EQ(step.consumed_bytes(), scratch.size());
+    const auto bytes = step.get_if<ruvia::decode_output>()->bytes();
+    EXPECT_EQ(bytes.data(), input.data());
+    EXPECT_EQ(bytes, "ide");
+    EXPECT_EQ((std::string_view(scratch.data(), scratch.size())), "kep");
+}
+
+TEST(RuviaHttpPublicApi, content_decoder_fragments_input_output_and_resets_every_coding) {
+    const std::string plain = std::string(257, 's') + " streaming payload";
+    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
+        const auto wire = encode_http_content(coding, plain, {.max_encoded_bytes_ = plain.size() + 256});
+        ASSERT_TRUE(wire.has_value());
+        ruvia::http_content_decoder decoder(coding, {.max_decoded_bytes_ = plain.size()});
+        EXPECT_EQ(decoder.state(), ruvia::decoder_state::active);
+        for (const std::size_t fragment_bytes : {1U, 7U}) {
+            std::string output;
+            for (std::size_t offset = 0; offset < wire->size(); offset += fragment_bytes) {
+                EXPECT_FALSE(append_content_decoded(decoder, std::string_view(*wire).substr(offset, fragment_bytes), output, 1).has_value());
+            }
+            const auto end = decoder.finish_input();
+            EXPECT_TRUE(end.holds<ruvia::decode_complete>());
+            EXPECT_EQ(output, plain);
+            EXPECT_EQ(decoder.state(), ruvia::decoder_state::finished);
+            std::array<char, 1> scratch;
+            const auto replay = decoder.decode("not another representation", scratch);
+            EXPECT_TRUE(replay.holds<ruvia::decode_complete>());
+            EXPECT_EQ(replay.consumed_bytes(), 0U);
+            decoder.reset();
+            EXPECT_EQ(decoder.state(), ruvia::decoder_state::active);
+        }
+    }
+}
+
+TEST(RuviaHttpPublicApi, content_decoder_enforces_exact_cumulative_output_limit) {
+    const std::string plain(512, 'b');
+    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
+        const auto wire = encode_http_content(coding, plain, {.max_encoded_bytes_ = plain.size() + 256});
+        ASSERT_TRUE(wire.has_value());
+        for (const auto cap : {std::size_t{0}, plain.size() - 1, plain.size()}) {
+            ruvia::http_content_decoder decoder(coding, {.max_decoded_bytes_ = cap});
+            std::string output;
+            const auto error = append_content_decoded(decoder, *wire, output, 17);
+            EXPECT_LE(output.size(), cap);
+            if (cap == plain.size()) {
+                EXPECT_FALSE(error.has_value());
+                const auto end = decoder.finish_input();
+                EXPECT_TRUE(end.holds<ruvia::decode_complete>());
+                EXPECT_EQ(output, plain);
+            } else {
+                ASSERT_TRUE(error.has_value());
+                EXPECT_EQ(*error, http_content_decode_error::decoded_size_exceeded);
+                EXPECT_EQ(output, plain.substr(0, cap));
+                EXPECT_EQ(decoder.state(), ruvia::decoder_state::failed);
+                const auto end = decoder.finish_input();
+                EXPECT_TRUE(end.holds<ruvia::http_content_decode_failure>());
+            }
+        }
+        const auto empty = encode_http_content(coding, {}, {.max_encoded_bytes_ = 256});
+        ASSERT_TRUE(empty.has_value());
+        ruvia::http_content_decoder decoder(coding, {.max_decoded_bytes_ = 0});
+        std::string output;
+        EXPECT_FALSE(append_content_decoded(decoder, *empty, output).has_value());
+        const auto end = decoder.finish_input();
+        EXPECT_TRUE(end.holds<ruvia::decode_complete>());
+        EXPECT_TRUE(output.empty());
+    }
+}
+
+TEST(RuviaHttpPublicApi, content_decoder_eof_rejects_truncation_and_failure_is_resettable) {
+    const std::string plain(512, 't');
+    for (const auto coding : {http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
+        const auto wire = encode_http_content(coding, plain, {.max_encoded_bytes_ = 1024});
+        ASSERT_TRUE(wire.has_value());
+        ASSERT_GT(wire->size(), 1U);
+        ruvia::http_content_decoder decoder(coding, {.max_decoded_bytes_ = plain.size()});
+        std::string output;
+        const auto error = append_content_decoded(decoder, std::string_view(*wire).substr(0, wire->size() - 1), output);
+        if (error.has_value()) {
+            EXPECT_EQ(*error, http_content_decode_error::invalid_content);
+        }
+        const auto end = decoder.finish_input();
+        ASSERT_TRUE(end.holds<ruvia::http_content_decode_failure>());
+        EXPECT_EQ(end.get_if<ruvia::http_content_decode_failure>()->error(), http_content_decode_error::invalid_content);
+        EXPECT_EQ(decoder.state(), ruvia::decoder_state::failed);
+        std::array<char, 1> scratch;
+        const auto replay = decoder.decode(*wire, scratch);
+        EXPECT_TRUE(replay.holds<ruvia::http_content_decode_failure>());
+        EXPECT_EQ(replay.consumed_bytes(), 0U);
+        decoder.reset();
+        output.clear();
+        EXPECT_FALSE(append_content_decoded(decoder, *wire, output).has_value());
+        const auto finished = decoder.finish_input();
+        EXPECT_TRUE(finished.holds<ruvia::decode_complete>());
+        EXPECT_EQ(output, plain);
+        decoder.reset();
+        const auto empty = decoder.finish_input();
+        EXPECT_TRUE(empty.holds<ruvia::decode_complete>());
+    }
+}
+
+TEST(RuviaHttpPublicApi, content_decoder_concatenates_only_gzip_and_zstd) {
+    for (const auto coding : {http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
+        const auto first = encode_http_content(coding, "first", {.max_encoded_bytes_ = 256});
+        const auto second = encode_http_content(coding, "second", {.max_encoded_bytes_ = 256});
+        ASSERT_TRUE(first.has_value());
+        ASSERT_TRUE(second.has_value());
+        ruvia::http_content_decoder decoder(coding, {.max_decoded_bytes_ = 11});
+        std::string output;
+        const auto error = append_content_decoded(decoder, *first + *second, output);
+        if (coding == http_content_coding::gzip || coding == http_content_coding::zstd) {
+            EXPECT_FALSE(error.has_value());
+            const auto end = decoder.finish_input();
+            EXPECT_TRUE(end.holds<ruvia::decode_complete>());
+            EXPECT_EQ(output, "firstsecond");
+            decoder.reset();
+            output.clear();
+            EXPECT_FALSE(append_content_decoded(decoder, *first, output).has_value());
+            EXPECT_EQ(decoder.state(), ruvia::decoder_state::active);
+            EXPECT_FALSE(append_content_decoded(decoder, *second, output).has_value());
+            const auto fragmented_end = decoder.finish_input();
+            EXPECT_TRUE(fragmented_end.holds<ruvia::decode_complete>());
+            EXPECT_EQ(output, "firstsecond");
+        } else {
+            ASSERT_TRUE(error.has_value());
+            EXPECT_EQ(*error, http_content_decode_error::invalid_content);
+        }
+    }
+}
+
+TEST(RuviaHttpPublicApi, content_codec_budget_and_callbacks_release_all_native_memory) {
+    const std::string plain(512, 'm');
+    for (const auto coding : {http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
+        const auto wire = encode_http_content(coding, plain, {.max_encoded_bytes_ = 1024});
+        ASSERT_TRUE(wire.has_value());
+        codec_allocation_probe probe;
+        ruvia::http_codec_memory memory(32 * 1024 * 1024, probe.callbacks());
+        {
+            http_content_encoder encoder(coding, {.memory_ = &memory});
+            ruvia::http_content_decoder decoder(coding, {.max_decoded_bytes_ = plain.size(), .memory_ = &memory});
+            EXPECT_GT(memory.live_bytes(), 0U);
+            EXPECT_GT(probe.live_bytes_, 0U);
+            std::string encoded;
+            encoder.write(plain, encoded);
+            encoder.finish(encoded);
+            std::string output;
+            EXPECT_FALSE(append_content_decoded(decoder, encoded, output).has_value());
+            const auto end = decoder.finish_input();
+            EXPECT_TRUE(end.holds<ruvia::decode_complete>());
+            EXPECT_EQ(output, plain);
+            encoder.reset();
+            decoder.reset();
+        }
+        EXPECT_EQ(memory.live_bytes(), 0U);
+        EXPECT_EQ(probe.live_bytes_, 0U);
+        ruvia::http_codec_memory exhausted(0);
+        EXPECT_THROW((void)http_content_encoder(coding, {.memory_ = &exhausted}), std::bad_alloc);
+        EXPECT_EQ(exhausted.live_bytes(), 0U);
+        EXPECT_THROW((void)ruvia::http_content_decoder(coding, {.max_decoded_bytes_ = plain.size(), .memory_ = &exhausted}), std::bad_alloc);
+        EXPECT_EQ(exhausted.live_bytes(), 0U);
+        const auto buffered = decode_http_content(coding, *wire, {.max_decoded_bytes_ = plain.size(), .memory_ = &memory});
+        ASSERT_TRUE(std::holds_alternative<std::string>(buffered));
+        EXPECT_EQ(std::get<std::string>(buffered), plain);
+        EXPECT_EQ(memory.live_bytes(), 0U);
+    }
+}
+
+TEST(RuviaHttpPublicApi, content_codec_c_boundary_rethrows_original_allocator_exception) {
+    const std::string plain(512, 'f');
+    for (const auto coding : {http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
+        const auto wire = encode_http_content(coding, plain, {.max_encoded_bytes_ = 1024});
+        ASSERT_TRUE(wire.has_value());
+        for (const bool encode : {false, true}) {
+            codec_allocation_probe baseline;
+            {
+                ruvia::http_codec_memory memory(32 * 1024 * 1024, baseline.callbacks());
+                if (encode) {
+                    http_content_encoder encoder(coding, {.memory_ = &memory});
+                    std::string output;
+                    encoder.write(plain, output);
+                    encoder.finish(output);
+                } else {
+                    ruvia::http_content_decoder decoder(coding, {.max_decoded_bytes_ = plain.size(), .memory_ = &memory});
+                    std::string output;
+                    EXPECT_FALSE(append_content_decoded(decoder, *wire, output).has_value());
+                }
+            }
+            ASSERT_GT(baseline.allocations_, 0U);
+            for (const auto fail_after : {std::size_t{0}, baseline.allocations_ - 1}) {
+                codec_allocation_probe probe;
+                probe.fail_after_ = fail_after;
+                ruvia::http_codec_memory memory(32 * 1024 * 1024, probe.callbacks());
+                bool caught_original = false;
+                try {
+                    if (encode) {
+                        http_content_encoder encoder(coding, {.memory_ = &memory});
+                        std::string output;
+                        encoder.write(plain, output);
+                        encoder.finish(output);
+                    } else {
+                        ruvia::http_content_decoder decoder(coding, {.max_decoded_bytes_ = plain.size(), .memory_ = &memory});
+                        std::string output;
+                        (void)append_content_decoded(decoder, *wire, output);
+                    }
+                } catch (const codec_test_allocation_error&) {
+                    caught_original = true;
+                }
+                EXPECT_TRUE(caught_original);
+                EXPECT_EQ(memory.live_bytes(), 0U);
+                EXPECT_EQ(probe.live_bytes_, 0U);
+            }
+        }
+    }
+}
+
+TEST(RuviaHttpPublicApi, content_codec_shared_request_budget_is_not_per_instance) {
+    std::size_t encoder_bytes = 0;
+    {
+        ruvia::http_codec_memory measuring;
+        http_content_encoder encoder(http_content_coding::gzip, {.memory_ = &measuring});
+        encoder_bytes = measuring.live_bytes();
+    }
+    ASSERT_GT(encoder_bytes, 0U);
+    ruvia::http_codec_memory memory(encoder_bytes);
+    {
+        http_content_encoder first(http_content_coding::gzip, {.memory_ = &memory});
+        EXPECT_EQ(memory.live_bytes(), encoder_bytes);
+        EXPECT_THROW((void)http_content_encoder(http_content_coding::gzip, {.memory_ = &memory}), std::bad_alloc);
+        EXPECT_EQ(memory.live_bytes(), encoder_bytes);
+    }
+    EXPECT_EQ(memory.live_bytes(), 0U);
+}
+
+TEST(RuviaHttpPublicApi, content_encoder_accepts_coding_specific_levels_and_preserves_them_on_reset) {
+    const std::string plain(512, 'l');
+    for (const auto coding : {http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
+        const std::array levels = coding == http_content_coding::brotli ? std::array{0, 5, 11} : (coding == http_content_coding::zstd ? std::array{-3, 1, 5} : std::array{-1, 0, 9});
+        for (const int level : levels) {
+            const ruvia::http_content_encoder_options options{.compression_level_ = level};
+            const auto expected = encode_http_content(coding, plain, {.max_encoded_bytes_ = 2048}, options);
+            ASSERT_TRUE(expected.has_value());
+            EXPECT_EQ(decoded(coding, *expected, plain.size()), plain);
+            std::string first_output;
+            http_content_encoder encoder(coding, options);
+            for (unsigned iteration = 0; iteration != 2; ++iteration) {
+                std::string output;
+                encoder.write(std::string_view(plain).substr(0, 11), output);
+                encoder.write(std::string_view(plain).substr(11), output);
+                encoder.finish(output);
+                if (iteration == 0) {
+                    first_output = output;
+                } else {
+                    EXPECT_EQ(output, first_output);
+                }
+                EXPECT_EQ(decoded(coding, output, plain.size()), plain);
+                EXPECT_EQ(encoder.state(), ruvia::decoder_state::finished);
+                encoder.reset();
+                EXPECT_EQ(encoder.state(), ruvia::decoder_state::active);
+            }
+        }
+    }
+    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
+        EXPECT_THROW((void)http_content_encoder(coding, {.compression_level_ = (std::numeric_limits<int>::max)()}), std::invalid_argument);
+    }
+    EXPECT_THROW((void)http_content_encoder(http_content_coding::identity, {.compression_level_ = 0}), std::invalid_argument);
+    EXPECT_THROW((void)http_content_encoder(http_content_coding::gzip, {.compression_level_ = -2}), std::invalid_argument);
+    EXPECT_THROW((void)http_content_encoder(http_content_coding::brotli, {.compression_level_ = -1}), std::invalid_argument);
+}
+
+TEST(RuviaHttpPublicApi, content_decoder_late_native_budget_failure_is_terminal_and_releases_memory) {
+    const std::string plain(512, 'q');
+    for (const auto coding : {http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
+        const auto wire = encode_http_content(coding, plain, {.max_encoded_bytes_ = 1024});
+        ASSERT_TRUE(wire.has_value());
+        std::size_t initial_bytes = 0;
+        {
+            ruvia::http_codec_memory measuring;
+            ruvia::http_content_decoder decoder(coding, {.max_decoded_bytes_ = plain.size(), .memory_ = &measuring});
+            initial_bytes = measuring.live_bytes();
+        }
+        ASSERT_GT(initial_bytes, 0U);
+        codec_allocation_probe probe;
+        ruvia::http_codec_memory memory(initial_bytes, probe.callbacks());
+        {
+            ruvia::http_content_decoder decoder(coding, {.max_decoded_bytes_ = plain.size(), .memory_ = &memory});
+            std::string output;
+            EXPECT_THROW((void)append_content_decoded(decoder, *wire, output), std::bad_alloc);
+            EXPECT_EQ(decoder.state(), ruvia::decoder_state::failed);
+            decoder.reset();
+            EXPECT_EQ(decoder.state(), ruvia::decoder_state::active);
+            const auto empty = decoder.finish_input();
+            EXPECT_TRUE(empty.holds<ruvia::decode_complete>());
+        }
+        EXPECT_EQ(memory.live_bytes(), 0U);
+        EXPECT_EQ(probe.live_bytes_, 0U);
+    }
+}
 
 TEST(Ruvia, http_content_coding_field_mapping_is_protocol_generic) {
     const auto check_coding = [&](std::string_view value, http_content_coding expected) {
@@ -948,6 +1300,55 @@ TEST(Ruvia, url_decode_form) {
     EXPECT_EQ(url_decode("a+b%20c", m_type::form).value(), std::string("a b c"));
 }
 
+TEST(Ruvia, url_decode_strict_form_rejects_malformed_escapes_without_changing_storage) {
+    constexpr auto mode = ruvia::url_decode_mode::strict_form;
+    EXPECT_EQ(url_decode("a+b%2Bc%00", mode).value(), std::string("a b+c\0", 6));
+    EXPECT_TRUE(has_url_encoding("a+b", mode));
+    EXPECT_TRUE(has_url_encoding(std::string(80, 'x') + "+", mode));
+    for (const std::string_view input : {"%", "%0", "%GG", "a+b%2", "%41+%zz"}) {
+        std::string storage("preserve");
+        EXPECT_FALSE(decode_url_component(input, storage, mode).has_value());
+        EXPECT_EQ(storage, "preserve");
+    }
+    std::string aliased("a+b%zz");
+    EXPECT_FALSE(decode_url_component(aliased, aliased, mode).has_value());
+    EXPECT_EQ(aliased, "a+b%zz");
+    aliased.assign("a+b%2B");
+    EXPECT_EQ(decode_url_component(aliased, aliased, mode).value(), "a b+");
+    std::string storage("preserve");
+    constexpr std::string_view literal("plain");
+    EXPECT_EQ(decode_url_component(literal, storage, mode)->data(), literal.data());
+    EXPECT_EQ(storage, "preserve");
+}
+
+TEST(Ruvia, url_component_encoding_escapes_every_non_unreserved_octet) {
+    std::string input;
+    std::string expected;
+    for (unsigned int byte = 0; byte < 256; ++byte) {
+        input.push_back(static_cast<char>(byte));
+        if (ruvia::is_uri_unreserved_byte(static_cast<unsigned char>(byte))) {
+            expected.push_back(static_cast<char>(byte));
+        } else {
+            ruvia::http_append_percent_byte(expected, static_cast<unsigned char>(byte));
+        }
+    }
+    std::string storage("replace");
+    EXPECT_EQ(ruvia::percent_encode_url_component(input, storage), expected);
+    EXPECT_EQ(url_decode(storage, mode_type::percent).value(), input);
+    constexpr std::string_view literal = "AZaz09-._~";
+    EXPECT_EQ(ruvia::percent_encode_url_component(literal, storage).data(), literal.data());
+    EXPECT_EQ(storage, expected);
+    EXPECT_EQ(ruvia::percent_encode_url_component("", storage), "");
+    EXPECT_EQ(storage, expected);
+    EXPECT_EQ(ruvia::percent_encode_url_component("/?%20+#", storage), "%2F%3F%2520%2B%23");
+    storage.assign("a+b%20/");
+    EXPECT_EQ(ruvia::percent_encode_url_component(storage, storage), "a%2Bb%2520%2F");
+    storage.clear();
+    EXPECT_EQ(ruvia::percent_encode_url_component("a b", storage), "a%20b");
+    storage.reserve(128);
+    EXPECT_EQ(ruvia::percent_encode_url_component("a/b", storage), "a%2Fb");
+}
+
 TEST(Ruvia, percent_byte_decoding_rejects_out_of_range_and_truncated_triplets) {
     EXPECT_TRUE(ruvia::http_try_decode_percent_byte("a%2Fb", 1) == std::optional<unsigned char>('/'));
     EXPECT_TRUE(!ruvia::http_try_decode_percent_byte("abc", std::string_view::npos).has_value());
@@ -1092,6 +1493,37 @@ TEST(Ruvia, url_visit_pairs_skips_empty_segments) {
     EXPECT_EQ(kept.size(), std::size_t(2));  // "k=" (name k, empty value) and "=v" (empty name, value v)
 }
 
+TEST(Ruvia, url_visit_pairs_preserves_empty_segments_including_empty_input) {
+    std::vector<std::pair<std::string_view, std::string_view>> pairs;
+    const auto collect = [&](std::string_view name, std::string_view value) {
+        pairs.emplace_back(name, value);
+    };
+    EXPECT_TRUE(ruvia::visit_url_encoded_pairs("&a=1&&=x&b=&", collect, ruvia::url_empty_pair_policy::preserve));
+    ASSERT_EQ(pairs.size(), std::size_t{6});
+    EXPECT_EQ(pairs[0].first, "");
+    EXPECT_EQ(pairs[1].first, "a");
+    EXPECT_EQ(pairs[1].second, "1");
+    EXPECT_EQ(pairs[2].first, "");
+    EXPECT_EQ(pairs[3].second, "x");
+    EXPECT_EQ(pairs[4].first, "b");
+    EXPECT_EQ(pairs[5].first, "");
+    pairs.clear();
+    EXPECT_TRUE(ruvia::visit_url_encoded_pairs("", collect));
+    EXPECT_TRUE(pairs.empty());
+    EXPECT_TRUE(ruvia::visit_url_encoded_pairs("", collect, ruvia::url_empty_pair_policy::preserve));
+    ASSERT_EQ(pairs.size(), std::size_t{1});
+    EXPECT_TRUE(pairs[0].first.empty() && pairs[0].second.empty());
+    pairs.clear();
+    EXPECT_TRUE(ruvia::visit_url_encoded_pairs("&&", collect, ruvia::url_empty_pair_policy::preserve));
+    EXPECT_EQ(pairs.size(), std::size_t{3});
+    std::size_t visited = 0;
+    EXPECT_FALSE(ruvia::visit_url_encoded_pairs("&a=1", [&](std::string_view, std::string_view) {
+        ++visited;
+        return false;
+    }, ruvia::url_empty_pair_policy::preserve));
+    EXPECT_EQ(visited, std::size_t{1});
+}
+
 TEST(Ruvia, has_url_encoding_detection) {
     EXPECT_TRUE(has_url_encoding("a%20b", mode_type::percent));
     EXPECT_TRUE(!has_url_encoding("abc", mode_type::percent));
@@ -1201,6 +1633,68 @@ TEST(Ruvia, hex_append_accepts_input_aliasing_the_output) {
     ruvia::http_append_lower_hex(nul_only, std::string_view(nul_only.data() + filled, 1));
     EXPECT_EQ(nul_only.size(), filled + 2);
     EXPECT_EQ(std::string_view(nul_only).substr(filled - 1), std::string_view("B00"));
+}
+
+TEST(Ruvia, bulk_hex_decode_checks_lengths_characters_and_overlap) {
+    std::array<std::uint8_t, 4> bytes{};
+    EXPECT_EQ(ruvia::http_decode_hex("00aBfF19", bytes), std::optional<std::size_t>{4});
+    EXPECT_EQ(bytes, (std::array<std::uint8_t, 4>{0, 0xAB, 0xFF, 0x19}));
+    EXPECT_EQ(ruvia::http_decode_hex("", {}), std::optional<std::size_t>{0});
+    for (const std::string_view invalid : {"0", "000", "0g", "g0", " 0", "00\n0"}) {
+        EXPECT_FALSE(ruvia::http_decode_hex(invalid, bytes).has_value());
+    }
+    bytes.fill(0xAA);
+    EXPECT_FALSE(ruvia::http_decode_hex("0000000000", bytes).has_value());
+    EXPECT_EQ(bytes[0], 0xAA);
+    std::array<std::uint8_t, 12> aliased{'4', '1', '4', '2', '4', '3'};
+    const std::string_view input(reinterpret_cast<const char*>(aliased.data()), 6);
+    EXPECT_FALSE(ruvia::http_decode_hex(input, std::span(aliased).subspan(1)).has_value());
+    EXPECT_EQ(aliased[1], '1');
+    EXPECT_EQ(ruvia::http_decode_hex(input, aliased), std::optional<std::size_t>{3});
+    EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(aliased.data()), 3), "ABC");
+    EXPECT_TRUE(ruvia::http_is_lower_hex("0123456789abcdef", 16));
+    EXPECT_TRUE(ruvia::http_is_lower_hex("", 0));
+    EXPECT_FALSE(ruvia::http_is_lower_hex("ab", 4));
+    EXPECT_FALSE(ruvia::http_is_lower_hex("AB", 2));
+    EXPECT_FALSE(ruvia::http_is_lower_hex(std::string_view("a\0", 2), 2));
+}
+
+TEST(Ruvia, upper_hex_encoding_and_append_support_aliasing) {
+    constexpr std::string_view input = "\x01\xAB\xFF";
+    for (std::size_t offset = 0; offset <= 15; ++offset) {
+        std::array<char, 24> storage{};
+        input.copy(storage.data() + 6, input.size());
+        const auto* const end = ruvia::http_encode_upper_hex(storage.data() + offset, std::string_view(storage.data() + 6, input.size()));
+        EXPECT_EQ(end, storage.data() + offset + 6);
+        EXPECT_EQ(std::string_view(storage.data() + offset, 6), "01ABFF");
+    }
+    std::string output(64, 'x');
+    output.back() = '\xFF';
+    output.shrink_to_fit();
+    ruvia::http_append_upper_hex(output, std::string_view(output).substr(63));
+    EXPECT_EQ(std::string_view(output).substr(64), "FF");
+    std::string terminated("A");
+    ruvia::http_append_upper_hex(terminated, std::string_view(terminated.data(), terminated.size() + 1));
+    EXPECT_EQ(terminated, "A4100");
+}
+
+TEST(Ruvia, utf8_prefix_keeps_only_complete_valid_code_points) {
+    constexpr std::string_view input = "A\xC2\xA2\xE2\x82\xAC\xF0\x90\x8D\x88Z";
+    constexpr std::array<std::size_t, 12> lengths{0, 1, 1, 3, 3, 3, 6, 6, 6, 6, 10, 11};
+    for (std::size_t limit = 0; limit < lengths.size(); ++limit) {
+        const auto prefix = ruvia::utf8_prefix(input, limit);
+        EXPECT_EQ(prefix.data(), input.data());
+        EXPECT_EQ(prefix, input.substr(0, lengths[limit]));
+    }
+    EXPECT_EQ(ruvia::utf8_prefix(input, (std::numeric_limits<std::size_t>::max)()), input);
+    EXPECT_EQ(ruvia::utf8_prefix("", 10), "");
+    constexpr std::string_view binary("A\0B", 3);
+    EXPECT_EQ(ruvia::utf8_prefix(binary, 3), binary);
+    for (const std::string_view invalid : {"\x80", "\xC0\xAF", "\xC2", "\xE0\x80\x80", "\xED\xA0\x80", "\xF0\x80\x80\x80", "\xF4\x90\x80\x80", "\xF5\x80\x80\x80", "\xE2\x82"}) {
+        const std::string text = "ok" + std::string(invalid) + "tail";
+        EXPECT_EQ(ruvia::utf8_prefix(text, text.size()), "ok");
+        EXPECT_EQ(ruvia::utf8_prefix(invalid, invalid.size()), "");
+    }
 }
 
 namespace {
@@ -1314,6 +1808,37 @@ TEST(Ruvia, http_base64_decode_rejects_output_overwriting_unread_input) {
     EXPECT_EQ(decoded_text(after + 8, 6), std::string("ABCDEF"));
 }
 
+TEST(Ruvia, http_base64_accepts_both_alphabets_and_optional_complete_padding) {
+    constexpr auto both = ruvia::http_base64_charset::both;
+    constexpr auto optional = ruvia::http_base64_padding::optional;
+    std::array<std::uint8_t, 8> output{};
+    for (const std::string_view text : {"+/8=", "-_8=", "+_8=", "-/8=", "+/8", "-_8", "+_8", "-/8"}) {
+        EXPECT_EQ(ruvia::http_base64_decode(text, output, both, optional), std::optional<std::size_t>{2});
+        EXPECT_EQ(output[0], 0xFB);
+        EXPECT_EQ(output[1], 0xFF);
+    }
+    for (const std::string_view text : {"", "Zg", "Zg==", "Zm8", "Zm8=", "Zm9v"}) {
+        EXPECT_TRUE(ruvia::http_base64_decode(text, output, both, optional).has_value());
+    }
+    for (const std::string_view text : {"Z", "Zg=", "Zg===", "Zg==x", "=Zg=", "Zm=8", "Zh", "Zh==", "Zm9", "Zm9=", "Zg\n", "Zg== ", "====", "A==="}) {
+        EXPECT_FALSE(ruvia::http_base64_decode(text, output, both, optional).has_value());
+    }
+    EXPECT_FALSE(ruvia::http_base64_decode("Zg", {}, both, optional).has_value());
+    EXPECT_FALSE(ruvia::http_base64_decode("-_8=", output, ruvia::http_base64_charset::standard, optional).has_value());
+    EXPECT_FALSE(ruvia::http_base64_decode("+/8=", output, ruvia::http_base64_charset::url_safe, optional).has_value());
+    EXPECT_FALSE(ruvia::http_base64_decode("Zg", output, both, ruvia::http_base64_padding::required).has_value());
+    EXPECT_FALSE(ruvia::http_base64_decode("Zg==", output, both, ruvia::http_base64_padding::forbidden).has_value());
+}
+
+TEST(Ruvia, http_base64_encoding_rejects_decode_only_options_before_writing) {
+    std::array<char, 4> output{'k', 'e', 'e', 'p'};
+    const std::array<std::uint8_t, 1> input{'f'};
+    EXPECT_THROW(ruvia::http_base64_encode(output.data(), input, ruvia::http_base64_charset::both), std::invalid_argument);
+    EXPECT_THROW(ruvia::http_base64_encode(output.data(), input, ruvia::http_base64_charset::standard, ruvia::http_base64_padding::optional), std::invalid_argument);
+    EXPECT_THROW((void)ruvia::http_base64_encoded_size(0, ruvia::http_base64_padding::optional), std::invalid_argument);
+    EXPECT_EQ(std::string_view(output.data(), output.size()), "keep");
+}
+
 namespace {
 
 using ruvia::http_ascii_equals_ignore_case;
@@ -1373,7 +1898,7 @@ TEST(RuviaHttpPublicApi, no_transform_detection_and_encoder_memory_cap) {
     EXPECT_TRUE(ruvia::http_cache_control_has_no_transform("public, ext=\"a, b\", no-transform, max-age=60"));
 
     // Exhausted native codec memory cap throws std::bad_alloc.
-    EXPECT_THROW((void)ruvia::http_content_encoder(ruvia::http_content_coding::gzip, 64), std::bad_alloc);
+    EXPECT_THROW((void)ruvia::http_content_encoder(ruvia::http_content_coding::gzip, {.max_memory_bytes_ = 64}), std::bad_alloc);
 }
 
 TEST(RuviaHttpPublicApi, media_type_compressibility_allowlist) {

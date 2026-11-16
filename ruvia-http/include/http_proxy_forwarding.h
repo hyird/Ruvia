@@ -1,12 +1,16 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include "borrowed_text.h"
@@ -82,14 +86,31 @@ private:
 [[nodiscard]] http_max_forwards_result parse_http_max_forwards(std::string_view field_value, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
 [[nodiscard]] http_max_forwards_result parse_http_max_forwards(const http_header_range_view& headers, std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
 
-// Case-insensitive set of field/option tokens parsed from one or more
-// Connection header lines (RFC 9110 section 7.6.1).
+enum class http_connection_fields_status : std::uint8_t { valid,
+    invalid,
+    budget_exceeded };
+
+// Zero-allocation, case-insensitive set borrowing Connection field bytes.
+// Inputs must remain unchanged and alive while the set is used. Failure is
+// sticky; forwarding callers must reject any non-valid status.
 class http_connection_nominated_fields final {
 public:
     http_connection_nominated_fields() noexcept = default;
 
-    void update(std::string_view connection_field_value);
-    void update_headers(const http_header_range_view& headers);
+    static constexpr std::size_t capacity = 128;
+    static constexpr std::size_t max_input_bytes = 16384;
+
+    void update(borrowed_text connection_field_value) noexcept;
+    void update_headers(const http_header_range_view& headers) noexcept;
+
+    template <typename source_type>
+        requires http_header_field_source<source_type> && (!std::is_lvalue_reference_v<source_type&&>) && (!std::ranges::borrowed_range<source_type>)
+    void update_headers(source_type&&) = delete;
+    void update_headers(std::initializer_list<http_header_view>) = delete;
+
+    [[nodiscard]] constexpr http_connection_fields_status status() const noexcept {
+        return status_;
+    }
 
     [[nodiscard]] bool contains(std::string_view field_name) const noexcept;
     [[nodiscard]] constexpr bool has_close() const noexcept {
@@ -105,30 +126,37 @@ public:
         return has_te_;
     }
     [[nodiscard]] bool empty() const noexcept {
-        return tokens_.empty();
+        return count_ == 0;
     }
     [[nodiscard]] std::size_t size() const noexcept {
-        return tokens_.size();
+        return count_;
     }
-    [[nodiscard]] std::span<const std::string> tokens() const& noexcept RUVIA_LIFETIMEBOUND {
-        return tokens_;
+    [[nodiscard]] std::span<const std::string_view> tokens() const& noexcept RUVIA_LIFETIMEBOUND {
+        return {tokens_.data(), count_};
     }
-    std::span<const std::string> tokens() const&& = delete;
+    std::span<const std::string_view> tokens() const&& = delete;
 
     [[nodiscard]] std::vector<std::string> non_standard_options() const;
 
     [[nodiscard]] std::string rebuild_connection_field(bool retain_upgrade = false, bool include_non_standard = true) const;
 
 private:
-    std::vector<std::string> tokens_;
+    std::array<std::string_view, capacity> tokens_{};
+    std::size_t count_{0};
+    std::size_t input_bytes_{0};
+    http_connection_fields_status status_{http_connection_fields_status::valid};
     bool has_close_{false};
     bool has_keep_alive_{false};
     bool has_upgrade_{false};
     bool has_te_{false};
 };
 
-[[nodiscard]] http_connection_nominated_fields parse_http_connection_nominated_fields(std::string_view connection_field_value);
-[[nodiscard]] http_connection_nominated_fields parse_http_connection_nominated_fields(const http_header_range_view& headers);
+[[nodiscard]] http_connection_nominated_fields parse_http_connection_nominated_fields(borrowed_text connection_field_value) noexcept;
+[[nodiscard]] http_connection_nominated_fields parse_http_connection_nominated_fields(const http_header_range_view& headers) noexcept;
+template <typename source_type>
+    requires http_header_field_source<source_type> && (!std::is_lvalue_reference_v<source_type&&>) && (!std::ranges::borrowed_range<source_type>)
+http_connection_nominated_fields parse_http_connection_nominated_fields(source_type&&) = delete;
+http_connection_nominated_fields parse_http_connection_nominated_fields(std::initializer_list<http_header_view>) = delete;
 
 // Protocol hop-by-hop fields (RFC 9110 section 7.6.1): Connection, Keep-Alive,
 // Proxy-Connection, TE, Transfer-Encoding, Trailer, Upgrade,

@@ -5,9 +5,12 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 
 #include "borrowed_text.h"
 #include "content_decoding_fixture.h"
+#include "http_io_buffer.h"
 
 namespace {
 
@@ -119,4 +122,38 @@ TEST(Ruvia, io_buffer_reader_prepares_when_no_spare_is_available) {
     space[0] = 'i';
     buffer.commit(1);
     EXPECT_EQ(buffer.view(), "bcdefghi");
+}
+
+TEST(Ruvia, io_buffer_move_assignment_transfers_storage_and_readable_window) {
+    static_assert(std::is_nothrow_move_assignable_v<ruvia::http_io_buffer>);
+    ruvia::http_io_buffer source;
+    source.reserve(128);
+    source.append("prefix-payload");
+    source.consume(7);
+    const auto* const data = source.data();
+    const auto capacity = source.capacity();
+    ruvia::http_io_buffer target;
+    target.append(std::string(8192, 'x'));
+    EXPECT_EQ(&(target = std::move(source)), &target);
+    EXPECT_EQ(target.data(), data);
+    EXPECT_EQ(target.capacity(), capacity);
+    EXPECT_EQ(target.view(), "payload");
+    EXPECT_TRUE(source.empty());
+    EXPECT_EQ(source.capacity(), std::size_t{0});
+    source.append("reused");
+    EXPECT_EQ(source.view(), "reused");
+    auto& self = target;
+    target = std::move(self);
+    EXPECT_EQ(target.data(), data);
+    EXPECT_EQ(target.view(), "payload");
+    ruvia::http_io_buffer empty;
+    target = std::move(empty);
+    EXPECT_TRUE(target.empty());
+    EXPECT_EQ(target.capacity(), std::size_t{0});
+    target.append("after-empty");
+    EXPECT_EQ(target.view(), "after-empty");
+    source = std::move(target);
+    EXPECT_EQ(source.view(), "after-empty");
+    EXPECT_TRUE(target.empty());
+    EXPECT_EQ(target.capacity(), std::size_t{0});
 }

@@ -7,47 +7,13 @@
 
 #include "borrowed_text.h"
 #include "http_authority.h"
+#include "http_content_negotiation.h"
 #include "http_field_kind.h"
 #include "http_header.h"
 #include "http_request.h"
 #include "http_request_head_view.h"
 
 namespace ruvia::detail {
-
-// Shared quality parsing (RFC 9110 section 12.4.2). Token fields use one
-// optional weight; media ranges extract q from their parameters.
-
-[[nodiscard]] inline int http_parse_quality_value(std::string_view value) noexcept {
-    value = http_trim_ows(value);
-    if (value == "1") {
-        return 1000;
-    }
-    if (value == "0") {
-        return 0;
-    }
-    if (value.size() >= 2 && value[1] == '.' && (value[0] == '0' || value[0] == '1')) {
-        int quality = value[0] == '1' ? 1000 : 0;
-        if (value[0] == '1') {
-            for (std::size_t i = 2; i < value.size(); ++i) {
-                if (i > 4 || value[i] != '0') {
-                    return -1;
-                }
-            }
-            return quality;
-        }
-
-        int scale = 100;
-        for (std::size_t i = 2; i < value.size(); ++i) {
-            if (i > 4 || value[i] < '0' || value[i] > '9') {
-                return -1;
-            }
-            quality += (value[i] - '0') * scale;
-            scale /= 10;
-        }
-        return quality;
-    }
-    return -1;
-}
 
 // Token-based Accept fields allow one optional weight, not media parameters.
 // The list visitor has already trimmed surrounding OWS. Invalid weights are
@@ -65,8 +31,7 @@ namespace ruvia::detail {
     if (qvalue != http_trim_ows(qvalue)) {
         return 0;
     }
-    const auto parsed_value = http_parse_quality_value(qvalue);
-    return parsed_value < 0 ? 0 : parsed_value;
+    return parse_http_quality_value(qvalue).value_or(0);
 }
 
 enum class response_field_status : std::uint8_t {

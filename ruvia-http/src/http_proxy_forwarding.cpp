@@ -135,29 +135,55 @@ bool is_http_standard_connection_option(std::string_view option) noexcept {
     return (option.size() == 5U && http_ascii_equals_ignore_case(option, "close")) || is_http_hop_by_hop_field_name(option);
 }
 
-void http_connection_nominated_fields::update(std::string_view connection_field_value) {
-    detail::http_visit_comma_separated_tokens(connection_field_value, [&](std::string_view token) {
-        if (!is_valid_http_header_name(token)) {
-            return true;
+void http_connection_nominated_fields::update(borrowed_text connection_field_value) noexcept {
+    if (status_ != http_connection_fields_status::valid) {
+        return;
+    }
+    auto remaining = connection_field_value.view();
+    if (remaining.size() > max_input_bytes - input_bytes_) {
+        status_ = http_connection_fields_status::budget_exceeded;
+        return;
+    }
+    input_bytes_ += remaining.size();
+    std::size_t empty_members = 0;
+    while (true) {
+        const auto comma = remaining.find(',');
+        const auto token = http_trim_ows(remaining.substr(0, comma));
+        if (token.empty()) {
+            if (++empty_members > 32) {
+                status_ = http_connection_fields_status::budget_exceeded;
+                return;
+            }
+        } else {
+            if (!is_valid_http_header_name(token)) {
+                status_ = http_connection_fields_status::invalid;
+                return;
+            }
+            if (!contains(token)) {
+                if (count_ == capacity) {
+                    status_ = http_connection_fields_status::budget_exceeded;
+                    return;
+                }
+                tokens_[count_++] = token;
+            }
+            if (http_ascii_equals_ignore_case(token, "close")) {
+                has_close_ = true;
+            } else if (http_ascii_equals_ignore_case(token, "keep-alive")) {
+                has_keep_alive_ = true;
+            } else if (http_ascii_equals_ignore_case(token, "Upgrade")) {
+                has_upgrade_ = true;
+            } else if (http_ascii_equals_ignore_case(token, "TE")) {
+                has_te_ = true;
+            }
         }
-        if (http_ascii_equals_ignore_case(token, "close")) {
-            has_close_ = true;
-        } else if (http_ascii_equals_ignore_case(token, "keep-alive")) {
-            has_keep_alive_ = true;
-        } else if (http_ascii_equals_ignore_case(token, "Upgrade")) {
-            has_upgrade_ = true;
-        } else if (http_ascii_equals_ignore_case(token, "TE")) {
-            has_te_ = true;
+        if (comma == std::string_view::npos) {
+            return;
         }
-        if (contains(token)) {
-            return true;
-        }
-        tokens_.push_back(http_ascii_lowercase(token));
-        return true;
-    });
+        remaining.remove_prefix(comma + 1);
+    }
 }
 
-void http_connection_nominated_fields::update_headers(const http_header_range_view& headers) {
+void http_connection_nominated_fields::update_headers(const http_header_range_view& headers) noexcept {
     for (const auto field : headers) {
         if (http_ascii_equals_ignore_case(field.name(), "Connection")) {
             update(field.value());
@@ -166,16 +192,16 @@ void http_connection_nominated_fields::update_headers(const http_header_range_vi
 }
 
 bool http_connection_nominated_fields::contains(std::string_view field_name) const noexcept {
-    return std::ranges::any_of(tokens_, [field_name](std::string_view token) noexcept {
+    return std::ranges::any_of(tokens(), [field_name](std::string_view token) noexcept {
         return http_ascii_equals_ignore_case(token, field_name);
     });
 }
 
 std::vector<std::string> http_connection_nominated_fields::non_standard_options() const {
     std::vector<std::string> result;
-    for (const auto& token : tokens_) {
+    for (const auto token : tokens()) {
         if (!is_http_standard_connection_option(token)) {
-            result.emplace_back(token);
+            result.emplace_back(http_ascii_lowercase(token));
         }
     }
     return result;
@@ -187,26 +213,28 @@ std::string http_connection_nominated_fields::rebuild_connection_field(bool reta
         output.append("Upgrade");
     }
     if (include_non_standard) {
-        for (const auto& token : tokens_) {
+        for (const auto token : tokens()) {
             if (is_http_standard_connection_option(token)) {
                 continue;
             }
             if (!output.empty()) {
                 output.append(", ");
             }
-            output.append(token);
+            for (const auto ch : token) {
+                output.push_back(static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(ch))));
+            }
         }
     }
     return output;
 }
 
-http_connection_nominated_fields parse_http_connection_nominated_fields(std::string_view connection_field_value) {
+http_connection_nominated_fields parse_http_connection_nominated_fields(borrowed_text connection_field_value) noexcept {
     http_connection_nominated_fields nominated;
     nominated.update(connection_field_value);
     return nominated;
 }
 
-http_connection_nominated_fields parse_http_connection_nominated_fields(const http_header_range_view& headers) {
+http_connection_nominated_fields parse_http_connection_nominated_fields(const http_header_range_view& headers) noexcept {
     http_connection_nominated_fields nominated;
     nominated.update_headers(headers);
     return nominated;

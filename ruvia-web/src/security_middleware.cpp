@@ -6,12 +6,12 @@
 
 #include "context.h"
 #include "context_access.h"
-#include "crypto.h"
 #include "http_cookie.h"
 #include "http_error.h"
 #include "http_header.h"
 #include "http_request.h"
 #include "middleware.h"
+#include "secret_encoding.h"
 #include "task.h"
 
 namespace ruvia {
@@ -61,7 +61,7 @@ task<void> csrf_middleware::invoke(context& c, next& next_value) {
     const bool has_cookie = cookie.status_ == unique_lookup_status::found && !cookie.value_.empty();
     if (!safe) {
         const auto header_value = c.req().unique_header(header_name_);
-        if (!has_cookie || header_value.status_ != unique_lookup_status::found || header_value.value_.empty() || !detail::constant_time_bytes_equal(cookie.value_, header_value.value_)) {
+        if (!has_cookie || header_value.status_ != unique_lookup_status::found || header_value.value_.empty() || !constant_time_bytes_equal(cookie.value_, header_value.value_)) {
             throw http_error({.status_ = ruvia::http_status::forbidden, .code_ = "csrf_token_mismatch", .message_ = "CSRF token missing or invalid"});
         }
     } else if (!has_cookie) {

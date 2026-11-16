@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <string_view>
 
+#include "borrowed_text.h"
+
 namespace ruvia {
 
 struct utf8_sequence final {
@@ -65,6 +67,27 @@ struct utf8_sequence final {
         i += sequence.length_;
     }
     return true;
+}
+
+// Longest well-formed code-point prefix of at most max_bytes bytes. Stops at
+// the first malformed sequence or a code point cut by the byte limit.
+// The returned view borrows text; owning-string temporaries are rejected.
+[[nodiscard]] constexpr std::string_view utf8_prefix(borrowed_text text, std::size_t max_bytes) noexcept {
+    const auto input = text.view();
+    const auto limit = max_bytes < input.size() ? max_bytes : input.size();
+    std::size_t size = 0;
+    while (size < limit) {
+        if (static_cast<unsigned char>(input[size]) < 0x80) {
+            ++size;
+            continue;
+        }
+        const auto sequence = scan_utf8_sequence(input.substr(0, limit), size);
+        if (!sequence.well_formed_) {
+            break;
+        }
+        size += sequence.length_;
+    }
+    return input.substr(0, size);
 }
 
 }  // namespace ruvia

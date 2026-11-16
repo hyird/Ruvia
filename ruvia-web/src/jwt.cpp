@@ -19,6 +19,7 @@
 #include <variant>
 #include <vector>
 
+#include "binary_text_encoding.h"
 #include "borrowed_text.h"
 #include "connection_lifecycle.h"
 #include "crypto.h"
@@ -461,7 +462,7 @@ template <typename visitor_type>
 // `out` is cleared and false is returned, so verification fails closed rather
 // than acting on a half-parsed list.
 [[nodiscard]] bool jwt_decode_audiences(std::vector<std::string>& out, std::string_view& value) {
-    detail::skip_json_whitespace(value);
+    skip_json_whitespace(value);
     if (value.empty()) {
         return false;
     }
@@ -473,7 +474,7 @@ template <typename visitor_type>
         return false;
     }
 
-    const bool consumed = detail::consume_json_array_elements(value, 1, [&out](std::string_view& element) {
+    const bool consumed = consume_json_array_elements(value, 1, [&out](std::string_view& element) {
         if (auto decoded = detail::jwt_decode_json_string_value(element)) {
             out.push_back(std::move(*decoded));
             return true;
@@ -730,12 +731,12 @@ bool jwt_payload_access::decode_jwt_payload_claim(jwt_payload& payload_value, st
     // A claim value can be any JSON value (RFC 7519 §2), and claims that are
     // not understood MUST be ignored (§4). Only string values are exposed
     // through claims(); every other valid JSON value is skipped at depth 1.
-    detail::skip_json_whitespace(value);
+    skip_json_whitespace(value);
     if (value.empty()) {
         return false;
     }
     if (value.front() != '"') {
-        return detail::skip_json_value(value, 1);
+        return skip_json_value(value, 1);
     }
     if (auto claim_value = detail::jwt_decode_json_string_value(value)) {
         payload_value.claims_.push_back(detail::jwt_payload_access::claim(std::string(key), std::move(*claim_value)));
@@ -843,7 +844,7 @@ std::string jwt_sign(const jwt_sign_options& options) {
         throw std::invalid_argument("JWT signing time offsets must not be negative");
     }
     const auto digest = detail::jwt_hmac_digest(options.algorithm_);
-    detail::validate_jwt_hmac_secret(detail::hmac_digest_size(digest), options.secret_);
+    detail::validate_jwt_hmac_secret(hmac_digest_size(digest), options.secret_);
     const auto encoded_header = detail::jwt_encoded_header(options.algorithm_);
     const auto now = std::chrono::system_clock::now();
 
@@ -880,7 +881,7 @@ std::string jwt_sign(const jwt_sign_options& options) {
     payload.push_back('}');
 
     const auto encoded_payload_size = http_base64_encoded_size(payload.size(), http_base64_padding::forbidden);
-    const auto signature_size = http_base64_encoded_size(detail::hmac_digest_size(digest), http_base64_padding::forbidden);
+    const auto signature_size = http_base64_encoded_size(hmac_digest_size(digest), http_base64_padding::forbidden);
     const auto payload_offset = encoded_header.size() + 1;
     if (encoded_payload_size > std::numeric_limits<std::size_t>::max() - 1 - payload_offset || signature_size > std::numeric_limits<std::size_t>::max() - (payload_offset + encoded_payload_size + 1)) {
         throw std::length_error("JWT token is too large");
@@ -893,7 +894,7 @@ std::string jwt_sign(const jwt_sign_options& options) {
     detail::jwt_base64_url_encode_into(token.data() + payload_offset, payload.view());
     token[signing_input_size] = '.';
     const std::string_view signing_input(token.data(), signing_input_size);
-    if (signing_input.size() > detail::hmac_max_input_size) {
+    if (signing_input.size() > hmac_max_input_size) {
         throw std::length_error("JWT signing input is too large");
     }
     (void)detail::jwt_hmac_encode(digest, options.secret_, signing_input, token.data() + signing_input_size + 1);
@@ -910,18 +911,18 @@ jwt_result jwt_verify(const jwt_verify_options& options) {
         throw std::invalid_argument("JWT expiration claim policy is invalid");
     }
     const auto digest = detail::jwt_hmac_digest(options.algorithm_);
-    detail::validate_jwt_hmac_secret(detail::hmac_digest_size(digest), options.secret_);
+    detail::validate_jwt_hmac_secret(hmac_digest_size(digest), options.secret_);
     const auto parts = detail::jwt_split_token(options.token_.view());
     if (!parts) {
         return access::result(code_type::malformed_token);
     }
     // No HMAC can be computed over a larger input, so no such token is authentic.
-    if (parts->signing_input_.size() > detail::hmac_max_input_size) {
+    if (parts->signing_input_.size() > hmac_max_input_size) {
         return access::result(code_type::malformed_token);
     }
     std::array<char, 88> expected_buf;
     const auto expected = detail::jwt_hmac_encode(digest, options.secret_, parts->signing_input_, expected_buf.data());
-    if (!detail::constant_time_bytes_equal(expected, parts->signature_)) {
+    if (!constant_time_bytes_equal(expected, parts->signature_)) {
         return access::result(code_type::signature_mismatch);
     }
     if (parts->header_ != detail::jwt_encoded_header(options.algorithm_)) {

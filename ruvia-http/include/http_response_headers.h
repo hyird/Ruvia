@@ -84,6 +84,7 @@ public:
     using value_type = http_response_header;
     using const_iterator = const http_response_header*;
 
+    http_response_headers() noexcept;
     // Moving transfers every descriptor and the index. The source remains
     // usable, independent, and empty.
     http_response_headers(http_response_headers&& other) noexcept;
@@ -161,8 +162,6 @@ private:
     // Stages up to three owned descriptors without touching the table and
     // publishes them later without allocation or failure.
     class descriptor_stage;
-
-    http_response_headers() noexcept;
 
     // Mutable iteration for the owning block and its friends. Named apart from
     // the public const begin()/end() so a non-const block still iterates

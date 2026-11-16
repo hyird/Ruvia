@@ -2,16 +2,20 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <variant>
 
 #include "binary_text_encoding.h"
 #include "borrowed_text.h"
 #include "http_header.h"
 
-// RFC 9651 Structured Field Values: a zero-allocation item / parameter /
-// inner-list scanner over one field value or every line of a repeated field.
+// RFC 9651 Structured Field Values: item / parameter / inner-list scanner.
+// Contiguous tokens borrow input; strings spanning field lines own their text.
 // Callers own the top-level list or dictionary walk.
-namespace ruvia::detail {
+namespace ruvia {
 
 struct http_structured_item {
     enum class kind_type { other,
@@ -22,8 +26,16 @@ struct http_structured_item {
         inner_list } kind_{kind_type::other};
     std::int64_t integer_{0};
     bool boolean_{false};
-    std::string_view text_{};
+    std::variant<std::string_view, std::string> text_{std::string_view{}};
     bool has_escapes_{false};
+
+    [[nodiscard]] std::string_view text() const& noexcept RUVIA_LIFETIMEBOUND {
+        if (const auto* borrowed = std::get_if<std::string_view>(&text_)) {
+            return *borrowed;
+        }
+        return std::get<std::string>(text_);
+    }
+    std::string_view text() const&& = delete;
 };
 
 struct http_structured_text_input {
@@ -37,6 +49,9 @@ struct http_structured_text_input {
     }
     [[nodiscard]] const char* data() const noexcept {
         return remaining_.data();
+    }
+    [[nodiscard]] std::size_t contiguous_size() const noexcept {
+        return remaining_.size();
     }
     void advance() noexcept {
         remaining_.remove_prefix(1);
@@ -61,6 +76,9 @@ public:
     }
     [[nodiscard]] const char* data() const noexcept {
         return remaining_.data();
+    }
+    [[nodiscard]] std::size_t contiguous_size() const noexcept {
+        return remaining_.size();
     }
     void advance() noexcept {
         remaining_.remove_prefix(1);
@@ -141,10 +159,13 @@ struct http_structured_parser {
         // Field-line boundaries inject commas, so a key always stays contiguous.
         return {start, length};
     }
-    bool item(http_structured_item& value) {
+    // Text is retained as raw Structured Fields spelling (escapes included).
+    // Passing false validates and classifies without retaining text or allocating.
+    bool item(http_structured_item& value, bool retain_text = true) {
         if (input_.empty()) {
             return false;
         }
+        value = {};
         if (take('?')) {
             value.kind_ = http_structured_item::kind_type::boolean;
             if (take('1')) {
@@ -154,29 +175,50 @@ struct http_structured_parser {
             return take('0');
         }
         if (take('"')) {
-            const auto* const start = input_.data();
+            const char* chunk = input_.data();
             std::size_t length = 0;
-            bool has_escapes = false;
+            std::optional<std::string> fragmented;
+            const auto advance_text = [&] {
+                if (!retain_text) {
+                    input_.advance();
+                    return;
+                }
+                const bool boundary = input_.contiguous_size() == 1;
+                ++length;
+                input_.advance();
+                if (boundary && !input_.empty()) {
+                    if (!fragmented) {
+                        fragmented.emplace();
+                    }
+                    fragmented->append(chunk, length);
+                    chunk = input_.data();
+                    length = 0;
+                }
+            };
             while (!input_.empty()) {
                 const auto ch = static_cast<unsigned char>(input_.peek());
-                input_.advance();
                 if (ch == '"') {
                     value.kind_ = http_structured_item::kind_type::string;
-                    value.text_ = std::string_view(start, length);
-                    value.has_escapes_ = has_escapes;
+                    if (fragmented) {
+                        fragmented->append(chunk, length);
+                        value.text_ = std::move(*fragmented);
+                    } else if (retain_text) {
+                        value.text_ = std::string_view(chunk, length);
+                    }
+                    input_.advance();
                     return true;
                 }
                 if (ch == '\\') {
+                    advance_text();
                     if (input_.empty() || (input_.peek() != '\\' && input_.peek() != '"')) {
                         return false;
                     }
-                    has_escapes = true;
-                    input_.advance();
-                    length += 2;
+                    value.has_escapes_ = true;
+                    advance_text();
                 } else if (ch < 0x20 || ch > 0x7e) {
                     return false;
                 } else {
-                    ++length;
+                    advance_text();
                 }
             }
             return false;
@@ -249,7 +291,9 @@ struct http_structured_parser {
             input_.advance();
         }
         value.kind_ = http_structured_item::kind_type::token;
-        value.text_ = std::string_view(start, length);
+        if (retain_text) {
+            value.text_ = std::string_view(start, length);
+        }
         return true;
     }
     bool parameters() {
@@ -260,22 +304,23 @@ struct http_structured_parser {
             }
             if (take('=')) {
                 http_structured_item ignored;
-                if (!item(ignored)) {
+                if (!item(ignored, false)) {
                     return false;
                 }
             }
         }
         return true;
     }
-    bool member(http_structured_item& value) {
+    bool member(http_structured_item& value, bool retain_text = true) {
         if (!take('(')) {
-            return item(value) && parameters();
+            return item(value, retain_text) && parameters();
         }
+        value = {};
         value.kind_ = http_structured_item::kind_type::inner_list;
         spaces();
         while (!take(')')) {
             http_structured_item ignored;
-            if (!item(ignored) || !parameters()) {
+            if (!item(ignored, false) || !parameters()) {
                 return false;
             }
             if (input_.empty() || (input_.peek() != ' ' && input_.peek() != ')')) {
@@ -287,4 +332,4 @@ struct http_structured_parser {
     }
 };
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

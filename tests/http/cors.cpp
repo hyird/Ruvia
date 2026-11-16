@@ -120,7 +120,7 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
         EXPECT_EQ(reflect_opts_resp.header("Vary"), std::optional<std::string_view>("Origin, Access-Control-Request-Method, Access-Control-Request-Headers"));
     }
 
-    // Vary and Connection use non-quoted comma-token scanning (unclosed quote does not hide later tokens).
+    // Vary uses non-quoted comma-token scanning; Connection rejects invalid tokens.
     {
         std::vector<ruvia::http_header> vary_list;
         vary_list.emplace_back("Vary", "\"unclosed, Origin");
@@ -132,8 +132,7 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
         EXPECT_TRUE(parsed_vary.is_wildcard());
 
         const auto parsed_conn = ruvia::parse_http_connection_nominated_fields("\"unclosed, close, X-Custom-Hop");
-        EXPECT_TRUE(parsed_conn.has_close());
-        EXPECT_TRUE(parsed_conn.contains("x-custom-hop"));
+        EXPECT_EQ(parsed_conn.status(), ruvia::http_connection_fields_status::invalid);
     }
 }
 

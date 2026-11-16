@@ -8,6 +8,7 @@
 #include "borrowed_text.h"
 #include "http_message.h"
 #include "http_request.h"
+#include "http_uri.h"
 
 // RFC 3986 syntax and the HTTP rules built directly on it: URI components,
 // IPv4 / IPv6 / IPvFuture literals, reg-names, schemes, authorities, the four
@@ -26,26 +27,14 @@ namespace ruvia::detail {
     return is_uri_lower_alpha(byte) || (byte >= 'A' && byte <= 'Z');
 }
 
-// `host` is a proper subdomain of `domain`: it ends with '.' and then
-// `domain`, compared ASCII case-insensitively (cookie domain-match, RFC 6265
-// section 5.1.3, and CORS subdomain origin rules).
-[[nodiscard]] constexpr bool is_dns_subdomain_of(std::string_view host, std::string_view domain) noexcept {
-    return host.size() > domain.size() && host[host.size() - domain.size() - 1] == '.' && http_ascii_ends_with_ignore_case(host, domain);
-}
-
 // Literal pchar bytes. The caller validates percent-encoded triplets separately.
 [[nodiscard]] bool is_valid_uri_userinfo(std::string_view value) noexcept;
 [[nodiscard]] bool is_valid_uri_port(std::string_view value) noexcept;
 [[nodiscard]] bool is_uri_pchar(unsigned char byte) noexcept;
 
-// Split RFC 3986 host [ ":" port ] (host may be an IP-literal in brackets)
-// without validating either part. False when brackets are unbalanced, text
-// follows "]" without ":", or the port contains another ":".
-[[nodiscard]] bool split_uri_host_port(std::string_view value, std::string_view& host, std::string_view& port, bool& has_port) noexcept;
-
 // Validate a percent-encoded component: unreserved / sub-delims / pct-encoded,
 // plus ':' and '@', with '/' and '?' admitted only where the component allows them.
-[[nodiscard]] bool is_valid_uri_component(std::string_view value, bool allow_slash, bool allow_question) noexcept;
+[[nodiscard]] bool is_valid_uri_component(std::string_view value, bool allow_slash, bool allow_question, bool reject_encoded_nul = false) noexcept;
 
 // Address octets/groups in wire order; no allocation or platform IP parser.
 // IPv6 and IPvFuture literals are supplied without surrounding brackets.
@@ -53,7 +42,6 @@ namespace ruvia::detail {
 [[nodiscard]] std::optional<std::array<std::uint16_t, 8>> parse_ipv6_address(std::string_view literal) noexcept;
 [[nodiscard]] bool is_valid_ipv_future(std::string_view literal) noexcept;
 [[nodiscard]] bool is_valid_reg_name(std::string_view value) noexcept;
-[[nodiscard]] bool is_valid_dns_domain_name(std::string_view name) noexcept;
 
 struct request_target_view {
     std::string_view scheme_;

@@ -320,7 +320,7 @@ private:
         const auto name = http_trim_ows(raw_name);
         const auto value = http_trim_ows(raw_value);
         if (http_ascii_equals_ignore_case(name, "q")) {
-            if (quality_seen || raw_name != name || raw_value != value || http_parse_quality_value(value) < 0) {
+            if (quality_seen || raw_name != name || raw_value != value || !parse_http_quality_value(value)) {
                 return false;
             }
             quality_seen = true;

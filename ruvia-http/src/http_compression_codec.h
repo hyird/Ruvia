@@ -10,6 +10,7 @@
 #include <exception>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -65,29 +66,6 @@ private:
     int uncaught_exceptions_;
 };
 
-// One compression library binding per coding: decode a whole buffer bounded by
-// an explicit output ceiling, reporting data errors as values and throwing
-// http_content_codec_error when the codec itself cannot run. Encoding runs
-// only through each encoder stream's encode() loop, driven by
-// http_content_encoder. Which coding a field asks for is decided elsewhere;
-// this is only the machinery each one runs on. decode_http_content maps an
-// empty representation to empty content before any decoder below runs.
-
-// Append decoder output while enforcing the ceiling; false means the ceiling
-// would be exceeded and the decode must fail.
-[[nodiscard]] inline bool append_decoded_bytes(std::string& output, const char* bytes_value, std::size_t size, std::size_t max_decoded_bytes) {
-    if (output.size() > max_decoded_bytes || size > max_decoded_bytes - output.size()) {
-        return false;
-    }
-    output.append(bytes_value, size);
-    return true;
-}
-
-[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_gzip_content(std::string_view input, std::size_t max_decoded_bytes);
-[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_deflate_content(std::string_view input, std::size_t max_decoded_bytes);
-[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_brotli_content(std::string_view input, std::size_t max_decoded_bytes);
-[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_zstd_content(std::string_view input, std::size_t max_decoded_bytes);
-
 // zlib inflate/deflate state with tracked working memory, including the LZ77
 // window. zlib keeps back-pointers to both the z_stream and the allocator
 // context, so these types are pinned: owners embed them in storage whose
@@ -110,9 +88,6 @@ inline constexpr int zlib_default_mem_level = 8;
 // wrapper) content codings.
 inline constexpr int zlib_gzip_window_bits = 15 + 16;
 inline constexpr int zlib_deflate_window_bits = 15;
-
-enum class zlib_content_format : unsigned char { gzip,
-    deflate };
 
 // Supplies the next window of `input` once zlib has consumed the previous
 // one: inputs can exceed zlib's 32-bit avail_in, so they are handed over in
@@ -149,7 +124,7 @@ private:
 
 class zlib_inflate_stream final {
 public:
-    explicit zlib_inflate_stream(int window_bits, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    explicit zlib_inflate_stream(int window_bits, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)(), http_codec_memory* memory = nullptr);
     ~zlib_inflate_stream();
     zlib_inflate_stream(const zlib_inflate_stream&) = delete;
     zlib_inflate_stream& operator=(const zlib_inflate_stream&) = delete;
@@ -172,9 +147,7 @@ private:
 
 class zlib_deflate_stream final {
 public:
-    zlib_deflate_stream(int level, int window_bits, int mem_level, int strategy, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
-    // The gzip or deflate content-coding stream with zlib's default parameters.
-    explicit zlib_deflate_stream(zlib_content_format format, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    zlib_deflate_stream(int level, int window_bits, int mem_level, int strategy, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)(), http_codec_memory* memory = nullptr);
     ~zlib_deflate_stream();
     zlib_deflate_stream(const zlib_deflate_stream&) = delete;
     zlib_deflate_stream& operator=(const zlib_deflate_stream&) = delete;
@@ -216,7 +189,7 @@ private:
 // failure.
 class brotli_decoder_stream final {
 public:
-    explicit brotli_decoder_stream(std::size_t max_decoded_bytes, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    explicit brotli_decoder_stream(std::size_t max_decoded_bytes, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)(), http_codec_memory* memory = nullptr);
     ~brotli_decoder_stream();
     brotli_decoder_stream(const brotli_decoder_stream&) = delete;
     brotli_decoder_stream& operator=(const brotli_decoder_stream&) = delete;
@@ -243,10 +216,10 @@ private:
 // since a stream encoder lives as long as its response (SSE).
 inline constexpr int brotli_stream_window_bits = 19;
 
-// Encoder at quality 5, shared by whole-buffer and streaming HTTP content coding.
+// Encoder shared by whole-buffer and streaming HTTP content coding.
 class brotli_encoder_stream final {
 public:
-    explicit brotli_encoder_stream(int window_bits, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    explicit brotli_encoder_stream(int window_bits, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)(), http_codec_memory* memory = nullptr, int quality = 5);
     ~brotli_encoder_stream();
     brotli_encoder_stream(const brotli_encoder_stream&) = delete;
     brotli_encoder_stream& operator=(const brotli_encoder_stream&) = delete;
@@ -275,7 +248,7 @@ private:
 
 class zstd_decoder_stream final {
 public:
-    explicit zstd_decoder_stream(std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    explicit zstd_decoder_stream(std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)(), http_codec_memory* memory = nullptr);
     ~zstd_decoder_stream();
     zstd_decoder_stream(const zstd_decoder_stream&) = delete;
     zstd_decoder_stream& operator=(const zstd_decoder_stream&) = delete;
@@ -289,28 +262,26 @@ public:
     void rethrow_allocation_failure() const {
         allocation_.rethrow_if_failed();
     }
+    [[nodiscard]] bool reset() noexcept;
 
 private:
     http_c_library_memory allocation_;
     ZSTD_DStream* stream_;
 };
 
-// Encoder at the default compression level, with the level's own window.
+// Encoder with the selected compression level and that level's own window.
 // reset() ends any frame in progress and keeps both the parameters and the
 // working memory, so the next frame is identical to one from a new encoder.
 // false means the owner must destroy it.
 class zstd_encoder_stream final {
 public:
-    explicit zstd_encoder_stream(std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    explicit zstd_encoder_stream(std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)(), http_codec_memory* memory = nullptr, int level = 3);
     ~zstd_encoder_stream();
     zstd_encoder_stream(const zstd_encoder_stream&) = delete;
     zstd_encoder_stream& operator=(const zstd_encoder_stream&) = delete;
 
     [[nodiscard]] bool initialized() const noexcept {
         return context_ != nullptr;
-    }
-    void rethrow_allocation_failure() const {
-        allocation_.rethrow_if_failed();
     }
     [[nodiscard]] bool reset() noexcept;
     // The single zstd encode loop, shared by whole-buffer and streaming
@@ -323,6 +294,36 @@ public:
 private:
     http_c_library_memory allocation_;
     ZSTD_CCtx* context_;
+};
+
+// Shared pinned state for content and transfer decoding. Transfer stages embed
+// this directly in their stack allocation; only the public opaque owner needs
+// a separate allocation. There is exactly one incremental decode loop.
+class http_content_decoder_stream final {
+public:
+    http_content_decoder_stream(http_content_coding coding, http_content_decode_options options);
+    http_content_decoder_stream(const http_content_decoder_stream&) = delete;
+    http_content_decoder_stream& operator=(const http_content_decoder_stream&) = delete;
+    [[nodiscard]] http_content_decode_result decode(std::string_view input, std::span<char> output);
+    [[nodiscard]] http_content_decode_result finish_input() noexcept;
+    [[nodiscard]] decoder_state state() const noexcept {
+        return phase_;
+    }
+    void reset();
+
+private:
+    void initialize();
+    [[nodiscard]] http_content_decode_result decode_active(std::string_view input, std::span<char> output);
+    [[nodiscard]] http_content_decode_result fail(std::size_t consumed, http_content_decode_error error) noexcept;
+    using decoder_stream = std::variant<zlib_inflate_stream, brotli_decoder_stream, zstd_decoder_stream>;
+    http_content_coding coding_;
+    http_content_decode_options options_;
+    std::optional<decoder_stream> stream_;
+    decoder_state phase_{decoder_state::active};
+    http_content_decode_error failure_{http_content_decode_error::invalid_content};
+    std::size_t decoded_bytes_{0};
+    bool received_input_{false};
+    bool boundary_{false};
 };
 
 }  // namespace ruvia::detail

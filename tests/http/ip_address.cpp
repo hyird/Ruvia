@@ -77,3 +77,108 @@ TEST(RuviaHttp, ip_address_formats_maximal_scoped_ipv6) {
     ASSERT_TRUE(address.has_value());
     EXPECT_EQ(address->to_string(), "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff%4294967295");
 }
+
+TEST(RuviaHttp, ip_address_classifies_native_and_mapped_addresses) {
+    const auto v4 = ruvia::ip_address::parse("192.0.2.1");
+    ASSERT_TRUE(v4);
+    EXPECT_EQ(v4->ipv4_uint32(), 0xc0000201U);
+    const auto mapped = ruvia::ip_address::parse("::ffff:192.0.2.1");
+    ASSERT_TRUE(mapped);
+    EXPECT_FALSE(mapped->ipv4_uint32());
+    EXPECT_EQ(mapped->normalized_ipv4().ipv4_uint32(), v4->ipv4_uint32());
+    struct classification final {
+        std::string_view text;
+        bool loopback;
+        bool multicast;
+        bool link_local;
+        bool public_unicast;
+    };
+    for (const auto& entry : std::array{
+             classification{"127.255.255.255", true, false, false, false},
+             classification{"::ffff:127.0.0.1", true, false, false, false},
+             classification{"::1", true, false, false, false},
+             classification{"224.0.0.1", false, true, false, false},
+             classification{"::ffff:239.255.255.255", false, true, false, false},
+             classification{"ff02::1%2", false, true, false, false},
+             classification{"169.254.0.1", false, false, true, false},
+             classification{"::ffff:169.254.1.1", false, false, true, false},
+             classification{"febf::1%2", false, false, true, false},
+             classification{"fec0::1", false, false, false, false},
+             classification{"8.8.8.8", false, false, false, true},
+             classification{"::ffff:8.8.8.8", false, false, false, true},
+             classification{"::ffff:8.8.8.8%2", false, false, false, false},
+             classification{"2001:4860:4860::8888", false, false, false, true},
+             classification{"2001:4860::1%2", false, false, false, false}
+         }) {
+        SCOPED_TRACE(entry.text);
+        const auto address = ruvia::ip_address::parse(entry.text);
+        ASSERT_TRUE(address);
+        EXPECT_EQ(address->is_loopback(), entry.loopback);
+        EXPECT_EQ(address->is_multicast(), entry.multicast);
+        EXPECT_EQ(address->is_link_local(), entry.link_local);
+        EXPECT_EQ(address->is_public_unicast(), entry.public_unicast);
+    }
+}
+
+TEST(RuviaHttp, ip_address_public_unicast_excludes_special_purpose_space) {
+    for (const std::string_view text : {"0.0.0.0", "0.255.255.255", "10.255.255.255", "100.64.0.0", "100.127.255.255", "127.0.0.1", "169.254.0.0", "172.16.0.0", "172.31.255.255", "192.0.0.8", "192.0.0.11", "192.0.2.1", "192.88.99.1", "192.168.255.255", "198.18.0.0", "198.19.255.255", "198.51.100.1", "203.0.113.1", "224.0.0.0", "240.0.0.1", "255.255.255.255", "::", "::1", "::192.0.2.1", "64:ff9b::808:808", "100::1", "2001::1", "2001:1ff:ffff::1", "2001:db8::1", "2002:808:808::1", "3ffe::1", "3fff:fff::1", "4000::1", "fc00::1", "fe80::1", "fec0::1", "ff00::1"}) {
+        SCOPED_TRACE(text);
+        const auto address = ruvia::ip_address::parse(text);
+        ASSERT_TRUE(address);
+        EXPECT_FALSE(address->is_public_unicast());
+    }
+    for (const std::string_view text : {"1.0.0.1", "100.63.255.255", "100.128.0.0", "172.15.255.255", "172.32.0.0", "192.0.0.9", "192.0.0.10", "198.17.255.255", "198.20.0.0", "2001:200::1", "2606:4700::1111"}) {
+        SCOPED_TRACE(text);
+        const auto address = ruvia::ip_address::parse(text);
+        ASSERT_TRUE(address);
+        EXPECT_TRUE(address->is_public_unicast());
+    }
+}
+
+TEST(RuviaHttp, ip_cidr_preserves_family_prefix_and_inclusive_endpoints) {
+    struct block final {
+        std::string_view text;
+        std::string_view first;
+        std::string_view last;
+        unsigned bits;
+    };
+    for (const auto& entry : std::array{
+             block{"0.0.0.0/0", "0.0.0.0", "255.255.255.255", 0},
+             block{"128.0.0.0/1", "128.0.0.0", "255.255.255.255", 1},
+             block{"10.128.0.0/9", "10.128.0.0", "10.255.255.255", 9},
+             block{"192.0.2.0/31", "192.0.2.0", "192.0.2.1", 31},
+             block{"192.0.2.1", "192.0.2.1", "192.0.2.1", 32},
+             block{"::/0", "::", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", 0},
+             block{"8000::/1", "8000::", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", 1},
+             block{"2001:db8:0:0:8000::/65", "2001:db8::8000:0:0:0", "2001:db8::ffff:ffff:ffff:ffff", 65},
+             block{"2001:db8::/127", "2001:db8::", "2001:db8::1", 127},
+             block{"::1/128", "::1", "::1", 128},
+             block{"::ffff:192.0.2.0/120", "::ffff:192.0.2.0", "::ffff:192.0.2.255", 120}
+         }) {
+        SCOPED_TRACE(entry.text);
+        const auto cidr = ruvia::ip_cidr::parse(entry.text);
+        ASSERT_TRUE(cidr);
+        EXPECT_EQ(cidr->prefix_bits(), entry.bits);
+        EXPECT_EQ(cidr->network(), ruvia::ip_address::parse(entry.first));
+        EXPECT_EQ(cidr->first_address(), ruvia::ip_address::parse(entry.first));
+        EXPECT_EQ(cidr->last_address(), ruvia::ip_address::parse(entry.last));
+        EXPECT_TRUE(cidr->contains(cidr->first_address()));
+        EXPECT_TRUE(cidr->contains(cidr->last_address()));
+    }
+    const auto ipv4 = ruvia::ip_cidr::parse("192.0.2.0/24");
+    ASSERT_TRUE(ipv4);
+    EXPECT_TRUE(ipv4->contains("::ffff:192.0.2.1"));
+    EXPECT_FALSE(ipv4->contains("::ffff:192.0.2.1%2"));
+    EXPECT_FALSE(ipv4->contains("192.0.3.0"));
+    EXPECT_NE(ipv4, ruvia::ip_cidr::parse("::ffff:192.0.2.0/120"));
+    const auto ipv6 = ruvia::ip_cidr::parse("fe80::/10");
+    ASSERT_TRUE(ipv6);
+    EXPECT_TRUE(ipv6->contains("fe80::1%2"));
+}
+
+TEST(RuviaHttp, ip_cidr_rejects_host_bits_and_scoped_networks) {
+    for (const std::string_view text : {"", "192.0.2.1/24", "10.127.0.0/8", "0.0.0.1/0", "192.0.2.0/33", "192.0.2.0/", "192.0.2.0/-1", "192.0.2.0/+1", "192.0.2.0/24/1", "::1/0", "2001:db8::1/64", "2001:db8:0:0:8000::1/65", "::/129", "::/128 ", "fe80::%0/10", "fe80::%2/10", "fe80::1%2", "::ffff:192.0.2.1/120"}) {
+        SCOPED_TRACE(text);
+        EXPECT_FALSE(ruvia::ip_cidr::parse(text));
+    }
+}

@@ -191,7 +191,7 @@ namespace {
 [[nodiscard]] bool set_ticket_mac_key(EVP_MAC_CTX& mac, const tls_session_ticket_key& key) noexcept {
     const OSSL_PARAM parameters[] = {
         OSSL_PARAM_construct_octet_string(OSSL_MAC_PARAM_KEY, const_cast<unsigned char*>(key.hmac_key_.data()), key.hmac_key_.size()),
-        OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, const_cast<char*>(openssl_digest_name(hmac_digest::sha256)), 0),
+        OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, const_cast<char*>("SHA256"), 0),
         OSSL_PARAM_construct_end(),
     };
     return EVP_MAC_CTX_set_params(&mac, parameters) == 1;

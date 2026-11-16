@@ -71,7 +71,7 @@ bool http_cookie_jar::cookie_domain_matches(std::string_view host, std::string_v
     if (is_cookie_ip_host(host)) {
         return false;
     }
-    return detail::is_dns_subdomain_of(host, domain);
+    return is_dns_subdomain_of(host, domain);
 }
 
 bool http_cookie_jar::cookie_path_matches(std::string_view request_path, std::string_view cookie_path) noexcept {

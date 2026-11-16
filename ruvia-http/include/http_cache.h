@@ -135,7 +135,7 @@ private:
     friend class cache_control_field_parser;
     friend std::optional<cache_control> parse_targeted_cache_control(std::string_view value) noexcept;
     template <typename input_type>
-    friend std::optional<cache_control> parse_targeted_cache_control_from_input(input_type input) noexcept;
+    friend std::optional<cache_control> parse_targeted_cache_control_from_input(input_type input);
 
     static constexpr std::size_t max_nominated_fields = 16;
     static constexpr std::size_t max_nominated_field_bytes = 256;
@@ -217,18 +217,16 @@ struct targeted_cache_control_selection final {
 // Parses an RFC 8941 Structured Field Dictionary of cache directives; returns
 // std::nullopt when absent, empty, or syntactically invalid per RFC 9213 §2.1.
 [[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(std::string_view value) noexcept;
-[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(const http_header_range_view& headers, std::string_view header_name = "CDN-Cache-Control") noexcept;
+[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(const http_header_range_view& headers, std::string_view header_name = "CDN-Cache-Control");
 
 // RFC 9213 §2.2 target-list selection: evaluates `target_headers` in priority
 // order and returns the first present, valid non-empty targeted policy; falls
 // back to standard Cache-Control when no targeted header matches.
-[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control(const http_header_range_view& headers, std::span<const std::string_view> target_headers) noexcept;
+[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control(const http_header_range_view& headers, std::span<const std::string_view> target_headers);
 
-// RFC 9111 §5.2.2.7 & §5.2.2.3 field-qualified header stripping for shared caches.
-// Returns false if unqualified `private` or `no-store` forbids shared-cache
-// storage; returns true when storable (after stripping any field-qualified
-// `private="field1, field2"` headers in place).
-bool strip_http_cache_private_headers(editable_http_headers headers, const cache_control& control) noexcept;
+// RFC 9111 field-qualified stripping. Rejection (no-store, unqualified
+// private, or a nominated protected name) leaves the entire block unchanged.
+bool strip_http_cache_private_headers(editable_http_headers headers, const cache_control& control, std::span<const std::string_view> protected_fields = {}) noexcept;
 // The no-cache="field1, field2" counterpart: false if `no-store` or
 // unqualified `no-cache` forbids reuse without validation.
 bool strip_http_cache_no_cache_headers(editable_http_headers headers, const cache_control& control) noexcept;
@@ -236,13 +234,12 @@ bool strip_http_cache_no_cache_headers(editable_http_headers headers, const cach
 [[nodiscard]] bool http_cache_control_has_no_transform(std::string_view field_value) noexcept;
 [[nodiscard]] bool http_cache_control_has_no_transform(const http_header_range_view& headers) noexcept;
 
-// Rewrites Cache-Control to preserve all directives except max-age and s-maxage
-// while setting client max-age=<client_max_age>.
-[[nodiscard]] std::string rewrite_http_cache_control_max_age(std::string_view field_value, std::uint64_t client_max_age);
-[[nodiscard]] std::string rewrite_http_cache_control_max_age(const http_header_range_view& headers, std::uint64_t client_max_age);
-// Replaces the block's Cache-Control lines with the rewritten one and clears
-// Expires so the rewritten max-age governs client freshness.
-void rewrite_http_response_cache_max_age(editable_http_headers response_headers, std::uint64_t client_max_age);
+// Rewrites only max-age, preserving s-maxage and every other directive.
+// nullopt removes max-age without imposing a browser freshness lifetime.
+[[nodiscard]] std::string rewrite_http_cache_control_max_age(std::string_view field_value, std::optional<std::uint64_t> client_max_age);
+[[nodiscard]] std::string rewrite_http_cache_control_max_age(const http_header_range_view& headers, std::optional<std::uint64_t> client_max_age);
+// Replaces Cache-Control atomically and clears Expires only when setting a TTL.
+void rewrite_http_response_cache_max_age(editable_http_headers response_headers, std::optional<std::uint64_t> client_max_age);
 
 // Parsed multi-line Vary specification (RFC 9111 section 4.1). Field names are
 // normalized to lowercase, deduplicated, and sorted in fixed ASCII order.
@@ -317,10 +314,25 @@ struct http_cache_age_input final {
 
 void sanitize_http_304_response_headers(editable_http_headers headers) noexcept;
 
-// RFC 9111 section 4.3.4 freshening: every stored field that the 304 also
-// carries is replaced by the 304's lines, except hop-by-hop, nominated and
-// 304-forbidden fields. `not_modified_headers` may view `cached_headers`,
-// wholly or in part.
-void merge_http_304_response_headers(editable_http_headers cached_headers, const http_header_range_view& not_modified_headers);
+enum class http_cache_validator_match : std::uint8_t { none,
+    unvalidated,
+    weak,
+    strong };
+
+// RFC 9111 section 4.3.4 identification for one stored response. ETag takes
+// precedence over Last-Modified. Equal dates are strong only when the stored
+// Date is at least 60 seconds later (RFC 9110 section 8.8.2.2).
+// An explicitly supplied Content-Encoding must match the stored coding stack;
+// its absence in a 304 preserves the stored coding.
+[[nodiscard]] http_cache_validator_match match_http_cache_validators(const http_header_range_view& cached_headers, const http_header_range_view& validating_headers) noexcept;
+
+// Returns false without mutation when validators, encoding, or Connection
+// syntax do not match. Otherwise atomically replaces eligible stored fields.
+// Inputs may alias wholly or in part. No CDN policy is inferred.
+bool merge_http_304_response_headers(editable_http_headers cached_headers, const http_header_range_view& not_modified_headers);
+
+// Reuses representation ETag semantics when a cache transforms content coding.
+// Invalid or repeated tags reject without mutation; absence is a no-op success.
+bool weaken_http_cache_etag(editable_http_headers headers);
 
 }  // namespace ruvia

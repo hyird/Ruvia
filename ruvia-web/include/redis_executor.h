@@ -42,6 +42,25 @@ class redis_scored_value;
 
 class redis_search_mapping;
 
+// Immutable owned Lua source with its SHA1 computed once at construction.
+// Copies share storage; a cold operation retains its own script ownership.
+class redis_script final {
+public:
+    explicit redis_script(std::string_view body);
+    template <std::same_as<std::string> string_type>
+    explicit redis_script(string_type&& body) :
+        storage_(own(std::move(body))) {}
+    [[nodiscard]] std::string_view body() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view body() const&& = delete;
+    [[nodiscard]] std::string_view sha1() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view sha1() const&& = delete;
+
+private:
+    struct storage_type;
+    [[nodiscard]] static std::shared_ptr<const storage_type> own(std::string body);
+    std::shared_ptr<const storage_type> storage_;
+};
+
 // Owns every command argument, including binary text, in standard strings.
 class redis_compiled_command final {
 public:
@@ -563,7 +582,6 @@ namespace detail {
 class redis_client_runtime;
 class redis_client_state;
 struct request_io_metrics;
-struct redis_orm_script;
 class redis_subscription_connection;
 class redis_subscription_set;
 class worker_client_registry_view;
@@ -1225,6 +1243,12 @@ public:
         return registration_.attach(command_owned(std::move(command).take_arguments()));
     }
 
+    // EVALSHA, falling back to EVAL only for NOSCRIPT, under one deadline.
+    // Owns the script and all keys/arguments before returning the cold task.
+    [[nodiscard]] task<redis_value> eval_cached(const redis_script& script, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {}) const;
+    task<redis_value> eval_cached(const redis_script&, std::initializer_list<std::string_view>, std::span<const std::string_view> = {}) const = delete;
+    task<redis_value> eval_cached(const redis_script&, std::span<const std::string_view>, std::initializer_list<std::string_view>) const = delete;
+
     // Every command owns its arguments before this call returns.
     template <typename... args_type>
         requires detail::redis_argument_pack<args_type...>
@@ -1296,7 +1320,7 @@ private:
     [[nodiscard]] task<redis_value> command_owned(std::vector<std::string>&& args) const;
     // ORM scripts run as EVALSHA; a NOSCRIPT reply loads the body through
     // EVAL within the same operation.
-    [[nodiscard]] task<redis_value> script_owned(const detail::redis_orm_script& script, std::vector<std::string>&& args) const;
+    [[nodiscard]] task<redis_value> script_owned(redis_script script, std::vector<std::string>&& args) const;
 
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<result_type> command_mapped(std::vector<std::string>&& args, mapper_type mapper) const {
@@ -1305,7 +1329,7 @@ private:
     }
 
     template <typename result_type, typename mapper_type>
-    [[nodiscard]] task<result_type> script_mapped(const detail::redis_orm_script& script, std::vector<std::string>&& args, mapper_type mapper) const {
+    [[nodiscard]] task<result_type> script_mapped(const redis_script& script, std::vector<std::string>&& args, mapper_type mapper) const {
         registration_.require_active();
         return registration_.attach(detail::map_redis_command<result_type>(script_owned(script, std::move(args)), std::move(mapper)));
     }

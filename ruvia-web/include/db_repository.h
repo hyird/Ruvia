@@ -1646,7 +1646,7 @@ public:
     }
     [[nodiscard]] task<db_exec_result> execute() const {
         validate();
-        return db_command_set<executor_type>::execute_query(executor_, query_);
+        return executor_.execute(query_);
     }
     template <typename output_type = entity_type>
     [[nodiscard]] task<entity_rows<output_type>> get_many() const {
@@ -1858,7 +1858,7 @@ public:
         if (!query.has_where()) {
             throw std::invalid_argument("remove requires an entity primary key");
         }
-        return db_command_set<executor_type>::execute_query(executor_, query);
+        return executor_.execute(query);
     }
     // An empty PostgreSQL conflict target with an update action defaults to the
     // primary key, the target save() uses.
@@ -1867,7 +1867,7 @@ public:
     }
     [[nodiscard]] task<db_exec_result> upsert(std::span<const entity_type> entities, const db_conflict_options& options = {}) const {
         auto query = upsert_query(entities, options);
-        return db_command_set<executor_type>::execute_query(executor_, query);
+        return executor_.execute(query);
     }
 
     [[nodiscard]] task<db_exec_result> update(const db_predicate& predicate, std::span<const db_assignment> changes) const {

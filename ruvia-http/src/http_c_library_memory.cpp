@@ -5,7 +5,41 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#include <stdexcept>
 #include <utility>
+
+namespace ruvia {
+
+http_codec_memory::http_codec_memory(std::size_t max_bytes, http_codec_allocation_callbacks callbacks) :
+    max_bytes_(max_bytes),
+    callbacks_(callbacks) {
+    if ((callbacks_.allocate_ == nullptr) != (callbacks_.deallocate_ == nullptr)) {
+        throw std::invalid_argument("codec allocation callbacks must be supplied together");
+    }
+}
+
+void* http_codec_memory::allocate(std::size_t payload_bytes, std::size_t total_bytes, std::size_t alignment) {
+    if (payload_bytes > max_bytes_ - live_bytes_) {
+        throw std::bad_alloc();
+    }
+    void* pointer = callbacks_.allocate_ != nullptr ? callbacks_.allocate_(total_bytes, alignment, callbacks_.context_) : ::operator new(total_bytes, std::align_val_t{alignment});
+    if (pointer == nullptr) {
+        throw std::bad_alloc();
+    }
+    live_bytes_ += payload_bytes;
+    return pointer;
+}
+
+void http_codec_memory::deallocate(void* pointer, std::size_t payload_bytes, std::size_t total_bytes, std::size_t alignment) noexcept {
+    if (callbacks_.deallocate_ != nullptr) {
+        callbacks_.deallocate_(pointer, total_bytes, alignment, callbacks_.context_);
+    } else {
+        ::operator delete(pointer, total_bytes, std::align_val_t{alignment});
+    }
+    live_bytes_ -= payload_bytes;
+}
+
+}  // namespace ruvia
 
 namespace ruvia::detail {
 namespace {
@@ -26,9 +60,10 @@ constexpr std::size_t allocation_prefix_bytes = ((sizeof(std::size_t) + allocati
 
 }  // namespace
 
-http_c_library_memory::http_c_library_memory(std::size_t native_budget, bool throw_on_budget_exceeded) noexcept :
+http_c_library_memory::http_c_library_memory(std::size_t native_budget, bool throw_on_budget_exceeded, http_codec_memory* memory) noexcept :
     native_budget_(native_budget),
-    throw_on_budget_exceeded_(throw_on_budget_exceeded) {}
+    throw_on_budget_exceeded_(throw_on_budget_exceeded),
+    memory_(memory) {}
 
 void http_c_library_memory::rethrow_if_failed() const {
     if (auto failure = std::exchange(failure_, nullptr)) {
@@ -58,7 +93,7 @@ void* http_c_library_memory::allocate(std::size_t size, void* context) noexcept 
     }
     const auto total = size + allocation_prefix_bytes;
     try {
-        auto* base = static_cast<std::byte*>(::operator new(total, std::align_val_t{allocation_alignment}));
+        auto* base = static_cast<std::byte*>(self.memory_ != nullptr ? self.memory_->allocate(size, total, allocation_alignment) : ::operator new(total, std::align_val_t{allocation_alignment}));
         std::memcpy(base, &total, sizeof(total));
         self.live_bytes_ += size;
         return base + allocation_prefix_bytes;
@@ -77,7 +112,11 @@ void http_c_library_memory::deallocate(void* pointer, void* context) noexcept {
     auto& self = *static_cast<http_c_library_memory*>(context);
     std::size_t total = 0;
     std::memcpy(&total, allocation_base(pointer), sizeof(total));
-    ::operator delete(allocation_base(pointer), total, std::align_val_t{allocation_alignment});
+    if (self.memory_ != nullptr) {
+        self.memory_->deallocate(allocation_base(pointer), total - allocation_prefix_bytes, total, allocation_alignment);
+    } else {
+        ::operator delete(allocation_base(pointer), total, std::align_val_t{allocation_alignment});
+    }
     self.live_bytes_ -= total - allocation_prefix_bytes;
 }
 

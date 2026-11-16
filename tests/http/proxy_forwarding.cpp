@@ -2,11 +2,29 @@
 
 #include <array>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include "http_cache.h"
+#include "http_content_negotiation.h"
 #include "http_header.h"
 #include "http_proxy_forwarding.h"
+
+namespace {
+template <typename source_type>
+concept parses_connection_fields = requires(source_type&& source) {
+    ruvia::parse_http_connection_nominated_fields(std::forward<source_type>(source));
+};
+static_assert(parses_connection_fields<std::string&>);
+static_assert(!parses_connection_fields<std::string>);
+static_assert(parses_connection_fields<std::vector<ruvia::http_header>&>);
+static_assert(!parses_connection_fields<std::vector<ruvia::http_header>>);
+static_assert(!parses_connection_fields<std::initializer_list<ruvia::http_header_view>>);
+}  // namespace
 
 TEST(RuviaHttpPublicApi, hop_by_hop_fields_and_connection_nomination) {
     const std::array<ruvia::http_header_view, 2> headers{{
@@ -55,4 +73,55 @@ TEST(RuviaHttpPublicApi, proxy_target_and_max_forwards) {
     }};
     EXPECT_TRUE(ruvia::parse_http_max_forwards(mf_dup).is_invalid());
     EXPECT_TRUE(ruvia::parse_http_max_forwards("5, 4").is_invalid());
+}
+
+TEST(RuviaHttpPublicApi, connection_nominations_borrow_original_bytes_and_report_terminal_failures) {
+    std::string input = "X-Mixed-Case, x-mixed-case, close";
+    auto nominated = ruvia::parse_http_connection_nominated_fields(input);
+    ASSERT_EQ(nominated.status(), ruvia::http_connection_fields_status::valid);
+    ASSERT_EQ(nominated.size(), 2U);
+    EXPECT_EQ(nominated.tokens()[0], "X-Mixed-Case");
+    EXPECT_EQ(nominated.tokens()[0].data(), input.data());
+    EXPECT_TRUE(nominated.contains("X-MIXED-CASE"));
+    nominated.update("bad token");
+    EXPECT_EQ(nominated.status(), ruvia::http_connection_fields_status::invalid);
+    nominated.update("X-Later");
+    EXPECT_FALSE(nominated.contains("X-Later"));
+
+    ruvia::http_connection_nominated_fields bounded;
+    std::string many;
+    for (std::size_t index = 0; index <= ruvia::http_connection_nominated_fields::capacity; ++index) {
+        if (!many.empty()) {
+            many += ',';
+        }
+        many += "x-" + std::to_string(index);
+    }
+    bounded.update(many);
+    EXPECT_EQ(bounded.status(), ruvia::http_connection_fields_status::budget_exceeded);
+    const std::string oversized(ruvia::http_connection_nominated_fields::max_input_bytes + 1, 'x');
+    EXPECT_EQ(ruvia::parse_http_connection_nominated_fields(oversized).status(), ruvia::http_connection_fields_status::budget_exceeded);
+}
+
+TEST(RuviaHttpPublicApi, public_quality_and_media_range_parsers_preserve_wildcards) {
+    EXPECT_EQ(ruvia::parse_http_quality_value("0"), 0);
+    EXPECT_EQ(ruvia::parse_http_quality_value("0."), 0);
+    EXPECT_EQ(ruvia::parse_http_quality_value("0.125"), 125);
+    EXPECT_EQ(ruvia::parse_http_quality_value("1.000"), 1000);
+    for (const auto invalid : {" 0.5", "0.5 ", ".5", "1.001", "0.1234", "-1", "\"0.5\""}) {
+        EXPECT_FALSE(ruvia::parse_http_quality_value(invalid).has_value()) << invalid;
+    }
+    const auto wildcard = ruvia::parse_http_media_range("*/*;q=0.25");
+    ASSERT_TRUE(wildcard.has_value());
+    EXPECT_EQ(wildcard->type_, "*");
+    EXPECT_EQ(wildcard->subtype_, "*");
+    EXPECT_EQ(wildcard->quality_, 250);
+    const auto type = ruvia::parse_http_media_range("Text/*;charset=utf-8;q=0");
+    ASSERT_TRUE(type.has_value());
+    EXPECT_EQ(type->type_, "Text");
+    EXPECT_EQ(type->subtype_, "*");
+    EXPECT_EQ(type->quality_, 0);
+    EXPECT_EQ(type->parameter_count_, 1U);
+    EXPECT_FALSE(ruvia::parse_http_media_range("*/json"));
+    EXPECT_FALSE(ruvia::parse_http_media_range("text/*;q=bad"));
+    EXPECT_FALSE(ruvia::parse_http_media_range("text/*;q=0.5;q=1"));
 }

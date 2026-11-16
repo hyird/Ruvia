@@ -38,16 +38,16 @@ std::variant<http_datagram_write_plan, http_datagram_error> http_datagram_sessio
     return plan;
 }
 std::optional<bool> parse_http_capsule_protocol(std::string_view value) noexcept {
-    detail::http_structured_parser parser{detail::http_structured_text_input{value}};
+    http_structured_parser parser{http_structured_text_input{value}};
     parser.spaces();
-    detail::http_structured_item item;
+    http_structured_item item;
     if (!parser.item(item) || !parser.parameters()) {
         return std::nullopt;
     }
     // RFC 8941 4.2: only SP surrounds a top-level Item; OWS (with HTAB)
     // belongs between List and Dictionary members.
     parser.spaces();
-    if (!parser.empty() || item.kind_ != detail::http_structured_item::kind_type::boolean) {
+    if (!parser.empty() || item.kind_ != http_structured_item::kind_type::boolean) {
         return std::nullopt;
     }
     return item.boolean_;

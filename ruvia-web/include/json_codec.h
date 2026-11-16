@@ -93,6 +93,10 @@ template <std::floating_point t_type = double>
     return convert_decimal_number<t_type>(text, saw_non_zero);
 }
 
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
 inline constexpr std::size_t max_json_depth = 64;
 
 inline void skip_json_whitespace(std::string_view& input) noexcept {
@@ -319,7 +323,7 @@ template <typename output_type>
 }
 
 template <typename output_t_type>
-void append_utf8(output_t_type& output, std::uint32_t code_point) {
+void append_json_utf8(output_t_type& output, std::uint32_t code_point) {
     if (code_point <= 0x7F) {
         output.push_back(static_cast<char>(code_point));
     } else if (code_point <= 0x7FF) {
@@ -445,7 +449,7 @@ template <typename escaped_budget_type>
                     return std::nullopt;
                 }
                 decoded->append(remaining.data() + decoded_until, i - decoded_until);
-                append_utf8(*decoded, code_point);
+                append_json_utf8(*decoded, code_point);
             }
             i = next_until;
             decoded_until = i;
@@ -571,7 +575,7 @@ template <typename number_t_type>
     if constexpr (std::is_floating_point_v<number_t_type>) {
         // The scan already enforced the RFC 8259 grammar, which excludes the
         // non-finite spellings; only range errors remain.
-        const auto parsed_value = convert_decimal_number<number_t_type>(number, token.nonzero_significand_);
+        const auto parsed_value = detail::convert_decimal_number<number_t_type>(number, token.nonzero_significand_);
         if (!parsed_value || !std::isfinite(*parsed_value)) {
             return false;
         }
@@ -586,7 +590,7 @@ template <typename number_t_type>
     return true;
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia
 
 #if defined(RUVIA_JSON_SCAN_SSE2)
 #undef RUVIA_JSON_SCAN_SSE2
@@ -598,7 +602,7 @@ template <typename number_t_type>
 // skipping, and object field traversal. Skipping, typed model parsing and
 // dynamic token traversal all walk containers through these functions.
 
-namespace ruvia::detail {
+namespace ruvia {
 
 // Consumes one array directly from input and lets the visitor consume each
 // element from the same cursor, positioned at the element's first byte. The
@@ -811,4 +815,4 @@ template <typename visitor_type>
     return input.empty() ? json_object_visit_result::complete : json_object_visit_result::invalid;
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

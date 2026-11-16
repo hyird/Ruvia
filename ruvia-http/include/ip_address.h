@@ -104,6 +104,31 @@ public:
         return *this;
     }
 
+    // Network-order numeric value (a.b.c.d = 0xaabbccdd). Only native IPv4
+    // has a value; call normalized_ipv4() explicitly for mapped addresses.
+    [[nodiscard]] constexpr std::optional<std::uint32_t> ipv4_uint32() const noexcept {
+        if (family_ != ip_address_family::ipv4) {
+            return std::nullopt;
+        }
+        return (std::uint32_t{bytes_[0]} << 24) | (std::uint32_t{bytes_[1]} << 16) | (std::uint32_t{bytes_[2]} << 8) | bytes_[3];
+    }
+
+    // Classification treats unscoped IPv4-mapped IPv6 as IPv4. Scoped IPv6
+    // retains IPv6 semantics; any scope makes public_unicast false.
+    [[nodiscard]] bool is_loopback() const noexcept;
+    [[nodiscard]] bool is_multicast() const noexcept;
+    [[nodiscard]] bool is_link_local() const noexcept;
+
+    // Conservative, fixed special-purpose exclusion policy, not a routing or
+    // reachability test. IPv4 excludes 0/8, private/shared/loopback/link-local,
+    // 192.0.0/24 (except .9/.10), documentation, 192.88.99/24, benchmarking,
+    // multicast and reserved space. IPv6 admits only 2000::/3, excluding
+    // 2001::/23 (protocol assignments), 2001:db8::/32, 2002::/16,
+    // 3ffe::/16 (former 6bone) and 3fff::/20.
+    // Thus unspecified, compatible/translation, discard, ULA, site/link-local,
+    // multicast and reserved addresses are not public unicast.
+    [[nodiscard]] bool is_public_unicast() const noexcept;
+
     // Longest text: eight four-digit groups, seven colons, then '%' and the
     // ten digits of the largest zone.
     static constexpr std::size_t max_text_size = 50;
@@ -154,13 +179,25 @@ static_assert(std::is_trivially_copyable_v<ip_address>);
 static_assert(std::is_trivially_copyable_v<ip_endpoint>);
 
 // An IPv4 or IPv6 CIDR prefix block (or bare address with full-width prefix).
-// IPv4 blocks are stored in IPv4-mapped IPv6 form so 10.0.0.0/8 matches both
-// 10.1.2.3 and ::ffff:10.1.2.3.
+// Parsing requires zero host bits and rejects IPv6 zones, including "%0".
+// IPv4 blocks match native and unscoped IPv4-mapped IPv6 addresses. IPv6
+// blocks keep their family and prefix width; membership ignores peer scopes.
 class ip_cidr final {
 public:
     constexpr ip_cidr() noexcept = default;
 
     [[nodiscard]] static std::optional<ip_cidr> parse(std::string_view text) noexcept;
+
+    [[nodiscard]] ip_address network() const noexcept;
+    [[nodiscard]] constexpr std::uint8_t prefix_bits() const noexcept {
+        return prefix_bits_;
+    }
+    // Inclusive endpoints, not "usable host" addresses: IPv4 /31 and /32
+    // and IPv6 /127 and /128 have no special subtraction.
+    [[nodiscard]] ip_address first_address() const noexcept {
+        return network();
+    }
+    [[nodiscard]] ip_address last_address() const noexcept;
 
     [[nodiscard]] bool contains(const ip_address& address) const noexcept;
     [[nodiscard]] bool contains(std::string_view address_text) const noexcept;
@@ -170,6 +207,7 @@ public:
 private:
     std::array<std::uint8_t, 16> network_{};
     std::uint8_t prefix_bits_{128};
+    ip_address_family family_{ip_address_family::ipv6};
 };
 
 static_assert(std::is_trivially_copyable_v<ip_cidr>);

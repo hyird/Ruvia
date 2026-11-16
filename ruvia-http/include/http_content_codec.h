@@ -14,6 +14,8 @@
 #include <variant>
 
 #include "borrowed_text.h"
+#include "decode_step.h"
+#include "http_codec_memory.h"
 #include "http_content_coding.h"
 
 namespace ruvia {
@@ -33,6 +35,8 @@ struct http_content_encode_options final {
 
 struct http_content_decode_options final {
     std::size_t max_decoded_bytes_{};
+    std::size_t max_memory_bytes_{(std::numeric_limits<std::size_t>::max)()};
+    http_codec_memory* memory_{nullptr};
 };
 
 // gzip members and zstd frames are consumed through the end of input; Brotli
@@ -50,9 +54,54 @@ struct http_content_decode_options final {
 // http_content_codec_error.
 [[nodiscard]] std::variant<std::string, http_content_decode_error> decode_http_content(std::span<const http_content_coding> codings, std::string_view input, http_content_decode_options options);
 
+using http_content_decode_failure = decode_failure<http_content_decode_error>;
+using http_content_decode_result = decode_step<decode_need_input, decode_output, decode_complete, http_content_decode_failure>;
+
+// The sole incremental content decoder, also used by transfer decoding and the
+// whole-buffer functions above. Input is never retained. Identity output borrows
+// input without copying; compressed output borrows the caller's nonempty scratch.
+// Compressed input must not overlap scratch. Drop consumed_bytes() and consume output
+// before reusing scratch. Drain with decode({}, scratch) before providing more
+// input or calling finish_input(); EOF rejects truncated streams. gzip members
+// and zstd frames may be concatenated, so only EOF commits their final boundary.
+// Empty representations complete at EOF, including compressed codings.
+// Every returned byte is within the exact cumulative decoded-size limit.
+// Terminal calls repeat their terminal result without consuming input; only
+// reset() starts another representation. Exceptions mark the decoder failed
+// and retain their original type. memory_ must outlive the decoder.
+// A native data error with valid output delivers that output first (state() is
+// already failed); the next decode() or finish_input() returns its typed failure.
+class http_content_decoder final {
+public:
+    http_content_decoder(http_content_coding coding, http_content_decode_options options);
+    ~http_content_decoder();
+    http_content_decoder(const http_content_decoder&) = delete;
+    http_content_decoder& operator=(const http_content_decoder&) = delete;
+    http_content_decoder(http_content_decoder&&) = delete;
+    http_content_decoder& operator=(http_content_decoder&&) = delete;
+
+    [[nodiscard]] http_content_decode_result decode(std::string_view input, std::span<char> output);
+    [[nodiscard]] http_content_decode_result finish_input() noexcept;
+    [[nodiscard]] decoder_state state() const noexcept;
+    void reset();
+
+private:
+    struct impl_type;
+    impl_type* impl_;
+};
+
+struct http_content_encoder_options final {
+    std::size_t max_memory_bytes_{(std::numeric_limits<std::size_t>::max)()};
+    http_codec_memory* memory_{nullptr};
+    // nullopt uses the coding's default. gzip/deflate: -1..9, Brotli: 0..11,
+    // zstd: ZSTD_minCLevel()..ZSTD_maxCLevel(). identity rejects a level.
+    std::optional<int> compression_level_{};
+};
+
 // The one content encoder: whole-buffer encode() and incremental write()/
 // finish() run the same codec stream. An unknown coding value throws
-// std::invalid_argument. max_memory_bytes bounds the codec's working memory.
+// std::invalid_argument. options.max_memory_bytes_ bounds native working memory;
+// options.memory_ optionally shares a request budget and custom allocator.
 // Each write consumes all of its input and appends to caller-owned output; it
 // does not retain either view. Input may borrow output. Compressed writes
 // snapshot that input before an append can invalidate it.
@@ -69,7 +118,7 @@ struct http_content_decode_options final {
 // which may allocate. A reset failure leaves the encoder failed.
 class http_content_encoder final {
 public:
-    explicit http_content_encoder(http_content_coding coding, std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    explicit http_content_encoder(http_content_coding coding, http_content_encoder_options options = {});
     ~http_content_encoder();
     http_content_encoder(const http_content_encoder&) = delete;
     http_content_encoder& operator=(const http_content_encoder&) = delete;
@@ -89,19 +138,20 @@ public:
     // reset() before the next representation.
     [[nodiscard]] std::optional<std::string> encode(std::string_view input, http_content_encode_options options);
     void reset();
+    [[nodiscard]] decoder_state state() const noexcept {
+        return phase_;
+    }
 
 private:
     struct impl_type;
-    enum class phase : unsigned char { active,
-        finished,
-        failed };
+    using phase = decoder_state;
     http_content_coding coding_;
     impl_type* impl_{nullptr};
     phase phase_{phase::active};
 };
 
 // A fresh http_content_encoder's encode().
-[[nodiscard]] std::optional<std::string> encode_http_content(http_content_coding coding, std::string_view input, http_content_encode_options options);
+[[nodiscard]] std::optional<std::string> encode_http_content(http_content_coding coding, std::string_view input, http_content_encode_options options, http_content_encoder_options encoder_options = {});
 
 class http_worker_codecs;
 
