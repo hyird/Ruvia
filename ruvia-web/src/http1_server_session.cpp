@@ -1689,7 +1689,7 @@ private:
     // record; otherwise `buffers` stays the equivalent gather write. Plain TCP
     // sends the gather write as one segment already.
     void coalesce_tls_frame(std::array<asio::const_buffer, 3>& buffers, std::string_view first, std::string_view second, std::string_view third) noexcept {
-        if constexpr (!std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
+        if constexpr (!std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
             if (first.size() + second.size() + third.size() > response_head_retained_heap_bytes) {
                 return;
             }

@@ -80,6 +80,7 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
   - **超长与不足**：写入超出声明长度抛 `std::length_error` 且该块不写出；`end()` 时不足声明长度抛 `std::invalid_argument`。两者都中止本请求并在流结束后关闭连接（[RFC 9112 §8](https://www.rfc-editor.org/rfc/rfc9112.html#section-8)），与 HTTP/2 的同类错误一致。
   - **分块与关闭界定**：未声明长度（或带 `Transfer-Encoding: chunked` 提示）时，HTTP/1.1 用 `chunked`，HTTP/1.0 以关闭连接界定。
   - **压缩**：框架内容编码生效时 `Content-Length` 随编码移除，退回分块。
+- **HTTP/1 写出**：明文分块直接对分帧与正文视图执行 gather write，不另行拼接；TLS 在保留缓冲可容纳时合并小帧，避免分帧片段各占一条 TLS 记录。
 
 HTTP/2 服务端写循环直接等待 Worker 信号；没有输出时不创建额外的等待协程。
 
