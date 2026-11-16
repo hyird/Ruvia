@@ -3528,7 +3528,7 @@ co_return c.text(body.text());
 - **重定向**：默认最多 5 跳，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应；`on_redirect` 可在每一跳观察并停止；后续跳的期限与首跳共用同一绝对截止期。
 - **全文转发**：`response.pipe_to(c)` 与 `response.pipe_to(request_stream)` 共用提交、正文消费与结束主链；转发状态、端到端字段、未读正文与 Trailer，移除逐跳与 `Connection` 命名字段。
 - **转发准入**：元数据在冷任务启动后、目标输出通道内从本响应当前的 `headers()` 准备，不留存冷任务构造时的响应头引用；目标已提交时抛 `std::logic_error`。
-- **`Connection` 字段非法或超限**：上游 `Connection` 提名字段集不为 `http_connection_fields_status::valid`（状态与上限见 [ruvia-http 8.3.3](ruvia-http.md#api-http-proxy-forwarding-h)）时抛 `http_client_error`（`std::system_error` 派生，`code()` 为 `http_client_errc::protocol_error`）。准备转发头时检出：目标头未改动、仍未提交，异常按 [3.4](#web-errors) 提交前规则处理；正文结束、转发 Trailer 前按同一字段再次判定时检出：已提交下游随异常中止，不发送结束与 Trailer。
+- **`Connection` 字段非法或超限**：上游 `Connection` 提名字段集不为 `http_connection_fields_status::valid`（状态与上限见 [ruvia-http 8.3.3](ruvia-http.md#api-http-proxy-forwarding-h)）时抛 `http_client_error`（`std::system_error` 派生，`code()` 为 `http_client_errc::protocol_error`）。准备转发头时检出：目标头未改动、仍未提交，异常按 [3.4](#web-errors) 提交前规则处理；正文结束、有 Trailer 需要转发时按同一字段再次判定，若检出异常：已提交下游随异常中止，不发送结束与 Trailer。
 - **转发长度**：冷任务启动时按累计成功消费量重建未读 `Content-Length`，覆盖目标原有分帧字段；仅当上游字段中仍有未被 `Connection` 提名的 `Content-Length`、没有 `Transfer-Encoding` 且分帧为 `fixed_length` / `none` / `stream` 时才写出，否则由目标按流式分帧；解码后不沿用原始线面长度；上游 HEAD 转成普通正文响应时长度为零，HEAD / 304 的表示长度元数据仍按无正文规则处理。
 - **`take_headers()` 之后转发**：字段数组已移出，`pipe_to(c)` / `pipe_to(request_stream)` 只转发状态、未读正文与 Trailer：不转发任何上游字段，也不再按上游 `Content-Length` 重建长度（即使 `content_length()` 仍返回解析值；仅上游 HEAD 的零长度规则仍适用），Trailer 只按固定逐跳名单过滤（已无 `Connection` 提名可用）。
 - **转发 Trailer**：HTTP/1.1 在长度未知、已有 Trailer 或多路复用上游尚可能产生尾部字段时使用 `chunked`，不为定长分帧丢弃尾部字段；HTTP/1.0 按协议能力省略可选 Trailer。

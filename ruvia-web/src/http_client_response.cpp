@@ -661,6 +661,22 @@ void prepare_forwarded_response_head(const detail::http_client_response_state& s
     head.commit_headers(std::move(staged));
 }
 
+// Keep borrowed nomination storage out of the forwarding coroutine frame.
+std::vector<http_header_view> prepare_forwarded_response_trailers(const detail::http_client_response_state& state) {
+    std::vector<http_header_view> trailers;
+    trailers.reserve(state.trailers_.size());
+    const auto nominated = parse_http_connection_nominated_fields(state.headers_);
+    if (nominated.status() != http_connection_fields_status::valid) {
+        throw http_client_error(make_error_code(http_client_errc::protocol_error), "invalid or oversized HTTP response Connection field");
+    }
+    for (const auto& field : state.trailers_) {
+        if (!is_http_hop_by_hop_trailer_field(field.name(), nominated)) {
+            trailers.emplace_back(field.name(), field.value());
+        }
+    }
+    return trailers;
+}
+
 // Each frame binds one scope. The destination frame also pins response storage
 // while its source-bound consumer commits headers, writes and finishes.
 task<void> pipe_response_in_destination([[maybe_unused]] http_client_response response, task<void> source) {
@@ -1063,17 +1079,7 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
             state_value.discard_response_body();
             if constexpr (std::is_void_v<view>) {
                 if (output.forwarded_) {
-                    std::vector<http_header_view> trailers;
-                    trailers.reserve(state_value.trailers_.size());
-                    const auto nominated = parse_http_connection_nominated_fields(state_value.headers_);
-                    if (nominated.status() != http_connection_fields_status::valid) {
-                        throw http_client_error(make_error_code(http_client_errc::protocol_error), "invalid or oversized HTTP response Connection field");
-                    }
-                    for (const auto& field : state_value.trailers_) {
-                        if (!is_http_hop_by_hop_trailer_field(field.name(), nominated)) {
-                            trailers.emplace_back(field.name(), field.value());
-                        }
-                    }
+                    const auto trailers = state_value.trailers_.empty() ? std::vector<http_header_view>{} : prepare_forwarded_response_trailers(state_value);
                     try {
                         co_await output.writer_.end(trailers, state_value.downstream_step(steps));
                     } catch (...) {
