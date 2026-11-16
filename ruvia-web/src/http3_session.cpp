@@ -967,6 +967,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
     const auto& options = services_.options_;
     try {
         const auto request_start = options.access_log_.callback_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        co_await multiplexed_dispatch_turn(services_.worker_);
         auto* stream = find_stream(stream_id);
         auto* signal = stream != nullptr ? stream->signal() : nullptr;
         if (signal == nullptr) {

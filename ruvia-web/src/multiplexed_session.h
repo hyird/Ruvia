@@ -63,6 +63,43 @@
 
 namespace ruvia::detail {
 
+// The session already owns and counts the dispatch task. Defer before
+// materializing request views so peer events can advance without borrowing them.
+class multiplexed_dispatch_turn final {
+public:
+    explicit multiplexed_dispatch_turn(const worker_ref& worker_value) :
+        worker_(worker_value) {
+        if (!worker_.valid()) {
+            throw std::invalid_argument("multiplexed dispatch requires a worker");
+        }
+    }
+    multiplexed_dispatch_turn(worker_ref&&) = delete;
+    multiplexed_dispatch_turn(const worker_ref&&) = delete;
+    multiplexed_dispatch_turn(const multiplexed_dispatch_turn&) = delete;
+    multiplexed_dispatch_turn& operator=(const multiplexed_dispatch_turn&) = delete;
+    multiplexed_dispatch_turn(multiplexed_dispatch_turn&&) = delete;
+    multiplexed_dispatch_turn& operator=(multiplexed_dispatch_turn&&) = delete;
+    void operator&() const = delete;
+
+    [[nodiscard]] bool await_ready() {
+        if (std::exchange(started_, true)) {
+            throw std::logic_error("multiplexed dispatch turn already awaited");
+        }
+        if (!worker_.is_current()) {
+            throw std::logic_error("multiplexed dispatch requires its worker");
+        }
+        return false;
+    }
+    void await_suspend(std::coroutine_handle<> continuation) noexcept {
+        worker_.defer_resume(continuation);
+    }
+    void await_resume() const noexcept {}
+
+private:
+    const worker_ref& worker_;
+    bool started_{false};
+};
+
 // Inactivity belongs to the connection; request bodies and output waits have
 // independent per-stream deadlines.
 [[nodiscard]] inline connection_scanner::phase multiplexed_inactivity_phase(bool peer_settings_received, bool header_block_in_progress, bool stream_active, bool tunnel_active) noexcept {

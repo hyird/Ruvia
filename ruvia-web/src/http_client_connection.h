@@ -127,12 +127,15 @@ public:
     // No transport, operation, session or stream uses this slot: a request
     // routed here connects at once.
     [[nodiscard]] bool idle_unconnected() const noexcept {
+        if (connected_ || http1_operations_ != 0) {
+            return false;
+        }
 #ifdef RUVIA_ENABLE_HTTP2
         if (http2_.running() || !http2_streams_.empty()) {
             return false;
         }
 #endif
-        return !connected_ && http1_operations_ == 0;
+        return true;
     }
 
     // Serialized by connect_scheduler_. Returns true only when the existing

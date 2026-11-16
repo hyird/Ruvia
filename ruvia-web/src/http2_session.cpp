@@ -1264,6 +1264,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
     try {
         const auto& options = session_.options();
         const auto request_start = options.access_log_.callback_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        co_await multiplexed_dispatch_turn(session_.services().worker());
         auto* stream_runtime = stream_runtimes_.find(stream_id);
         auto* request_head = stream_runtime != nullptr ? stream_runtime->request_head() : nullptr;
         if (request_head == nullptr) {

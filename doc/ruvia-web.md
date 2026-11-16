@@ -2579,6 +2579,7 @@ ruvia::task<void> proxy(ruvia::request_stream& stream) {
 - **内容编码**：`stream_body` 路由只移除传输编码，不解码 `Content-Encoding`，处理器读到编码后的原始字节；`request_multipart()` 对已编码正文回 `415`、对非法 `Content-Encoding` 回 `400`。
 - **流式响应**：`c.stream()` / `c.stream_text()` 返回 `response_stream_writer&`，`c.stream_sse()` 返回 `sse_writer`；先 `commit()`，结果为 `stream_commit_result::body` 才可生产正文。
 - **线性通道**：读取方向一次只运行一个读取；输出方向 `commit` / `write` / `writeln` / `end` 共用一条线性通道，并发启动抛 `std::logic_error`。未启动的冷任务可以共存。
+- **多路复用分派**：HTTP/2 与 HTTP/3 先登记分派任务，再于所属 worker 的下一轮进入请求处理；沿用原任务与流的生命周期，不另建调度协程。
 - **HTTP/2 DATA 信用**：单连接保留四份 16 KiB 正文信用，每流最多一份，直至对应 socket 写完成才归还；准入重试直接留在统一 DATA 写协程中，复用 `worker_signal` 的延迟唤醒。
 - **逐次期限**：所有 I/O 末参数为 `operation_options operation = {}`（见 [`"operation_options.h"`](ruvia-core.md#api-operation-options-h)），只收紧服务器既有超时，非正超时抛 `std::invalid_argument`。
 - **客户端断开**：流式响应路由中客户端离开会停止 `c.stop_token()`；`db()`、`redis()`、`run_blocking()` 与 `sleep()` 已自动绑定该令牌，自定义等待须显式传入。
@@ -3504,6 +3505,7 @@ ruvia::app().client({
 - **逐次操作期限**：出站流式与会话 I/O 的末参数为 `operation_options operation = {}`（见 [core](ruvia-core.md#api-operation-options-h)），从操作启动起计时，非正超时在调用处抛 `std::invalid_argument`；请求自身期限与宿主取消仍约束整个交换。
 - **就绪读取**：单次明文读取的已就绪完成在等待器挂起前消费，不额外排队；未就绪读取仍在所属 worker 上恢复，TLS 组合读取保持异步驱动。
 - **失败阶段**：后续正文失败不撤销已校验的终态头，正文接口保留并抛出原失败；信息回调与必需内容解码失败仍阻断头交付。
+- **重连筛选**：已连接或仍有 HTTP/1 操作的槽位不做 HTTP/2 存活查询；其余槽位继续校验会话与流占用，路由隔离与空闲复用顺序不变。
 - **worker 亲和**：响应、隧道、推送与通告是 worker 亲和的独立拥有对象，可在客户端停机后存活，但须在所属 `event_loop` 退役前销毁。
 
 #### 11.3.2 使用指引
