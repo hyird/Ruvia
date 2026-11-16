@@ -9,9 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <system_error>
 
-#include <asio/completion_condition.hpp>
 #include <asio/ip/tcp.hpp>
 
 #include "stop_token.h"
@@ -159,12 +157,12 @@ public:
     // Writes have their own stall clock, independent of the phase that times
     // reads (downstream write_timeout bounds every write, as in Pingora): it
     // runs while the entry is in the `writing` phase or a write_scope is open,
-    // and only write progress renews it. Beside it, each write operation has
+    // and only write progress renews it. Progress is a transfer of at least
+    // one byte to the peer: the bound lifecycle's native socket stream
+    // reports each one, beneath any TLS record buffering, so queued or
+    // failed output never counts. Beside it, each write operation has
     // an absolute completion clock from its start that progress never renews,
     // so a peer draining a byte per write_timeout still cannot hold a write.
-    // Either clock closes a connection whose limit lapses, whatever its
-    // phase, so a full-duplex reader (HTTP/2) that keeps the entry idle,
-    // reading or long_lived cannot hide a peer that stopped reading.
     // Destruction detaches the entry and its checks, including during a periodic
     // callback. Destroying the scanner detaches its entries and checks.
     class entry final {
@@ -175,15 +173,19 @@ public:
         entry& operator=(const entry&) = delete;
         entry(entry&&) = delete;
         entry& operator=(entry&&) = delete;
-        void bind_lifecycle(connection_lifecycle* lifecycle) noexcept {
-            lifecycle_ = lifecycle;
-        }
+        // Binds the connection's lifecycle, which must outlive the entry, and
+        // makes the entry the one its native socket stream reports write
+        // progress to, replacing any entry bound before. Rebinding or
+        // destruction withdraws the entry; output completing after that
+        // renews no clock.
+        void bind_lifecycle(connection_lifecycle* lifecycle) noexcept;
         [[nodiscard]] connection_lifecycle* lifecycle() const noexcept {
             return lifecycle_;
         }
         void touch() noexcept;
-        // Records transport progress of a write: activity that also renews
-        // the write stall clock.
+        // Records transport progress of a write that bypasses the native
+        // stream (a raw-socket ciphertext writer, a QUIC datagram): activity
+        // that also renews the write stall clock.
         void note_write_progress() noexcept;
         // Records progress of a write that continues as a new write
         // operation (the next slice of a file body): renews the stall clock
@@ -260,8 +262,15 @@ public:
 
     private:
         friend class connection_scanner;
+        friend class connection_lifecycle;
         friend class periodic_check_registration;
         friend struct impl_type;
+        // The bound lifecycle's native stream sent bytes. Renews the write
+        // stall clock while a write is pending; other output (a TLS
+        // handshake flight, a response the socket took at once outside a
+        // write) is not write progress.
+        void note_transport_write() noexcept;
+        void release_write_progress() noexcept;
         [[nodiscard]] bool linked() const noexcept;
         // A write is under way: the write stall clock runs, and a timeout
         // cannot end the connection gracefully.
@@ -348,25 +357,6 @@ private:
     friend struct impl_type;
     static void detach_entry(entry& entry) noexcept;
     std::unique_ptr<impl_type> impl_;
-};
-
-// asio::async_write completion condition that records each partial transfer on
-// the connection's scanner entry, so write_timeout measures inactivity rather
-// than the time to drain the whole write.
-class connection_write_progress final {
-public:
-    explicit connection_write_progress(connection_scanner::entry& entry) noexcept :
-        entry_(&entry) {}
-
-    [[nodiscard]] std::size_t operator()(const std::error_code& error, std::size_t bytes_transferred) const noexcept {
-        if (bytes_transferred != 0) {
-            entry_->note_write_progress();
-        }
-        return asio::transfer_all()(error, bytes_transferred);
-    }
-
-private:
-    connection_scanner::entry* entry_;
 };
 
 struct connection_scanner::impl_type final {

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <concepts>
 #include <cstddef>
@@ -20,6 +21,8 @@
 
 #include "byte_view.h"
 #include "context.h"
+#include "context_access.h"
+#include "decimal_text.h"
 #include "http_client.h"
 #include "http_client_pool.h"
 #include "http_client_request_storage.h"
@@ -593,40 +596,54 @@ detail::http_client_response_state& require_response_body_state(detail::http_cli
     return state;
 }
 
-// One bound for the whole forward: commit, body and end share the deadline
-// started here and the caller's stop token.
-task<void> pipe_response(http_client_response response, detail::http_client_response_state& state, response_stream_writer& output, operation_options operation) {
-    if (operation.stop_token_.stop_requested()) {
-        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP client operation cancelled", std::nullopt, &state.connection_info_, state.request_written_);
-    }
-    const detail::operation_steps steps(std::move(operation));
-    stream_commit_result committed{};
-    try {
-        committed = co_await output.commit(state.downstream_step(steps));
-    } catch (...) {
-        state.rethrow_downstream_failure(steps);
-    }
-    if (committed == stream_commit_result::body) {
-        co_await state.consume_body<void>(state.downstream_step(steps), &output);
-        std::vector<http_header_view> trailers;
-        trailers.reserve(response.trailers().size());
-        const auto nominated = parse_http_connection_nominated_fields(response.headers());
-        for (const auto& field : response.trailers()) {
-            if (!is_http_hop_by_hop_trailer_field(field.name(), nominated)) {
-                trailers.emplace_back(field.name(), field.value());
-            }
-        }
-        try {
-            co_await output.end(trailers, state.downstream_step(steps));
-        } catch (...) {
-            state.rethrow_downstream_failure(steps);
+void prepare_forwarded_response_head(const detail::http_client_response_state& state, const detail::http_client_forwarded_response& output) {
+    auto& head = detail::context_access::mutable_stream_head(output.context_);
+    const auto fields = std::span<const http_header>(state.headers_);
+    const auto nominated = parse_http_connection_nominated_fields(fields);
+    auto staged = head.headers().clone();
+    staged.remove_header("content-length");
+    staged.remove_header("transfer-encoding");
+    for (auto field = fields.begin(); field != fields.end(); ++field) {
+        if (!is_http_hop_by_hop_or_nominated_field(field->name(), nominated) && !http_ascii_equals_ignore_case(field->name(), "content-length")) {
+            const bool repeated = std::any_of(fields.begin(), field, [&](const http_header& previous) {
+                return http_ascii_equals_ignore_case(previous.name(), field->name());
+            });
+            staged.header(field->name(), field->value(), {.mode_ = repeated ? http_response_header_mode::append : http_response_header_mode::replace});
         }
     }
+    const auto status = state.status_.status();
+    const auto body_plan = plan_http_response_body(output.request_method_, status);
+    std::optional<std::uint64_t> length;
+    if (body_plan.explicit_content_length_allowed()) {
+        if (state.request_method_ == http_known_method::head && !body_plan.body_suppressed()) {
+            // A HEAD's representation length is not a body available to forward.
+            length = 0;
+        } else if (state.content_length_ && find_first_http_header(fields, "content-length") &&
+            !find_first_http_header(fields, "transfer-encoding") &&
+            !is_http_hop_by_hop_or_nominated_field("content-length", nominated) &&
+            (state.framing_ == http_client_response_framing::fixed_length || state.framing_ == http_client_response_framing::none || state.framing_ == http_client_response_framing::stream)) {
+            // Raw wire length survives decoding in state, but not in normalized
+            // fields. Only an unchanged representation has a usable length.
+            length = *state.content_length_ - std::min(*state.content_length_, state.consumed_body_bytes_);
+        }
+        if (output.protocol_version_ == http_protocol_version::http11 &&
+            (!state.trailers_.empty() || (state.framing_ == http_client_response_framing::stream && !state.receive_complete()))) {
+            // Multiplexed streams may still deliver unannounced trailing fields.
+            // HTTP/1.1 needs chunked to preserve them without buffering the body.
+            length.reset();
+        }
+    }
+    if (length) {
+        std::array<char, max_decimal_size> digits{};
+        staged.header("content-length", format_decimal(digits, *length));
+    }
+    head.status(status);
+    head.commit_headers(std::move(staged));
 }
 
-// A task frame may bind exactly one scope. This outer frame binds the
-// destination while its child remains bound to the source response.
-task<void> pipe_response_in_destination(task<void> source) {
+// Each frame binds one scope. The destination frame also pins response storage
+// while its source-bound consumer commits headers, writes and finishes.
+task<void> pipe_response_in_destination([[maybe_unused]] http_client_response response, task<void> source) {
     co_await std::move(source);
 }
 }  // namespace
@@ -977,11 +994,27 @@ task<std::optional<std::string_view>> http_client_response_body::read_text(opera
 }
 
 template <typename view>
-task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail::http_client_response_state::consume_body(operation_options operation, response_stream_writer* output) {
+task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail::http_client_response_state::consume_body(operation_options operation, std::conditional_t<std::is_void_v<view>, http_client_response_output, std::nullptr_t> output) {
     auto& state_value = *this;
     auto activity = claim_operation_lane(state_value.body_operation_active_, "HTTP client response body operation is already active");
     [[maybe_unused]] const operation_steps steps(operation);
     const http_client_operation_interruption interruption(state_value, http_client_operation_lane::read, operation);
+    if constexpr (std::is_void_v<view>) {
+        if (output.forwarded_) {
+            state_value.throw_if_read_interrupted();
+            state_value.release_consumed_body_prefix();
+            auto prepare = [&] {
+                prepare_forwarded_response_head(state_value, *output.forwarded_);
+            };
+            try {
+                if (co_await streaming_access::commit_prepared(output.writer_, callback_access::bind<void()>(prepare), state_value.downstream_step(steps)) == stream_commit_result::completed) {
+                    co_return;
+                }
+            } catch (...) {
+                state_value.rethrow_downstream_failure(steps);
+            }
+        }
+    }
     for (;;) {
         // A forward is bounded as a whole: its bound also ends it between
         // chunks that are already buffered.
@@ -1004,6 +1037,21 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
             }
             state_value.discard_response_body();
             if constexpr (std::is_void_v<view>) {
+                if (output.forwarded_) {
+                    std::vector<http_header_view> trailers;
+                    trailers.reserve(state_value.trailers_.size());
+                    const auto nominated = parse_http_connection_nominated_fields(state_value.headers_);
+                    for (const auto& field : state_value.trailers_) {
+                        if (!is_http_hop_by_hop_trailer_field(field.name(), nominated)) {
+                            trailers.emplace_back(field.name(), field.value());
+                        }
+                    }
+                    try {
+                        co_await output.writer_.end(trailers, state_value.downstream_step(steps));
+                    } catch (...) {
+                        state_value.rethrow_downstream_failure(steps);
+                    }
+                }
                 co_return;
             } else {
                 co_return std::nullopt;
@@ -1013,13 +1061,14 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
         const auto chunk = std::string_view(state_value.buffered_).substr(state_value.offset_, count);
         if constexpr (std::is_void_v<view>) {
             try {
-                co_await output->write(std::as_bytes(std::span(chunk.data(), chunk.size())), state_value.downstream_step(steps));
+                co_await output.writer_.write(std::as_bytes(std::span(chunk.data(), chunk.size())), state_value.downstream_step(steps));
             } catch (...) {
                 state_value.rethrow_downstream_failure(steps);
             }
-            state_value.offset_ += count;
-        } else {
-            state_value.offset_ += count;
+        }
+        state_value.offset_ += count;
+        state_value.consumed_body_bytes_ = saturating_add(state_value.consumed_body_bytes_, static_cast<std::uint64_t>(count));
+        if constexpr (!std::is_void_v<view>) {
             if constexpr (std::same_as<view, std::string_view>) {
                 co_return chunk;
             } else {
@@ -1029,9 +1078,9 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
     }
 }
 
-template task<std::optional<std::span<const std::byte>>> detail::http_client_response_state::consume_body<std::span<const std::byte>>(operation_options, response_stream_writer*);
-template task<std::optional<std::string_view>> detail::http_client_response_state::consume_body<std::string_view>(operation_options, response_stream_writer*);
-template task<void> detail::http_client_response_state::consume_body<void>(operation_options, response_stream_writer*);
+template task<std::optional<std::span<const std::byte>>> detail::http_client_response_state::consume_body<std::span<const std::byte>>(operation_options, std::nullptr_t);
+template task<std::optional<std::string_view>> detail::http_client_response_state::consume_body<std::string_view>(operation_options, std::nullptr_t);
+template task<void> detail::http_client_response_state::consume_body<void>(operation_options, detail::http_client_response_output);
 
 task<http_client_response_bytes> http_client_response::bytes(std::size_t max_bytes, operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
@@ -1084,13 +1133,14 @@ task<http_client_response_bytes> detail::http_client_response_state::collect_bod
     }
     // The result uses independent thread-safe storage. Only release the
     // worker-owned response buffers after the complete copy succeeds.
+    state_value.consumed_body_bytes_ = saturating_add(state_value.consumed_body_bytes_, static_cast<std::uint64_t>(total_remaining));
     state_value.discard_response_body();
     co_return std::move(result_value);
 }
 
 task<void> http_client_response_body::pipe_to(response_stream_writer& output, operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
-    return state_value.body_operation_scope_.attach(state_value.consume_body<void>(std::move(operation), &output));
+    return state_value.body_operation_scope_.attach(state_value.consume_body<void>(std::move(operation), {output}));
 }
 
 std::optional<std::string_view> http_client_response::header(std::string_view name) const& {
@@ -1106,14 +1156,14 @@ std::optional<std::string_view> http_client_response::trailer(std::string_view n
 }
 
 task<void> http_client_response::pipe_to(context& output, operation_options operation) & {
-    return pipe_to_destination(output.stream_head(), output.stream(), output.operation_scope_, std::move(operation));
+    return pipe_to_destination(output, output.stream(), output.operation_scope_, std::move(operation));
 }
 
 task<void> http_client_response::pipe_to(request_stream& output, operation_options operation) & {
-    return pipe_to_destination(output.context_.stream_head(), output.stream(), output.operation_scope_, std::move(operation));
+    return pipe_to_destination(output.context_, output.stream(), output.operation_scope_, std::move(operation));
 }
 
-task<void> http_client_response::pipe_to_destination(http_response& head, response_stream_writer& writer, detail::operation_scope& destination, operation_options operation) {
+task<void> http_client_response::pipe_to_destination(context& output, response_stream_writer& writer, detail::operation_scope& destination, operation_options operation) {
     if (state_ == nullptr) {
         throw std::logic_error("response owner has moved");
     }
@@ -1121,19 +1171,9 @@ task<void> http_client_response::pipe_to_destination(http_response& head, respon
     if (!state_->body_operation_scope_.active() || !destination.active()) {
         throw std::logic_error("HTTP response pipe_to scope is closed");
     }
-    head.status(status());
-    const auto fields = headers();
-    const auto nominated = parse_http_connection_nominated_fields(fields);
-    for (auto field = fields.begin(); field != fields.end(); ++field) {
-        if (!is_http_hop_by_hop_or_nominated_field(field->name(), nominated) && !http_ascii_equals_ignore_case(field->name(), "content-length")) {
-            const bool repeated = std::any_of(fields.begin(), field, [&](const http_header& previous) {
-                return http_ascii_equals_ignore_case(previous.name(), field->name());
-            });
-            head.header(field->name(), field->value(), {.mode_ = repeated ? http_response_header_mode::append : http_response_header_mode::replace});
-        }
-    }
-    auto source = state_->body_operation_scope_.attach(pipe_response(http_client_response(state_), *state_, writer, std::move(operation)));
-    return destination.attach(pipe_response_in_destination(std::move(source)));
+    detail::http_client_response_output target{writer, detail::http_client_forwarded_response{output, output.req().known_method(), output.req().protocol_version()}};
+    auto source = state_->body_operation_scope_.attach(state_->consume_body<void>(std::move(operation), target));
+    return destination.attach(pipe_response_in_destination(http_client_response(state_), std::move(source)));
 }
 
 }  // namespace ruvia

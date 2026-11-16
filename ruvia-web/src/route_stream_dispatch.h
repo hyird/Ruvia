@@ -400,8 +400,8 @@ template <typename stream_type>
     }
     const std::array<asio::const_buffer, 2> buffers{asio::buffer(continue_head), asio::buffer(head)};
     const connection_scanner::entry::write_scope write_stall_clock(scanner_entry);
-    const auto written = co_await ruvia::async_asio<std::size_t>([&stream, &buffers, &scanner_entry](auto handler) {
-        asio::async_write(stream, buffers, connection_write_progress(scanner_entry), std::move(handler));
+    const auto written = co_await ruvia::async_asio<std::size_t>([&stream, &buffers](auto handler) {
+        asio::async_write(stream, buffers, std::move(handler));
     });
     co_return written.error_code();
 }

@@ -97,6 +97,7 @@ public:
 
     /// 显式提交响应头（包含 session 持久化）；成功返回 body 才可生产正文。
     /// HEAD、304 返回 completed，属于正常完成，不设置 aborted 或取消 token。
+    /// HTTP/1 非空定长响应的头随首次正文写出；其他分帧在 commit 时写出。
     /// commit/write/writeln/end 共用线性输出通道，并发启动抛 logic_error。
     /// 重复 commit 抛 logic_error；提交前失败仍可由框架替换为缓冲错误响应。
     /// 输出操作的 `operation` 超时或停止中止本请求流（HTTP/2、HTTP/3 重置流，

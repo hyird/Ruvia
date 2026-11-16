@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <semaphore>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -62,6 +63,7 @@ class interim_phase_routes final {
     RUVIA_GET("/interim-phase/hinted", hinted);
     RUVIA_GET("/interim-phase/stream", stream);
     RUVIA_GET("/interim-phase/bulk", bulk);
+    RUVIA_GET("/interim-phase/bulk-fixed", bulk);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> item(ruvia::context& c) {
@@ -84,12 +86,16 @@ class interim_phase_routes final {
     }
 
     ruvia::task<void> bulk(ruvia::context& c) {
-        const std::string bytes(bulk_bytes, 'b');
+        std::string bytes(bulk_bytes, 'b');
+        const auto length = std::to_string(bulk_bytes);
+        const std::array headers{ruvia::http_header_view{"content-length", length}};
+        const bool fixed = c.req().path() == "/interim-phase/bulk-fixed";
+        auto& output = c.stream({.headers_ = std::span(headers).first(fixed ? 1 : 0)});
         const auto started = std::chrono::steady_clock::now();
-        if (co_await c.stream().commit() == ruvia::stream_commit_result::completed) {
+        if (co_await output.commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }
-        co_await c.stream().write(bytes);
+        co_await output.write(std::move(bytes));
         bulk_write_duration_ms.store(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count(), std::memory_order_relaxed);
     }
 };
@@ -202,10 +208,25 @@ TEST(Ruvia, a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) 
         // A steadily draining single write is not inactivity. Paced batches
         // keep each raw write below the timeout; the handler measurement proves
         // that the whole write still spans more than one inactivity budget.
-        const auto bulk = exchange_tls(io, endpoint, "GET /interim-phase/bulk HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", 2ms);
-        EXPECT_TRUE(bulk.size() > bulk_bytes);
-        EXPECT_TRUE(bulk.ends_with("0\r\n\r\n"));
-        EXPECT_TRUE(bulk_write_duration_ms.load(std::memory_order_relaxed) > write_timeout.count());
+        for (const bool fixed : {false, true}) {
+            bulk_write_duration_ms.store(0, std::memory_order_relaxed);
+            const auto request = fixed ? "GET /interim-phase/bulk-fixed HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" : "GET /interim-phase/bulk HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+            const auto bulk = exchange_tls(io, endpoint, request, 2ms);
+            if (fixed) {
+                const auto head_end = bulk.find("\r\n\r\n");
+                EXPECT_NE(head_end, std::string::npos);
+                if (head_end != std::string::npos) {
+                    const auto body = std::string_view(bulk).substr(head_end + 4);
+                    EXPECT_EQ(body.size(), bulk_bytes);
+                    EXPECT_EQ(body.find_first_not_of('b'), std::string_view::npos);
+                    EXPECT_NE(bulk.substr(0, head_end).find("Content-Length: " + std::to_string(bulk_bytes)), std::string::npos);
+                }
+            } else {
+                EXPECT_TRUE(bulk.size() > bulk_bytes);
+                EXPECT_TRUE(bulk.ends_with("0\r\n\r\n"));
+            }
+            EXPECT_TRUE(bulk_write_duration_ms.load(std::memory_order_relaxed) > write_timeout.count());
+        }
 
         // The same response to a peer that accepts no data exhausts the send
         // queue and must time out, rather than treating a pending write as

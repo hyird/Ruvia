@@ -1405,9 +1405,10 @@ auto websocket_session_connection<stream_type>::write_bytes(const websocket_outp
         // One gathered write: pending protocol output, then a borrowed payload.
         const std::array<asio::const_buffer, 2> buffers{asio::buffer(plan.bytes().data(), plan.bytes().size()), asio::buffer(plan.borrowed_bytes().data(), plan.borrowed_bytes().size())};
         return ruvia::async_asio([this, buffers](auto handler) mutable {
-            // Partial progress refreshes heartbeat transport activity and the
-            // write_timeout inactivity clock.
-            asio::async_write(stream_, buffers, connection_write_progress(scanner_entry_), std::move(handler));
+            // The native stream reports each transfer as write progress,
+            // refreshing heartbeat transport activity and the write_timeout
+            // inactivity clock.
+            asio::async_write(stream_, buffers, std::move(handler));
         });
     }
 }

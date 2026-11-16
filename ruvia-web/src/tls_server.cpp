@@ -279,8 +279,12 @@ void tls_session_ticket_key_set::install(SSL_CTX& context) {
 }
 
 // SSL_CTX_set_tlsext_ticket_key_evp_cb(3): returns 1 when the key is set up,
-// 2 when a ticket decrypted with the previous key should be renewed, 0 when no
+// 2 when it is set up and the resumed session gets a new ticket, 0 when no
 // ticket is issued or the key name is unknown (full handshake), -1 on error.
+// A ticket decrypted with the previous key is renewed. So is every TLS 1.3
+// ticket, as OpenSSL does with its own keys: RFC 9846 §C.4 recommends against
+// ticket reuse, so clients that consume tickets need a new one to keep
+// resuming successive connections.
 int tls_session_ticket_key_set::protect_ticket(SSL* ssl, unsigned char* key_name, unsigned char* iv, EVP_CIPHER_CTX* cipher, EVP_MAC_CTX* mac, int encrypt) noexcept {
     // OpenSSL calls the callback of the connection's initial context, but an
     // SNI switch may already have replaced the context; every context of the
@@ -309,7 +313,7 @@ int tls_session_ticket_key_set::protect_ticket(SSL* ssl, unsigned char* key_name
     if (!set_ticket_mac_key(*mac, key) || EVP_DecryptInit_ex2(cipher, keys->aes_256_cbc_, key.aes_key_.data(), iv, nullptr) != 1) {
         return -1;
     }
-    return current ? 1 : 2;
+    return current && SSL_version(ssl) != TLS1_3_VERSION ? 1 : 2;
 }
 
 namespace {

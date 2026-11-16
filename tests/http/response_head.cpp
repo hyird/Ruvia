@@ -935,9 +935,12 @@ ruvia::prepared_http1_response_stream prepare_stream_for(std::string_view reques
 
 }  // namespace
 
+// A declared length outranks a trailer intent: the trailers have no chunked
+// section to travel in, so the head does not announce them (RFC 9110 §6.6.2).
 TEST(Ruvia, http1_stream_with_declared_content_length_is_length_delimited_and_reusable) {
     http_response response;
     response.header("Content-Length", "5");
+    response.header("Trailer", "X-Checksum");
     auto prepared = prepare_stream_for("GET / HTTP/1.1\r\nHost: a\r\n\r\n", std::move(response), ruvia::http_response_trailer_intent::present);
     const auto& head_plan = prepared.response_head_plan();
     EXPECT_TRUE(head_plan.content_source() == ruvia::http1_response_content_source::streamed);
@@ -949,6 +952,7 @@ TEST(Ruvia, http1_stream_with_declared_content_length_is_length_delimited_and_re
     const auto wire = emit_head(prepared.response(), prepared.response_head_plan());
     EXPECT_EQ(count_occurrences(wire, "Content-Length: 5\r\n"), std::size_t{1});
     EXPECT_EQ(wire.find("Transfer-Encoding:"), std::string::npos);
+    EXPECT_EQ(wire.find("Trailer:"), std::string::npos);
 }
 
 TEST(Ruvia, http1_stream_transfer_encoding_hint_overrides_declared_content_length) {

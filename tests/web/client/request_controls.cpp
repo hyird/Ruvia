@@ -1335,3 +1335,133 @@ TEST(Ruvia, http1_client_borrowed_small_chunk_pauses_read_inactivity_until_next_
         std::rethrow_exception(peer_failure);
     }
 }
+
+// Every HTTP/1.1 request framing of the public client, sent serially over one
+// reused connection: no content sends no framing field, explicit and declared
+// lengths send Content-Length with exactly that many raw bytes, and unknown
+// lengths send chunked content ending in its last chunk and trailer section.
+// Each request must end exactly where the next one begins.
+TEST(Ruvia, http1_client_request_framing_reuses_one_connection_at_exact_boundaries) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    const auto& worker = attachment.loop().worker();
+    asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
+    asio::ip::tcp::socket socket(io);
+    const auto host = "Host: 127.0.0.1:" + std::to_string(peer.local_endpoint().port()) + "\r\n";
+    const std::vector<std::string> expected{
+        "GET /get HTTP/1.1\r\n" + host + "\r\n",
+        "HEAD /head HTTP/1.1\r\n" + host + "\r\n",
+        "POST /none HTTP/1.1\r\n" + host + "\r\n",
+        "POST /empty HTTP/1.1\r\n" + host + "Content-Length: 0\r\n\r\n",
+        "PUT /buffered HTTP/1.1\r\n" + host + "Content-Length: 7\r\n\r\npayload",
+        "POST /known HTTP/1.1\r\n" + host + "Content-Length: 6\r\n\r\nabcdef",
+        "POST /zero HTTP/1.1\r\n" + host + "Content-Length: 0\r\n\r\n",
+        "POST /chunked HTTP/1.1\r\n" + host + "Transfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n3\r\ndef\r\n0\r\nx-end: done\r\n\r\n",
+    };
+    std::vector<std::string> received;
+    std::string trailing;
+    ruvia::worker_signal peer_finished(worker);
+    bool peer_done = false;
+    bool stopping = false;
+    std::exception_ptr peer_failure;
+    const auto serve = [&]() -> asio::awaitable<void> {
+        co_await peer.async_accept(socket, asio::use_awaitable);
+        std::string input;
+        for (const auto& request : expected) {
+            if (input.size() < request.size()) {
+                co_await asio::async_read(socket, asio::dynamic_buffer(input), asio::transfer_exactly(request.size() - input.size()), asio::use_awaitable);
+            }
+            received.push_back(input.substr(0, request.size()));
+            input.erase(0, request.size());
+            constexpr std::string_view reply = "HTTP/1.1 204 No Content\r\n\r\n";
+            co_await asio::async_write(socket, asio::buffer(reply), asio::use_awaitable);
+        }
+        // Client shutdown ends the reused connection; nothing else was sent.
+        std::error_code ended;
+        co_await asio::async_read(socket, asio::dynamic_buffer(input), asio::transfer_at_least(1), asio::redirect_error(asio::use_awaitable, ended));
+        trailing = std::move(input);
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr error) {
+        if (!stopping) {
+            peer_failure = error;
+        }
+        peer_done = true;
+        peer_finished.notify();
+    });
+    std::exception_ptr failure;
+    std::vector<ruvia::http_client_connection_info> connections;
+    std::size_t sent_bytes = 0;
+    const auto run = [&]() -> ruvia::task<void> {
+        const auto url = "http://127.0.0.1:" + std::to_string(peer.local_endpoint().port());
+        // One connection slot: each request waits for the previous exchange to
+        // release it, so reuse depends only on that exchange's framing.
+        ruvia::http_client client(attachment.loop(), {.base_url_ = url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}, .user_agent_ = ""});
+        const auto handle = client.client();
+        const auto observe = [&](const ruvia::http_client_response& response) {
+            EXPECT_EQ(response.status().value(), 204);
+            connections.push_back(response.connection_info());
+        };
+        try {
+            observe(co_await handle.get("/get").send());
+            observe(co_await handle.head("/head").send());
+            observe(co_await handle.post("/none").send());
+            observe(co_await handle.post("/empty").body("").send());
+            observe(co_await handle.put("/buffered").body("payload").send());
+            {
+                auto exchange = co_await handle.post("/known").upload({.content_length_ = ruvia::http_content_length(6)});
+                co_await exchange.body().write("abc");
+                co_await exchange.body().write("def");
+                co_await exchange.body().end();
+                observe(co_await exchange.response());
+            }
+            {
+                auto exchange = co_await handle.post("/zero").upload({.content_length_ = ruvia::http_content_length(0)});
+                co_await exchange.body().end();
+                observe(co_await exchange.response());
+            }
+            {
+                auto exchange = co_await handle.post("/chunked").upload();
+                co_await exchange.body().write("abc");
+                co_await exchange.body().write("def");
+                const std::array trailers{ruvia::http_header_view{"x-end", "done"}};
+                co_await exchange.body().end(trailers);
+                observe(co_await exchange.response());
+            }
+            sent_bytes = handle.stats().plaintext_bytes_sent_;
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await client.shutdown();
+        if (failure) {
+            stopping = true;
+            peer.close();
+            std::error_code ignored;
+            socket.close(ignored);
+        }
+        while (!peer_done) {
+            co_await peer_finished.wait();
+        }
+        attachment.request_stop();
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    std::move(root).get();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    if (peer_failure) {
+        std::rethrow_exception(peer_failure);
+    }
+    EXPECT_EQ(received, expected);
+    EXPECT_TRUE(trailing.empty());
+    std::size_t expected_bytes = 0;
+    for (const auto& request : expected) {
+        expected_bytes += request.size();
+    }
+    EXPECT_EQ(sent_bytes, expected_bytes);
+    ASSERT_EQ(connections.size(), expected.size());
+    for (std::size_t index = 0; index < connections.size(); ++index) {
+        EXPECT_EQ(connections[index].id_, connections.front().id_);
+        EXPECT_EQ(connections[index].reused_, index != 0);
+    }
+}

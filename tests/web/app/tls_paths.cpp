@@ -393,6 +393,65 @@ bool resumes_tls_session_under(asio::io_context& io, const asio::ip::tcp::endpoi
     return false;
 }
 
+// Model a client that consumes each TLS 1.3 ticket once instead of repeatedly
+// offering the same session. Each resumed exchange must replenish the chain.
+bool resumes_with_fresh_tls13_tickets(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const std::filesystem::path& ca_file) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.load_verify_file(ca_file.string());
+    client.set_verify_mode(asio::ssl::verify_peer);
+    configure_client_version(client, TLS1_3_VERSION);
+    (void)SSL_CTX_set_session_cache_mode(client.native_handle(), SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL_STORE);
+    // Asio owns SSL's app_data slot for its verify callback.
+    static const int ticket_slot = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
+    if (ticket_slot < 0) {
+        throw std::runtime_error("cannot allocate the TLS ticket test slot");
+    }
+    using owned_session = std::unique_ptr<SSL_SESSION, decltype(&SSL_SESSION_free)>;
+    owned_session next(nullptr, SSL_SESSION_free);
+    SSL_CTX_sess_set_new_cb(client.native_handle(), [](SSL* ssl, SSL_SESSION* session) {
+        auto* target = static_cast<owned_session*>(SSL_get_ex_data(ssl, ticket_slot));
+        if (target != nullptr && SSL_SESSION_up_ref(session) == 1) {
+            target->reset(session);
+        }
+        return 0;
+    });
+    for (unsigned round = 0; round != 3; ++round) {
+        auto offered = std::move(next);
+        if (round != 0 && !offered) {
+            return false;
+        }
+        asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+        auto* const native = stream.native_handle();
+        if (SSL_set_ex_data(native, ticket_slot, &next) != 1 || SSL_set_tlsext_host_name(native, "localhost") != 1 || SSL_set1_host(native, "localhost") != 1 || (offered && SSL_set_session(native, offered.get()) != 1)) {
+            throw std::runtime_error("cannot prepare the single-use TLS ticket client");
+        }
+        asio::error_code error;
+        stream.next_layer().connect(endpoint, error);
+        if (!error) {
+            stream.handshake(asio::ssl::stream_base::client, error);
+        }
+        if (error) {
+            throw std::system_error(error, "single-use TLS ticket handshake failed");
+        }
+        if ((round != 0) != (SSL_session_reused(native) == 1)) {
+            return false;
+        }
+        constexpr std::string_view request = "GET /tls HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        asio::write(stream, asio::buffer(request), error);
+        std::string response;
+        std::array<char, 1024> buffer;
+        while (!error) {
+            const auto size = stream.read_some(asio::buffer(buffer), error);
+            response.append(buffer.data(), size);
+        }
+        if (error != asio::error::eof || !serves_secure_body(response)) {
+            return false;
+        }
+        SSL_set_shutdown(native, SSL_get_shutdown(native) | SSL_SENT_SHUTDOWN);
+    }
+    return next && SSL_SESSION_is_resumable(next.get()) == 1;
+}
+
 }  // namespace tls_paths_test
 
 using namespace tls_paths_test;
@@ -516,6 +575,7 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
                 EXPECT_TRUE(!resumes_tls_session_under(io, endpoint, version, "localhost", "sni.test"));
                 EXPECT_TRUE(!resumes_tls_session_under(io, endpoint, version, "localhost", "unknown.test"));
             }
+            EXPECT_TRUE(resumes_with_fresh_tls13_tickets(io, endpoint, identity.ca_file_));
         }
         app.request_stop();
         runner.join();

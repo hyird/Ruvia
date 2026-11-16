@@ -534,6 +534,17 @@ enum class http_client_response_transport : std::uint8_t {
     http3,
 };
 
+struct http_client_forwarded_response final {
+    context& context_;
+    http_known_method request_method_;
+    http_protocol_version protocol_version_;
+};
+
+struct http_client_response_output final {
+    response_stream_writer& writer_;
+    std::optional<http_client_forwarded_response> forwarded_{};
+};
+
 // Address-stable response storage. Network stream registration and connection
 // leases are added here rather than to the movable public response wrapper.
 class http_client_response_state final {
@@ -545,7 +556,7 @@ public:
     // body_operation_active_ only when their lazy task starts. `operation` is
     // validated by the facade and timed from here.
     template <typename view>
-    [[nodiscard]] task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> consume_body(operation_options operation, response_stream_writer* output = nullptr);
+    [[nodiscard]] task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> consume_body(operation_options operation, std::conditional_t<std::is_void_v<view>, http_client_response_output, std::nullptr_t> output = {});
     [[nodiscard]] task<http_client_response_bytes> collect_body(std::size_t max_bytes, operation_options operation);
     void retain_reference() noexcept;
     void release_reference() noexcept;
@@ -706,6 +717,8 @@ public:
     // returning a view, so later network progress cannot invalidate that view.
     std::string pending_;
     std::size_t offset_{0};
+    // Successful consumption survives buffer compaction and whole-body collection.
+    std::uint64_t consumed_body_bytes_{0};
     std::size_t buffered_limit_{default_max_buffered_body_bytes};
     std::exception_ptr failure_;
     // The pool retired before the exchange completed; consumers report

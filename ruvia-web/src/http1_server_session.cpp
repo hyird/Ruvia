@@ -411,7 +411,7 @@ public:
             }
         }
 #endif
-        const auto first_written = co_await connection_gather_write(stream, head.view(), first_.bytes(), progress);
+        const auto first_written = co_await connection_gather_write(stream, head.view(), first_.bytes());
         if (first_written.error_ || !response_plan.send_body()) {
             co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, first_written.error_, first_written.bytes_);
         }
@@ -427,7 +427,7 @@ public:
                 co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, std::make_error_code(std::errc::io_error), response_head_bytes);
             }
             progress.begin_next_write();
-            if (const auto written = co_await connection_gather_write(stream, chunk.bytes(), {}, progress); written.error_) {
+            if (const auto written = co_await connection_gather_write(stream, chunk.bytes(), {}); written.error_) {
                 co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, written.error_, response_head_bytes);
             }
         }
@@ -1683,9 +1683,17 @@ private:
     [[nodiscard]] auto write_to_stream(const buffers_type& buffers) {
         return ruvia::async_asio([this, &buffers](auto handler) mutable {
             ensure_peer_writable();
-            asio::async_write(stream_, buffers, connection_write_progress(scanner_entry_), std::move(handler));
+            asio::async_write(stream_, buffers, std::move(handler));
         });
     }
+
+    // Asio's TLS write_some copies a gather sequence into this much stack
+    // scratch before SSL_write, so a larger gathered frame leaves as two or
+    // more records; a single buffer is passed through without that copy.
+    static constexpr std::size_t tls_gather_scratch_bytes = asio::detail::buffer_sequence_adapter<asio::const_buffer, std::array<asio::const_buffer, 3>>::linearisation_storage_size;
+    // A frame larger than the scratch never takes coalesce_tls_frame()'s
+    // head_ branch, which resets head_ and so cannot take head_ as input.
+    static_assert(response_head_retained_heap_bytes < tls_gather_scratch_bytes);
 
     // Keep bounded TLS frames contiguous instead of repeatedly linearising
     // their fragments through Asio's smaller TLS scratch buffer. Plain TCP
@@ -1776,6 +1784,14 @@ private:
             }
             throw;
         }
+        // As in Pingora, a head declaring a non-empty Content-Length is not
+        // sent alone: it stays in head_ and leaves with the first body bytes
+        // in that write, which completes only once both reached the transport.
+        // Every other head is sent now: unknown-length content may be produced
+        // in real time, and a bodyless or empty message has already ended.
+        if (framing_ == http1_framing_kind::known_length && remaining_content_length_ != 0) {
+            co_return;
+        }
         std::error_code ec;
         {
             const connection_scanner::entry::phase_scope write_phase(scanner_entry_, connection_scanner::phase::writing);
@@ -1817,8 +1833,12 @@ private:
             co_return;
         }
 
-        const http1_chunk_header chunk_header(chunk.size());
-        std::array<asio::const_buffer, 3> buffers{};
+        // Raw body bytes need no framing; Asio's buffer preparation drops the
+        // empty trailing views, so neither the socket gather nor TLS
+        // linearisation copies a lone chunk.
+        std::array<asio::const_buffer, 3> buffers{asio::buffer(chunk)};
+        std::optional<http1_chunk_header> chunk_header;
+        bool head_held = false;
         if (framing_ == http1_framing_kind::known_length) {
             // The declared Content-Length delimits the message: raw bytes, and
             // no byte past it (RFC 9112 §6.3). An overrun leaves the head's
@@ -1827,16 +1847,27 @@ private:
                 state_.mark_aborted();
                 throw std::length_error("HTTP/1 response exceeds Content-Length");
             }
+            // commit_head() held the head back for these first body bytes.
+            head_held = !head_.view().empty();
+            if (head_held) {
+                buffers = {asio::buffer(head_.view()), asio::buffer(chunk), asio::const_buffer{}};
+                // A first frame that fits one TLS record but not Asio's
+                // gather scratch leaves as one record from tls_frame_; a
+                // smaller one already does from the scratch, and a larger
+                // one keeps the gather. Later body bytes are a lone buffer.
+                const auto first_frame_bytes = head_.view().size() + chunk.size();
+                if (first_frame_bytes > tls_gather_scratch_bytes && first_frame_bytes <= SSL3_RT_MAX_PLAIN_LENGTH) {
+                    coalesce_tls_frame(buffers, head_.view(), chunk, {});
+                }
+            }
             remaining_content_length_ -= chunk.size();
-            buffers[0] = asio::buffer(chunk);
-        } else if (framing_ == http1_framing_kind::close_delimited) {
-            // No chunk framing: write the raw body bytes. The connection close
-            // (forced once the stream ends) is what delimits the message.
-            buffers[0] = asio::buffer(chunk);
-        } else {
-            buffers = {asio::buffer(chunk_header.view()), asio::buffer(chunk), asio::buffer(http1_chunk_data_terminator)};
-            coalesce_tls_frame(buffers, chunk_header.view(), chunk, http1_chunk_data_terminator);
+        } else if (framing_ == http1_framing_kind::chunked) {
+            chunk_header.emplace(chunk.size());
+            buffers = {asio::buffer(chunk_header->view()), asio::buffer(chunk), asio::buffer(http1_chunk_data_terminator)};
+            coalesce_tls_frame(buffers, chunk_header->view(), chunk, http1_chunk_data_terminator);
         }
+        // A close-delimited body is written raw; the connection close (forced
+        // once the stream ends) is what delimits the message.
         std::error_code ec;
         {
             const connection_scanner::entry::phase_scope write_phase(scanner_entry_, connection_scanner::phase::writing);
@@ -1845,6 +1876,9 @@ private:
         }
         if (ec) {
             fail_write(ec, "failed to write HTTP response stream body");
+        }
+        if (head_held) {
+            head_.reset();
         }
     }
 
@@ -2138,9 +2172,6 @@ public:
             const auto flags = finish_connection ? final_plain_tcp_send_flags : 0;
             const auto output = output_->view();
             const bool completed = body.empty() ? try_plain_tcp_sync_write(*stream_, asio::buffer(output), output.size(), flags, written_.error_, written_.bytes_) : try_plain_tcp_sync_write(*stream_, std::array<asio::const_buffer, 2>{asio::buffer(output), asio::buffer(body)}, output.size() + body.size(), flags, written_.error_, written_.bytes_);
-            if (written_.bytes_ != 0) {
-                progress_->note_write_progress();
-            }
             if (completed && !written_.error_ && finish_connection) {
                 shutdown_http_connection_send(stream_->lowest_layer());
             }
@@ -2150,13 +2181,12 @@ public:
         }
     }
 
-    // Initiates the asynchronous write of what start() left. Every partial
-    // transfer touches the scanner entry, so write_timeout measures
-    // inactivity rather than the time to drain the whole output.
+    // Initiates what start() left; the native stream reports each actual
+    // transport write, keeping inactivity separate from completion time.
     template <typename handler_type>
     void write_remaining(handler_type&& handler) {
         progress_->set_phase(connection_scanner::phase::writing);
-        async_write_after(*stream_, output_->view(), body_, written_.bytes_, *progress_, std::forward<handler_type>(handler));
+        async_write_after(*stream_, output_->view(), body_, written_.bytes_, std::forward<handler_type>(handler));
     }
 
     [[nodiscard]] auto async_write_remaining() {
@@ -2276,7 +2306,7 @@ private:
         }
         const connection_scanner::entry::write_scope write_stall_clock(self.scanner_entry_);
         const auto completion = co_await async_asio<std::size_t>([&self, bytes = prepared->head()](auto handler) {
-            asio::async_write(self.stream_, asio::buffer(bytes), connection_write_progress(self.scanner_entry_), std::move(handler));
+            asio::async_write(self.stream_, asio::buffer(bytes), std::move(handler));
         });
         if (completion.error_code()) {
             throw inbound_transport_error(completion.error_code(), "failed to write HTTP/1 interim response");

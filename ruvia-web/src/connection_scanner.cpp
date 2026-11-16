@@ -52,8 +52,21 @@ void connection_scanner::periodic_check_registration::reset() noexcept {
     }
 }
 connection_scanner::entry::~entry() noexcept {
+    release_write_progress();
     connection_scanner::detach_entry(*this);
     detach_periodic_checks();
+}
+void connection_scanner::entry::bind_lifecycle(connection_lifecycle* lifecycle) noexcept {
+    release_write_progress();
+    lifecycle_ = lifecycle;
+    if (lifecycle_ != nullptr) {
+        lifecycle_->write_progress_ = this;
+    }
+}
+void connection_scanner::entry::release_write_progress() noexcept {
+    if (lifecycle_ != nullptr && lifecycle_->write_progress_ == this) {
+        lifecycle_->write_progress_ = nullptr;
+    }
 }
 void connection_scanner::entry::touch() noexcept {
     if (scanner_ != nullptr) {
@@ -64,6 +77,11 @@ void connection_scanner::entry::note_write_progress() noexcept {
     if (scanner_ != nullptr) {
         last_active_ms_ = steady_stamp_ms();
         write_progress_ms_ = last_active_ms_;
+    }
+}
+void connection_scanner::entry::note_transport_write() noexcept {
+    if (write_pending()) {
+        note_write_progress();
     }
 }
 void connection_scanner::entry::begin_next_write() noexcept {

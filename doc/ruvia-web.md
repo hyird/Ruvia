@@ -671,7 +671,7 @@ ruvia::app()
 | `request_body_timeout_` | `std::optional<timeout_duration>` | `std::chrono::seconds(60)` | 请求体不活动；HTTP/2 逐流计时，超时（或超出 `body_completion_timeout_`）的流以 `RST_STREAM(CANCEL)` 重置，连接与其他流不受影响 |
 | `header_completion_timeout_` | `timeout_duration` | `std::chrono::seconds(30)` | 绝对阶段期限，进度不续期；覆盖 PROXY 头、TLS/QUIC 握手、请求头与 HTTP/2 前言，始终生效，无“未设置” |
 | `body_completion_timeout_` | `std::optional<timeout_duration>` | `std::chrono::seconds(120)` | 请求体绝对完成期限 |
-| `write_timeout_` | `std::optional<timeout_duration>` | `std::chrono::seconds(60)` | 写入不活动：缓冲响应、流式单次写、WebSocket/CONNECT 隧道写、HTTP/2 帧输出；只有写进度续期，与读侧状态和心跳无关，对端不读即关闭。HTTP/2 流等待对端流控窗口超时以 `RST_STREAM(CANCEL)` 重置。文件正文读（阻塞池）同受此限：到期时在响应头前回 503，或结束连接（HTTP/1）/流（HTTP/2）；打开 `context::file()`/`static_file()` 的等待超时抛 503 `file_read_unavailable` 的 `http_error` |
+| `write_timeout_` | `std::optional<timeout_duration>` | `std::chrono::seconds(60)` | 写入不活动：缓冲响应、流式单次写、WebSocket/CONNECT 隧道写、HTTP/2 帧输出；TCP/TLS 仅按原生传输的实际写进度续期，不等待整个 `SSL_write` 完成，与读侧状态和心跳无关，对端不读即关闭。HTTP/2 流等待对端流控窗口超时以 `RST_STREAM(CANCEL)` 重置。文件正文读（阻塞池）同受此限：到期时在响应头前回 503，或结束连接（HTTP/1）/流（HTTP/2）；打开 `context::file()`/`static_file()` 的等待超时抛 503 `file_read_unavailable` 的 `http_error` |
 | `write_completion_timeout_` | `std::optional<timeout_duration>` | `std::chrono::minutes(5)` | 单次写操作的绝对期限：一个缓冲响应（头与内存正文）、一次流式或升级写、一片文件正文（头后至多 64 KiB）、一次 HTTP/2/HTTP/3 传输写，或一次跨流控等待的 HTTP/2/HTTP/3 流写（以 `CANCEL`/`H3_REQUEST_CANCELLED` 重置该流）。默认值约合单次 64 MiB 写 220 KiB/s |
 | `max_connections_per_worker_` | `std::optional<std::size_t>` | `1024` | 每 worker 连接上限；满时新连接接替空闲最久的连接（等待下一请求的 HTTP/1 keep-alive 或无流的 HTTP/2），其 socket 立即关闭，`active_connections_` 可因此暂时超限；无空闲连接时新 socket 在 TLS/协议探测前关闭并计入 `connections_refused_` |
 | `max_requests_per_connection_` | `std::optional<std::size_t>` | `1000` | 每连接累计请求上限；HTTP/2 优雅排空，最终 `GOAWAY` 前已发出的流仍被服务（最多超出 128）；HTTP/3 同样先发 shutdown-notice 再发最终 `GOAWAY` |
@@ -1209,6 +1209,7 @@ ruvia::app().callbacks({
 
 - **协议**：监听协商 TLS 1.2 或 1.3；TLS 1.2 套件仅 ECDHE + AEAD，按服务器偏好；拒绝重协商；ALPN 选择 `h2`、`http/1.1` 或 `http/1.0`。配对 HTTP/3 用相同身份，TLS 1.3 与 ALPN `h3`。
 - **会话**：会话在同一监听的各 worker 间恢复，且只在建立时的 `server_name`（ASCII 大小写无关）下恢复，跨 `replace_tls_identities()` 有效；票据密钥每两小时（会话寿命）轮换，最后一次用于新票据后一个周期销毁。
+- **票据续发**：TLS 1.3 恢复成功后仍签发新票据，支持客户端单次消费票据后连续恢复；TLS 1.2 仅在旧密钥解密时续发。避免复用同一票据的隐私建议见 [RFC 9846 §C.4](https://www.rfc-editor.org/rfc/rfc9846.html#appendix-C.4)。
 - **421 检查（RFC 9110 §7.4）**：目标为 `https` 资源的请求，若本连接出示的证书的 subjectAltName DNS/IP 项（仅整标签通配；忽略 subject CN）不含其主机，则回 421；HTTP/2 只拒绝该流。明文监听对 `https` 目标回 421。`trusted_proxy_config` 中的对端豁免两项检查。
 - **身份三选一**：`identities_` 为固定身份、证书库中的一个 ID、或证书库上的每握手选择器。固定身份选择顺序：精确 `sni_` 主机 → 通配 `sni_` 主机 → `local_addresses_` 项 → `primary_`；未提供或不匹配 `server_name` 的客户端仍被服务（产品选择，不发 RFC 9325 §3.7 `unrecognized_name`）。
 - **凭据来源**：每个 `tls_identity_config` 只能有一种来源——两个 PEM 文件，或内存中的相同 PEM 文本（叶证书 + 链，及私钥）；混用或只给一半抛 `std::invalid_argument`。路径不得为空或含 NUL，以 UTF-8 交给 OpenSSL 与数据库驱动。内存 PEM 只用于 HTTPS 监听，数据库、Redis 与 HTTP 客户端只读文件。非空口令解密私钥，二进制字节（含 NUL）保留。监听配置只暂存字节；启动/新增监听、替换身份与证书库更新在 worker 外解析一次并清除其拥有的口令/PEM 副本。
@@ -2607,9 +2608,9 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 - **读取中断**：`read()` 的超时或停止只结束本次等待并抛 `std::system_error`（`timed_out` / `operation_canceled`），不返回 EOF；已缓冲正文与读通道保留，可继续读取。
 - **输出中断**：输出操作的超时或停止中止本请求流（HTTP/2、HTTP/3 重置流，HTTP/1 关闭连接，已写出部分无法撤回）并抛 `std::system_error`；启动前令牌已停止则不发出任何字节。
-- **HTTP/1 分帧**：响应带合法 `Content-Length` 且无 `Transfer-Encoding` 时定长写出，超长写入抛 `std::length_error`、`end()` 时不足抛 `std::invalid_argument`；未声明长度时 HTTP/1.1 用 `chunked`，HTTP/1.0 以关闭连接界定；框架压缩生效时移除 `Content-Length` 并退回分块。
+- **HTTP/1 分帧**：响应带合法 `Content-Length` 且无 `Transfer-Encoding` 时定长写出，非空定长头随首次正文写出；超长写入抛 `std::length_error` 且不发送超额字节，`end()` 时不足抛 `std::invalid_argument`；未知长度时 HTTP/1.1 用 `chunked`，HTTP/1.0 以关闭连接界定；框架压缩生效时移除 `Content-Length` 并退回分块。
 - **写入块所有权**：`write()` 返回冷任务前完成输入拥有化，统一输出操作持有正文直到写出结束；丢弃未启动操作释放该块且不占用输出通道。
-- **HTTP/1 写出**：明文分块对分帧与正文视图直接 gather write，不另行拼接；TLS 将最多 16 KiB 正文块及其分帧合并写出，较大正文块保留 gather write；大块拼接空间只随当前流式响应存活，不随空闲连接保留。
+- **HTTP/1 写出**：明文分块对分帧与正文视图直接 gather write，不另行拼接；TLS 将有界分块帧及较大的定长首块合并写出，小首块不新增拼接，大块保留 gather write；拼接空间只随当前流式响应存活，不随空闲连接保留。
 - **出站转发**：上游 `http_client_response` 的正文可经 `pipe_to(writer)` 写入已提交的 writer（见 [`"http_client.h"`](#api-http-client-h)）。
 - **SSE 订阅**：把 `c.stop_token()` 传给订阅接收等待，取消后返回并释放订阅；不要停止整个 worker 来取消单个 SSE。示例见 [../examples/streaming.cpp](../examples/streaming.cpp)、[../examples/redis_pubsub.cpp](../examples/redis_pubsub.cpp)。
 
@@ -3517,7 +3518,11 @@ co_return c.text(body.text());
 | `stream().pipe_to(writer)`、`pipe_to(c)` / `pipe_to(stream)` | 约束整次转发；已提交的下游随异常中止 |
 
 - **重定向**：默认最多 5 跳，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应；`on_redirect` 可在每一跳观察并停止；后续跳的期限与首跳共用同一绝对截止期。
-- **转发**：`response.pipe_to(c)` 转发状态、端到端字段、未读正文与 Trailer（不转发逐跳字段、`Connection` 命名的字段与 `Content-Length`）；只转发正文时先设置元数据并 `commit()`，仅 `body` 结果才调用 `stream().pipe_to(writer)`。
+- **全文转发**：`response.pipe_to(c)` 与 `response.pipe_to(request_stream)` 共用提交、正文消费与结束主链；转发状态、端到端字段、未读正文与 Trailer，移除逐跳与 `Connection` 命名字段。
+- **转发准入**：元数据在目标输出通道内准备，不留存冷任务构造时的响应头引用；目标已提交时抛 `std::logic_error`。
+- **转发长度**：冷任务启动时按累计成功消费量重建未读 `Content-Length`，覆盖目标原有分帧字段；解码后不沿用原始线面长度；上游 HEAD 转成普通正文响应时长度为零，HEAD / 304 的表示长度元数据仍按无正文规则处理。
+- **转发 Trailer**：HTTP/1.1 在长度未知、已有 Trailer 或多路复用上游尚可能产生尾部字段时使用 `chunked`，不为定长分帧丢弃尾部字段；HTTP/1.0 按协议能力省略可选 Trailer。
+- **仅转发正文**：先设置目标元数据并 `commit()`，仅 `body` 结果才调用 `stream().pipe_to(writer)`；此入口不提交或结束目标。
 - **SSE 上游**：把 `stream().read()` 的分块交给 `sse_parser`（见 [`"http_server_sent_events.h"`](ruvia-http.md#api-http-server-sent-events-h)）。
 - **通用 Upgrade**：`request.connect()` 总在 HTTP/1.1 上进行（复用 HTTP/1.1 空闲连接或新建只报价 `http/1.1` 的连接），只校验 HTTP 切换协定并交付 101 之后的原始字节；非 101 保留为普通 HTTP 响应。普通 `send()` 不接受意外的 101。
 - **放弃上传**：`exchange.body().abandon()` 只停止发送；HTTP/1 读完响应后关闭连接，HTTP/2 / HTTP/3 只结束发送方向。据 `writable()` 停止泵送正文。

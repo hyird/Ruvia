@@ -23,12 +23,16 @@
 #include "task.h"
 #include "worker_ref.h"
 
-// The accepted server socket as a stream: prefix replay and lifecycle byte
-// accounting, its TLS transport, and how a TCP connection session closes.
+// The accepted server socket as a stream: prefix replay, lifecycle byte
+// accounting and native write progress, its TLS transport, and how a TCP
+// connection session closes.
 namespace ruvia::detail {
 
 // The caller owns the socket and the already-read prefix until all I/O joins.
 // Prefix delivery is asynchronous, like socket reads, and never reads a byte twice.
+// Every socket transfer reports to `lifecycle`; a sent byte is write progress of
+// its bound scanner entry, so TLS output renews write_timeout per ciphertext
+// flush rather than per plaintext write.
 class inbound_socket_stream final {
 public:
     using executor_type = asio::ip::tcp::socket::executor_type;
@@ -61,7 +65,7 @@ public:
     std::size_t send(const buffers_type& buffers, asio::socket_base::message_flags flags, std::error_code& error) {
         const auto bytes = socket_.send(buffers, flags, error);
         if (lifecycle_ != nullptr) {
-            lifecycle_->note_write(bytes);
+            lifecycle_->note_transport_write(bytes, error);
             lifecycle_->note_error(error);
         }
         return bytes;
@@ -119,7 +123,7 @@ private:
         void operator()(const std::error_code& error, std::size_t bytes) {
             if (lifecycle_ != nullptr) {
                 if constexpr (writing) {
-                    lifecycle_->note_write(bytes);
+                    lifecycle_->note_transport_write(bytes, error);
                 } else {
                     lifecycle_->note_read(bytes);
                 }

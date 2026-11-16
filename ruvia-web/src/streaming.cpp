@@ -156,6 +156,14 @@ task<stream_commit_result> response_stream_writer::commit(operation_options oper
     }));
 }
 
+task<stream_commit_result> detail::streaming_access::commit_prepared(response_stream_writer& writer, callback_ref<void()> prepare, operation_options operation) {
+    writer.require_output();
+    return writer.operation_scope_.attach(run_response_stream_output({writer.target_, writer.output_active_, *writer.interrupts_, *writer.worker_, writer.context_}, std::move(operation), "response stream commit", [target = writer.target_, commit = writer.commit_, prepare] {
+        prepare();
+        return commit(target);
+    }));
+}
+
 task<stream_commit_result> sse_writer::commit(operation_options operation) & {
     return writer().commit(std::move(operation));
 }

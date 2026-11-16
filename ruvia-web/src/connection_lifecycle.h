@@ -355,6 +355,8 @@ public:
     connection_lifecycle(const connection_lifecycle&) = delete;
     connection_lifecycle& operator=(const connection_lifecycle&) = delete;
     connection_lifecycle& operator=(connection_lifecycle&&) = delete;
+    // A scanner entry bound for write progress stays bound to `other`, which
+    // must outlive it; the new object starts with none.
     connection_lifecycle(connection_lifecycle&& other) noexcept :
         registry_(std::exchange(other.registry_, nullptr)),
         listener_(other.listener_),
@@ -440,6 +442,15 @@ public:
     void note_write(std::size_t bytes) noexcept {
         add_bytes(info_.bytes_out_, bytes);
     }
+    // Output of the connection's native socket stream: counts `bytes`, and a
+    // successful transfer of at least one byte is write progress of the
+    // scanner entry bound last (connection_scanner::entry::bind_lifecycle).
+    void note_transport_write(std::size_t bytes, const std::error_code& error) noexcept {
+        note_write(bytes);
+        if (bytes != 0 && !error && write_progress_ != nullptr) {
+            write_progress_->note_transport_write();
+        }
+    }
     void note_request() noexcept {
         add_bytes(info_.requests_, 1);
     }
@@ -494,6 +505,7 @@ public:
 
 private:
     friend class connection_registry;
+    friend class connection_scanner::entry;
     static void add_bytes(std::uint64_t& value, std::size_t bytes) noexcept {
         value = saturating_add(value, static_cast<std::uint64_t>(bytes));
     }
@@ -511,6 +523,7 @@ private:
     std::optional<ip_address> nearest_hop_;
     bool hop_restricted_{};
     connection_transport transport_;
+    connection_scanner::entry* write_progress_{};
     bool aborted_{};
     bool bound_{};
     std::uint32_t interface_index_{};

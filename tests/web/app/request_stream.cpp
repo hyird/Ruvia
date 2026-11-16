@@ -2135,19 +2135,35 @@ TEST(Ruvia, response_pipe_to_request_stream_forwards_status_headers_body_and_tra
     const auto run = [&]() -> ruvia::task<void> {
         const auto origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
         ruvia::http_client upstream(attachment.loop(), {.base_url_ = origin, .versions_ = {.http2_ = false}});
+#ifdef RUVIA_ENABLE_HTTP2
+        ruvia::http_client multiplexed(attachment.loop(), {.base_url_ = origin, .versions_ = {.http1_ = false, .http2_ = true}});
+#endif
         ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& request) -> ruvia::task<void> {
-            if (request.request().path() == "/source") {
+            if (request.request().path() == "/source" || request.request().path() == "/source-fixed" || request.request().path() == "/source-fixed-trailers") {
+                const bool fixed = request.request().path() != "/source";
+                const bool trailing_fixed = request.request().path() == "/source-fixed-trailers";
                 static const std::array headers{
                     ruvia::http_header_view{"x-end-to-end", "retained"},
                     ruvia::http_header_view{"connection", "x-private"},
                     ruvia::http_header_view{"x-private", "removed"},
+                    ruvia::http_header_view{"content-length", "14"},
                 };
-                (void)co_await request.stream({.status_ = ruvia::http_status::created, .headers_ = headers}).commit();
+                static const std::array multiplexed_headers{ruvia::http_header_view{"content-length", "14"}};
+                const auto fields = trailing_fixed ? std::span(multiplexed_headers).first(1) : std::span(headers).first(fixed ? 4 : 3);
+                (void)co_await request.stream({.status_ = ruvia::http_status::created, .headers_ = fields}).commit();
                 co_await request.stream().write("forwarded-body");
                 const std::array trailers{ruvia::http_header_view{"x-checksum", "complete"}};
-                co_await request.stream().end(trailers);
+                co_await request.stream().end(std::span(trailers).first(fixed && !trailing_fixed ? 0 : 1));
             } else {
-                auto response = co_await upstream.client().get("/source").send();
+#ifdef RUVIA_ENABLE_HTTP2
+                if (request.request().path() == "/proxy-multiplexed") {
+                    auto response = co_await multiplexed.client().get("/source-fixed-trailers").send();
+                    EXPECT_EQ(response.protocol_version(), ruvia::http_protocol_version::http2);
+                    co_await response.pipe_to(request);
+                    co_return;
+                }
+#endif
+                auto response = co_await upstream.client().get(request.request().path() == "/proxy-fixed" ? "/source-fixed" : "/source").send();
                 co_await response.pipe_to(request);
             }
         }});
@@ -2167,11 +2183,31 @@ TEST(Ruvia, response_pipe_to_request_stream_forwards_status_headers_body_and_tra
                 EXPECT_EQ(response.trailers().front().name(), "x-checksum");
                 EXPECT_EQ(response.trailers().front().value(), "complete");
             }
+            auto fixed = co_await downstream.client().get("/proxy-fixed").send();
+            EXPECT_EQ(fixed.status(), ruvia::http_status::created);
+            EXPECT_EQ(fixed.content_length(), 14U);
+            EXPECT_EQ(fixed.framing(), ruvia::http_client_response_framing::fixed_length);
+            EXPECT_FALSE(fixed.header("transfer-encoding"));
+            EXPECT_FALSE(fixed.header("x-private"));
+            const auto fixed_body = co_await fixed.bytes();
+            EXPECT_EQ(fixed_body.text(), "forwarded-body");
+            EXPECT_TRUE(fixed.trailers().empty());
+#ifdef RUVIA_ENABLE_HTTP2
+            auto trailing = co_await downstream.client().get("/proxy-multiplexed").send();
+            EXPECT_FALSE(trailing.content_length());
+            EXPECT_EQ(trailing.framing(), ruvia::http_client_response_framing::chunked);
+            const auto trailing_body = co_await trailing.bytes();
+            EXPECT_EQ(trailing_body.text(), "forwarded-body");
+            EXPECT_EQ(trailing.trailer("x-checksum"), "complete");
+#endif
         } catch (...) {
             failure = std::current_exception();
         }
         co_await downstream.shutdown();
         co_await upstream.shutdown();
+#ifdef RUVIA_ENABLE_HTTP2
+        co_await multiplexed.shutdown();
+#endif
         co_await server.shutdown();
         attachment.request_stop();
         if (failure) {

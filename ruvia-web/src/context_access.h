@@ -314,6 +314,10 @@ struct streaming_access final {
         return writer.output_active_;
     }
 
+    // The preparation callback borrows its caller until this commit completes.
+    // It runs inside the writer's output lane, before native head submission.
+    [[nodiscard]] static task<stream_commit_result> commit_prepared(response_stream_writer& writer, callback_ref<void()> prepare, operation_options operation);
+
     static void bind_context(response_stream_writer& writer, context& context_value, stop_token stop_token_value) {
         writer.bind_context(context_value, std::move(stop_token_value));
     }
@@ -1657,6 +1661,10 @@ struct context_access final {
 
     [[nodiscard]] static http_response streaming_head(context& context_value) {
         return context_value.streaming_head();
+    }
+
+    [[nodiscard]] static http_response& mutable_stream_head(context& context_value) {
+        return context_value.stream_head();
     }
 
     // Commits the bound session, then builds the head a response stream sends before its first byte.

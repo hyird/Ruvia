@@ -651,6 +651,8 @@ TEST(Ruvia, response_stream_declared_length_is_sent_unchunked_and_keeps_connecti
     EXPECT_TRUE(rest.ends_with("plain-ok"));
 }
 
+// A declared-length head leaves only with its first body bytes, so a first
+// write past the length is rejected before any byte of the response is sent.
 TEST(Ruvia, response_stream_write_past_declared_length_closes_without_extra_bytes) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
@@ -659,12 +661,7 @@ TEST(Ruvia, response_stream_write_past_declared_length_closes_without_extra_byte
         "GET /server-stream-plain HTTP/1.1\r\nHost: localhost\r\n\r\n");
     server.finish();
     ASSERT_TRUE(response.has_value());
-    const auto head_end = response->find("\r\n\r\n");
-    ASSERT_NE(head_end, std::string::npos);
-    EXPECT_NE(response->substr(0, head_end).find("Content-Length: 4"), std::string::npos);
-    const auto body = response->substr(head_end + 4);
-    EXPECT_LE(body.size(), std::size_t{4});
-    EXPECT_TRUE(std::string_view("abcd").starts_with(body));
+    EXPECT_EQ(*response, "");
 }
 
 TEST(Ruvia, response_stream_ending_short_of_declared_length_closes_connection) {

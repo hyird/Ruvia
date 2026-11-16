@@ -259,9 +259,10 @@ public:
     task<model_parse_result<value_type>> json(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
     // Forwards status, end-to-end fields, unread body and trailers. The cold
     // operation expires with either this response or the destination. Hop-by-hop
-    // fields, those the Connection field names, and Content-Length are not
-    // forwarded (RFC 9110 §7.6.1). operation bounds the whole forward, as
-    // pipe_to(response_stream_writer&). Both destinations forward identically.
+    // and Connection-nominated fields are removed (RFC 9110 §7.6.1). A valid
+    // untransformed Content-Length is reduced by bytes already consumed.
+    // HTTP/1.1 uses chunked when the length is unknown or trailers may follow.
+    // operation bounds commit, body and end. Both destinations use one chain.
     [[nodiscard]] task<void> pipe_to(context& output, operation_options operation = {}) &;
     task<void> pipe_to(context&, operation_options = {}) && = delete;
     [[nodiscard]] task<void> pipe_to(request_stream& output, operation_options operation = {}) &;
@@ -269,7 +270,7 @@ public:
 
 private:
     // The one forwarding chain of both pipe_to() destinations.
-    [[nodiscard]] task<void> pipe_to_destination(http_response& head, response_stream_writer& writer, detail::operation_scope& destination, operation_options operation);
+    [[nodiscard]] task<void> pipe_to_destination(context& output, response_stream_writer& writer, detail::operation_scope& destination, operation_options operation);
     template <typename value_type>
     static task<model_parse_result<value_type>> decode_json(task<http_client_response_bytes> input) {
         auto owned = co_await std::move(input);

@@ -357,6 +357,7 @@ namespace fluent_client_tests {
 
 std::atomic<std::size_t> host_cancel_waiters{};
 std::atomic<std::size_t> host_cancelled_requests{};
+std::atomic<std::size_t> committed_pipe_rejections{};
 
 struct redirect_destinations final {
     std::string source_{};
@@ -381,6 +382,10 @@ public:
     RUVIA_HEAD("/fluent/redirect", redirect);
     RUVIA_GET("/fluent/registered", registered_redirect);
     RUVIA_GET("/fluent/stream-source", stream_source);
+    RUVIA_GET("/fluent/framed-source", framed_source);
+    RUVIA_HEAD("/fluent/framed-source", framed_source);
+    RUVIA_GET("/fluent/pipe-fixed", pipe_fixed);
+    RUVIA_HEAD("/fluent/pipe-fixed", pipe_fixed);
     RUVIA_GET("/fluent/host-cancel", host_cancel);
     RUVIA_GET("/fluent/hold", hold);
     RUVIA_GET("/fluent/pipe", pipe);
@@ -450,6 +455,65 @@ public:
             const std::array trailers{ruvia::http_header_view{"x-finished", "yes"}};
             co_await output.end(trailers);
         }
+    }
+
+    ruvia::task<ruvia::http_response> framed_source(ruvia::context& c) {
+        const auto mode = c.req().query("mode").value_or("");
+        if (mode == "decoded") {
+            static constexpr char encoded[] = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x4b\x49\x4d\xce\x4f\x49\x4d\x51\x28\x4a\x2d\x28\x4a\x2d\x4e\xcd\x2b\x49\x2c\xc9\xcc\xcf\x03\x00\xde\xa6\x1e\x06\x16\x00\x00\x00";
+            ruvia::http_response response;
+            response.header("content-encoding", "gzip");
+            response.body(std::string_view(encoded, sizeof(encoded) - 1));
+            co_return response;
+        }
+        auto response = c.text(std::string(65553, 'x'));
+        if (mode == "204") {
+            response.status(ruvia::http_status::no_content);
+        } else if (mode == "205") {
+            response.status(ruvia::http_status::reset_content);
+        } else if (mode == "304") {
+            response.status(ruvia::http_status::not_modified);
+            response.header("content-length", "65553");
+        }
+        co_return response;
+    }
+
+    ruvia::task<void> pipe_fixed(ruvia::context& c) {
+        const auto mode = c.req().query("mode").value_or("");
+        auto origin = c.client("source");
+        auto request = mode == "head" ? origin.head("/fluent/framed-source") : origin.get("/fluent/framed-source");
+        request.query("mode", mode);
+        auto response = co_await std::move(request).send();
+        // Framing must use progress at cold-task start, not construction time.
+        auto forwarding = response.pipe_to(c);
+        if (mode == "committed") {
+            const std::array empty{ruvia::http_header_view{"content-length", "0"}};
+            auto& output = c.stream({.headers_ = empty});
+            if (co_await output.commit() == ruvia::stream_commit_result::body) {
+                co_await output.end();
+            }
+            try {
+                co_await std::move(forwarding);
+            } catch (const std::logic_error&) {
+                ++committed_pipe_rejections;
+            }
+            co_return;
+        }
+        std::size_t consumed = 0;
+        if (mode == "partial") {
+            const auto first = co_await response.stream().read_text();
+            consumed += first ? first->size() : 0;
+            const auto second = co_await response.stream().read();
+            consumed += second ? second->size() : 0;
+        } else if (mode == "all") {
+            const auto body = co_await response.bytes();
+            consumed = body.size();
+        }
+        const auto consumed_text = std::to_string(consumed);
+        // A stale destination length must not frame the upstream body.
+        const std::array fields{ruvia::http_header_view{"x-consumed", consumed_text}, ruvia::http_header_view{"content-length", "999999"}};
+        (void)c.stream({.headers_ = fields});
+        co_await std::move(forwarding);
     }
 
     ruvia::task<void> pipe(ruvia::context& c) {
@@ -663,6 +727,47 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 const auto bounded_contents = co_await bounded.bytes();
                 EXPECT_EQ(bounded_contents.text(), "firstsecond");
                 EXPECT_TRUE(bounded.trailer("x-finished") == "yes");
+            }
+            for (const auto mode : {"", "partial", "all", "head", "decoded", "204", "205", "304"}) {
+                auto piped = co_await origin.get("/fluent/pipe-fixed").query("mode", mode).send();
+                const auto consumed = std::stoull(std::string(piped.header("x-consumed").value_or("0")));
+                const bool suppressed = mode == std::string_view("204") || mode == std::string_view("205") || mode == std::string_view("304");
+                if (mode == std::string_view("decoded")) {
+                    EXPECT_FALSE(piped.header("content-encoding"));
+                    EXPECT_FALSE(piped.header("content-length"));
+                    const auto body = co_await piped.bytes();
+                    EXPECT_EQ(body.text(), "decoded representation");
+                } else if (suppressed) {
+                    const auto expected = mode == std::string_view("204") ? std::optional<std::string_view>{} : std::optional<std::string_view>{mode == std::string_view("205") ? "0" : "65553"};
+                    EXPECT_EQ(piped.header("content-length"), expected);
+                    EXPECT_TRUE((co_await piped.bytes()).empty());
+                } else {
+                    const auto expected = mode == std::string_view("head") ? 0 : 65553 - consumed;
+                    EXPECT_EQ(piped.content_length(), expected);
+                    EXPECT_EQ(piped.framing(), ruvia::http_client_response_framing::fixed_length);
+                    EXPECT_FALSE(piped.header("transfer-encoding"));
+                    const auto body = co_await piped.bytes();
+                    EXPECT_EQ(body.text(), std::string(expected, 'x'));
+                    if (mode == std::string_view("partial")) {
+                        EXPECT_GT(consumed, 0U);
+                        EXPECT_LT(consumed, 65553U);
+                    }
+                }
+            }
+            {
+                auto head = co_await origin.head("/fluent/pipe-fixed").send();
+                EXPECT_EQ(head.content_length(), 65553U);
+                EXPECT_TRUE((co_await head.bytes()).empty());
+            }
+
+            {
+                fluent_client_tests::committed_pipe_rejections.store(0);
+                auto committed = co_await origin.get("/fluent/pipe-fixed").query("mode", "committed").send();
+                EXPECT_EQ(committed.content_length(), 0U);
+                EXPECT_TRUE((co_await committed.bytes()).empty());
+                ruvia::test::wait_until([] {
+                    return fluent_client_tests::committed_pipe_rejections.load() == 1;
+                }, std::chrono::seconds(5));
             }
 
             auto json_request = [&] {

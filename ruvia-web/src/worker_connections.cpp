@@ -738,6 +738,9 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
             client_hello.emplace(tls_client_hello_observation{.callback_ = options_.tls_client_hello_, .fields_ = {.endpoints_ = lifecycle.endpoints(), .quic_ = false, .message_ = {}}});
         }
         server_tls_stream tls_stream(input, *listener_value.tls_context_);
+        // Fill the existing bounded BIO before flushing, rather than forcing
+        // a socket write per TLS record. No larger connection buffers are needed.
+        SSL_clear_mode(tls_stream.native_handle(), SSL_MODE_ENABLE_PARTIAL_WRITE);
         if (!local_error) {
             bind_tls_local_address(*tls_stream.native_handle(), local_address);
         }

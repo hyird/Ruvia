@@ -315,6 +315,8 @@ task<client_transport_result> client_tcp_transport::connect(const operation_dead
     if (mode_error || !secure()) {
         co_return finish(read_, timeout, mode_error, 0, client_transport_status::connect_failed);
     }
+    // Match inbound TLS: fill the existing bounded BIO before flushing.
+    SSL_clear_mode(stream_->native_handle(), SSL_MODE_ENABLE_PARTIAL_WRITE);
     tls_started_ = true;
     if (const auto prepared = prepare_client_tls_stream(*stream_->native_handle(), endpoint_.identity_host_.empty() ? endpoint_.tls_->tls_host(endpoint_.host_) : endpoint_.identity_host_, endpoint_.alpn_); prepared != client_tls_setup_error::none) {
         (void)clear(read_);

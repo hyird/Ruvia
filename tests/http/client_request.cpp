@@ -1421,6 +1421,17 @@ TEST(Ruvia, http1_streaming_request_chunked_upload_and_trailers) {
     EXPECT_TRUE(prepared_req->content().streaming_content() != nullptr);
     EXPECT_EQ(prepared_req->head(), std::string_view("POST / HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n"));
     ruvia::http1_request_content_writer writer(*prepared_req);
+    // An empty write has no chunk on the wire: a zero-size chunk would be the
+    // last-chunk and end the content early (RFC 9112 section 7.1).
+    auto empty = writer.plan_chunk(std::span<const char>{});
+    EXPECT_TRUE((empty.index() == 0));
+    if (empty.index() == 0) {
+        EXPECT_TRUE(std::get<0>(empty).prefix().empty());
+        EXPECT_TRUE(std::get<0>(empty).payload().empty());
+        EXPECT_TRUE(std::get<0>(empty).suffix().empty());
+    }
+    writer.commit_chunk();
+    EXPECT_EQ(writer.committed_payload_bytes(), 0U);
     const std::string payload_value = "hello";
     auto chunk = writer.plan_chunk(payload_value);
     EXPECT_TRUE((chunk.index() == 0));
