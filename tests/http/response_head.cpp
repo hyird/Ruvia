@@ -25,8 +25,11 @@
 #include "http1_connection_plan.h"
 #include "http1_message_body.h"
 #include "http1_server_response.h"
+#include "http_cache.h"
+#include "http_client_response_head.h"
 #include "http_cookie.h"
 #include "http_header.h"
+#include "http_request.h"
 #include "http_response.h"
 #include "http_response_stream.h"
 
@@ -1860,3 +1863,119 @@ static_assert(!std::is_constructible_v<ruvia::borrowed_http_headers, std::initia
 static_assert(std::is_constructible_v<http_interim_response_head, ruvia::http_status_code, const std::vector<http_header_view>&>);
 static_assert(!std::is_constructible_v<http_interim_response_head, ruvia::http_status_code, std::vector<http_header_view>>);
 static_assert(!std::is_constructible_v<http_interim_response_head, ruvia::http_status_code, std::array<http_header_view, 1>>);
+
+namespace {
+
+template <typename source_type>
+concept unique_header_lookup_available = requires(source_type&& source) {
+    ruvia::find_unique_http_header(std::forward<source_type>(source), "X-Test");
+};
+
+template <typename source_type>
+concept first_header_lookup_available = requires(source_type&& source) {
+    ruvia::find_first_http_header(std::forward<source_type>(source), "X-Test");
+};
+
+template <typename decoder_type>
+concept body_decode_available = requires(decoder_type&& decoder) {
+    std::forward<decoder_type>(decoder).decode(std::string_view{}, std::span<char>{});
+};
+
+template <typename decoder_type>
+concept body_finish_input_available = requires(decoder_type&& decoder) {
+    std::forward<decoder_type>(decoder).finish_input(std::string_view{}, std::span<char>{});
+};
+
+}  // namespace
+
+static_assert(unique_header_lookup_available<std::vector<ruvia::http_header>&>);
+static_assert(unique_header_lookup_available<const std::vector<ruvia::http_header>&>);
+static_assert(!unique_header_lookup_available<std::vector<ruvia::http_header>>);
+static_assert(!unique_header_lookup_available<const std::vector<ruvia::http_header>>);
+static_assert(!unique_header_lookup_available<std::array<http_header_view, 1>>);
+static_assert(!unique_header_lookup_available<std::initializer_list<http_header_view>>);
+static_assert(unique_header_lookup_available<std::span<const ruvia::http_header>>);
+static_assert(unique_header_lookup_available<std::span<const http_header_view>>);
+static_assert(unique_header_lookup_available<ruvia::http_header_range_view>);
+static_assert(unique_header_lookup_available<ruvia::borrowed_http_headers>);
+static_assert(unique_header_lookup_available<ruvia::borrowed_span<ruvia::http_header>>);
+static_assert(unique_header_lookup_available<ruvia::http_interim_response_head>);
+static_assert(!unique_header_lookup_available<ruvia::argument_list<http_header_view>>);
+static_assert(unique_header_lookup_available<ruvia::http_response&>);
+static_assert(unique_header_lookup_available<const ruvia::http_response&>);
+static_assert(unique_header_lookup_available<ruvia::http_request&>);
+static_assert(unique_header_lookup_available<const ruvia::http_request&>);
+static_assert(!unique_header_lookup_available<ruvia::http_request>);
+static_assert(unique_header_lookup_available<ruvia::http_client_response_head&>);
+static_assert(unique_header_lookup_available<const ruvia::http_client_response_head&>);
+static_assert(!unique_header_lookup_available<ruvia::http_client_response_head>);
+static_assert(!unique_header_lookup_available<ruvia::http_response>);
+static_assert(!unique_header_lookup_available<const ruvia::http_response>);
+static_assert(first_header_lookup_available<std::vector<ruvia::http_header>&>);
+static_assert(first_header_lookup_available<const std::vector<ruvia::http_header>&>);
+static_assert(!first_header_lookup_available<std::vector<ruvia::http_header>>);
+static_assert(!first_header_lookup_available<const std::vector<ruvia::http_header>>);
+static_assert(!first_header_lookup_available<std::array<http_header_view, 1>>);
+static_assert(!first_header_lookup_available<std::initializer_list<http_header_view>>);
+static_assert(first_header_lookup_available<std::span<const ruvia::http_header>>);
+static_assert(first_header_lookup_available<std::span<const http_header_view>>);
+static_assert(first_header_lookup_available<ruvia::http_header_range_view>);
+static_assert(first_header_lookup_available<ruvia::borrowed_http_headers>);
+static_assert(first_header_lookup_available<ruvia::borrowed_span<ruvia::http_header>>);
+static_assert(first_header_lookup_available<ruvia::http_interim_response_head>);
+static_assert(!first_header_lookup_available<ruvia::argument_list<http_header_view>>);
+static_assert(first_header_lookup_available<ruvia::http_response&>);
+static_assert(first_header_lookup_available<const ruvia::http_response&>);
+static_assert(first_header_lookup_available<ruvia::http_request&>);
+static_assert(first_header_lookup_available<const ruvia::http_request&>);
+static_assert(!first_header_lookup_available<ruvia::http_request>);
+static_assert(first_header_lookup_available<ruvia::http_client_response_head&>);
+static_assert(first_header_lookup_available<const ruvia::http_client_response_head&>);
+static_assert(!first_header_lookup_available<ruvia::http_client_response_head>);
+static_assert(!first_header_lookup_available<ruvia::http_response>);
+static_assert(!first_header_lookup_available<const ruvia::http_response>);
+// Read-only operations returning owned values still accept temporary owners.
+static_assert(std::is_constructible_v<ruvia::http_header_range_view, std::vector<ruvia::http_header>>);
+static_assert(std::is_constructible_v<ruvia::http_header_range_view, ruvia::http_response>);
+static_assert(body_decode_available<ruvia::http1_body_decoder&>);
+static_assert(!body_decode_available<ruvia::http1_body_decoder>);
+static_assert(body_finish_input_available<ruvia::http1_body_decoder&>);
+static_assert(!body_finish_input_available<ruvia::http1_body_decoder>);
+
+TEST(Ruvia, HttpHeaderLookupsBorrowOwnerStorageThroughTemporarySpans) {
+    const std::vector<ruvia::http_header> fields{
+        {"X-Test", std::string(128, 't')},
+        {"x-test", "second"},
+        {"X-Other", "other"},
+    };
+    const auto first = ruvia::find_first_http_header(std::span<const ruvia::http_header>(fields), "x-TEST");
+    ASSERT_TRUE(first.has_value());
+    EXPECT_EQ(first->data(), fields.front().value().data());
+    const auto unique = ruvia::find_unique_http_header(std::span<const ruvia::http_header>(fields).first(1), "x-TEST");
+    EXPECT_EQ(unique.status_, ruvia::unique_lookup_status::found);
+    EXPECT_EQ(unique.value_.data(), fields.front().value().data());
+    EXPECT_EQ(ruvia::find_unique_http_header(fields, "X-Test").status_, ruvia::unique_lookup_status::repeated);
+    EXPECT_FALSE(ruvia::find_first_http_header(fields, "missing").has_value());
+    EXPECT_EQ(ruvia::find_unique_http_header(fields, "missing").status_, ruvia::unique_lookup_status::absent);
+}
+
+TEST(Ruvia, HttpHeaderLookupsAcceptTemporaryBorrowedMessages) {
+    const std::array fields{http_header_view("X-Test", "value")};
+    const auto first = ruvia::find_first_http_header(ruvia::http_interim_response_head(ruvia::http_status::early_hints, fields), "x-test");
+    ASSERT_TRUE(first.has_value());
+    EXPECT_EQ(first->data(), fields.front().value().data());
+    const auto unique = ruvia::find_unique_http_header(ruvia::http_interim_response_head(ruvia::http_status::early_hints, fields), "x-test");
+    EXPECT_EQ(unique.status_, ruvia::unique_lookup_status::found);
+    EXPECT_EQ(unique.value_.data(), fields.front().value().data());
+}
+
+TEST(Ruvia, HttpHeaderOwnedReadersAcceptTemporaryOwners) {
+    const auto parsed = ruvia::parse_cache_control(std::vector<ruvia::http_header>{{"Cache-Control", "public, max-age=60"}});
+    EXPECT_TRUE(parsed.is_public());
+    EXPECT_EQ(parsed.max_age(), std::optional<std::uint64_t>{60});
+
+    ruvia::http_response response;
+    response.header("Cache-Control", "no-store");
+    const auto moved = ruvia::parse_cache_control(std::move(response));
+    EXPECT_TRUE(moved.no_store());
+}

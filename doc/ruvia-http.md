@@ -145,7 +145,8 @@ if (step.holds<ruvia::decode_need_input>()) {
 ### 2.1 借用与生命周期
 
 - **调用期借用**：协议对象在调用期间读取 `std::string_view`、`std::span`、[`http_io_buffer`](#api-http-io-buffer-h) 等输入；结果中的视图借用的对象（输入、调用方提供的 scratch / `storage`、解析器内部存储或事件自身存储）由各 API 明确说明，视图在该对象被修改、移动、重置或销毁后失效。显式构造 `std::string_view` / `std::span` 不会延长 owner 寿命。
-- **编译期借用防线**：跨表达式留存视图的入口使用 [`borrowed_text`](#api-borrowed-text-h) 或 `borrowed_span<T>`，以 `= delete` 重载拒绝绑定右值临时 `std::string`、临时拥有型连续容器与 `std::initializer_list`；返回借用的访问器标注 [`RUVIA_LIFETIMEBOUND`](#api-borrowed-text-h)。宿主地址被借用的访问器限定为左值（`&` / `const&`），对应右值重载为 `= delete`；拥有型内容只经右值 `take_*() &&` 提取，提取后源对象只可 `reset()` 或析构。
+- **编译期借用防线**：跨表达式留存视图的入口使用 [`borrowed_text`](#api-borrowed-text-h) 或 `borrowed_span<T>`，以 `= delete` 重载拒绝绑定右值临时 `std::string`、临时拥有型连续容器与 `std::initializer_list`；返回借用的访问器标注 [`RUVIA_LIFETIMEBOUND`](#api-borrowed-text-h)。借用宿主内部存储的访问器及 HTTP/1 正文解码入口限定为左值（`&` / `const&`），对应右值重载为 `= delete`；拥有型内容只经右值 `take_*() &&` 提取，提取后源对象只可 `reset()` 或析构。
+- **借用范围不拥有存储**：`std::span`、`borrowed_span<T>` 与 `http_header_range_view` 满足 `std::ranges::borrowed_range`，其迭代器不依赖视图对象本身存活，但底层字段、文本与容器仍须存活且不发生使视图失效的修改。返回借用的首部查找接受拥有型容器 / 消息左值、临时借用范围，以及 `headers()` 返回借用范围的临时消息；拒绝临时拥有型容器 / 消息。同步只读参数 `const http_header_range_view&` 可以在一次调用内读取临时 owner，不代表从该调用返回的视图可继续借用它。
 - **线性凭证**：流控信用（[`http_received_data_credit`](#api-http-multiplexed-stream-h)）与请求租约只可移动；析构或显式交还时把精确字节数或存储归还签发连接。
 - **回调重入**：观察器与回调只在对应的 `feed()` / `read_stream()` / `next_event()` 等调用内同步执行，记录仅在回调期间有效；回调返回前不得修改、重入、移动或销毁宿主对象。
 
@@ -367,6 +368,11 @@ public:
     [[nodiscard]] constexpr const element_type& operator[](std::size_t index) const noexcept;
 };
 }
+
+namespace std::ranges {
+template <typename element_type>
+inline constexpr bool enable_borrowed_range<ruvia::borrowed_span<element_type>> = true;
+}
 ```
 
 保存在选项结构或消息视图结构中的只读连续元素借用。规则：
@@ -378,7 +384,7 @@ public:
 | 临时拥有型连续容器（`std::vector<T>{...}`、函数返回的 `std::array`、`std::move(v)` 等，即非 `borrowed_range` 的右值） | `= delete`，编译期拒绝：其存储在完整表达式结束时释放，而结构体通常在之后才被消费。 |
 | `std::initializer_list<T>`（花括号列表） | `= delete`，编译期拒绝：其底层数组同样只活到完整表达式结束。 |
 
-访问器均为 `const`、`noexcept`，语义同 `std::span<const T>`；`front()`、`back()`、`operator[]` 的前置条件与 `std::span` 相同（非空 / 下标在界内），越界为未定义行为。借用区间同源容器；容器被重新分配或销毁后失效。
+访问器均为 `const`、`noexcept`，语义同 `std::span<const T>`；`front()`、`back()`、`operator[]` 的前置条件与 `std::span` 相同（非空 / 下标在界内），越界为未定义行为。`borrowed_span<T>` 满足 `std::ranges::borrowed_range`，迭代器和元素视图不借用 span 包装对象本身，因而可使用临时 `borrowed_span`；这不会延长源存储的寿命，源容器被重新分配、移动或销毁后借用可能失效。
 
 示例（数据库选项使用 `borrowed_span` 时的典型写法）：
 
@@ -1764,9 +1770,14 @@ public:
 };
 
 }  // namespace ruvia
+
+namespace std::ranges {
+template <>
+inline constexpr bool enable_borrowed_range<ruvia::http_header_range_view> = true;
+}
 ```
 
-唯一的只读首部参数类型：读取字段的函数只需声明一次 `const http_header_range_view&` 形参，即可接受所有首部容器与消息。它是对字段范围或消息的类型擦除视图，借用来源直至接收它的调用返回；与 `argument_list` 类似，它也可绑定临时容器，该存储在整个调用表达式内有效。拷贝构造与拷贝赋值被删除（同时抑制移动），因此不能作为返回值、按值捕获或存入成员。
+唯一的只读首部参数类型：读取字段的函数只需声明一次 `const http_header_range_view&` 形参，即可接受所有首部容器与消息。它是对字段范围或消息的类型擦除视图，借用来源直至接收它的调用返回；与 `argument_list` 类似，它也可绑定临时容器，该存储在整个调用表达式内有效。拷贝构造与拷贝赋值被删除（同时抑制移动），不能通过复制 / 移动返回、按值捕获或存入成员。它仍满足 `std::ranges::borrowed_range`：迭代器独立保存数据指针、访问器与下标，不依赖包装对象；不延长底层字段存储的寿命。显式把临时 owner 包成该视图也不能让借用逃逸到完整表达式之后。
 
 | 成员 | 语义 |
 | --- | --- |
@@ -1783,18 +1794,52 @@ public:
 namespace ruvia {
 
 template <http_header_field_source source_type>
-[[nodiscard]] constexpr http_unique_field_lookup find_unique_http_header(const source_type& fields, std::string_view name) noexcept;
+    requires (std::is_lvalue_reference_v<source_type&&>
+              || std::ranges::borrowed_range<source_type>
+              || requires(source_type&& source) {
+                     { std::forward<source_type>(source).headers() } -> std::ranges::borrowed_range;
+                 })
+[[nodiscard]] constexpr http_unique_field_lookup find_unique_http_header(source_type&& fields, std::string_view name) noexcept;
 
 template <http_header_field_source source_type>
-[[nodiscard]] constexpr std::optional<std::string_view> find_first_http_header(const source_type& fields, std::string_view name) noexcept;
+    requires (std::is_lvalue_reference_v<source_type&&>
+              || std::ranges::borrowed_range<source_type>
+              || requires(source_type&& source) {
+                     { std::forward<source_type>(source).headers() } -> std::ranges::borrowed_range;
+                 })
+[[nodiscard]] constexpr std::optional<std::string_view> find_first_http_header(source_type&& fields, std::string_view name) noexcept;
 
 }  // namespace ruvia
 ```
 
-两者都按 `http_ascii_equals_ignore_case` 匹配字段名，接受任一 `http_header_field_source`（消息自动经 `headers()` 转发），不复制值；返回的视图借用来源的字段存储（`fields` 本身可以是 span 等临时视图）。
+上面将实现中的内部约束展开为等价的公开条件；内部约束的名称本身不是用户契约。两者都按 `http_ascii_equals_ignore_case` 匹配字段名，接受满足所示借用条件的 `http_header_field_source`（消息自动经 `headers()` 转发），不复制值；返回的视图借用来源的字段存储，而非 `fields` 包装对象。
 
 - `find_unique_http_header`：三态查找，在第二次出现处停止扫描并返回 `repeated`。
 - `find_first_http_header`：返回第一条匹配字段行的值，无匹配时为 `std::nullopt`。
+
+| 来源 | 接受性与寿命 |
+| --- | --- |
+| 拥有型字段容器 / 消息左值（含 `const` 左值） | 接受；字段存储必须覆盖返回视图的使用期。 |
+| 临时 `std::span`、`borrowed_http_headers`、`http_header_range_view` | 接受；均为借用范围，包装对象销毁不影响迭代器或返回视图，底层 owner 仍须存活。 |
+| 临时消息，其按原值类别调用的 `headers()` 返回 `std::ranges::borrowed_range` | 接受；返回字段仍借用 `headers()` 所指存储，该存储必须覆盖结果使用期。 |
+| 临时拥有型字段容器 / 消息（含 `std::move(owner)`，且不满足上述借用条件） | 约束不满足，编译期拒绝；没有可退回 `const source_type&` 的宽松重载。 |
+
+```cpp
+std::vector<ruvia::http_header> fields;  // owner 必须覆盖查找结果的使用期
+auto unique = ruvia::find_unique_http_header(fields, "Content-Type");
+auto first = ruvia::find_first_http_header(std::span<const ruvia::http_header>(fields), "Content-Type");
+auto via_view = ruvia::find_first_http_header(ruvia::http_header_range_view(fields), "Content-Type");
+
+struct borrowed_message {
+    std::span<const ruvia::http_header> fields_;
+    auto headers() const noexcept { return fields_; }
+};
+auto via_message = ruvia::find_unique_http_header(borrowed_message{fields}, "Content-Type");
+// ruvia::find_first_http_header(std::move(fields), "Content-Type");  // 编译期拒绝
+// ruvia::find_unique_http_header(std::vector<ruvia::http_header>{}, "Content-Type");  // 编译期拒绝
+```
+
+这些调用均保留零拷贝：需要在底层字段失效后保存结果时，由调用方显式复制文本；不要通过构造 span 或类型擦除视图绕过 owner 寿命。
 
 接收字段单值查找统一规则：
 
@@ -5946,7 +5991,7 @@ if (step.holds<ruvia::decode_need_input>()) {
                                    {.body_limit_ = ruvia::protocol_byte_limit::limited(1 << 20)});
     std::array<char, 16 * 1024> scratch;
     for (;;) {
-        auto r = body.decode(rest, scratch);
+        auto r = body.decode(rest, scratch);  // 具名左值 decoder；结果不拥有正文 / Trailer
         rest.remove_prefix(r.consumed_bytes());
         if (const auto* out = r.get_if<ruvia::decode_output>()) {
             // 消费 out->bytes()
@@ -5954,7 +5999,10 @@ if (step.holds<ruvia::decode_need_input>()) {
             break;  // need_input：保留 rest 并读取更多
         } else if (const auto* f = r.get_if<ruvia::http1_body_decode_failure>()) {
             throw ruvia::make_http_protocol_error(f->error());
-        }  // http1_body_trailers：读取 Trailer 后继续
+        } else if (const auto* trailers = r.get_if<ruvia::http1_body_trailers>()) {
+            // 在下一次 decode / finish_input / reset 前消费 trailers->fields()；
+            // 若需跨越该边界保存，复制字段到调用方拥有的存储。
+        }
     }
 }
 ```
@@ -6033,12 +6081,14 @@ public:
     http1_body_decoder(http1_body_decoder&&) = delete;
     http1_body_decoder& operator=(http1_body_decoder&&) = delete;
 
-    [[nodiscard]] http1_body_decode_result decode(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)());
-    [[nodiscard]] http1_body_decode_result finish_input(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)());
+    [[nodiscard]] http1_body_decode_result decode(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
+    http1_body_decode_result decode(std::string_view, std::span<char>, std::size_t = 0) && = delete;
+    [[nodiscard]] http1_body_decode_result finish_input(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
+    http1_body_decode_result finish_input(std::string_view, std::span<char>, std::size_t = 0) && = delete;
     template </* 临时拥有型 std::basic_string<char, ...> 右值 */ input_type>
-    http1_body_decode_result decode(input_type&&, std::span<char>, std::size_t = 0) = delete;
+    http1_body_decode_result decode(input_type&&, std::span<char>, std::size_t = 0) & = delete;
     template </* 临时拥有型 std::basic_string<char, ...> 右值 */ input_type>
-    http1_body_decode_result finish_input(input_type&&, std::span<char>, std::size_t = 0) = delete;
+    http1_body_decode_result finish_input(input_type&&, std::span<char>, std::size_t = 0) & = delete;
 
     void discard_content() noexcept;
 
@@ -6062,10 +6112,12 @@ public:
 | 构造函数 | 绑定分帧与配置。分帧中的编码不是传输编码时抛 `std::invalid_argument`；编解码器无法启动时抛 `http_content_codec_error`（见 [`"http_content_codec.h"`](#api-http-content-codec-h)）。不可复制、不可移动。 |
 | `decode(available, scratch, max_output_bytes)` | 推进一步。输出在分帧不含传输编码时借用 `available`，否则借用 `scratch`；须在改变任一存储或进行下一次调用前消费输出。仅传输编码内容使用 `scratch`，此时它必须非空，否则抛 `std::invalid_argument`；`max_output_bytes` 必须为正（为 0 抛 `std::invalid_argument`），每步最多发布这么多字节。调用方从 `available` 中精确删除 `consumed_bytes()`。`finish_input()` 之后的 `decode()` 沿用同一 EOF 状态：可以排出已缓冲的输入/输出，但缺失的正文字节报告 `incomplete_body` 而不是请求更多输入。 |
 | `finish_input(...)` | 声明 EOF（单调，不可撤销）并提供剩余缓冲字节；之后的调用可以排出解码器输出，但不会再请求网络输入。`close_delimited` 无编码时 EOF 即正常结束；`known_length` 与 `chunked` 在分帧结束前遇到 EOF 报告 `incomplete_body`。 |
-| 删除的 `decode` / `finish_input` 重载 | 拒绝右值临时 `std::basic_string`：输出可能借用 `available`，临时字符串会悬垂。 |
+| 删除的 `decode` / `finish_input` 重载 | `&& = delete` 拒绝临时或 `std::move` 后的解码器，避免结果中的 Trailer 视图借用即将销毁的 owner；`&` 上的输入删除重载拒绝右值临时 `std::basic_string`，避免正文输出借用临时输入。两类限制互不替代。 |
 | `discard_content()` | 自此起，分帧界定的内容被消费但不做传输解码、也不发布：单步只报告 need-input、Trailer、结束或分帧失败。用于接收方不得使用（`205` 响应，RFC 9110 §15.3.6）或不再需要（未读请求体）而连接仍可复用的内容。 |
 | `state()` | `active` / `finished` / `failed`。 |
 | `reset()` | 以构造时的分帧与配置开始另一正文。编解码器无法重启时抛 `http_content_codec_error`，此后解码器不可用。 |
+
+`decode()` / `finish_input()` 的左值入口均带 `RUVIA_LIFETIMEBOUND`，结果不因此拥有正文或 Trailer。正文仍零拷贝借用 `available` / `scratch`；Trailer 借用解码器内部字段存储，必须在下一次 `decode()`、`finish_input()`、`reset()` 或解码器析构前消费。显式传入 `std::string_view` 不能延长输入 owner 寿命；必须同时满足输入 / scratch 与解码器各自的借用区间。
 
 终态：已完成或已失败的解码器不再消费输入，`decode()` 与 `finish_input()` 以 0 消费字节重放终态结果，绝不触碰后续消息的字节，直到 `reset()`。
 
@@ -6171,9 +6223,10 @@ public:
     http1_chunked_body_decoder(http1_chunked_body_decoder&&) noexcept;
     http1_chunked_body_decoder& operator=(http1_chunked_body_decoder&&) noexcept;
 
-    [[nodiscard]] http1_chunk_decode_result decode(std::string_view available, std::size_t max_body_bytes = (std::numeric_limits<std::size_t>::max)());
+    [[nodiscard]] http1_chunk_decode_result decode(std::string_view available, std::size_t max_body_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
+    http1_chunk_decode_result decode(std::string_view, std::size_t = 0) && = delete;
     template </* 临时拥有型 std::basic_string<char, ...> 右值 */ input_type>
-    http1_chunk_decode_result decode(input_type&&, std::size_t = 0) = delete;
+    http1_chunk_decode_result decode(input_type&&, std::size_t = 0) & = delete;
 
     [[nodiscard]] decoder_state state() const noexcept;
     void reset() noexcept;
@@ -6186,9 +6239,23 @@ public:
 |---|---|
 | 构造函数 | 绑定配置。 |
 | `decode(available, max_body_bytes)` | 推进一步；每次最多发布 `max_body_bytes` 字节 chunk 载荷（为 0 抛 `std::invalid_argument`）。载荷 `decode_output` 借用 `available`，仅在其被修改前有效；不完整的分帧保持未消费，由调用方保留。发布 Trailer 时可能因分配抛 `std::bad_alloc`（已发布字段被清空）。 |
-| 删除的 `decode(input_type&&, ...)` | 拒绝右值临时 `std::basic_string`：载荷视图借用输入。 |
+| 删除的 `decode` 重载 | `&& = delete` 拒绝临时或 `std::move` 后的解码器，因为完成结果可能借用解码器拥有的 Trailer；`&` 上的 `decode(input_type&&, ...) = delete` 拒绝右值临时 `std::basic_string`，因为载荷视图借用输入。 |
 | `state()` | `active` / `finished` / `failed`。 |
 | `reset()` | 以构造时的配置开始新正文，保留 Trailer 存储容量。 |
+
+`decode()` 仅在左值解码器上调用，并带 `RUVIA_LIFETIMEBOUND`；不会为延长结果寿命而复制正文或 Trailer。具名 owner 的用法如下，正文输入与解码器均须覆盖其各自的借用期：
+
+```cpp
+ruvia::http1_chunked_body_decoder decoder;
+std::string wire = "0\r\n\r\n";
+auto result = decoder.decode(wire);
+if (const auto* done = result.get_if<ruvia::http1_chunk_decode_complete>()) {
+    // 在下一次 decoder.decode() / reset() 或 decoder 移动、赋值、析构前消费 done->trailers()。
+}
+// ruvia::http1_chunked_body_decoder{}.decode(wire);  // 编译期拒绝临时 owner
+// std::move(decoder).decode(wire);                  // 编译期拒绝右值 owner
+// decoder.decode(std::string{"0\r\n\r\n"});         // 编译期拒绝临时输入 owner
+```
 
 分帧与上限契约：
 

@@ -28,7 +28,7 @@ namespace ruvia {
 
 // Failure category shared by db_error and redis_error.
 enum class backend_error_code : std::uint8_t {
-    not_configured,
+    not_configured = 1,
     // DNS resolution, TCP/TLS establishment, or the startup handshake
     // (authentication, database selection) failed.
     connect_failed,
@@ -40,6 +40,47 @@ enum class backend_error_code : std::uint8_t {
     cancelled,
     closing,
 };
+
+// Interruptions use generic codes so every asynchronous API shares the same
+// standard conditions; backend-specific failures retain their own category.
+[[nodiscard]] inline std::error_code make_error_code(backend_error_code code) noexcept {
+    if (code == backend_error_code::timeout) {
+        return std::make_error_code(std::errc::timed_out);
+    }
+    if (code == backend_error_code::cancelled) {
+        return std::make_error_code(std::errc::operation_canceled);
+    }
+    class backend_category final : public std::error_category {
+    public:
+        [[nodiscard]] const char* name() const noexcept override {
+            return "ruvia.backend";
+        }
+
+        [[nodiscard]] std::string message(int value) const override {
+            switch (static_cast<backend_error_code>(value)) {
+                case backend_error_code::not_configured:
+                    return "backend is not configured";
+                case backend_error_code::connect_failed:
+                    return "backend connection failed";
+                case backend_error_code::io_error:
+                    return "backend I/O failed";
+                case backend_error_code::protocol_error:
+                    return "backend protocol error";
+                case backend_error_code::command_failed:
+                    return "backend command failed";
+                case backend_error_code::timeout:
+                    return "backend operation timed out";
+                case backend_error_code::cancelled:
+                    return "backend operation cancelled";
+                case backend_error_code::closing:
+                    return "backend is closing";
+            }
+            return "unknown backend error";
+        }
+    };
+    static const backend_category category;
+    return {static_cast<int>(code), category};
+}
 
 // Sort direction of one ordering key, shared by the SQL and Redis query layers.
 enum class order_direction : std::uint8_t {
@@ -71,6 +112,9 @@ private:
 };
 
 }  // namespace ruvia
+
+template <>
+struct std::is_error_code_enum<ruvia::backend_error_code> : std::true_type {};
 
 namespace ruvia::detail {
 

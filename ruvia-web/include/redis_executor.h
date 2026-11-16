@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -469,14 +470,9 @@ class redis_pool;
 
 }  // namespace detail
 
-class redis_error final : public std::runtime_error {
+class redis_error final : public std::system_error {
 public:
     redis_error(backend_error_code code, std::string_view message);
-
-    [[nodiscard]] backend_error_code code() const noexcept;
-
-private:
-    backend_error_code code_;
 };
 
 class redis_value final {

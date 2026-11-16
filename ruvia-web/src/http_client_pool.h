@@ -266,6 +266,7 @@ public:
     [[nodiscard]] bool close_connection(std::uint64_t id) noexcept;
     [[nodiscard]] std::uint64_t next_connection_id() noexcept;
     [[nodiscard]] task<client_resolve_result> resolve_addresses(std::string_view host, std::uint16_t port, client_host_resolver& resolver, const operation_deadline& timeout);
+    [[nodiscard]] task<void> prepare_tls(const operation_deadline& timeout, stop_token stop);
     [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() {
         return advertisements_.next();
     }
@@ -462,6 +463,7 @@ private:
     http_client_response_memory_domain::owner response_memory_{};
     client_wire_counters wire_counters_;
     asio::ssl::context tls_context_;
+    bool tls_ready_{};
     std::shared_ptr<http_client_cancellation_target> cancellation_target_;
     task_scope background_tasks_;
     // Owners stay at one address; a null entry is a free position.

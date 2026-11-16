@@ -659,7 +659,7 @@ TEST(Ruvia, db_stream_read_takes_its_own_operation_options) {
         db_client client(attachment.loop(), peer.config());
         test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
             auto stream = co_await connected.db().query_stream("SELECT v FROM records");
-            const auto failure_of = [](task<std::optional<db_row>> read) -> task<std::optional<backend_error_code>> {
+            const auto failure_of = [](task<std::optional<db_row>> read) -> task<std::optional<std::error_code>> {
                 try {
                     (void)co_await std::move(read);
                 } catch (const db_error& error) {
@@ -964,7 +964,7 @@ TEST(Ruvia, db_transaction_operation_views_tighten_inherited_budgets_on_every_ex
                 const auto commands = transaction.with_options({.timeout_ = std::chrono::milliseconds(100)});
                 const auto derived = commands.with_options({.timeout_ = std::chrono::seconds(5)});
                 const auto started = std::chrono::steady_clock::now();
-                std::optional<backend_error_code> code;
+                std::optional<std::error_code> code;
                 try {
                     if (route == 0) {
                         (void)co_await derived.query("SELECT v FROM records");
@@ -1022,7 +1022,7 @@ TEST(Ruvia, db_transaction_held_idle_past_its_deadline_closes_the_session_and_fa
     using namespace ruvia;
     for (const auto driver : drivers) {
         auto peer = make_peer(driver, {step::begin});
-        std::optional<backend_error_code> code;
+        std::optional<std::error_code> code;
         bool ended = false;
         drive_client(*peer, driver, std::chrono::milliseconds(100), [&](db_client& connected) -> task<void> {
             auto transaction = co_await connected.db().begin_transaction();
@@ -1051,7 +1051,7 @@ TEST(Ruvia, db_transaction_statement_is_bounded_by_the_remaining_transaction_tim
     constexpr auto lease = std::chrono::milliseconds(600);
     for (const auto driver : drivers) {
         auto peer = make_peer(driver, {step::begin, step::held_row});
-        std::optional<backend_error_code> code;
+        std::optional<std::error_code> code;
         std::chrono::steady_clock::duration statement_time{};
         bool ended = false;
         drive_client(*peer, driver, lease, [&](db_client& connected) -> task<void> {
@@ -1109,7 +1109,7 @@ TEST(Ruvia, db_stream_held_idle_past_its_deadline_closes_the_session_and_fails_r
         for (const bool close : {false, true}) {
             auto peer = make_peer(driver, {step::stream_rows});
             std::string first{};
-            std::optional<backend_error_code> code;
+            std::optional<std::error_code> code;
             bool ended = false;
             drive_client(*peer, driver, std::chrono::milliseconds(100), [&](db_client& connected) -> task<void> {
                 auto stream = co_await connected.db().query_stream("SELECT v FROM records");

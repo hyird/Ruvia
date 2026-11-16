@@ -236,7 +236,7 @@ void http1_chunked_body_decoder::reset() noexcept {
     trailers_.clear();
 }
 
-http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view available, std::size_t max_body_bytes) {
+http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view available, std::size_t max_body_bytes) & {
     if (max_body_bytes == 0) {
         throw std::invalid_argument("HTTP/1 chunk decode body quota must be greater than zero");
     }

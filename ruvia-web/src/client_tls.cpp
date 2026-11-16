@@ -4,6 +4,7 @@
 #include <array>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -25,29 +26,45 @@
 
 namespace ruvia::detail {
 
-namespace {
-
-struct client_tls_preparation final {
-    explicit client_tls_preparation(client_tls_config_storage config) :
-        config_(std::move(config)),
-        password_() {}
-    ~client_tls_preparation() {
+struct client_tls_material final {
+    ~client_tls_material() {
+        erase_password();
+    }
+    void erase_password() noexcept {
         if (!password_.empty()) {
             OPENSSL_cleanse(password_.data(), password_.size());
+            std::string{}.swap(password_);
         }
     }
-    client_tls_config_storage config_;
+    std::once_flag preparation_;
     std::string password_;
+    std::optional<tls_trust_store> trust_store_;
+    std::optional<tls_certificate> certificate_;
+    std::exception_ptr failure_;
 };
 
-task<client_tls_config_storage> prepare_client_tls_owned(worker_ref worker, std::unique_ptr<client_tls_preparation> input, stop_token stop) {
-    auto result = co_await run_blocking(std::move(worker), [input = std::move(input), stop = std::move(stop)]() mutable {
-        if (stop.stop_requested()) {
-            throw std::runtime_error("client TLS preparation cancelled");
+namespace {
+
+task<client_tls_config_storage> prepare_client_tls_owned(worker_ref worker, client_tls_config_storage config, operation_options options) {
+    const operation_deadline deadline(options.timeout_);
+    const auto check = [&] {
+        if (options.stop_token_.stop_requested()) {
+            throw std::system_error(std::make_error_code(std::errc::operation_canceled), "client TLS preparation cancelled");
         }
-        input->config_.parse_files(input->password_);
-        return std::move(input->config_);
+        if (deadline.expired()) {
+            throw std::system_error(std::make_error_code(std::errc::timed_out), "client TLS preparation deadline expired");
+        }
+    };
+    check();
+    // Do not cancel the blocking wait: OpenSSL cannot interrupt a file read,
+    // and retiring the owner must join that read before reporting completion.
+    auto result = co_await run_blocking(std::move(worker), [config = std::move(config), options, deadline]() mutable {
+        if (!options.stop_token_.stop_requested() && !deadline.expired()) {
+            config.parse_files();
+        }
+        return std::move(config);
     });
+    check();
     co_return std::move(result).take_value();
 }
 
@@ -131,10 +148,11 @@ public:
     std::terminate();
 }
 
-client_tls_config_storage::client_tls_config_storage(const client_tls_config& source_value, client_tls_files files) :
+client_tls_config_storage::client_tls_config_storage(const client_tls_config& source_value) :
     mode_(source_value.mode_),
     minimum_version_(source_value.minimum_version_),
     max_outgoing_records_(source_value.max_outgoing_records_) {
+    validate_client_tls_config(source_value);
     if (source_value.ca_file_.has_value()) {
         ca_file_.emplace(make_tls_file_name(*source_value.ca_file_));
     }
@@ -144,28 +162,45 @@ client_tls_config_storage::client_tls_config_storage(const client_tls_config& so
     if (source_value.server_name_.has_value()) {
         server_name_.emplace(*source_value.server_name_);
     }
-    if (files != client_tls_files::parse || mode_ == client_tls_mode::disabled) {
+    if (mode_ != client_tls_mode::disabled) {
+        material_ = std::make_shared<client_tls_material>();
+        if (source_value.identity_) {
+            material_->password_.assign(source_value.identity_->private_key_password_);
+        }
+    }
+}
+
+void client_tls_config_storage::parse_files() {
+    if (mode_ == client_tls_mode::disabled) {
         return;
     }
-    parse_files(source_value.identity_ ? std::string_view(source_value.identity_->private_key_password_) : std::string_view{});
+    std::call_once(material_->preparation_, [&] {
+        try {
+            auto trust = trust_store_.has_value() ? *trust_store_ : (ca_file_ ? load_tls_trust_store(*ca_file_) : tls_trust_store::load_default());
+            std::optional<tls_certificate> certificate;
+            if (identity_) {
+                certificate = load_tls_certificate(*identity_, material_->password_);
+            }
+            material_->trust_store_ = std::move(trust);
+            material_->certificate_ = std::move(certificate);
+        } catch (...) {
+            material_->failure_ = std::current_exception();
+        }
+        material_->erase_password();
+    });
+    if (material_->failure_) {
+        std::rethrow_exception(material_->failure_);
+    }
+    trust_store_ = material_->trust_store_;
+    if (material_->certificate_) {
+        certificate_.emplace(*material_->certificate_);
+    } else {
+        certificate_.reset();
+    }
 }
 
-void client_tls_config_storage::parse_files(std::string_view private_key_password) {
-    // An owner may supply its shared system trust store; it is never re-read here.
-    if (!trust_store_.has_value()) {
-        trust_store_ = ca_file_.has_value() ? load_tls_trust_store(*ca_file_) : tls_trust_store::load_default();
-    }
-    if (identity_.has_value()) {
-        certificate_ = load_tls_certificate(*identity_, private_key_password);
-    }
-}
-
-task<client_tls_config_storage> prepare_client_tls_config(worker_ref worker, client_tls_config_storage config, std::string_view private_key_password, stop_token stop) {
-    auto input = std::make_unique<client_tls_preparation>(std::move(config));
-    // Keep the secret at one stable address: moving an SSO string can leave
-    // uncleansed bytes behind in an abandoned coroutine or callable frame.
-    input->password_.assign(private_key_password);
-    return prepare_client_tls_owned(std::move(worker), std::move(input), std::move(stop));
+task<client_tls_config_storage> prepare_client_tls_config(worker_ref worker, client_tls_config_storage config, operation_options options) {
+    return prepare_client_tls_owned(std::move(worker), std::move(config), std::move(options));
 }
 
 client_tls_config_storage::client_tls_config_storage(const client_tls_config_storage& source_value) :
@@ -173,7 +208,8 @@ client_tls_config_storage::client_tls_config_storage(const client_tls_config_sto
     minimum_version_(source_value.minimum_version_),
     max_outgoing_records_(source_value.max_outgoing_records_),
     trust_store_(source_value.trust_store_),
-    certificate_(source_value.certificate_) {
+    certificate_(source_value.certificate_),
+    material_(source_value.material_) {
     if (source_value.ca_file_.has_value()) {
         ca_file_.emplace(*source_value.ca_file_);
     }

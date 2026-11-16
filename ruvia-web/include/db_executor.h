@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -182,19 +183,17 @@ enum class db_cache_shape : std::uint8_t {
 
 }  // namespace detail
 
-class db_error final : public std::runtime_error {
+class db_error final : public std::system_error {
 public:
     db_error(backend_error_code code, std::optional<db_driver> driver, std::string_view message, std::optional<std::int64_t> native_code = std::nullopt, std::string_view sql_state = {}, std::string_view constraint_name = {}) :
-        std::runtime_error(std::string(message)),
-        code_(code),
+        std::system_error(make_error_code(code), std::string(message)),
         driver_(driver),
         native_code_(native_code),
         sql_state_(sql_state),
         constraint_name_(constraint_name) {}
 
     db_error(const db_error& other) :
-        std::runtime_error(other),
-        code_(other.code_),
+        std::system_error(other),
         driver_(other.driver_),
         native_code_(other.native_code_),
         sql_state_(other.sql_state_, other.sql_state_.get_allocator()),
@@ -202,10 +201,6 @@ public:
     db_error(db_error&&) = default;
     db_error& operator=(const db_error&) = default;
     db_error& operator=(db_error&&) = default;
-
-    [[nodiscard]] backend_error_code code() const noexcept {
-        return code_;
-    }
 
     [[nodiscard]] std::optional<db_driver> driver() const noexcept {
         return driver_;
@@ -234,7 +229,6 @@ public:
     [[nodiscard]] std::optional<std::string_view> constraint_name() const&& = delete;
 
 private:
-    backend_error_code code_;
     std::optional<db_driver> driver_;
     std::optional<std::int64_t> native_code_;
     std::string sql_state_;

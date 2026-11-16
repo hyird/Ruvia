@@ -107,14 +107,16 @@ public:
     // After finish_input(), decode() continues with the same EOF state: it can
     // drain buffered input/output, but missing body bytes are an
     // incomplete_body failure rather than a request for more input.
-    [[nodiscard]] http1_body_decode_result decode(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)());
+    [[nodiscard]] http1_body_decode_result decode(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
+    http1_body_decode_result decode(std::string_view, std::span<char>, std::size_t = 0) && = delete;
     // EOF is monotonic. Supply any remaining buffered bytes; later calls may
     // drain decoder output but can never request more network input.
-    [[nodiscard]] http1_body_decode_result finish_input(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)());
+    [[nodiscard]] http1_body_decode_result finish_input(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
+    http1_body_decode_result finish_input(std::string_view, std::span<char>, std::size_t = 0) && = delete;
     template <detail::http_temporary_owning_char_string input_type>
-    http1_body_decode_result decode(input_type&&, std::span<char>, std::size_t = 0) = delete;
+    http1_body_decode_result decode(input_type&&, std::span<char>, std::size_t = 0) & = delete;
     template <detail::http_temporary_owning_char_string input_type>
-    http1_body_decode_result finish_input(input_type&&, std::span<char>, std::size_t = 0) = delete;
+    http1_body_decode_result finish_input(input_type&&, std::span<char>, std::size_t = 0) & = delete;
 
     // From now on the content the framing delimits is consumed without
     // transfer decoding and never published: a step reports only need-input,

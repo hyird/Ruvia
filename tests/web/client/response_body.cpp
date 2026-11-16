@@ -1234,7 +1234,7 @@ TEST(Ruvia, http_client_preserves_large_unsigned_timeout_bounds) {
     run_operation(worker, io, operation);
 }
 
-TEST(Ruvia, http_client_ref_options_override_pool_timeout_and_start_when_operation_runs) {
+TEST(Ruvia, http_client_ref_options_only_tighten_pool_timeout_and_start_when_operation_runs) {
     {
         auto& io = ruvia::test::new_test_io_context();
         test_worker worker(io);
@@ -1247,15 +1247,25 @@ TEST(Ruvia, http_client_ref_options_override_pool_timeout_and_start_when_operati
 
         auto operation = [&]() -> ruvia::task<void> {
             auto handle = client.client().with_options({.timeout_ = std::chrono::seconds(2)});
-            auto cold = handle.get("/pool-timeout-override").send();
+            auto cold = handle.get("/configured-upper-bound").send();
             (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(250));
             const auto start = std::chrono::steady_clock::now();
-            auto response = co_await std::move(cold);
+            bool timed_out = false;
+            try {
+                (void)co_await std::move(cold);
+            } catch (const ruvia::http_client_error& error) {
+                timed_out = error.code() == std::errc::timed_out;
+            }
             const auto elapsed = std::chrono::steady_clock::now() - start;
-            EXPECT_EQ(response.status(), ruvia::http_status_code(200));
-            EXPECT_TRUE(elapsed >= std::chrono::milliseconds(50));
+            EXPECT_TRUE(timed_out);
+            EXPECT_TRUE(elapsed >= std::chrono::milliseconds(25));
             EXPECT_TRUE(elapsed < std::chrono::seconds(2));
-            co_await server.wait();
+            server.stop_accepting();
+            try {
+                co_await server.wait();
+            } catch (const std::system_error&) {
+                // A delayed response may reach the already timed-out socket.
+            }
             co_await client.shutdown();
         };
         run_operation(worker, io, operation);
@@ -1929,7 +1939,7 @@ TEST(Ruvia, http_client_connect_failure_message_is_utf8) {
     // text/plain; charset=UTF-8 body. The strict JSON parser rejects ill-formed
     // UTF-8, and the message holds no characters that need escaping.
     EXPECT_TRUE(message.find_first_of("\"\\") == std::string::npos);
-    const auto decoded = ruvia::from_json<ruvia::string>(std::string("\"") + message + "\"");
+    const auto decoded = ruvia::parse_json<ruvia::string>(std::string("\"") + message + "\"").take_value();
     EXPECT_EQ(decoded.view(), std::string_view(message));
 }
 

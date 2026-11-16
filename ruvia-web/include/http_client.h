@@ -248,14 +248,15 @@ public:
     // body operation.
     [[nodiscard]] task<http_client_response_bytes> bytes(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &;
     task<http_client_response_bytes> bytes(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
+    // 传输/配额故障仍抛出；已收集正文的格式、结构与字段错误返回领域结果。
     template <typename value_type>
         requires detail::is_model_json_value<value_type>
-    [[nodiscard]] task<value_type> json(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) & {
+    [[nodiscard]] task<model_parse_result<value_type>> json(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) & {
         return decode_json<value_type>(bytes(max_bytes, std::move(operation)));
     }
     template <typename value_type>
         requires detail::is_model_json_value<value_type>
-    task<value_type> json(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
+    task<model_parse_result<value_type>> json(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
     // Forwards status, end-to-end fields, unread body and trailers. The cold
     // operation expires with either this response or the destination. Hop-by-hop
     // fields, those the Connection field names, and Content-Length are not
@@ -270,9 +271,9 @@ private:
     // The one forwarding chain of both pipe_to() destinations.
     [[nodiscard]] task<void> pipe_to_destination(http_response& head, response_stream_writer& writer, detail::operation_scope& destination, operation_options operation);
     template <typename value_type>
-    static task<value_type> decode_json(task<http_client_response_bytes> input) {
+    static task<model_parse_result<value_type>> decode_json(task<http_client_response_bytes> input) {
         auto owned = co_await std::move(input);
-        co_return from_json<value_type>(owned.text());
+        co_return parse_json<value_type>(owned.text());
     }
     friend class detail::http_client_pool;
     friend class detail::http_client_websocket_transport;

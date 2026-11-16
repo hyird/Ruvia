@@ -348,6 +348,9 @@ TEST(Ruvia, http_client_response_and_body_moved_from_throw_logic_error) {
     }
 }
 
+RUVIA_MODEL(fluent_client_body_rule, RUVIA_REQUIRED_FIELD(body, ruvia::string, RUVIA_MIN(5, "body too short")));
+RUVIA_MODEL(fluent_client_missing_field, RUVIA_REQUIRED_FIELD(missing_field, ruvia::string));
+
 RUVIA_MODEL(fluent_client_observation, RUVIA_REQUIRED_FIELD(method, ruvia::string), RUVIA_REQUIRED_FIELD(body, ruvia::string), RUVIA_REQUIRED_FIELD(query, ruvia::string), RUVIA_REQUIRED_FIELD(single_header, ruvia::string), RUVIA_REQUIRED_FIELD(span_header, ruvia::string), RUVIA_REQUIRED_FIELD(authorization, ruvia::string), RUVIA_REQUIRED_FIELD(proxy_authorization, ruvia::string), RUVIA_REQUIRED_FIELD(cookie, ruvia::string), RUVIA_REQUIRED_FIELD(content_type, ruvia::string), RUVIA_REQUIRED_FIELD(authority, ruvia::string));
 
 namespace fluent_client_tests {
@@ -599,7 +602,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
             }();
             auto response = co_await std::move(cold);
             EXPECT_TRUE(response.ok());
-            auto observed = co_await response.json<fluent_client_observation>();
+            auto observed = (co_await response.json<fluent_client_observation>()).take_value();
             EXPECT_EQ(observed.get<"method">().view(), "POST");
             EXPECT_EQ(observed.get<"body">().view(), "owned-payload");
             EXPECT_EQ(observed.get<"query">().view(), "a &b=+/%?#\xc3\xa9");
@@ -607,18 +610,36 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
             EXPECT_EQ(observed.get<"span_header">().view(), "span-value");
             EXPECT_TRUE((co_await response.bytes()).empty());
             EXPECT_TRUE(!(co_await response.stream().read()));
-            bool replay_rejected = false;
-            try {
-                (void)co_await response.json<fluent_client_observation>();
-            } catch (const std::exception&) {
-                replay_rejected = true;
-            }
-            EXPECT_TRUE(replay_rejected);
+            const auto replay = co_await response.json<fluent_client_observation>();
+            EXPECT_FALSE(replay.has_value());
+            EXPECT_EQ(replay.error().code(), ruvia::model_parse_error::code_type::invalid_format);
 
             auto temporary = origin.post(std::string("/fluent/inspect")).body(std::string("temporary-body")).send();
             auto temporary_response = co_await std::move(temporary);
-            auto temporary_observed = co_await temporary_response.json<fluent_client_observation>();
+            auto temporary_observed = (co_await temporary_response.json<fluent_client_observation>()).take_value();
             EXPECT_EQ(temporary_observed.get<"body">().view(), "temporary-body");
+            {
+                auto invalid_rules = co_await origin.post("/fluent/inspect").body("x").send();
+                const auto rejected = co_await invalid_rules.json<fluent_client_body_rule>();
+                EXPECT_FALSE(rejected.has_value());
+                EXPECT_TRUE(invalid_rules.stream().complete());
+                EXPECT_EQ(rejected.error().code(), ruvia::model_parse_error::code_type::validation_failed);
+                EXPECT_EQ(rejected.error().issues().size(), std::size_t{1});
+                if (rejected.error().issues().size() == 1) {
+                    EXPECT_EQ(rejected.error().issues()[0].field(), "body");
+                    EXPECT_EQ(rejected.error().issues()[0].code(), "too_small");
+                    EXPECT_EQ(rejected.error().issues()[0].message(), "body too short");
+                }
+                auto missing_field = co_await origin.get("/fluent/inspect").send();
+                const auto missing = co_await missing_field.json<fluent_client_missing_field>();
+                EXPECT_FALSE(missing.has_value());
+                EXPECT_EQ(missing.error().code(), ruvia::model_parse_error::code_type::invalid_format);
+                EXPECT_EQ(missing.error().issues().size(), std::size_t{1});
+                if (missing.error().issues().size() == 1) {
+                    EXPECT_EQ(missing.error().issues()[0].field(), "missing_field");
+                    EXPECT_EQ(missing.error().issues()[0].code(), "required");
+                }
+            }
             {
                 auto piped = co_await origin.get("/fluent/pipe").send();
                 EXPECT_TRUE(piped.status() == ruvia::http_status::created);
@@ -646,13 +667,13 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
 
             auto json_request = [&] {
                 const auto encoded = ruvia::to_json(observed);
-                auto model = ruvia::from_json<fluent_client_observation>(encoded);
+                auto model = ruvia::parse_json<fluent_client_observation>(encoded).take_value();
                 return origin.post("/fluent/inspect").json(model).send();
             }();
             auto json_response = co_await std::move(json_request);
-            auto json_observed = co_await json_response.json<fluent_client_observation>();
+            auto json_observed = (co_await json_response.json<fluent_client_observation>()).take_value();
             EXPECT_EQ(json_observed.get<"content_type">().view(), "application/json");
-            auto echoed_model = ruvia::from_json<fluent_client_observation>(json_observed.get<"body">().view());
+            auto echoed_model = ruvia::parse_json<fluent_client_observation>(json_observed.get<"body">().view()).take_value();
             EXPECT_EQ(echoed_model.get<"body">().view(), "owned-payload");
 
             using method_factory = ruvia::http_client_request (ruvia::http_client_ref::*)(std::string_view) const;
@@ -673,7 +694,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 if (method == "HEAD") {
                     EXPECT_TRUE(body.empty());
                 } else {
-                    auto report = ruvia::from_json<fluent_client_observation>(body.text());
+                    auto report = ruvia::parse_json<fluent_client_observation>(body.text()).take_value();
                     EXPECT_EQ(report.get<"method">().view(), method);
                 }
             }
@@ -687,7 +708,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
             for (const auto test : std::array{redirect_case{"301", "POST", "GET", false}, redirect_case{"302", "POST", "GET", false}, redirect_case{"303", "PUT", "GET", false}, redirect_case{"307", "POST", "POST", true}, redirect_case{"308", "PUT", "PUT", true}}) {
                 auto result = co_await origin.request(test.method_, "/fluent/redirect").query("status", test.status_).header("authorization", "Bearer same-origin").header("content-type", "text/plain").body("redirect-body").send();
                 EXPECT_TRUE(result.ok());
-                auto report = co_await result.json<fluent_client_observation>();
+                auto report = (co_await result.json<fluent_client_observation>()).take_value();
                 EXPECT_EQ(report.get<"method">().view(), test.expected_method_);
                 EXPECT_EQ(report.get<"body">().view(), test.keep_body_ ? "redirect-body" : "");
                 EXPECT_EQ(report.get<"content_type">().view(), test.keep_body_ ? "text/plain" : "");
@@ -709,7 +730,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
             {
                 auto result = co_await origin.get("/fluent/registered").send();
                 EXPECT_TRUE(result.ok());
-                auto report = co_await result.json<fluent_client_observation>();
+                auto report = (co_await result.json<fluent_client_observation>()).take_value();
                 EXPECT_EQ(report.get<"method">().view(), "GET");
                 EXPECT_TRUE(report.get<"body">().view().empty());
                 EXPECT_TRUE(report.get<"authorization">().view().empty());
@@ -867,7 +888,7 @@ void fluent_client_tests::verify_standalone_origins(server& server) {
                 auto result = co_await source.post("/fluent/redirect").query("status", status).query("location", std::string(server.targets().destination_) + "/fluent/inspect").header("authorization", "Bearer source-secret").header("proxy-authorization", "Basic proxy-secret").header("cookie", "explicit=source-secret").header("content-type", "text/plain").body("source-body").send();
                 EXPECT_TRUE(result.ok());
                 EXPECT_TRUE(result.header("x-observed-user-agent") == "destination-agent");
-                const auto report = co_await result.json<fluent_client_observation>();
+                const auto report = (co_await result.json<fluent_client_observation>()).take_value();
                 EXPECT_EQ(report.get<"method">().view(), std::string_view(status) == "302" ? "GET" : "POST");
                 EXPECT_EQ(report.get<"body">().view(), std::string_view(status) == "302" ? "" : "source-body");
                 EXPECT_EQ(report.get<"content_type">().view(), std::string_view(status) == "302" ? "" : "text/plain");
@@ -883,12 +904,12 @@ void fluent_client_tests::verify_standalone_origins(server& server) {
             {
                 auto result = co_await source.get("/fluent/inspect").send();
                 EXPECT_TRUE(result.header("x-observed-user-agent") == "source-agent");
-                const auto report = co_await result.json<fluent_client_observation>();
+                const auto report = (co_await result.json<fluent_client_observation>()).take_value();
                 EXPECT_EQ(report.get<"cookie">().view(), "configured=source; received=retained");
             }
             {
                 auto result = co_await destination.get("/fluent/inspect").send();
-                const auto report = co_await result.json<fluent_client_observation>();
+                const auto report = (co_await result.json<fluent_client_observation>()).take_value();
                 EXPECT_EQ(report.get<"cookie">().view(), "configured=destination");
             }
             {

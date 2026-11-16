@@ -1516,7 +1516,7 @@ ruvia::task<void> check_read_operation_options(ruvia::redis_client& client, bool
     auto subscription = client.redis().subscription();
     const std::array<std::string_view, 1> channels{"silent"};
     co_await subscription.subscribe(channels);
-    const auto failure_of = [](ruvia::task<std::optional<ruvia::redis_pubsub_event>> read) -> ruvia::task<std::optional<ruvia::backend_error_code>> {
+    const auto failure_of = [](ruvia::task<std::optional<ruvia::redis_pubsub_event>> read) -> ruvia::task<std::optional<std::error_code>> {
         try {
             (void)co_await std::move(read);
         } catch (const ruvia::redis_error& error) {

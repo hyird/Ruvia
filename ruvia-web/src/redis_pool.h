@@ -85,12 +85,11 @@ private:
         return source.port_;
     }
 
-    // Public configuration parses the TLS files every pool's context
-    // installs; normalized owning copies share the parsed files.
+    // Owning copies share asynchronous credential preparation.
     template <typename source_type>
     [[nodiscard]] static client_tls_config_storage tls_storage(const source_type& source_value) {
         if constexpr (std::same_as<source_type, redis_config>) {
-            return {source_value.tls_, client_tls_files::parse};
+            return client_tls_config_storage(source_value.tls_);
         } else {
             return {source_value.tls_};
         }
@@ -454,6 +453,7 @@ private:
     redis_pool general_;
     redis_pool blocking_;
     redis_subscription_set subscriptions_;
+    stop_source preparation_stop_;
 };
 
 // Runs an EVALSHA argument list for `script`; a NOSCRIPT reply loads the body

@@ -63,15 +63,6 @@ namespace ruvia {
 
 namespace {
 
-// Borrowed input is copied into response storage; an owned string moves in.
-void set_outbound_body(http_response& response, outbound_bytes&& body) {
-    if (body.owns()) {
-        response.owned_body(std::move(body).into_string());
-    } else {
-        response.body(body.view());
-    }
-}
-
 // text() and stream_text(): plain UTF-8 text plus nosniff, so a browser never
 // sniffs application text into an active content type. An
 // X-Content-Type-Options the application set keeps its value.
@@ -165,7 +156,7 @@ http_response request_exchange<host_type>::body(response_options options) const 
 template <typename host_type>
 http_response request_exchange<host_type>::body(outbound_bytes body, response_options options) const {
     auto response = detail::make_response(options);
-    set_outbound_body(response, std::move(body));
+    response.owned_body(std::move(body).into_string());
     return response;
 }
 
@@ -180,7 +171,7 @@ template <typename host_type>
 http_response request_exchange<host_type>::text(outbound_bytes body, response_options options) const {
     auto response = detail::make_response(options);
     mark_plain_text_defaults(response);
-    set_outbound_body(response, std::move(body));
+    response.owned_body(std::move(body).into_string());
     return response;
 }
 
@@ -244,7 +235,7 @@ template <typename host_type>
 http_response request_exchange<host_type>::html(outbound_bytes body, response_options options) const {
     auto response = detail::make_response(options);
     set_default_content_type(response, http_content_type::text_html_utf8);
-    set_outbound_body(response, std::move(body));
+    response.owned_body(std::move(body).into_string());
     return response;
 }
 

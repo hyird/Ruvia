@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -31,29 +30,15 @@ enum class jwt_expiration_claim_policy : std::uint8_t {
     allow_missing,
 };
 
-class jwt_error final : public std::runtime_error {
-public:
-    enum class code_type : std::uint8_t { malformed_token,
-        invalid_header,
-        invalid_payload,
-        signature_mismatch,
-        algorithm_mismatch,
-        expired,
-        not_yet_valid,
-        missing_claim,
-        claim_mismatch };
-
-    jwt_error(code_type code, std::string_view message) :
-        std::runtime_error(std::string(message)),
-        code_(code) {}
-
-    [[nodiscard]] code_type code() const noexcept {
-        return code_;
-    }
-
-private:
-    code_type code_;
-};
+enum class jwt_error_code : std::uint8_t { malformed_token,
+    invalid_header,
+    invalid_payload,
+    signature_mismatch,
+    algorithm_mismatch,
+    expired,
+    not_yet_valid,
+    missing_claim,
+    claim_mismatch };
 
 struct jwt_claim_view final {
     borrowed_text name_{};
@@ -192,9 +177,8 @@ private:
     std::vector<jwt_claim> claims_;
 };
 
-// The outcome of try_jwt_verify / try_jwt_decode_unverified. The category is
-// fixed at construction: a decoded payload, or the jwt_error code the
-// throwing entry reports for the same token.
+// The outcome of jwt_verify / jwt_decode_unverified. The category is fixed at
+// construction: a decoded payload, or a token data error code.
 class jwt_result final {
 public:
     jwt_result(const jwt_result&) = delete;
@@ -206,8 +190,8 @@ public:
         return std::holds_alternative<jwt_payload>(state_);
     }
     // nullopt when the result holds a payload.
-    [[nodiscard]] std::optional<jwt_error::code_type> error() const noexcept {
-        if (const auto* code = std::get_if<jwt_error::code_type>(&state_)) {
+    [[nodiscard]] std::optional<jwt_error_code> error() const noexcept {
+        if (const auto* code = std::get_if<jwt_error_code>(&state_)) {
             return *code;
         }
         return std::nullopt;
@@ -222,23 +206,22 @@ private:
 
     explicit jwt_result(jwt_payload payload) noexcept :
         state_(std::in_place_type<jwt_payload>, std::move(payload)) {}
-    explicit jwt_result(jwt_error::code_type code) noexcept :
-        state_(std::in_place_type<jwt_error::code_type>, code) {}
+    explicit jwt_result(jwt_error_code code) noexcept :
+        state_(std::in_place_type<jwt_error_code>, code) {}
 
-    std::variant<jwt_payload, jwt_error::code_type> state_;
+    std::variant<jwt_payload, jwt_error_code> state_;
 };
 
-// Option misuse (negative leeway, invalid policy, a secret outside the RFC 7518
-// key bounds) and allocation failure throw from both entries. Token data
-// failures are returned by try_jwt_verify and thrown as jwt_error by jwt_verify.
+// Option misuse (negative leeway, invalid algorithm/policy, a secret outside the
+// RFC 7518 key bounds) throws even for malformed tokens. Allocation and crypto
+// initialization failures also throw; token data failures are returned.
 [[nodiscard]] std::string jwt_sign(const jwt_sign_options& options);
-[[nodiscard]] jwt_result try_jwt_verify(const jwt_verify_options& options);
-[[nodiscard]] jwt_payload jwt_verify(const jwt_verify_options& options);
+[[nodiscard]] jwt_result jwt_verify(const jwt_verify_options& options);
 // Decodes and validates the three-part token structure, JOSE header (requiring
 // a non-empty "alg" string and rejecting duplicate keys / "crit" / "b64"), and
-// payload claims without verifying the signature or time-based claims.
-[[nodiscard]] jwt_result try_jwt_decode_unverified(const jwt_decode_unverified_options& options);
-[[nodiscard]] jwt_payload jwt_decode_unverified(const jwt_decode_unverified_options& options);
+// payload claims WITHOUT authenticating the signature or checking time claims.
+// The returned claims are untrusted and must never authorize a request.
+[[nodiscard]] jwt_result jwt_decode_unverified(const jwt_decode_unverified_options& options);
 // Returns the b64token of an "Authorization: Bearer <token>" field value
 // (RFC 6750 §2.1: 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" / "+" / "/" )
 // *"="), or nullopt for another scheme or a malformed token. The scheme name

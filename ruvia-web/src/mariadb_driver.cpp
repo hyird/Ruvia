@@ -24,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -894,11 +895,6 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     if (mysql_optionsv(&initialized, MYSQL_OPT_NONBLOCK, nullptr) != 0) {
         throw mysql_error(initialized, "enabling MariaDB non-blocking I/O", backend_error_code::connect_failed);
     }
-    // The statement cache hears every change of the session the server
-    // reports, from the handshake on.
-    if (!slot.session_.statements_.observe(initialized)) {
-        throw mysql_error(initialized, "observing the MariaDB session", backend_error_code::connect_failed);
-    }
     // Pin the connection charset before connecting: utf8mb4 carries full
     // Unicode whatever the server or client library default, and keeps 0x5C
     // meaning only backslash, so escaping a string parameter needs no more
@@ -950,21 +946,54 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
             set_path(MYSQL_OPT_SSL_KEY, config.tls_.identity_->private_key_file_);
         }
     }
-    const auto client_flags = use_tls ? static_cast<unsigned long>(CLIENT_SSL) : 0UL;
+    using connection_owner = std::unique_ptr<MYSQL, decltype(&mysql_close)>;
     MYSQL* connected = nullptr;
     int status;
+    auto startup_config = std::make_shared<const db_config_storage>(config);
+    auto startup_hosts = std::make_shared<const std::string>(std::move(resolved_hosts));
+    pool.require_connecting(index, deadline_value);
     {
-        native_tls_context_scope tls_scope(use_tls ? config.host_ : std::string_view{}, config.tls_.max_outgoing_records_);
-        status = mysql_real_connect_start(&connected, &initialized, resolved_hosts.c_str(), config.username_.c_str(), config.password_.c_str(), config.database_.empty() ? nullptr : config.database_.c_str(), config.port_, nullptr, client_flags);
-        tls_scope.rethrow_failure();
+        auto step = co_await pool.run_connect_step(index, deadline_value, [connection = connection_owner(std::exchange(slot.connection_, nullptr), &mysql_close), input = startup_config, resolved_hosts = startup_hosts]() mutable {
+            const auto& config = *input;
+            ensure_mysql_thread_initialized();
+            const bool use_tls = config.tls_.mode_ == client_tls_mode::verify_identity;
+            const auto flags = use_tls ? static_cast<unsigned long>(CLIENT_SSL) : 0UL;
+            MYSQL* connected = nullptr;
+            native_tls_context_scope tls_scope(use_tls ? config.host_ : std::string_view{}, config.tls_.max_outgoing_records_);
+            const auto status = mysql_real_connect_start(&connected, connection.get(), resolved_hosts->c_str(), config.username_.c_str(), config.password_.c_str(), config.database_.empty() ? nullptr : config.database_.c_str(), config.port_, nullptr, flags);
+            tls_scope.rethrow_failure();
+            return std::tuple(std::move(connection), connected, status);
+        });
+        slot.connection_ = std::get<0>(step).release();
+        connected = std::get<1>(step);
+        status = std::get<2>(step);
     }
+    pool.require_connecting(index, deadline_value);
     while (status != 0) {
         const auto ready = co_await wait_for_mysql(pool, index, status, deadline_value);
-        native_tls_context_scope tls_scope(use_tls ? config.host_ : std::string_view{}, config.tls_.max_outgoing_records_);
-        status = mysql_real_connect_cont(&connected, &initialized, ready);
-        tls_scope.rethrow_failure();
+        pool.require_connecting(index, deadline_value);
+        {
+            auto step = co_await pool.run_connect_step(index, deadline_value, [connection = connection_owner(std::exchange(slot.connection_, nullptr), &mysql_close), host = std::string(use_tls ? config.host_ : std::string_view{}), limit = config.tls_.max_outgoing_records_, ready]() mutable {
+                ensure_mysql_thread_initialized();
+                MYSQL* connected = nullptr;
+                native_tls_context_scope tls_scope(host, limit);
+                const auto status = mysql_real_connect_cont(&connected, connection.get(), ready);
+                tls_scope.rethrow_failure();
+                return std::tuple(std::move(connection), connected, status);
+            });
+            slot.connection_ = std::get<0>(step).release();
+            connected = std::get<1>(step);
+            status = std::get<2>(step);
+        }
+        pool.require_connecting(index, deadline_value);
     }
-    std::string(resolved_hosts).swap(resolved_hosts);
+    // Startup owns no worker-affine session callback. Observe only after the
+    // native connection returns to its worker, before tracking is enabled.
+    if (!slot.session_.statements_.observe(initialized)) {
+        throw mysql_error(initialized, "observing the MariaDB session", backend_error_code::connect_failed);
+    }
+    startup_hosts.reset();
+    startup_config.reset();
     if (connected == nullptr) {
         throw mysql_error(initialized, "mysql_real_connect", backend_error_code::connect_failed);
     }

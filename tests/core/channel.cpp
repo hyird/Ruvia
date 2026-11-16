@@ -722,13 +722,18 @@ ruvia::task<void> verify_send_wait_returns_undelivered_values(ruvia::worker_ref 
         return value != nullptr && *value == expected;
     };
     auto [sender, receiver] = ruvia::make_channel<value_type>(worker_value, {.capacity_ = 1});
+    ruvia::stop_source stopped;
+    stopped.request_stop();
+    auto cancelled_empty = co_await sender.send_wait(std::make_unique<int>(7), {.stop_token_ = stopped.token()});
+    auto expired_empty = co_await sender.send_wait(std::make_unique<int>(8), {.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::time_point{})});
+    if (!returned(cancelled_empty, channel_send_status::cancelled, 7) || !returned(expired_empty, channel_send_status::timed_out, 8)) {
+        co_return;
+    }
     if (!sender.send(std::make_unique<int>(0)).accepted()) {
         co_return;
     }
     auto timed = co_await sender.send_wait(std::make_unique<int>(1), {.timeout_ = std::chrono::milliseconds(5)});
     auto passed = co_await sender.send_wait(std::make_unique<int>(2), {.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::time_point{})});
-    ruvia::stop_source stopped;
-    stopped.request_stop();
     auto already_cancelled = co_await sender.send_wait(std::make_unique<int>(3), {.stop_token_ = stopped.token()});
     ruvia::stop_source later;
     static_cast<void>(worker_value.post([&later] {
@@ -742,7 +747,7 @@ ruvia::task<void> verify_send_wait_returns_undelivered_values(ruvia::worker_ref 
     }));
     auto closed = co_await sender.send_wait(std::make_unique<int>(6));
     // The buffered value still drains after closure.
-    auto drained = co_await receiver.receive();
+    auto drained = co_await receiver.receive({.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::time_point{}), .stop_token_ = stopped.token()});
     success = returned(timed, channel_send_status::timed_out, 1) && returned(passed, channel_send_status::timed_out, 2) && returned(already_cancelled, channel_send_status::cancelled, 3) && returned(cancelled, channel_send_status::cancelled, 4) && returned(unbound, channel_send_status::closed, 5) && returned(closed, channel_send_status::closed, 6) && drained.has_value() && *drained.value() == 0;
 }
 

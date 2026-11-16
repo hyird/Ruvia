@@ -45,6 +45,91 @@ struct model_parse_options final {
     std::size_t max_representation_bytes_{16 * 1024 * 1024};
 };
 
+// 不可信输入错误属于模型领域；HTTP 状态仅由请求边界决定。
+class model_parse_error final {
+public:
+    enum class code_type : std::uint8_t { invalid_format,
+        validation_failed };
+
+    explicit model_parse_error(code_type code, std::string_view message, std::vector<validation_issue> issues = {}) :
+        code_(code),
+        message_(message),
+        issues_(std::move(issues)) {}
+    model_parse_error(const model_parse_error&) = delete;
+    model_parse_error& operator=(const model_parse_error&) = delete;
+    model_parse_error(model_parse_error&&) noexcept = default;
+    model_parse_error& operator=(model_parse_error&&) = delete;
+
+    [[nodiscard]] code_type code() const noexcept {
+        return code_;
+    }
+    [[nodiscard]] std::string_view message() const& noexcept RUVIA_LIFETIMEBOUND {
+        return message_;
+    }
+    std::string_view message() const&& = delete;
+    [[nodiscard]] const std::vector<validation_issue>& issues() const& noexcept RUVIA_LIFETIMEBOUND {
+        return issues_;
+    }
+    const std::vector<validation_issue>& issues() const&& = delete;
+    [[nodiscard]] std::vector<validation_issue> take_issues() && noexcept {
+        auto issues = std::move(issues_);
+        issues_.clear();
+        return issues;
+    }
+
+private:
+    code_type code_;
+    std::string message_;
+    std::vector<validation_issue> issues_;
+};
+
+// 类别在构造时固定。借用必须先保存结果；提取必须显式消费右值。
+template <typename t_type>
+class model_parse_result final {
+public:
+    explicit model_parse_result(t_type&& value) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
+        state_(std::in_place_index<0>, std::move(value)) {}
+    explicit model_parse_result(model_parse_error&& error) noexcept :
+        state_(std::in_place_index<1>, std::move(error)) {}
+    model_parse_result(const model_parse_result&) = delete;
+    model_parse_result& operator=(const model_parse_result&) = delete;
+    model_parse_result(model_parse_result&&) noexcept(std::is_nothrow_move_constructible_v<t_type>) = default;
+    model_parse_result& operator=(model_parse_result&&) = delete;
+
+    [[nodiscard]] bool has_value() const noexcept {
+        return state_.index() == 0;
+    }
+    [[nodiscard]] const t_type& value() const& RUVIA_LIFETIMEBOUND {
+        if (!has_value()) {
+            throw std::logic_error("model parse result has no value");
+        }
+        return std::get<0>(state_);
+    }
+    const t_type& value() const&& = delete;
+    [[nodiscard]] t_type take_value() && {
+        if (!has_value()) {
+            throw std::logic_error("model parse result has no value");
+        }
+        return std::move(std::get<0>(state_));
+    }
+    [[nodiscard]] const model_parse_error& error() const& RUVIA_LIFETIMEBOUND {
+        if (has_value()) {
+            throw std::logic_error("model parse result has no error");
+        }
+        return std::get<1>(state_);
+    }
+    const model_parse_error& error() const&& = delete;
+    [[nodiscard]] model_parse_error take_error() && {
+        if (has_value()) {
+            throw std::logic_error("model parse result has no error");
+        }
+        return std::move(std::get<1>(state_));
+    }
+
+private:
+    std::variant<t_type, model_parse_error> state_;
+};
+
 class json_object;
 class json_value;
 
@@ -979,11 +1064,14 @@ struct model_validation_access final {
     }
 
     template <typename value_type, typename validator_type>
-    static void validate_value(const value_type& value, validator_type& validator_value) {
+    [[nodiscard]] static bool validate_value(const value_type& value, validator_type& validator_value) {
         model::model_issue_sink sink(validator_value);
         const model::model_path root;
+        const auto initial_issue_count = validator_value.issues().size();
         validate_value_structure(value, root, sink);
+        const bool structure_valid = validator_value.issues().size() == initial_issue_count;
         validate_nested_field_rules(value, root, sink);
+        return structure_valid;
     }
     template <typename value_type>
     [[nodiscard]] static bool value_rules_valid(const value_type& value) {
@@ -1759,15 +1847,6 @@ struct model_parse_access final {
     [[nodiscard]] static model_type parse_form(const model_input& input) {
         auto value = model::model_access::empty<model_type>();
         materialize_form(value, input);
-        return value;
-    }
-
-    template <typename model_type>
-    [[nodiscard]] static std::optional<model_type> parse_form_owned(std::string_view body) {
-        auto value = parse_form<model_type>(form_body_input{.body_ = body, .string_storage_ = model_string_storage::owned});
-        if (!model_validation_access::structure_valid(value)) {
-            return std::nullopt;
-        }
         return value;
     }
 
@@ -2577,7 +2656,7 @@ private:
 // basic_string rvalues are rejected before a dangling view can be created.
 // Model fields may copy the JSON token when the parse owns its strings.
 // Dynamic JSON token, not an ordinary field-validation schema. parse() borrows
-// the complete token; from_json<Model>() owns it instead.
+// the complete token; parse_json<Model>() owns it instead.
 // Move construction preserves borrowing/ownership. Move assignment owns the
 // result (copying borrowed storage). A successful move or rvalue field transfer
 // resets the source to its default token without allocation. Failed rebinding
@@ -2633,11 +2712,11 @@ protected:
     explicit json_token_base(model_text_storage&& storage) noexcept :
         storage_(std::move(storage)) {}
 
-    [[nodiscard]] static derived_type parse_token(std::string_view body, model_parse_options options, bool require_object, const char* error_message) {
+    [[nodiscard]] static model_parse_result<derived_type> parse_token(std::string_view body, model_parse_options options, bool require_object, const char* error_message) {
         if (!is_complete_json_value(body, options, require_object)) {
-            throw std::invalid_argument(error_message);
+            return model_parse_result<derived_type>(model_parse_error(model_parse_error::code_type::invalid_format, error_message));
         }
-        return derived_type(borrowed_model_token_tag{}, body);
+        return model_parse_result<derived_type>(derived_type(borrowed_model_token_tag{}, body));
     }
 
     void assign_owned(std::string_view value) {
@@ -2673,15 +2752,13 @@ public:
     json_value() noexcept :
         base_type(detail::borrowed_model_token_tag{}, "null") {}
 
-    [[nodiscard]] static json_value parse(std::string_view body, model_parse_options options = {}) {
-        return parse_token(body, options, false, "invalid JSON value");
-    }
+    [[nodiscard]] static model_parse_result<json_value> parse(std::string_view body, model_parse_options options = {});
 
     template <typename traits_type, typename allocator_type>
-    static json_value parse(std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
+    static model_parse_result<json_value> parse(std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
 
     template <typename traits_type, typename allocator_type>
-    static json_value parse(const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
+    static model_parse_result<json_value> parse(const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
 
     json_value(const json_value&) = delete;
     json_value& operator=(const json_value&) = delete;
@@ -2779,15 +2856,13 @@ public:
     json_object() noexcept :
         base_type(detail::borrowed_model_token_tag{}, "{}") {}
 
-    [[nodiscard]] static json_object parse(std::string_view body, model_parse_options options = {}) {
-        return parse_token(body, options, true, "invalid JSON object");
-    }
+    [[nodiscard]] static model_parse_result<json_object> parse(std::string_view body, model_parse_options options = {});
 
     template <typename traits_type, typename allocator_type>
-    static json_object parse(std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
+    static model_parse_result<json_object> parse(std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
 
     template <typename traits_type, typename allocator_type>
-    static json_object parse(const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
+    static model_parse_result<json_object> parse(const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
 
     json_object(const json_object&) = delete;
     json_object& operator=(const json_object&) = delete;
@@ -2817,6 +2892,14 @@ private:
 
     using base_type::base_type;
 };
+
+inline model_parse_result<json_value> json_value::parse(std::string_view body, model_parse_options options) {
+    return parse_token(body, options, false, "invalid JSON value");
+}
+
+inline model_parse_result<json_object> json_object::parse(std::string_view body, model_parse_options options) {
+    return parse_token(body, options, true, "invalid JSON object");
+}
 
 template <typename visitor_type>
 [[nodiscard]] inline bool json_value::for_each_element(visitor_type&& visitor) const {
@@ -2929,14 +3012,6 @@ template <typename t_type>
 
 }  // namespace detail
 
-// How validator::throw_if_invalid presents its issues: the http_error it throws
-// carries these values together with the collected validation issues.
-struct validation_failure_options final {
-    http_status_code status_{http_status::bad_request};
-    borrowed_text code_{"validation_failed"};
-    borrowed_text message_{"request validation failed"};
-};
-
 // Allocation failure during copy assignment leaves both validators unchanged.
 // Successful moves leave an empty source that can be reused.
 class validator final {
@@ -3048,18 +3123,10 @@ public:
     }
     [[nodiscard]] const issue_list_type& issues() const&& = delete;
 
-    void throw_if_invalid(validation_failure_options options = {}) const& {
-        if (!ok()) {
-            throw http_error({.status_ = options.status_, .code_ = options.code_, .message_ = options.message_, .validation_issues_ = issues_});
-        }
-    }
-
-    void throw_if_invalid(validation_failure_options options = {}) && {
-        if (!ok()) {
-            auto moved_issues = std::move(issues_);
-            issues_.clear();
-            throw http_error(options.status_, options.code_.view(), options.message_.view(), {}, std::move(moved_issues));
-        }
+    [[nodiscard]] issue_list_type take_issues() && noexcept {
+        auto issues = std::move(issues_);
+        issues_.clear();
+        return issues;
     }
 
 private:
@@ -3072,34 +3139,39 @@ void validate_model(const model_type& model, validator& out) {
     detail::model_validation_access::validate_model(model, out);
 }
 
+namespace detail {
+
 template <typename t_type>
-    requires detail::is_model<t_type>
-[[nodiscard]] t_type from_form(std::string_view body) {
-    auto parsed_value = detail::model_parse_access::parse_form_owned<t_type>(body);
-    if (!parsed_value) {
-        throw std::invalid_argument("invalid form value");
+[[nodiscard]] model_parse_result<t_type> finish_model_parse(t_type&& value) {
+    if constexpr (model_validation_access::contains_model<t_type>()) {
+        validator checks;
+        const bool structure_valid = model_validation_access::validate_value(value, checks);
+        if (!checks.ok()) {
+            const auto code = structure_valid ? model_parse_error::code_type::validation_failed : model_parse_error::code_type::invalid_format;
+            return model_parse_result<t_type>(model_parse_error(code, code == model_parse_error::code_type::validation_failed ? "model validation failed" : "invalid model structure", std::move(checks).take_issues()));
+        }
     }
-    validator validator_value;
-    validate_model(*parsed_value, validator_value);
-    std::move(validator_value).throw_if_invalid();
-    return std::move(*parsed_value);
+    return model_parse_result<t_type>(std::move(value));
 }
 
-// Supports models, Ruvia scalar values, strings, bytes and arrays of these
-// types. Model types also evaluate their declared field validation rules.
+}  // namespace detail
+
+template <typename t_type>
+    requires detail::is_model<t_type>
+[[nodiscard]] model_parse_result<t_type> parse_form(std::string_view body) {
+    return detail::finish_model_parse(detail::model_parse_access::parse_form<t_type>(detail::form_body_input{.body_ = body, .string_storage_ = detail::model_string_storage::owned}));
+}
+
+// 独立解析拥有字符串与动态 token；模型字段同时执行声明的规则。
+// 分配失败、默认值/自定义规则抛出的内部或配置异常原样传播。
 template <typename t_type>
     requires detail::is_model_json_value<t_type>
-[[nodiscard]] t_type from_json(std::string_view body, model_parse_options options = {}) {
-    auto parsed_value = detail::parse_json_document<t_type>(body, detail::model_string_storage::owned, options);
+[[nodiscard]] model_parse_result<t_type> parse_json(std::string_view body, model_parse_options options = {}) {
+    auto parsed_value = detail::parse_complete_json_value<t_type>(body, detail::model_string_storage::owned, options);
     if (!parsed_value) {
-        throw std::invalid_argument("invalid JSON value");
+        return model_parse_result<t_type>(model_parse_error(model_parse_error::code_type::invalid_format, "invalid JSON value"));
     }
-    if constexpr (detail::model_validation_access::contains_model<t_type>()) {
-        validator validator_value;
-        detail::model_validation_access::validate_value(*parsed_value, validator_value);
-        std::move(validator_value).throw_if_invalid();
-    }
-    return std::move(*parsed_value);
+    return detail::finish_model_parse(std::move(*parsed_value));
 }
 
 template <typename t_type>
@@ -3211,25 +3283,27 @@ template <validation_target target>
 
 template <validation_target target, typename model_type>
 [[nodiscard]] model_type parse_and_validate_request_model(std::conditional_t<target == validation_target::json || target == validation_target::form, std::string_view, std::span<const http_header_view>> input) {
-    auto model = [&] {
+    auto parsed = [&]() -> model_parse_result<model_type> {
         if constexpr (target == validation_target::json) {
-            auto parsed_value = parse_complete_json_value<model_type>(input, model_string_storage::borrowed);
-            if (!parsed_value) {
-                // Selecting JSON makes malformed input an error, not an optional
-                // format mismatch that json_if<T>() may silently skip.
-                throw_invalid_json_body();
+            auto value = parse_complete_json_value<model_type>(input, model_string_storage::borrowed);
+            if (!value) {
+                return model_parse_result<model_type>(model_parse_error(model_parse_error::code_type::invalid_format, "invalid JSON body"));
             }
-            return std::move(*parsed_value);
+            return finish_model_parse(std::move(*value));
         } else if constexpr (target == validation_target::form) {
-            return model_parse_access::parse_form<model_type>(form_body_input{.body_ = input});
+            return finish_model_parse(model_parse_access::parse_form<model_type>(form_body_input{.body_ = input}));
         } else {
-            return model_parse_access::parse_form<model_type>(request_fields_input{.fields_ = input, .case_insensitive_names_ = target == validation_target::header});
+            return finish_model_parse(model_parse_access::parse_form<model_type>(request_fields_input{.fields_ = input, .case_insensitive_names_ = target == validation_target::header}));
         }
     }();
-    validator validator_value;
-    model_validation_access::validate_model(model, validator_value);
-    std::move(validator_value).throw_if_invalid();
-    return model;
+    if (!parsed.has_value()) {
+        auto error = std::move(parsed).take_error();
+        if (error.issues().empty()) {
+            throw_invalid_json_body();
+        }
+        throw http_error(http_status::bad_request, "validation_failed", "request validation failed", {}, std::move(error).take_issues());
+    }
+    return std::move(parsed).take_value();
 }
 
 // One validating middleware per request source: parses the model from `target`,

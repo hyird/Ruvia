@@ -18,12 +18,12 @@ enum class client_tls_mode : std::uint8_t {
     disabled,
 };
 
-// The one client TLS shape shared by database and Redis clients. TLS always
-// authenticates the peer. Redis clients read the CA bundle and identity once,
-// when the registration is created, and share them across workers; database
-// drivers read the files when connecting and do not accept an encrypted
-// private key. Clients default to TLS 1.2 or newer; minimum_version_ can
-// require TLS 1.3. TLS 1.2 offers only ECDHE with AEAD suites, and every
+// The shared client TLS shape. Construction only validates and owns inputs;
+// credential files are read during asynchronous connection preparation.
+// Prepared HTTP, TCP and Redis stores are immutable snapshots; database
+// drivers perform their native startup steps on the blocking pool and do not
+// accept encrypted private keys. Clients default to TLS 1.2 or newer;
+// minimum_version_ can require TLS 1.3. TLS 1.2 offers only ECDHE with AEAD suites, and every
 // version refuses renegotiation. Every client verifies
 // identities by subjectAltName type (RFC 9525): DNS names match DNS-ID entries,
 // IP literals match IP entries, the subject Common Name is never used, and DNS

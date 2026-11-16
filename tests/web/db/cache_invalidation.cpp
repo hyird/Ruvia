@@ -306,7 +306,7 @@ namespace query_cache_test {
 // thrown so every reader in a scope finishes on its own.
 struct read_outcome final {
     std::string value_{};
-    std::optional<ruvia::backend_error_code> error_;
+    std::optional<std::error_code> error_;
     bool done_{false};
 };
 

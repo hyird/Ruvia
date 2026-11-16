@@ -112,11 +112,11 @@ void http1_body_decoder::discard_content() noexcept {
     transfer_phase_ = transfer_phase_type::needs_framed_input;
 }
 
-http1_body_decode_result http1_body_decoder::decode(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes) {
+http1_body_decode_result http1_body_decoder::decode(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes) & {
     return run(available, scratch, max_output_bytes, false);
 }
 
-http1_body_decode_result http1_body_decoder::finish_input(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes) {
+http1_body_decode_result http1_body_decoder::finish_input(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes) & {
     return run(available, scratch, max_output_bytes, true);
 }
 

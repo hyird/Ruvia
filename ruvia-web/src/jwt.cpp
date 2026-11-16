@@ -42,7 +42,7 @@ struct jwt_payload_access final {
     [[nodiscard]] static jwt_result result(jwt_payload payload) noexcept {
         return jwt_result(std::move(payload));
     }
-    [[nodiscard]] static jwt_result result(jwt_error::code_type code) noexcept {
+    [[nodiscard]] static jwt_result result(jwt_error_code code) noexcept {
         return jwt_result(code);
     }
     [[nodiscard]] static jwt_payload& stored_payload(jwt_result& result);
@@ -507,7 +507,7 @@ void jwt_append_json_numeric_date(inline_text_buffer<512>& out, bool& first, std
     out.append(value);
 }
 
-[[nodiscard]] std::optional<jwt_error::code_type> jwt_validate_jose_header(std::string_view json, std::optional<std::string_view> expected_algorithm) {
+[[nodiscard]] std::optional<jwt_error_code> jwt_validate_jose_header(std::string_view json, std::optional<std::string_view> expected_algorithm) {
     std::optional<std::string_view> algorithm;
     std::string decoded_algorithm;
     bool unsupported_extension = false;
@@ -532,14 +532,14 @@ void jwt_append_json_numeric_date(inline_text_buffer<512>& out, bool& first, std
         return skip_json_value(value, 1);
     });
     if (!valid || !algorithm.has_value() || unsupported_extension) {
-        return jwt_error::code_type::invalid_header;
+        return jwt_error_code::invalid_header;
     }
     if (expected_algorithm.has_value()) {
         if (*algorithm != *expected_algorithm) {
-            return jwt_error::code_type::algorithm_mismatch;
+            return jwt_error_code::algorithm_mismatch;
         }
     } else if (algorithm->empty()) {
-        return jwt_error::code_type::invalid_header;
+        return jwt_error_code::invalid_header;
     }
     return std::nullopt;
 }
@@ -675,38 +675,6 @@ void validate_jwt_custom_claims(std::span<const jwt_claim_view> claims) {
     const auto encoded_size = http_base64_encoded_size(digest_size, http_base64_padding::forbidden);
     jwt_base64_url_encode_into(out, std::string_view(reinterpret_cast<const char*>(mac.data()), digest_size));
     return std::string_view(out, encoded_size);
-}
-
-[[nodiscard]] std::string_view jwt_error_message(jwt_error::code_type code) noexcept {
-    switch (code) {
-        case jwt_error::code_type::malformed_token:
-            return "JWT token is malformed";
-        case jwt_error::code_type::invalid_header:
-            return "JWT JOSE header is invalid";
-        case jwt_error::code_type::invalid_payload:
-            return "JWT payload is not a valid unique claims object";
-        case jwt_error::code_type::signature_mismatch:
-            return "JWT signature verification failed";
-        case jwt_error::code_type::algorithm_mismatch:
-            return "JWT algorithm mismatch";
-        case jwt_error::code_type::expired:
-            return "JWT token is expired";
-        case jwt_error::code_type::not_yet_valid:
-            return "JWT token is not yet valid";
-        case jwt_error::code_type::missing_claim:
-            return "JWT token is missing exp claim";
-        case jwt_error::code_type::claim_mismatch:
-            return "JWT issuer, subject or audience mismatch";
-    }
-    return "JWT token is invalid";
-}
-
-// The local strict entry: a token failure becomes jwt_error with the same code.
-[[nodiscard]] jwt_payload jwt_require_payload(jwt_result result) {
-    if (const auto code = result.error()) {
-        throw jwt_error(*code, jwt_error_message(*code));
-    }
-    return std::move(result).take_value();
 }
 
 }  // namespace
@@ -932,8 +900,8 @@ std::string jwt_sign(const jwt_sign_options& options) {
     return token;
 }
 
-jwt_result try_jwt_verify(const jwt_verify_options& options) {
-    using code_type = jwt_error::code_type;
+jwt_result jwt_verify(const jwt_verify_options& options) {
+    using code_type = jwt_error_code;
     using access = detail::jwt_payload_access;
     if (options.leeway_.count() < 0) {
         throw std::invalid_argument("JWT verification leeway must not be negative");
@@ -941,12 +909,12 @@ jwt_result try_jwt_verify(const jwt_verify_options& options) {
     if (options.expiration_claim_ != jwt_expiration_claim_policy::require && options.expiration_claim_ != jwt_expiration_claim_policy::allow_missing) {
         throw std::invalid_argument("JWT expiration claim policy is invalid");
     }
+    const auto digest = detail::jwt_hmac_digest(options.algorithm_);
+    detail::validate_jwt_hmac_secret(detail::hmac_digest_size(digest), options.secret_);
     const auto parts = detail::jwt_split_token(options.token_.view());
     if (!parts) {
         return access::result(code_type::malformed_token);
     }
-    const auto digest = detail::jwt_hmac_digest(options.algorithm_);
-    detail::validate_jwt_hmac_secret(detail::hmac_digest_size(digest), options.secret_);
     // No HMAC can be computed over a larger input, so no such token is authentic.
     if (parts->signing_input_.size() > detail::hmac_max_input_size) {
         return access::result(code_type::malformed_token);
@@ -1003,12 +971,8 @@ jwt_result try_jwt_verify(const jwt_verify_options& options) {
     return access::result(std::move(*payload_value));
 }
 
-jwt_payload jwt_verify(const jwt_verify_options& options) {
-    return detail::jwt_require_payload(try_jwt_verify(options));
-}
-
-jwt_result try_jwt_decode_unverified(const jwt_decode_unverified_options& options) {
-    using code_type = jwt_error::code_type;
+jwt_result jwt_decode_unverified(const jwt_decode_unverified_options& options) {
+    using code_type = jwt_error_code;
     using access = detail::jwt_payload_access;
     const auto parts = detail::jwt_split_token(options.token_.view());
     if (!parts) {
@@ -1032,10 +996,6 @@ jwt_result try_jwt_decode_unverified(const jwt_decode_unverified_options& option
         return access::result(code_type::invalid_payload);
     }
     return access::result(std::move(*payload_value));
-}
-
-jwt_payload jwt_decode_unverified(const jwt_decode_unverified_options& options) {
-    return detail::jwt_require_payload(try_jwt_decode_unverified(options));
 }
 
 const jwt_payload& jwt_result::value() const& {

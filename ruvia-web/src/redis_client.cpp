@@ -17,14 +17,6 @@ namespace ruvia::detail {
 
 namespace {
 
-[[nodiscard]] asio::ssl::context make_redis_tls_context(const client_tls_config_storage& config) {
-    asio::ssl::context context_value(asio::ssl::context::tls_client);
-    if (config.mode_ != client_tls_mode::disabled) {
-        configure_client_tls_context(*context_value.native_handle(), config);
-    }
-    return context_value;
-}
-
 void validate_redis_registry(const worker_ref& worker_value, std::span<const redis_definition_type> redis) {
     if (!worker_value.valid()) {
         throw std::invalid_argument("redis registry requires a valid worker");
@@ -83,7 +75,7 @@ redis_executor redis_registry::get(std::string_view alias, operation_scope& oper
 redis_client_runtime::redis_client_runtime(asio::io_context& io_context, const worker_ref& worker_value, redis_config_storage config) :
     config_(std::move(config)),
     worker_(worker_value),
-    tls_context_(make_redis_tls_context(config_.tls_)),
+    tls_context_(asio::ssl::context::tls_client),
     general_(io_context, config_, tls_context_, config_.command_timeout_, config_.pool_size_per_worker_, worker_),
     // Blocking waits have their own deadlines; ordinary command timeouts
     // must not interrupt a finite long wait or an explicitly cancelled wait.
@@ -93,12 +85,37 @@ redis_client_runtime::redis_client_runtime(asio::io_context& io_context, const w
 redis_client_runtime::~redis_client_runtime() = default;
 
 task<void> redis_client_runtime::connect(operation_options options) {
-    // Validate ordinary connections at startup; blocking slots and
-    // subscriptions connect lazily.
-    co_await general_.connect(std::move(options));
+    const auto timeout = operation_deadline(options.timeout_).constrained_by(config_.connect_timeout_);
+    const linked_operation_options linked({.timeout_ = timeout.timeout(), .stop_token_ = options.stop_token_}, preparation_stop_.token());
+    if (config_.tls_.mode_ != client_tls_mode::disabled) {
+        std::optional<client_tls_config_storage> prepared;
+        std::exception_ptr failure;
+        try {
+            prepared.emplace(co_await prepare_client_tls_config(worker_, config_.tls_, linked.options()));
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        if (preparation_stop_.stop_requested()) {
+            throw redis_error(backend_error_code::closing, "redis client is closing");
+        }
+        if (options.stop_token_.stop_requested()) {
+            throw redis_error(backend_error_code::cancelled, "redis connection cancelled");
+        }
+        if (timeout.expired()) {
+            throw redis_error(backend_error_code::timeout, "redis connection timed out");
+        }
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+        configure_client_tls_context(*tls_context_.native_handle(), *prepared);
+        config_.tls_ = std::move(*prepared);
+    }
+    // Every pool slot uses the same absolute startup budget.
+    co_await general_.connect({.timeout_ = timeout.timeout(), .stop_token_ = options.stop_token_});
 }
 
 void redis_client_runtime::close_now() noexcept {
+    preparation_stop_.request_stop();
     general_.close_now();
     blocking_.close_now();
     subscriptions_.close_now();

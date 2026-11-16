@@ -273,7 +273,7 @@ flowchart LR
 - **唯一入参**：有上限的操作以末位 `operation_options options = {}` 作控制参数，没有截止期平行重载；参数顺序为 `(worker, 对象…, 控制)`。适用：`channel_receiver::receive`、`channel_sender::send_wait`、`one_shot_receiver::wait`、`pool_lease_scheduler::acquire`、`run_blocking`、`worker_single_wait_awaiter`。
 - **上限与目标**：上限（bound）一律是 [`operation_timeout`](#api-operation-options-h)，非正相对值在构造时即抛 `std::invalid_argument`；睡眠时长是目标（target）而非上限，`sleep_for` / `sleep_until` 末位为 `stop_token = {}`，非正时长立即 `elapsed`。
 - **计时起点**：相对上限自 `co_await` 启动计时；绝对截止期原样使用，可与调用方其他阶段共享。
-- **已过期**：已过期的绝对截止期不是错误；等待在无可交付结果时立即以 `timed_out` 结束，已有结果优先交付。
+- **已取消 / 已过期**：已过期的绝对截止期不是错误。接收与等待已有可交付结果时仍优先交付，无结果才以 `cancelled` / `timed_out` 结束；准入型操作 `channel_sender::send_wait` 与 `run_blocking` 则在预留槽位或投递工作前检查启动时已请求的取消与已过期的截止期，拒绝新工作。
 - **嵌套预算**：已启动操作把剩余预算交给嵌套操作时传 `{.timeout_ = deadline.timeout()}`（同一绝对截止期），不重新折算为相对时长。
 - **合并**：`override_operation_options` 只收紧上限并以显式 token 替换原 token；累计取消只经 `linked_operation_options`。出站客户端的 `with_options` 沿用同一规则，见 [ruvia-web.md](ruvia-web.md#api-http-client-h)。
 - **配置时长**：配置输入（超时、心跳、探活）使用 [`timeout_duration`](#api-timeout-duration-h)；未配置用 `std::nullopt` 表示，零或负值不能代替未配置。缓存 TTL、会话有效期与限流窗口不属于该契约。
@@ -1095,7 +1095,7 @@ flowchart LR
 | `channel_sender() noexcept = default;` | 空发送端，`send()` 返回 `closed` |
 | `[[nodiscard]] bool valid() const noexcept;` | 关联通道 |
 | `[[nodiscard]] channel_send_result<T> send(T value) const;` | 任意线程；有空槽立即投递，否则 `full`；关闭或停机退回值；从不返回 `timed_out` / `cancelled` |
-| `[[nodiscard]] channel_send_operation<T> send_wait(T value, operation_options options = {}) const&;` | 等待式发送的冷操作 |
+| `[[nodiscard]] channel_send_operation<T> send_wait(T value, operation_options options = {}) const&;` | 等待式发送的冷操作；启动时先检查取消 / 截止期，再预留空槽；拒绝时退回负载 |
 | `channel_send_operation<T> send_wait(T, operation_options = {}) const&& = delete;` | 拒绝临时发送端 |
 | `void close() const;` | 停止发送，接收方仍可取完缓冲值 |
 
@@ -1110,11 +1110,12 @@ flowchart LR
 | `channel_send_operation(channel_send_operation&& other) noexcept(std::is_nothrow_move_constructible_v<T>);` | 仅启动前可移动，已启动时 `std::terminate()` |
 | `void operator&() const = delete;` | 不可取址 |
 | `~channel_send_operation();` | 挂起帧被销毁时摘下等待节点 |
-| `[[nodiscard]] bool await_ready();` | 须在某个 Worker 线程（否则 `std::logic_error`），不必是通道 Worker；重复或无值抛 `std::logic_error`；有空槽、关闭、停机、已取消或已过期时直接完成 |
-| `[[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation);` | 进入 FIFO 等待队列并布置定时器（无截止期时也观察等待方 Worker 的定时器队列停止） |
+| `[[nodiscard]] bool await_ready();` | 非空发送端须在某个 Worker 线程启动（否则 `std::logic_error`），不必是通道 Worker；重复或无值抛 `std::logic_error`；空发送端直接 `closed`；其余先检查通道关闭 / 停机，再检查已取消 / 已过期，最后才尝试预留空槽，无空槽则排入等待队列 |
+| `[[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation);` | 为已排队的 FIFO 等待者布置定时器并发布挂起状态（无截止期时也观察等待方 Worker 的定时器队列停止）；实际挂起时注册停止回调 |
 | `[[nodiscard]] channel_send_result<T> await_resume();` | `sent` 时在等待方 Worker 上填入预留槽并发布；其余状态退回值 |
 
 - **FIFO 预留**：接收方释放的空位按 FIFO 预留给队首等待者，等待者在自己的 Worker 上恢复后填入，不内联。
+- **取消准入与退回**：启动时已停止的 `stop_token_` 或已过期的绝对截止期，即使存在空槽也分别报告 `cancelled` / `timed_out`，不预留槽位、不发布消息，完整退回待发送负载；与 [`run_blocking`](#api-blocking-pool-h) 的投递前检查一致。相对上限仍从 `co_await` 启动计时。准入后取消仍是协作式，不承诺撤回已预留或已投递的消息；`receive()` 的已有结果优先规则不变，仍可交付、排空已有值。
 - **无上限等待**：没有上限与令牌时，等待持续到出现空位、通道关闭或任一 Worker 停机。
 
 **`template <typename T> class channel_receiver final`**：唯一接收端，绑定通道 Worker。

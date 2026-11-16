@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "http1_chunked_body.h"
 #include "http_header.h"
@@ -23,6 +24,14 @@ using ruvia::http1_chunk_decode_complete;
 using ruvia::http1_chunk_decode_failure;
 using ruvia::http1_chunked_body_decoder;
 using ruvia::protocol_byte_limit;
+
+template <typename decoder_type>
+concept chunk_decode_available = requires(decoder_type&& decoder) {
+    std::forward<decoder_type>(decoder).decode(std::string_view{});
+};
+
+static_assert(chunk_decode_available<http1_chunked_body_decoder&>);
+static_assert(!chunk_decode_available<http1_chunked_body_decoder>);
 
 // Published trailer fields as "name=value;" in received order.
 std::string rendered(std::span<const ruvia::http_header> fields) {

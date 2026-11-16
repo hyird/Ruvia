@@ -17,6 +17,7 @@
 #include "http_header.h"
 #include "http_request_head_view.h"
 #include "stop_token.h"
+#include "timeout_duration.h"
 #include "websocket_client_handshake.h"
 #include "websocket_connection.h"
 
@@ -31,8 +32,15 @@ struct http_client_config_storage;
 // Syntax of http_client_request_options' route overrides, independently of
 // any alias; throws std::invalid_argument.
 void validate_http_client_route_options(const http_client_request_options& options);
-// The checks of configure(): route overrides and the field source.
+// The checks of configure(): route overrides, field source and phase limits.
 void validate_http_client_request_options(const http_client_request_options& options);
+
+// Request phase limits and origin limits compose by intersection, never by
+// replacement. Keep this same rule for exchanges and WebSocket handshakes.
+[[nodiscard]] inline std::optional<timeout_duration> constrain_http_client_timeout(std::optional<timeout_duration> inherited, std::optional<timeout_duration> limit) noexcept {
+    return limit && (!inherited || limit->value() < inherited->value()) ? limit : inherited;
+}
+
 // Shares a request's informational callback between its exchanges; null when empty.
 [[nodiscard]] std::shared_ptr<http_client_informational_callback> share_http_client_informational(http_client_informational_callback&& callback);
 

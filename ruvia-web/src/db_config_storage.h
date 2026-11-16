@@ -162,7 +162,7 @@ private:
         return source.reconnect_;
     }
     [[nodiscard]] static client_tls_config_storage tls_storage(const db_config& source) {
-        return {source.tls_, client_tls_files::keep_paths};
+        return client_tls_config_storage(source.tls_);
     }
     [[nodiscard]] static client_tls_config_storage tls_storage(const db_config_storage& source) {
         return {source.tls_};

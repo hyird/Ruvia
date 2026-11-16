@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -12,6 +13,7 @@
 
 #include "client_host_resolver.h"
 #include "http_client_types.h"
+#include "operation_options.h"
 #include "stop_token.h"
 #include "task.h"
 #include "tls.h"
@@ -54,28 +56,18 @@ inline void validate_client_tls_config(const client_tls_config& config) {
     }
 }
 
-// Whether a client storage parses its TLS files. Owners that build their own
-// SSL_CTXs parse once at startup so every context shares the result; database
-// drivers read the paths themselves and plaintext clients never use them.
-enum class client_tls_files : std::uint8_t {
-    keep_paths,
-    parse,
-};
+struct client_tls_material;
 
-// Startup-owned copy of a validated client_tls_config. The private key
-// password is used only while parsing and is not retained.
+// Owns validated paths and the password without reading files. Copies share
+// preparation and its parsed credentials; the password is wiped after parsing.
 struct client_tls_config_storage final {
-    // Validates the file paths. With client_tls_files::parse and TLS enabled,
-    // also reads the trust store and the client identity (when configured);
-    // throws when either cannot be loaded.
-    client_tls_config_storage(const client_tls_config& source_value, client_tls_files files);
+    explicit client_tls_config_storage(const client_tls_config& source_value);
 
     // Copies share the parsed trust store and identity; no file is re-read.
     client_tls_config_storage(const client_tls_config_storage& source_value);
     client_tls_config_storage(client_tls_config_storage&&) noexcept = default;
     client_tls_config_storage& operator=(client_tls_config_storage&&) noexcept = default;
-    // Reads the client identity, and the trust store unless one was supplied.
-    void parse_files(std::string_view private_key_password);
+    void parse_files();
 
     // SNI and verified peer name: the configured override, else the origin host.
     [[nodiscard]] std::string_view tls_host(std::string_view configured_host) const noexcept {
@@ -89,16 +81,16 @@ struct client_tls_config_storage final {
     std::optional<tls_file_name> ca_file_;
     std::optional<tls_identity_files> identity_;
     std::optional<std::string> server_name_;
-    // Parsed by client_tls_files::parse: the trust store and the configured
-    // client identity.
     std::optional<tls_trust_store> trust_store_;
     std::optional<tls_certificate> certificate_;
+
+private:
+    std::shared_ptr<client_tls_material> material_;
 };
 
-// Owns paths and password before returning the cold task. Blocking work owns
-// only TLS material, never a client's worker-affine configuration or callbacks.
-// A started parser is joined even after cancellation; callers reject publication.
-[[nodiscard]] task<client_tls_config_storage> prepare_client_tls_config(worker_ref worker, client_tls_config_storage config, std::string_view private_key_password, stop_token stop);
+// Blocking parsing is always joined, including after cancellation or deadline
+// expiry. The caller must check its host's state before publishing the result.
+[[nodiscard]] task<client_tls_config_storage> prepare_client_tls_config(worker_ref worker, client_tls_config_storage config, operation_options options);
 
 enum class client_tls_setup_error : std::uint8_t {
     none,

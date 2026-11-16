@@ -783,7 +783,7 @@ TEST(Ruvia, http2_oversized_request_body_answers_413_without_100_continue) {
             }
         }
         EXPECT_EQ(response_heads, 1U);
-        const auto error = ruvia::json_object::parse(body);
+        const auto error = ruvia::json_object::parse(body).take_value();
         const auto status = error.get<ruvia::uint32>("status").value();
         const auto code = error.get<ruvia::string>("code").value();
         EXPECT_TRUE(status && static_cast<std::uint32_t>(*status) == 413);

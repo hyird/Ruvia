@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -728,19 +729,26 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
     // result text would be misinterpreted on a non-UTF-8 database (e.g. LATIN1,
     // SQL_ASCII). libpq accepts client_encoding as a connection keyword.
     const bool use_tls = config.tls_.mode_ == client_tls_mode::verify_identity;
-    const auto& identity = config.tls_.identity_;
-    const char* const root_certificate = !use_tls ? "" : (config.tls_.ca_file_.has_value() ? tls_file_name_c_str(*config.tls_.ca_file_) : "system");
+    using connection_owner = std::unique_ptr<PGconn, decltype(&PQfinish)>;
+    pool.require_connecting(index, deadline_value);
     {
-        const auto resolved_hosts = make_postgresql_resolved_host_list(tls_host, co_await pool.resolve_host(index, deadline_value));
-        const auto port = format_db_port(config.port_);
-        const char* minimum_tls = config.tls_.minimum_version_ == tls_version::tls_1_3 ? "TLSv1.3" : "TLSv1.2";
-        const std::array<const char*, 14> keywords{"host", "hostaddr", "port", "user", "password", "dbname", "client_encoding", "sslmode", "sslrootcert", "sslcert", "sslkey", "gssencmode", "ssl_min_protocol_version", nullptr};
-        const std::array<const char*, 14> values{resolved_hosts.hosts_.c_str(), resolved_hosts.addresses_.c_str(), port.data(), config.username_.c_str(), config.password_.c_str(), config.database_.c_str(), "UTF8", use_tls ? "verify-full" : "disable", root_certificate, identity.has_value() ? tls_file_name_c_str(identity->certificate_chain_file_) : "", identity.has_value() ? tls_file_name_c_str(identity->private_key_file_) : "", "disable", minimum_tls, nullptr};
-        // PQconnectStartParams copies the parameter strings before returning.
-        native_tls_context_scope tls_scope(use_tls ? tls_host : std::string_view{}, config.tls_.max_outgoing_records_);
-        slot.connection_ = PQconnectStartParams(keywords.data(), values.data(), 0);
-        tls_scope.rethrow_failure();
+        auto resolved_hosts = make_postgresql_resolved_host_list(tls_host, co_await pool.resolve_host(index, deadline_value));
+        auto connection = co_await pool.run_connect_step(index, deadline_value, [config = db_config_storage(config), resolved_hosts = std::move(resolved_hosts)] {
+            const bool use_tls = config.tls_.mode_ == client_tls_mode::verify_identity;
+            const auto& identity = config.tls_.identity_;
+            const char* root = !use_tls ? "" : (config.tls_.ca_file_ ? tls_file_name_c_str(*config.tls_.ca_file_) : "system");
+            const auto port = format_db_port(config.port_);
+            const char* minimum_tls = config.tls_.minimum_version_ == tls_version::tls_1_3 ? "TLSv1.3" : "TLSv1.2";
+            const std::array<const char*, 14> keywords{"host", "hostaddr", "port", "user", "password", "dbname", "client_encoding", "sslmode", "sslrootcert", "sslcert", "sslkey", "gssencmode", "ssl_min_protocol_version", nullptr};
+            const std::array<const char*, 14> values{resolved_hosts.hosts_.c_str(), resolved_hosts.addresses_.c_str(), port.data(), config.username_.c_str(), config.password_.c_str(), config.database_.c_str(), "UTF8", use_tls ? "verify-full" : "disable", root, identity ? tls_file_name_c_str(identity->certificate_chain_file_) : "", identity ? tls_file_name_c_str(identity->private_key_file_) : "", "disable", minimum_tls, nullptr};
+            native_tls_context_scope tls_scope(use_tls ? config.tls_.tls_host(config.host_) : std::string_view{}, config.tls_.max_outgoing_records_);
+            connection_owner connection(PQconnectStartParams(keywords.data(), values.data(), 0), &PQfinish);
+            tls_scope.rethrow_failure();
+            return connection;
+        });
+        slot.connection_ = connection.release();
     }
+    pool.require_connecting(index, deadline_value);
     if (slot.connection_ == nullptr) {
         throw db_error(backend_error_code::connect_failed, db_driver::postgresql, "PQconnectStartParams failed");
     }
@@ -757,9 +765,18 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
         if (status != PGRES_POLLING_ACTIVE) {
             co_await wait_for_postgresql(pool, index, status == PGRES_POLLING_READING ? db_socket_readiness::read : db_socket_readiness::write, deadline_value);
         }
-        native_tls_context_scope tls_scope(use_tls ? tls_host : std::string_view{}, config.tls_.max_outgoing_records_);
-        status = PQconnectPoll(slot.connection_);
-        tls_scope.rethrow_failure();
+        pool.require_connecting(index, deadline_value);
+        {
+            auto step = co_await pool.run_connect_step(index, deadline_value, [connection = connection_owner(std::exchange(slot.connection_, nullptr), &PQfinish), host = std::string(use_tls ? tls_host : std::string_view{}), limit = config.tls_.max_outgoing_records_]() mutable {
+                native_tls_context_scope tls_scope(host, limit);
+                const auto status = PQconnectPoll(connection.get());
+                tls_scope.rethrow_failure();
+                return std::pair(std::move(connection), status);
+            });
+            slot.connection_ = step.first.release();
+            status = step.second;
+        }
+        pool.require_connecting(index, deadline_value);
     }
     if (status != PGRES_POLLING_OK || PQstatus(slot.connection_) != CONNECTION_OK) {
         throw postgresql_error(*slot.connection_, "PQconnectPoll", backend_error_code::connect_failed);

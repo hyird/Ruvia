@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <span>
@@ -135,6 +136,11 @@ namespace {
 void validate_http_client_request_options(const http_client_request_options& options) {
     if (options.field_source_ != http_request_field_source::generated && options.field_source_ != http_request_field_source::forwarded) {
         throw std::invalid_argument("invalid HTTP request field source");
+    }
+    for (const auto& limit : {options.timeouts_.connect_, options.timeouts_.read_, options.timeouts_.write_, options.timeouts_.acquire_}) {
+        if (limit && limit->value().count() <= 0) {
+            throw std::invalid_argument("HTTP phase timeout must be positive");
+        }
     }
     validate_http_client_route_options(options);
 }
@@ -540,7 +546,7 @@ namespace {
 task<http_client_response> http_client_request::follow_redirects(http_client_request request, std::optional<http_client_response> initial_response, std::optional<operation_deadline> initial_deadline) {
     // Start one deadline with the cold operation, or retain the upload handoff's
     // existing bound. The same frame owns the request throughout every hop.
-    const auto total = initial_deadline.has_value() ? *initial_deadline : operation_deadline(request.client_.options_.timeout_.has_value() ? request.client_.options_.timeout_ : std::optional<operation_timeout>(request.client_.pool_->config().request_timeout_));
+    const auto total = initial_deadline.has_value() ? *initial_deadline : operation_deadline(request.client_.options_.timeout_).constrained_by(request.client_.pool_->config().request_timeout_);
     const bool upload_initial_hop = initial_response.has_value();
     for (std::size_t redirects = 0;; ++redirects) {
         std::optional<http_client_response> hop_response;

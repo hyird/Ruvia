@@ -1,10 +1,13 @@
 #include "tls.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <new>
 #include <stdexcept>
@@ -679,7 +682,112 @@ tls_trust_store tls_trust_store::load_default() {
     if (X509_STORE_set_default_paths(store.get()) != 1) {
         throw_tls_credential_error("set_default_verify_paths");
     }
-    return tls_trust_store(store.release());
+    const char* configured_file = OPENSSL_issetugid() == 0 ? std::getenv(X509_get_default_cert_file_env()) : nullptr;
+    if (configured_file != nullptr && X509_STORE_load_file(store.get(), configured_file) != 1) {
+        throw_tls_credential_error("load configured system TLS trust file");
+    }
+    // OpenSSL's default hash-directory lookup otherwise reads certificates
+    // during peer verification. Materialize those entries now, then retain
+    // only objects in a store without filesystem lookup methods.
+    const char* directories = OPENSSL_issetugid() == 0 ? std::getenv(X509_get_default_cert_dir_env()) : nullptr;
+    if (directories == nullptr) {
+        directories = X509_get_default_cert_dir();
+    }
+    const bool configured_directory = OPENSSL_issetugid() == 0 && std::getenv(X509_get_default_cert_dir_env()) != nullptr;
+    std::string_view remaining(directories);
+#ifdef _WIN32
+    constexpr char separator = ';';
+#else
+    constexpr char separator = ':';
+#endif
+    while (!remaining.empty()) {
+        const auto end = remaining.find(separator);
+        const auto directory = remaining.substr(0, end);
+        if (!directory.empty()) {
+            const std::filesystem::path path{std::string(directory)};
+            std::error_code error;
+            std::filesystem::directory_iterator entries(path, error);
+            if (error && (configured_directory || error != std::errc::no_such_file_or_directory)) {
+                throw std::system_error(error, "reading system TLS trust directory");
+            }
+            for (const auto& entry : entries) {
+                const auto name = entry.path().filename().string();
+                if (name.size() < 10 || name[8] != '.' || !std::all_of(name.begin(), name.begin() + 8, [](char value) {
+                    return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+                })) {
+                    continue;
+                }
+                std::string_view suffix(name.data() + 9, name.size() - 9);
+                const bool crl = suffix.starts_with('r');
+                if (crl) {
+                    suffix.remove_prefix(1);
+                }
+                if (suffix.empty() || !std::all_of(suffix.begin(), suffix.end(), [](char value) {
+                    return value >= '0' && value <= '9';
+                })) {
+                    continue;
+                }
+                if (suffix.size() > 1 && suffix.front() == '0') {
+                    continue;
+                }
+                unsigned long expected_hash{};
+                unsigned long sequence{};
+                if (std::from_chars(name.data(), name.data() + 8, expected_hash, 16).ec != std::errc{} || std::from_chars(suffix.data(), suffix.data() + suffix.size(), sequence).ec != std::errc{}) {
+                    continue;
+                }
+                bool contiguous = true;
+                for (unsigned long previous = 0; previous < sequence; ++previous) {
+                    if (!std::filesystem::exists(path / (name.substr(0, 9) + (crl ? "r" : "") + std::to_string(previous)))) {
+                        contiguous = false;
+                        break;
+                    }
+                }
+                if (!contiguous) {
+                    continue;
+                }
+                const auto file = make_tls_file_name(entry.path());
+                std::unique_ptr<X509_STORE, x509_store_deleter> candidate(X509_STORE_new());
+                if (candidate == nullptr || X509_STORE_load_file(candidate.get(), tls_file_name_c_str(file)) != 1) {
+                    throw_tls_credential_error("load system TLS trust entry");
+                }
+                const auto* objects = X509_STORE_get0_objects(candidate.get());
+                // Legacy MD5 hash links may coexist with current SHA-1 links.
+                // Only matching current indexes contribute trust objects.
+                for (int index = 0; index < sk_X509_OBJECT_num(objects); ++index) {
+                    const auto* object = sk_X509_OBJECT_value(objects, index);
+                    if (!crl && X509_OBJECT_get_type(object) == X509_LU_X509 && X509_subject_name_hash(X509_OBJECT_get0_X509(object)) == expected_hash) {
+                        if (X509_STORE_add_cert(store.get(), X509_OBJECT_get0_X509(object)) != 1) {
+                            throw_tls_credential_error("copy system TLS trust certificate");
+                        }
+                    } else if (crl && X509_OBJECT_get_type(object) == X509_LU_CRL && X509_NAME_hash_ex(X509_CRL_get_issuer(X509_OBJECT_get0_X509_CRL(object)), nullptr, nullptr, nullptr) == expected_hash) {
+                        if (X509_STORE_add_crl(store.get(), X509_OBJECT_get0_X509_CRL(object)) != 1) {
+                            throw_tls_credential_error("copy system TLS trust CRL");
+                        }
+                    }
+                }
+            }
+        }
+        if (end == std::string_view::npos) {
+            break;
+        }
+        remaining.remove_prefix(end + 1);
+    }
+    std::unique_ptr<X509_STORE, x509_store_deleter> snapshot(X509_STORE_new());
+    if (snapshot == nullptr) {
+        throw_tls_credential_error("X509_STORE_new");
+    }
+    if (X509_VERIFY_PARAM_set1(X509_STORE_get0_param(snapshot.get()), X509_STORE_get0_param(store.get())) != 1) {
+        throw_tls_credential_error("copy system TLS trust parameters");
+    }
+    const auto* objects = X509_STORE_get0_objects(store.get());
+    for (int index = 0; index < sk_X509_OBJECT_num(objects); ++index) {
+        const auto* object = sk_X509_OBJECT_value(objects, index);
+        const auto type = X509_OBJECT_get_type(object);
+        if ((type == X509_LU_X509 && X509_STORE_add_cert(snapshot.get(), X509_OBJECT_get0_X509(object)) != 1) || (type == X509_LU_CRL && X509_STORE_add_crl(snapshot.get(), X509_OBJECT_get0_X509_CRL(object)) != 1)) {
+            throw_tls_credential_error("copy system TLS trust");
+        }
+    }
+    return tls_trust_store(snapshot.release());
 }
 
 tls_trust_store::tls_trust_store(const tls_trust_store& other) :

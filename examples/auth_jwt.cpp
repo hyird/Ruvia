@@ -68,7 +68,7 @@ public:
 
         // A rejected token is a routine value, not an exception, so a downstream
         // handler's exception still reaches on_error unchanged.
-        auto verified = ruvia::try_jwt_verify(verify_options(*token));
+        auto verified = ruvia::jwt_verify(verify_options(*token));
         if (!verified.has_value()) {
             // RFC 6750 3.1: a presented but unusable token is invalid_token.
             c.policy().header("WWW-Authenticate", R"(Bearer error="invalid_token")");

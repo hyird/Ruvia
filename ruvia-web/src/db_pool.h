@@ -12,12 +12,14 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include <asio/io_context.hpp>
 
+#include "blocking_pool.h"
 #include "connection_lifecycle.h"
 #include "db_config_storage.h"
 #include "db_executor.h"
@@ -200,6 +202,7 @@ struct db_slot final {
     // it immediately would leave the queued Asio handler dangling.
     bool wait_active_{false};
     bool close_requested_{false};
+    std::optional<stop_source> startup_stop_;
     // An operation of the transaction or stream holding this slot is running.
     // Its deadline already ends no later than lease_timeout_, so the lease
     // timer leaves it to that deadline.
@@ -340,6 +343,35 @@ public:
     // wakes that wait so the driving coroutine finishes the close.
     void close_slot(std::size_t index) noexcept;
     task<db_resolved_addresses_type> resolve_host(std::size_t index, const operation_deadline& deadline);
+    void require_connecting(std::size_t index, const operation_deadline& deadline) {
+        leases_.throw_if_aborted(index);
+        if (leases_.closing() || slot(index).close_requested_) {
+            throw closing_error();
+        }
+        if (deadline.expired()) {
+            throw timed_out();
+        }
+    }
+    // The callable owns its native connection and inputs while off-worker;
+    // cancellation can retire the slot but cannot end this joined wait early.
+    template <typename fn_type>
+    [[nodiscard]] task<std::invoke_result_t<fn_type&>> run_connect_step(std::size_t index, operation_deadline deadline, fn_type fn) {
+        require_connecting(index, deadline);
+        db_slot_active_wait_guard active(slot(index));
+        auto result = co_await run_blocking(worker_, [fn = std::move(fn), deadline, stop = slot(index).startup_stop_->token()]() mutable {
+            using result_type = std::invoke_result_t<fn_type&>;
+            if (stop.stop_requested() || deadline.expired()) {
+                return std::optional<result_type>{};
+            }
+            return std::optional<result_type>(std::in_place, fn());
+        });
+        require_connecting(index, deadline);
+        auto value = std::move(result).take_value();
+        if (!value) {
+            std::terminate();
+        }
+        co_return std::move(*value);
+    }
     // One wait on a leased slot: readiness of the driver's current socket, or
     // a timed pause without a socket (MariaDB connect), under an optional
     // per-wait timeout. Not a coroutine: await_ready() registers the socket and

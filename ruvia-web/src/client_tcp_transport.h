@@ -435,7 +435,7 @@ public:
     // transport no longer sends close_notify for this connection.
     [[nodiscard]] asio::ssl::stream<client_tls_socket>& stream() noexcept {
         tls_close_ready_ = false;
-        return stream_;
+        return *stream_;
     }
 
 private:
@@ -452,6 +452,7 @@ private:
     [[nodiscard]] client_transport_result finish(lane_deadline& lane, const operation_deadline& timeout, const std::error_code& error, std::size_t bytes, client_transport_status failure) noexcept;
     [[nodiscard]] client_transport_result aborted() const noexcept;
 
+    asio::io_context& io_;
     const worker_ref& worker_;
     asio::ssl::context& tls_;
     client_tcp_endpoint endpoint_;
@@ -461,7 +462,9 @@ private:
     std::chrono::steady_clock::duration connect_duration_{};
     std::chrono::steady_clock::duration tls_duration_{};
     client_host_resolver resolver_;
-    asio::ssl::stream<client_tls_socket> stream_;
+    // SSL_new snapshots context credentials and policy, so create the engine
+    // only after asynchronous TLS preparation has populated the context.
+    std::optional<asio::ssl::stream<client_tls_socket>> stream_;
     lane_deadline read_;
     lane_deadline write_;
     client_abort_reason abort_reason_{client_abort_reason::none};

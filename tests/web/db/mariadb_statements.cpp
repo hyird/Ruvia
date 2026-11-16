@@ -680,7 +680,7 @@ TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_inside_a_trans
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::vector<std::string> results{};
-    std::optional<backend_error_code> failure;
+    std::optional<std::error_code> failure;
     pipeline_test::outcome after;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});

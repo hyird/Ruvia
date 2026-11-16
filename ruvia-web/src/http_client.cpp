@@ -45,23 +45,15 @@ void validate_http_client_configs(std::span<const config_type> definitions) {
 }  // namespace
 
 struct http_client_registry::origin_preparation final {
-    origin_preparation(const http_client_config& source, const worker_ref& worker, stop_token owner_stop, stop_token user_stop, const std::optional<tls_trust_store>& system_trust) :
+    origin_preparation(const http_client_config& source, stop_token owner_stop, stop_token user_stop) :
         alias_(source.alias_.view()),
-        config_(source, client_tls_files::keep_paths),
+        config_(source),
         cancellation_{owner_stop, user_stop} {
-        if (config_.scheme_ == http_scheme::https) {
-            if (!config_.tls_.ca_file_.has_value()) {
-                config_.tls_.trust_store_ = system_trust;
-            }
-            const auto password = source.tls_.identity_ ? std::string_view(source.tls_.identity_->private_key_password_) : std::string_view{};
-            tls_.emplace(prepare_client_tls_config(worker, std::move(config_.tls_), password, cancellation_.token()));
-        }
     }
 
     std::string alias_;
     http_client_config_storage config_;
     stop_group cancellation_;
-    std::optional<task<client_tls_config_storage>> tls_;
 };
 
 http_client_registry::http_client_registry(asio::io_context& io_context, const worker_ref& worker_value, std::span<const http_client_definition_type> definitions, const http_client_worker_services& services) :
@@ -98,22 +90,12 @@ void http_client_registry::initialize(std::span<const config_type> configs) {
 http_client_registry::~http_client_registry() = default;
 
 http_client_config_storage http_client_registry::startup_config(const http_client_definition_type& definition) {
-    // Application definitions were parsed once for every worker.
+    // Definitions own paths and share successfully prepared TLS material.
     return http_client_config_storage(definition.config_);
 }
 
 http_client_config_storage http_client_registry::startup_config(const http_client_config& config) {
-    http_client_config_storage storage(config, client_tls_files::keep_paths);
-    if (storage.scheme_ == http_scheme::https) {
-        if (!storage.tls_.ca_file_.has_value()) {
-            if (!system_trust_.has_value()) {
-                system_trust_ = tls_trust_store::load_default();
-            }
-            storage.tls_.trust_store_ = system_trust_;
-        }
-        storage.tls_.parse_files(config.tls_.identity_ ? std::string_view(config.tls_.identity_->private_key_password_) : std::string_view{});
-    }
-    return storage;
+    return http_client_config_storage(config);
 }
 
 void http_client_registry::require_mutable() const {
@@ -128,7 +110,7 @@ void http_client_registry::require_mutable() const {
 task<void> http_client_registry::upsert(const http_client_config& config, operation_options options) {
     require_mutable();
     validate_capability_alias(config.alias_.view(), "HTTP client alias must not be empty");
-    auto input = std::make_unique<origin_preparation>(config, worker_, preparation_stop_.token(), options.stop_token_, system_trust_);
+    auto input = std::make_unique<origin_preparation>(config, preparation_stop_.token(), options.stop_token_);
     return preparations_.attach(prepare_origin(std::move(input), std::move(options)));
 }
 
@@ -146,22 +128,18 @@ task<void> http_client_registry::prepare_origin(preparation_owner_type input, op
     const operation_deadline timeout(options.timeout_);
     const auto stop = input->cancellation_.token();
     require_prepared(stop, timeout);
-    if (input->tls_) {
+    if (input->config_.scheme_ == http_scheme::https) {
         std::exception_ptr failure;
         try {
-            input->config_.tls_ = co_await std::move(*input->tls_);
+            input->config_.tls_ = co_await prepare_client_tls_config(worker_, input->config_.tls_, {.timeout_ = timeout.timeout(), .stop_token_ = stop});
         } catch (...) {
             failure = std::current_exception();
         }
-        input->tls_.reset();
         // Cancellation cannot interrupt an OpenSSL file read. Join it first,
         // then decide whether the completed candidate may still be published.
         require_prepared(stop, timeout);
         if (failure) {
             std::rethrow_exception(failure);
-        }
-        if (!input->config_.tls_.ca_file_.has_value() && !system_trust_.has_value()) {
-            system_trust_ = input->config_.tls_.trust_store_;
         }
     }
     auto replacement = std::make_shared<http_client_pool>(io_context_, worker_, std::move(input->config_), services_);

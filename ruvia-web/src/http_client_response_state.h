@@ -403,6 +403,8 @@ public:
     std::exception_ptr failure_;
     bool content_released_{};
     http_client_response_handoff response_;
+    // Fixed when the upload starts, not when its response is collected.
+    operation_deadline redirect_deadline_;
     std::unique_ptr<http_client_request> redirect_request_;
 };
 

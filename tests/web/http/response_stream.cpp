@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <semaphore>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -47,9 +48,57 @@
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "middleware.h"
+#include "outbound_bytes.h"
 #include "streaming.h"
 #include "task_scope.h"
 #include "worker_task_fixture.h"
+
+TEST(Ruvia, OutboundBytesOwnsBorrowedAndTemporaryInputsAtConstruction) {
+    std::string text(128, 't');
+    ruvia::outbound_bytes copied_text(text);
+    text.assign(128, 'x');
+    EXPECT_EQ(copied_text.view(), std::string(128, 't'));
+
+    std::array bytes{std::byte{'a'}, std::byte{0}, std::byte{'b'}};
+    ruvia::outbound_bytes copied_bytes{std::span<const std::byte>(bytes)};
+    bytes.fill(std::byte{'x'});
+    EXPECT_EQ(copied_bytes.view(), std::string_view("a\0b", 3));
+
+    ruvia::outbound_bytes temporary_bytes(std::vector<std::byte>{std::byte{'a'}, std::byte{0}, std::byte{'b'}});
+    EXPECT_EQ(temporary_bytes.view(), std::string_view("a\0b", 3));
+    EXPECT_EQ(std::move(temporary_bytes).into_string(), std::string("a\0b", 3));
+}
+
+TEST(Ruvia, OutboundBytesTakesOverExactStringRvaluesWithoutCopying) {
+    std::string text(512, 't');
+    const auto* const storage = text.data();
+    ruvia::outbound_bytes bytes(std::move(text));
+    EXPECT_EQ(bytes.view().data(), storage);
+    auto extracted = std::move(bytes).into_string();
+    EXPECT_EQ(extracted.data(), storage);
+    EXPECT_EQ(extracted, std::string(512, 't'));
+
+    const std::string immutable(512, 'c');
+    ruvia::outbound_bytes copied(std::move(immutable));
+    EXPECT_NE(copied.view().data(), immutable.data());
+    EXPECT_EQ(copied.view(), immutable);
+}
+
+TEST(Ruvia, OutboundBytesPreservesEmptyInputs) {
+    std::array<ruvia::outbound_bytes, 5> empty_values{
+        ruvia::outbound_bytes{},
+        ruvia::outbound_bytes(std::string_view{}),
+        ruvia::outbound_bytes(std::span<const std::byte>{}),
+        ruvia::outbound_bytes(std::vector<std::byte>{}),
+        ruvia::outbound_bytes(std::string{}),
+    };
+    for (auto& bytes : empty_values) {
+        EXPECT_TRUE(bytes.empty());
+        EXPECT_EQ(bytes.size(), 0U);
+        EXPECT_TRUE(bytes.view().empty());
+        EXPECT_TRUE(std::move(bytes).into_string().empty());
+    }
+}
 
 namespace response_stream_test {
 

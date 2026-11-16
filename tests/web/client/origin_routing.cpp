@@ -686,7 +686,7 @@ TEST(Ruvia, http_client_connection_limits_bound_open_and_idle_connections_withou
         // max_open_ is reached by two active connections: a third request
         // waits for admission until its acquisition bound.
         auto waiting = handle.get("/late");
-        waiting.configure({.timeouts_ = {.acquire_ = ruvia::http_client_timeout_override::after(50ms)}});
+        waiting.configure({.timeouts_ = {.acquire_ = 50ms}});
         try {
             (void)co_await std::move(waiting).send();
             ADD_FAILURE() << "admission beyond max_open_ succeeded";
@@ -1157,6 +1157,28 @@ TEST(Ruvia, http_client_redirect_hop_observation_and_streaming_upload_redirect) 
         }
         EXPECT_TRUE(first_hop_recorded);
         EXPECT_EQ(failed_hop_count, 1U);
+    });
+}
+
+TEST(Ruvia, http_client_upload_redirect_preserves_its_original_configured_deadline) {
+    using namespace origin_routing_tests;
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    routing_peer peer(io, nullptr);
+    const std::string base_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    peer.redirect_location_ = base_url + "/final-destination";
+    ruvia::http_client_config config{.base_url_ = base_url, .request_timeout_ = 200ms};
+    run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_ref& worker) -> ruvia::task<void> {
+        auto exchange = co_await client.client().with_options({.timeout_ = 5s}).post("/drain-redirect").upload();
+        co_await exchange.body().end();
+        (void)co_await ruvia::sleep_for(worker, 400ms);
+        bool timed_out = false;
+        try {
+            (void)co_await exchange.response({.timeout_ = 5s});
+        } catch (const std::system_error& error) {
+            timed_out = error.code() == std::errc::timed_out;
+        }
+        EXPECT_TRUE(timed_out);
     });
 }
 

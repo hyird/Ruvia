@@ -173,11 +173,40 @@ http_client_pool::http_client_pool(asio::io_context& io_context, const worker_re
     if (!config_.dial_host_.empty()) {
         require_client_host_lookup(config_.dial_host_, worker_);
     }
-    if (config_.scheme_ == http_scheme::https) {
+    if (config_.scheme_ == http_scheme::https && config_.tls_.trust_store_.has_value()) {
         configure_client_tls_context(*tls_context_.native_handle(), config_.tls_);
+        tls_ready_ = true;
     }
     response_memory_ = http_client_response_memory_domain::create(worker_, result_budget_domain_);
     schedule_dns_refresh();
+}
+
+task<void> http_client_pool::prepare_tls(const operation_deadline& timeout, stop_token stop) {
+    if (config_.scheme_ != http_scheme::https || tls_ready_) {
+        co_return;
+    }
+    std::optional<client_tls_config_storage> prepared;
+    std::exception_ptr failure;
+    try {
+        prepared.emplace(co_await prepare_client_tls_config(worker_, config_.tls_, {.timeout_ = timeout.timeout(), .stop_token_ = stop}));
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    require_open();
+    if (stop.stop_requested()) {
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP TLS preparation cancelled");
+    }
+    if (timeout.expired()) {
+        throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP TLS preparation deadline expired");
+    }
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    if (!tls_ready_) {
+        configure_client_tls_context(*tls_context_.native_handle(), *prepared);
+        config_.tls_ = std::move(*prepared);
+        tls_ready_ = true;
+    }
 }
 
 std::uint64_t http_client_pool::next_connection_id() noexcept {
@@ -649,10 +678,10 @@ std::optional<http_client_push> http_client_pool::next_push() {
 
 void http_client_pool::spawn_request(http_client_request_storage request, operation_options options, http_client_response_state& state_value) {
     state_value.buffered_limit_ = config_.max_response_bytes_;
-    state_value.effective_connect_timeout_ = request.options_.timeouts_.connect_.resolve(config_.connect_timeout_);
-    state_value.effective_read_timeout_ = request.options_.timeouts_.read_.resolve(config_.read_timeout_);
-    state_value.effective_write_timeout_ = request.options_.timeouts_.write_.resolve(config_.write_timeout_);
-    state_value.effective_acquire_timeout_ = request.options_.timeouts_.acquire_.resolve(config_.acquire_timeout_);
+    state_value.effective_connect_timeout_ = detail::constrain_http_client_timeout(config_.connect_timeout_, request.options_.timeouts_.connect_);
+    state_value.effective_read_timeout_ = detail::constrain_http_client_timeout(config_.read_timeout_, request.options_.timeouts_.read_);
+    state_value.effective_write_timeout_ = detail::constrain_http_client_timeout(config_.write_timeout_, request.options_.timeouts_.write_);
+    state_value.effective_acquire_timeout_ = detail::constrain_http_client_timeout(config_.acquire_timeout_, request.options_.timeouts_.acquire_);
     state_value.decode_content_ = request.options_.decode_content_.value_or(config_.decode_content_);
     state_value.informational_callback_ = request.informational_;
     if (state_value.tunnel_) {
@@ -1133,7 +1162,10 @@ task<void> http_client_pool::execute_request_into(http_client_request_storage re
         }
     } route_binding_value{*state_value};
     state_value->route_ = &request.route();
-    const operation_deadline timeout(options.timeout_.has_value() ? options.timeout_ : config_.request_timeout_);
+    const auto timeout = operation_deadline(options.timeout_).constrained_by(config_.request_timeout_);
+    if (state_value->upload_) {
+        state_value->upload_->redirect_deadline_ = timeout;
+    }
     const linked_operation_options linked(options, request.host_stop(), dns_stop_.token());
     const stop_token& cancellation = linked.options().stop_token_;
     state_value->informational_stop_ = cancellation;
@@ -1146,6 +1178,7 @@ task<void> http_client_pool::execute_request_into(http_client_request_storage re
     request_admission admission{*this};
     try {
         require_open();
+        co_await prepare_tls(timeout, cancellation);
         if (request.is_upgrade() && !request.route().versions_.http1_) {
             throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP Upgrade requires HTTP/1.1");
         }

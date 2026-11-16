@@ -454,7 +454,11 @@ private:
 
     ruvia::task<ruvia::http_response> json_array(ruvia::context& c) const {
         const auto raw = co_await c.req().text();
-        auto items = ruvia::from_json<ruvia::array<ruvia::string>>(raw);
+        auto parsed = ruvia::parse_json<ruvia::array<ruvia::string>>(raw);
+        if (!parsed.has_value()) {
+            throw ruvia::http_error({.status_ = ruvia::http_status::bad_request, .code_ = "invalid_json", .message_ = parsed.error().message(), .validation_issues_ = parsed.error().issues()});
+        }
+        auto items = std::move(parsed).take_value();
         items.emplace_back("tail");
         co_return c.json(items);
     }
@@ -891,7 +895,9 @@ TEST(Ruvia, testing_facade_error_handler_throwing_validation_issues_keeps_its_st
         ruvia::validator checks;
         std::optional<std::string> absent;
         checks.required(absent, "email", "email is required");
-        checks.throw_if_invalid({.status_ = ruvia::http_status::unprocessable_content, .code_ = "invalid_payload", .message_ = "payload failed validation"});
+        if (!checks.ok()) {
+            throw ruvia::http_error({.status_ = ruvia::http_status::unprocessable_content, .code_ = "invalid_payload", .message_ = "payload failed validation", .validation_issues_ = checks.issues()});
+        }
         co_return c.text("unreachable");
     });
 

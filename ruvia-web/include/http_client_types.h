@@ -55,36 +55,13 @@ enum class http_client_received_cookie_policy : std::uint8_t {
     retain_and_send,
 };
 
-// 默认继承；disabled() 只禁用这一阶段，不修改总截止期或宿主取消。
-class http_client_timeout_override final {
-public:
-    http_client_timeout_override() noexcept = default;
-    [[nodiscard]] static http_client_timeout_override disabled() noexcept {
-        return http_client_timeout_override(std::nullopt);
-    }
-    [[nodiscard]] static http_client_timeout_override after(timeout_duration duration) {
-        if (duration.value().count() <= 0) {
-            throw std::invalid_argument("HTTP phase timeout must be positive");
-        }
-        return http_client_timeout_override(duration);
-    }
-    [[nodiscard]] std::optional<timeout_duration> resolve(std::optional<timeout_duration> inherited) const noexcept {
-        return overridden_ ? duration_ : inherited;
-    }
-
-private:
-    explicit http_client_timeout_override(std::optional<timeout_duration> duration) noexcept :
-        duration_(duration),
-        overridden_(true) {}
-    std::optional<timeout_duration> duration_;
-    bool overridden_{false};
-};
-
+// Unset fields inherit the origin's limit. Positive supplied values can only
+// tighten it; disabling a phase requires changing the origin configuration.
 struct http_client_phase_timeouts final {
-    http_client_timeout_override connect_;
-    http_client_timeout_override read_;
-    http_client_timeout_override write_;
-    http_client_timeout_override acquire_;
+    std::optional<timeout_duration> connect_;
+    std::optional<timeout_duration> read_;
+    std::optional<timeout_duration> write_;
+    std::optional<timeout_duration> acquire_;
 };
 
 // 按线序 await；字段借用只持续到回调完成。回调应响应 stop，不得等待本次
@@ -352,8 +329,8 @@ struct http_client_config final {
     // request transfer, response head and the complete body, including the
     // time the body producer waits for a slow consumer (read(), pipe_to()) to
     // drain max_response_bytes_ of buffered body. Expiry fails the response
-    // with timeout and discards its connection. An operation's own timeout
-    // replaces it; nullopt leaves the exchange unbounded.
+    // with timeout and discards its connection. An operation's own timeout can
+    // only tighten it; nullopt leaves no configured total upper bound.
     // Accepted WebSockets have no implicit total lifetime limit; their active
     // operations retain read/write, heartbeat, close and explicit operation bounds.
     std::optional<timeout_duration> request_timeout_{30000};

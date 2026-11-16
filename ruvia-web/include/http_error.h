@@ -19,8 +19,6 @@ namespace ruvia {
 
 class context;
 
-class validator;
-
 inline constexpr std::size_t max_validation_text_bytes = 1024;
 
 namespace detail {
@@ -134,6 +132,8 @@ private:
 class http_error final : public std::exception {
 public:
     explicit http_error(http_error_info_options options);
+    // 接管已由领域验证收集的诊断；文本参数仍复制拥有。
+    http_error(http_status_code status, std::string_view code, std::string_view message, std::string_view status_text, std::vector<validation_issue>&& issues);
     http_error(const http_error&) = default;
     http_error& operator=(const http_error& other);
     http_error(http_error&&) noexcept = default;
@@ -167,8 +167,6 @@ public:
     [[nodiscard]] std::span<const validation_issue> validation_issues() const&& = delete;
 
 private:
-    friend class validator;
-    http_error(http_status_code status, std::string_view code, std::string_view message, std::string_view status_text, std::vector<validation_issue>&& issues);
     http_status_code status_{http_status::internal_server_error};
     std::string status_text_;
     std::string code_;

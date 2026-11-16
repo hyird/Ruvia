@@ -1948,7 +1948,7 @@ concept db_find_options_accepts_order = requires(order_type&& order) { ruvia::db
 
 static_assert(db_find_options_accepts_order<const std::array<ruvia::db_order_term, 1>&>);
 static_assert(!db_find_options_accepts_order<const std::array<ruvia::borrowed_text, 1>&>);
-static_assert(std::is_same_v<decltype(std::declval<const ruvia::db_error&>().code()), ruvia::backend_error_code>);
+static_assert(std::is_same_v<decltype(std::declval<const ruvia::db_error&>().code()), const std::error_code&>);
 
 template <typename columns_type>
 concept db_conflict_options_accepts_conflict_target = requires(columns_type&& columns) { ruvia::db_conflict_options{.conflict_target_ = std::forward<columns_type>(columns)}; };

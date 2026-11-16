@@ -33,7 +33,7 @@ enum class channel_send_status : std::uint8_t {
     full,
     closed,
     worker_stopping,
-    // send_wait() only: its operation_options ended the wait for a slot.
+    // send_wait() only: its operation_options rejected admission or ended the wait.
     timed_out,
     cancelled,
 };
@@ -285,6 +285,8 @@ void channel_state<t_type>::worker_stopping() noexcept {
 // value until delivery and returns it in the result otherwise. A slot granted
 // while it waits is reserved for it and filled when it resumes on the worker
 // that awaited it.
+// An already-stopped token or expired deadline rejects before reserving a slot;
+// after admission cancellation remains cooperative and does not undo delivery.
 template <typename t_type>
 class channel_send_operation final : public detail::waiter_link<channel_send_operation<t_type>> {
 public:
@@ -326,12 +328,12 @@ public:
             complete_ready({*rejection, nullptr});
             return true;
         }
-        if (auto* slot = state.reserve_node()) {
-            complete_ready({channel_send_status::sent, slot});
-            return true;
-        }
         if (const auto ended = bounds_.ended()) {
             complete_ready({send_status(*ended), nullptr});
+            return true;
+        }
+        if (auto* slot = state.reserve_node()) {
+            complete_ready({channel_send_status::sent, slot});
             return true;
         }
         state.send_waiters_.push_back(*this);

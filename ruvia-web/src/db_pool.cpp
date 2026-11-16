@@ -429,6 +429,9 @@ template <typename driver_type>
 void db_pool<driver_type>::close_slot(std::size_t index) noexcept {
     auto& slot = *slots_[index];
     slot.close_requested_ = true;
+    if (slot.startup_stop_) {
+        slot.startup_stop_->request_stop();
+    }
     slot.resolver_.cancel();
     if (slot.wait_active_) {
         const auto* kind = leases_.deadline_kind(index);
@@ -477,6 +480,7 @@ task<void> db_pool<driver_type>::open_slot(std::size_t index, const operation_de
     }
     leases_.throw_if_aborted(index);
     const operation_deadline deadline_value = timeout.constrained_by(config_.connect_timeout_);
+    slot.startup_stop_.emplace();
     try {
         co_await driver_type::connect(*this, index, deadline_value);
         leases_.throw_if_aborted(index);

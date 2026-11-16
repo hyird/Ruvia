@@ -175,11 +175,11 @@ inline void validate_http_client_configured_cookie_capacity(std::span<const http
 }
 
 struct http_client_config_storage final {
-    http_client_config_storage(const http_client_config& source_value, client_tls_files files = client_tls_files::parse) :
-        http_client_config_storage(source_value, validate_http_client_config(source_value), files) {}
+    http_client_config_storage(const http_client_config& source_value) :
+        http_client_config_storage(source_value, validate_http_client_config(source_value)) {}
 
     http_client_config_storage(const http_client_config_storage& source_value) :
-        http_client_config_storage(source_value, http_client_origin_spec{.scheme_ = source_value.scheme_, .origin_ = source_value.fixed_origin_ ? std::optional(source_value.origin()) : std::nullopt}, client_tls_files::keep_paths) {}
+        http_client_config_storage(source_value, http_client_origin_spec{.scheme_ = source_value.scheme_, .origin_ = source_value.fixed_origin_ ? std::optional(source_value.origin()) : std::nullopt}) {}
 
     std::string host_;
     std::string dial_host_;
@@ -259,12 +259,11 @@ private:
         return source.dial_port_;
     }
 
-    // Startup parses TLS files; asynchronous updates first own paths only.
-    // Allocator-rebound copies share already prepared material.
+    // Owning copies share asynchronous credential preparation.
     template <typename source_type>
-    [[nodiscard]] static client_tls_config_storage tls_storage(const source_type& source_value, http_scheme scheme, client_tls_files files) {
+    [[nodiscard]] static client_tls_config_storage tls_storage(const source_type& source_value) {
         if constexpr (std::same_as<source_type, http_client_config>) {
-            return {source_value.tls_, scheme == http_scheme::https ? files : client_tls_files::keep_paths};
+            return client_tls_config_storage(source_value.tls_);
         } else {
             return {source_value.tls_};
         }
@@ -274,7 +273,7 @@ private:
     // and cookie through one allocator-bound construction path.
     template <typename source_type>
         requires(std::same_as<source_type, http_client_config> || std::same_as<source_type, http_client_config_storage>)
-    http_client_config_storage(const source_type& source_value, http_client_origin_spec spec, client_tls_files files) :
+    http_client_config_storage(const source_type& source_value, http_client_origin_spec spec) :
         host_(transport_host(spec.origin_)),
         dial_host_(dial_host_view(source_value, spec.origin_)),
         dial_port_(dial_port_value(source_value, spec.origin_)),
@@ -303,7 +302,7 @@ private:
         advertisements_(source_value.advertisements_),
         push_(source_value.push_),
         http3_(source_value.http3_),
-        tls_(tls_storage(source_value, scheme_, files)),
+        tls_(tls_storage(source_value)),
         tcp_(source_value.tcp_),
         received_cookies_(source_value.received_cookies_),
         user_agent_(user_agent_view(source_value)) {

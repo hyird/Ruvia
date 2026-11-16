@@ -607,7 +607,7 @@ TEST(Ruvia, redis_repository_inflight_operation_observes_cancellation) {
         ruvia::redis_client client(worker.loop(), config);
         ruvia::stop_source cancellation;
 
-        std::optional<ruvia::backend_error_code> observed_error;
+        std::optional<std::error_code> observed_error;
         auto exercise = [&](ruvia::redis_client& connected) -> ruvia::task<void> {
             const auto repository = connected.redis().with_options({.stop_token_ = cancellation.token()}).repository<test_redis_user>(test_redis_user_mapping());
             try {
@@ -634,7 +634,7 @@ TEST(Ruvia, redis_repository_inflight_operation_observes_cancellation) {
         runner.join();
         server.finish();
         std::move(root).get();
-        EXPECT_EQ(observed_error, std::optional{ruvia::backend_error_code::cancelled});
+        EXPECT_EQ(observed_error, std::optional{ruvia::make_error_code(ruvia::backend_error_code::cancelled)});
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
         }
@@ -814,7 +814,7 @@ static_assert(!borrows_temporary_command<ruvia::redis_compiled_command>);
 // Sort fields come only from typed field references.
 static_assert(!std::is_aggregate_v<ruvia::redis_find_order>);
 static_assert(!std::is_constructible_v<ruvia::redis_find_order, std::string_view, ruvia::order_direction>);
-static_assert(std::is_same_v<decltype(std::declval<const ruvia::redis_error&>().code()), ruvia::backend_error_code>);
+static_assert(std::is_same_v<decltype(std::declval<const ruvia::redis_error&>().code()), const std::error_code&>);
 }  // namespace
 
 TEST(Ruvia, redis_search_compilation_owns_configuration_and_binary_predicates) {
@@ -961,7 +961,7 @@ TEST(Ruvia, redis_entity_rejects_numeric_overflow_without_changing_identity_or_f
     EXPECT_TRUE(id_rejected);
     EXPECT_EQ(value.get<"id">(), 7);
     // 绑定层接受的有限 double，仍可能无法表示为实体的 float 字段。
-    const auto oversized = ruvia::from_json<ruvia::double_value>("1.7976931348623157e308");
+    const auto oversized = ruvia::parse_json<ruvia::double_value>("1.7976931348623157e308").take_value();
     EXPECT_EQ(oversized.value_, (std::numeric_limits<double>::max)());
     for (int state = 0; state != 3; ++state) {
         if (state == 1) {
@@ -1048,10 +1048,23 @@ TEST(Ruvia, redis_entity_supports_8bit_integers) {
     EXPECT_EQ(numbers.get<"flags">(), std::uint8_t{250});
 }
 
-TEST(Ruvia, redis_error_uses_runtime_error_message_and_stable_code) {
-    const ruvia::redis_error error(ruvia::backend_error_code::timeout, "redis timed out");
-    EXPECT_TRUE(error.code() == ruvia::backend_error_code::timeout);
-    EXPECT_EQ(std::string_view(error.what()), std::string_view("redis timed out"));
+TEST(Ruvia, redis_error_supports_standard_system_error_conditions) {
+    const ruvia::redis_error timeout(ruvia::backend_error_code::timeout, "redis timed out");
+    const ruvia::redis_error cancelled(ruvia::backend_error_code::cancelled, "redis cancelled");
+    const ruvia::redis_error command(ruvia::backend_error_code::command_failed, "WRONGTYPE");
+    EXPECT_TRUE(timeout.code() == ruvia::backend_error_code::timeout);
+    EXPECT_TRUE(timeout.code() == std::errc::timed_out);
+    EXPECT_TRUE(cancelled.code() == std::errc::operation_canceled);
+    EXPECT_TRUE(command.code() == ruvia::backend_error_code::command_failed);
+    EXPECT_TRUE(command.code() != std::errc::io_error);
+    EXPECT_TRUE(std::string_view(timeout.what()).find("redis timed out") != std::string_view::npos);
+    for (const auto* error : {&timeout, &cancelled, &command}) {
+        try {
+            throw *error;
+        } catch (const std::system_error& caught) {
+            EXPECT_TRUE(caught.code() == error->code());
+        }
+    }
 }
 
 namespace {
@@ -2382,7 +2395,7 @@ TEST(Ruvia, redis_client_connect_options_own_inputs_and_cover_authentication_and
             if (cancel) {
                 stop.request_stop();
             }
-            std::optional<ruvia::backend_error_code> observed;
+            std::optional<std::error_code> observed;
             try {
                 std::move(connecting).get();
             } catch (const ruvia::redis_error& error) {
@@ -2442,7 +2455,7 @@ TEST(Ruvia, redis_client_connect_preflight_observes_stopped_tokens_and_expired_d
         }
         auto cold = client.connect(options);
         pool.start();
-        std::optional<ruvia::backend_error_code> observed;
+        std::optional<std::error_code> observed;
         try {
             pool.loop(0).start(std::move(cold)).get();
         } catch (const ruvia::redis_error& error) {

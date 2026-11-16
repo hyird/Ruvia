@@ -828,7 +828,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         bool timed_out = false;
         try {
             auto request = client.get("/connection-silent");
-            request.configure({.timeouts_ = {.read_ = ruvia::http_client_timeout_override::after(10ms)}});
+            request.configure({.timeouts_ = {.read_ = 10ms}});
             (void)co_await std::move(request).send();
         } catch (const ruvia::http_client_error& error) {
             timed_out = error.code() == std::make_error_code(std::errc::timed_out);

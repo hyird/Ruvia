@@ -716,12 +716,7 @@ bool is_redis_subscription_pong(const redis_value& value) {
 namespace ruvia {
 
 redis_error::redis_error(backend_error_code code, std::string_view message) :
-    std::runtime_error(std::string(message)),
-    code_(code) {}
-
-backend_error_code redis_error::code() const noexcept {
-    return code_;
-}
+    std::system_error(make_error_code(code), std::string(message)) {}
 
 redis_value::redis_value() noexcept = default;
 

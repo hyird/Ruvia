@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <future>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -32,11 +34,14 @@
 #include "http_client.h"
 #include "http_client_fixture.h"
 #include "http_server_fixture.h"
+#include "redis_executor.h"
 #include "stop_token.h"
 #include "task.h"
 #include "task_scope.h"
+#include "tcp_client.h"
 #include "worker_signal.h"
 #include "worker_task_fixture.h"
+#include "worker_wait.h"
 
 namespace {
 void exercise_tls_response_retirement(bool join_before_reuse) {
@@ -382,6 +387,156 @@ TEST(Ruvia, http_client_tls_rejects_a_stapled_client_identity) {
     auto config = local_http_client_config("https://127.0.0.1:443");
     config.tls_.identity_ = ruvia::tls_identity_config{.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file(), .ocsp_response_ = {std::byte{0x30}}};
     EXPECT_THROW({ ruvia::http_client client(worker.attachment_.loop(), config); }, std::invalid_argument);
+}
+
+TEST(Ruvia, http_client_tls_constructor_defers_credential_io_until_first_request) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::tls_identity identity("localhost");
+    auto config = local_http_client_config("https://127.0.0.1:443");
+    config.tls_.ca_file_ = identity.ca_file_.parent_path() / "absent-client-ca.pem";
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    run_operation(worker, io, [&]() -> ruvia::task<void> {
+        bool failed = false;
+        try {
+            (void)co_await client.client().get("/").send();
+        } catch (const std::system_error&) {
+            failed = true;
+        }
+        EXPECT_TRUE(failed);
+        co_await client.shutdown();
+    });
+}
+
+TEST(Ruvia, tcp_client_tls_constructor_defers_credential_io_until_connect) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::tls_identity identity("localhost");
+    ruvia::tcp_client_config config{.host_ = "127.0.0.1", .port_ = 443};
+    config.tls_.ca_file_ = identity.ca_file_.parent_path() / "absent-client-ca.pem";
+    ruvia::tcp_client client(worker.attachment_.loop(), config);
+    run_operation(worker, io, [&]() -> ruvia::task<void> {
+        bool failed = false;
+        try {
+            co_await client.connect();
+        } catch (const std::system_error&) {
+            failed = true;
+        }
+        EXPECT_TRUE(failed);
+        co_await client.shutdown();
+    });
+}
+
+#ifdef RUVIA_ENABLE_REDIS
+TEST(Ruvia, redis_client_tls_constructor_defers_credential_io_until_connect) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::tls_identity identity("localhost");
+    ruvia::redis_config config{.host_ = "127.0.0.1", .port_ = 6379};
+    config.tls_.ca_file_ = identity.ca_file_.parent_path() / "absent-client-ca.pem";
+    ruvia::redis_client client(worker.attachment_.loop(), config);
+    run_operation(worker, io, [&]() -> ruvia::task<void> {
+        bool failed = false;
+        try {
+            co_await client.connect();
+        } catch (const std::system_error&) {
+            failed = true;
+        }
+        EXPECT_TRUE(failed);
+        co_await client.shutdown();
+    });
+}
+#endif
+
+namespace {
+enum class tls_startup_cancel { caller,
+    timeout,
+    shutdown };
+
+void exercise_initial_tls_cancellation(bool raw_tcp, tls_startup_cancel mode) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::tls_identity identity("localhost");
+    ruvia::blocking_pool blocking({.thread_count_ = 1, .queue_capacity_ = 4});
+    std::promise<void> release;
+    const auto gate = release.get_future().share();
+    ASSERT_EQ(blocking.post([gate] {
+        gate.wait();
+    }),
+        ruvia::post_status::accepted);
+    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &blocking});
+    const auto worker = attachment.loop().worker();
+    auto run = [&]() -> ruvia::task<void> {
+        std::unique_ptr<ruvia::tcp_client> tcp;
+        std::unique_ptr<ruvia::http_client> http;
+        if (raw_tcp) {
+            ruvia::tcp_client_config config{.host_ = "127.0.0.1", .port_ = 443};
+            config.tls_.ca_file_ = identity.ca_file_;
+            tcp = std::make_unique<ruvia::tcp_client>(attachment.loop(), config);
+        } else {
+            auto config = local_http_client_config("https://127.0.0.1:443");
+            config.tls_.ca_file_ = identity.ca_file_;
+            http = std::make_unique<ruvia::http_client>(attachment.loop(), config);
+        }
+        ruvia::stop_source stop;
+        bool finished = false;
+        bool retired = false;
+        std::exception_ptr failure;
+        const auto start = [&]() -> ruvia::task<void> {
+            try {
+                ruvia::operation_options options{.timeout_ = mode == tls_startup_cancel::timeout ? std::chrono::milliseconds(5) : std::chrono::seconds(2), .stop_token_ = stop.token()};
+                if (tcp) {
+                    co_await tcp->connect(options);
+                } else {
+                    (void)co_await http->client().with_options(options).get("/").send();
+                }
+                ADD_FAILURE() << "cancelled TLS startup succeeded";
+            } catch (const ruvia::http_client_error& error) {
+                const auto expected = mode == tls_startup_cancel::shutdown ? ruvia::make_error_code(ruvia::http_client_errc::closing) : std::make_error_code(mode == tls_startup_cancel::timeout ? std::errc::timed_out : std::errc::operation_canceled);
+                EXPECT_EQ(error.code(), expected);
+            } catch (const std::system_error& error) {
+                EXPECT_EQ(error.code(), std::make_error_code(mode == tls_startup_cancel::timeout ? std::errc::timed_out : std::errc::operation_canceled));
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            finished = true;
+        };
+        const auto shutdown = [&]() -> ruvia::task<void> {
+            if (tcp) {
+                co_await tcp->shutdown();
+            } else {
+                co_await http->shutdown();
+            }
+            retired = true;
+        };
+        ruvia::task_scope tasks(worker);
+        tasks.spawn(start());
+        if (mode == tls_startup_cancel::caller) {
+            stop.request_stop();
+        } else if (mode == tls_startup_cancel::shutdown) {
+            tasks.spawn(shutdown());
+        }
+        (void)co_await ruvia::sleep_for(worker, std::chrono::milliseconds(20));
+        EXPECT_FALSE(finished);
+        EXPECT_FALSE(retired);
+        release.set_value();
+        co_await tasks.join();
+        EXPECT_TRUE(finished);
+        co_await shutdown();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    ruvia::test::run_worker_tasks(attachment, run());
+    blocking.join();
+}
+}  // namespace
+
+TEST(Ruvia, initial_tls_preparation_cancellation_joins_work_before_client_retirement) {
+    for (const bool raw_tcp : {false, true}) {
+        for (const auto mode : {tls_startup_cancel::caller, tls_startup_cancel::timeout, tls_startup_cancel::shutdown}) {
+            exercise_initial_tls_cancellation(raw_tcp, mode);
+        }
+    }
 }
 
 // RFC 9113 §9.2.1: renegotiation is disabled. A TLS 1.2 server's HelloRequest

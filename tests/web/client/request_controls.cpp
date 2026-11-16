@@ -207,11 +207,11 @@ void raw_stream(bool http2, bool configured_raw) {
     upstream.start();
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
-        ruvia::http_client client(attachment.loop(), {.base_url_ = url, .decode_content_ = !configured_raw, .read_timeout_ = std::chrono::milliseconds(5), .request_timeout_ = std::chrono::seconds(3), .versions_ = http2 ? ruvia::http_client_versions{.http1_ = false} : ruvia::http_client_versions{.http2_ = false}});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = url, .decode_content_ = !configured_raw, .read_timeout_ = std::nullopt, .request_timeout_ = std::chrono::seconds(3), .versions_ = http2 ? ruvia::http_client_versions{.http1_ = false} : ruvia::http_client_versions{.http2_ = false}});
         try {
             bool informed = false;
             auto request = client.client().get("/raw");
-            request.header("Content-Type", "unparsed forwarded value").configure({.decode_content_ = configured_raw ? std::optional<bool>{} : std::optional<bool>{false}, .field_source_ = ruvia::http_request_field_source::forwarded, .timeouts_ = {.read_ = ruvia::http_client_timeout_override::disabled()}, .informational_ = [&](ruvia::http_status_code status, std::span<const ruvia::http_header> fields, ruvia::stop_token stop) -> ruvia::task<void> {
+            request.header("Content-Type", "unparsed forwarded value").configure({.decode_content_ = configured_raw ? std::optional<bool>{} : std::optional<bool>{false}, .field_source_ = ruvia::http_request_field_source::forwarded, .informational_ = [&](ruvia::http_status_code status, std::span<const ruvia::http_header> fields, ruvia::stop_token stop) -> ruvia::task<void> {
                 EXPECT_EQ(status.value(), 103U);
                 EXPECT_EQ(fields.front().value(), "</style.css>; rel=preload");
                 EXPECT_EQ(co_await ruvia::sleep_for(worker, std::chrono::milliseconds(20), stop), ruvia::timer_sleep_result::elapsed);
@@ -253,7 +253,7 @@ void raw_stream(bool http2, bool configured_raw) {
     }
 }
 
-void read_timeout(bool http2, bool total_only) {
+void read_timeout(bool http2, bool total_only, bool try_relax = false) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     const auto worker = attachment.loop().worker();
@@ -261,12 +261,26 @@ void read_timeout(bool http2, bool total_only) {
     const auto url = upstream.url();
     upstream.start();
     std::exception_ptr failure;
+    asio::steady_timer peer_lifetime(io);
     auto run = [&]() -> ruvia::task<void> {
-        ruvia::http_client client(attachment.loop(), {.base_url_ = url, .read_timeout_ = std::chrono::seconds(2), .request_timeout_ = total_only ? std::chrono::milliseconds(30) : std::chrono::milliseconds(2000), .versions_ = http2 ? ruvia::http_client_versions{.http1_ = false} : ruvia::http_client_versions{.http2_ = false}});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = url, .read_timeout_ = total_only ? std::nullopt : std::optional<ruvia::timeout_duration>(try_relax ? std::chrono::milliseconds(30) : std::chrono::milliseconds(2000)), .request_timeout_ = total_only ? std::chrono::milliseconds(30) : std::chrono::milliseconds(2000), .versions_ = http2 ? ruvia::http_client_versions{.http1_ = false} : ruvia::http_client_versions{.http2_ = false}});
         std::optional<ruvia::http_client_error> observed_error;
         try {
-            auto request = client.client().get("/silent");
-            request.configure({.timeouts_ = {.read_ = total_only ? ruvia::http_client_timeout_override::disabled() : ruvia::http_client_timeout_override::after(std::chrono::milliseconds(20))}});
+            // A relaxed limit would survive until peer closure and report an
+            // I/O failure instead of the configured timeout.
+            if (try_relax) {
+                peer_lifetime.expires_after(std::chrono::milliseconds(300));
+                peer_lifetime.async_wait([&](const std::error_code& error) {
+                    if (!error) {
+                        upstream.stop();
+                    }
+                });
+            }
+            auto request = client.client().with_options({.timeout_ = std::chrono::seconds(5)}).get("/silent");
+            if (try_relax) {
+                EXPECT_THROW(request.configure({.timeouts_ = {.read_ = std::chrono::milliseconds(0)}}), std::invalid_argument);
+            }
+            request.configure({.timeouts_ = {.read_ = total_only ? std::nullopt : std::optional<ruvia::timeout_duration>(try_relax ? std::chrono::milliseconds(5000) : std::chrono::milliseconds(20))}});
             bool timed_out = false;
             try {
                 (void)co_await std::move(request).send();
@@ -282,6 +296,7 @@ void read_timeout(bool http2, bool total_only) {
         } catch (...) {
             failure = std::current_exception();
         }
+        peer_lifetime.cancel();
         co_await client.shutdown();
         EXPECT_TRUE(observed_error.has_value());
         if (observed_error) {
@@ -316,6 +331,11 @@ TEST(Ruvia, http_client_http1_raw_stream_forwarded_fields_and_request_timeouts) 
         http_client_request_controls_test::read_timeout(false, total_only);
     }
 }
+
+TEST(Ruvia, http_client_http1_operation_and_phase_limits_cannot_relax_origin_limits) {
+    http_client_request_controls_test::read_timeout(false, false, true);
+    http_client_request_controls_test::read_timeout(false, true, true);
+}
 #ifdef RUVIA_ENABLE_HTTP2
 TEST(Ruvia, http_client_http2_raw_stream_forwarded_fields_and_request_timeouts) {
     for (const bool configured_raw : {false, true}) {
@@ -324,6 +344,11 @@ TEST(Ruvia, http_client_http2_raw_stream_forwarded_fields_and_request_timeouts) 
     for (const bool total_only : {false, true}) {
         http_client_request_controls_test::read_timeout(true, total_only);
     }
+}
+
+TEST(Ruvia, http_client_http2_operation_and_phase_limits_cannot_relax_origin_limits) {
+    http_client_request_controls_test::read_timeout(true, false, true);
+    http_client_request_controls_test::read_timeout(true, true, true);
 }
 
 TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_streams) {

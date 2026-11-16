@@ -272,3 +272,10 @@ private:
 };
 
 }  // namespace ruvia
+
+namespace std::ranges {
+
+template <typename element_type>
+inline constexpr bool enable_borrowed_range<ruvia::borrowed_span<element_type>> = true;
+
+}  // namespace std::ranges

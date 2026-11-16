@@ -75,14 +75,6 @@ namespace {
     return wire;
 }
 
-[[nodiscard]] asio::ssl::context make_tls_context(const client_tls_config_storage& config) {
-    asio::ssl::context context(asio::ssl::context::tls_client);
-    if (config.mode_ != client_tls_mode::disabled) {
-        configure_client_tls_context(*context.native_handle(), config);
-    }
-    return context;
-}
-
 [[noreturn]] void throw_transport_error(const client_transport_result& result) {
     std::error_code error = result.error_;
     if (result.status_ == client_transport_status::aborted) {
@@ -100,10 +92,11 @@ public:
     tcp_client_backend(event_loop& loop, const worker_ref& worker, const tcp_client_config& config) :
         host_(owned_host(config)),
         alpn_(owned_alpn(config)),
-        tls_config_(config.tls_, client_tls_files::parse),
-        tls_context_(make_tls_context(tls_config_)),
+        tls_config_(config.tls_),
+        tls_context_(asio::ssl::context::tls_client),
         transport_(loop.io_context(), tls_context_, worker, {host_, config.port_.value(), tls_config_.mode_ == client_tls_mode::disabled ? nullptr : &tls_config_, config.tcp_, alpn_}, counters_),
         cancellation_(make_worker_cancellation_target(*this, worker)),
+        worker_(worker),
         connect_timeout_(config.connect_timeout_),
         read_timeout_(config.read_timeout_),
         write_timeout_(config.write_timeout_) {}
@@ -155,6 +148,7 @@ public:
 
     void close_now() noexcept {
         transport_.abort(client_abort_reason::closing);
+        preparation_stop_.request_stop();
         transport_.close();
     }
 
@@ -174,6 +168,15 @@ private:
         operation_deadline timeout(override_operation_options({.timeout_ = connect_timeout_}, options).timeout_);
         worker_cancellation_registration cancellation(cancellation_, connect_id_);
         cancellation.arm(options.stop_token_);
+        const linked_operation_options linked({.timeout_ = timeout.timeout(), .stop_token_ = options.stop_token_}, preparation_stop_.token());
+        if (tls_config_.mode_ != client_tls_mode::disabled) {
+            auto prepared = co_await prepare_client_tls_config(worker_, tls_config_, linked.options());
+            if (transport_.abort_reason() != client_abort_reason::none) {
+                throw_transport_error({.status_ = client_transport_status::aborted, .abort_ = transport_.abort_reason()});
+            }
+            configure_client_tls_context(*tls_context_.native_handle(), prepared);
+            tls_config_ = std::move(prepared);
+        }
         const auto result = co_await transport_.connect(timeout);
         if (!result.ok()) {
             throw_transport_error(result);
@@ -187,6 +190,8 @@ private:
     client_wire_counters counters_;
     client_tcp_transport transport_;
     std::shared_ptr<worker_cancellation_target<tcp_client_backend>> cancellation_;
+    worker_ref worker_;
+    stop_source preparation_stop_;
     std::optional<timeout_duration> connect_timeout_;
     std::optional<timeout_duration> read_timeout_;
     std::optional<timeout_duration> write_timeout_;

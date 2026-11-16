@@ -739,11 +739,20 @@ private:
     accessor_type at_{nullptr};
 };
 
+namespace detail {
+
+template <typename source_type>
+concept http_borrowed_header_source = http_header_field_source<source_type> && (std::is_lvalue_reference_v<source_type&&> || std::ranges::borrowed_range<source_type> || requires(source_type&& source) {
+    { std::forward<source_type>(source).headers() } -> std::ranges::borrowed_range;
+});
+
+}  // namespace detail
+
 // Case-insensitive field-name match over any header field source; stops at
-// the second occurrence. The found value borrows the source's field storage
-// (`fields` itself may be a temporary view such as a span).
-template <http_header_field_source source_type>
-[[nodiscard]] constexpr http_unique_field_lookup find_unique_http_header(const source_type& fields, std::string_view name) noexcept {
+// the second occurrence. The found value borrows the source's field storage.
+// Only lvalue owners and borrowed views (including temporary spans) may escape.
+template <detail::http_borrowed_header_source source_type>
+[[nodiscard]] constexpr http_unique_field_lookup find_unique_http_header(source_type&& fields, std::string_view name) noexcept {
     if constexpr (http_header_field_message<source_type>) {
         return find_unique_http_header(fields.headers(), name);
     } else {
@@ -762,8 +771,8 @@ template <http_header_field_source source_type>
 
 // Singular convenience accessors over received fields select the first
 // matching field line (see doc/ruvia-http.md#api-http-header-h) without copying its value.
-template <http_header_field_source source_type>
-[[nodiscard]] constexpr std::optional<std::string_view> find_first_http_header(const source_type& fields, std::string_view name) noexcept {
+template <detail::http_borrowed_header_source source_type>
+[[nodiscard]] constexpr std::optional<std::string_view> find_first_http_header(source_type&& fields, std::string_view name) noexcept {
     if constexpr (http_header_field_message<source_type>) {
         return find_first_http_header(fields.headers(), name);
     } else {
@@ -830,3 +839,10 @@ private:
 };
 
 }  // namespace ruvia
+
+namespace std::ranges {
+
+template <>
+inline constexpr bool enable_borrowed_range<ruvia::http_header_range_view> = true;
+
+}  // namespace std::ranges
