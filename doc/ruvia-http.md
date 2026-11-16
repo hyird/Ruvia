@@ -7943,6 +7943,7 @@ public:
 DATA 提交（双角色）：
 
 - `submit_data(stream_id, bytes, end_stream, max_payload_bytes)`：至多序列化 `min(bytes.size(), max_payload_bytes, 可用发送窗口)` 字节，帧头开销另计；只有返回的 `consumed_bytes_` 推进 `Content-Length` 计数。不保留输入视图或未消费后缀：调用方保存后缀，在获得输出预算和/或 WINDOW_UPDATE、SETTINGS 变化后显式重试（窗口更新不会自动产生 DATA）。`complete` 表示本输入已被消费，不表示帧已到达 socket。
+  - **输出拥有化**：实际接受的正文前缀在调用返回前直接复制进最终 DATA 输出段，不经 `nghttp2` 临时 DATA 帧中转。
   - 长度与终结：先对完整输入及其终结意图校验 `Content-Length`，超出声明长度或终结时不足均返回 `{0, invalid_message}`，不提交任何前缀；流的内容未打开时抛 `std::logic_error`。
   - END_STREAM 只在本次输入全部消费后发出；结束后不能再次终结。空的终结输入仍是一个 DATA 帧：RFC 9113 §6.9.1 允许（MAY）但不要求在零窗口发送空 END_STREAM DATA，`nghttp2` 后端等待连接与流窗口都为正，这是实现限制；任一窗口不为正时返回 `{0, backpressured}` 且不改变状态，调用方待 `send_window_state()` 报告 `available_ != 0` 后重试。
   - `expectation_pending` 与 `closed` 均消费 0 字节；前者等待 `100 Continue` 或 `release_request_content()`，后者停止发送。

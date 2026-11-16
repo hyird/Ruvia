@@ -2610,9 +2610,9 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 - **输出中断**：输出操作的超时或停止中止本请求流（HTTP/2、HTTP/3 重置流，HTTP/1 关闭连接，已写出部分无法撤回）并抛 `std::system_error`；启动前令牌已停止则不发出任何字节。
 - **HTTP/1 分帧**：响应带合法 `Content-Length` 且无 `Transfer-Encoding` 时定长写出，非空定长头随首次正文写出；超长写入抛 `std::length_error` 且不发送超额字节，`end()` 时不足抛 `std::invalid_argument`；未知长度时 HTTP/1.1 用 `chunked`，HTTP/1.0 以关闭连接界定；框架压缩生效时移除 `Content-Length` 并退回分块。
 - **写入块所有权**：`write()` 返回冷任务前完成输入拥有化，统一输出操作持有正文直到写出结束；丢弃未启动操作释放该块且不占用输出通道。
-- **明文写出**：HTTP/1 缓冲、流式响应与 HTTP/2 复用非阻塞 gather 写原语，不额外拼接分帧和正文；仅余量或同步写预算耗尽时挂起。
-- **写出公平性**：连续同步写次数有界；即使 socket 始终可写，也定期通过异步完成让出 worker。
-- **TLS 写出**：有界分块帧及较大的定长首块合并写出，小首块不新增拼接，大块保留 gather write；拼接空间只随当前流式响应存活，不随空闲连接保留。
+- **明文写出**：HTTP/1 缓冲、流式响应与 HTTP/2 复用非阻塞 gather 写原语，不额外拼接分帧和正文。
+- **写出调度**：明文余量与 TLS 共用有界即时完成；可立即完成者在 worker 内联继续，未就绪或达到合作、嵌套上界时排队让出执行权。
+- **TLS 分帧**：有界分块帧及较大的定长首块合并写出，小首块不新增拼接，大块保留 gather write；拼接空间只随当前流式响应存活，不随空闲连接保留。
 - **出站转发**：上游 `http_client_response` 的正文可经 `pipe_to(writer)` 写入已提交的 writer（见 [`"http_client.h"`](#api-http-client-h)）。
 - **SSE 订阅**：把 `c.stop_token()` 传给订阅接收等待，取消后返回并释放订阅；不要停止整个 worker 来取消单个 SSE。示例见 [../examples/streaming.cpp](../examples/streaming.cpp)、[../examples/redis_pubsub.cpp](../examples/redis_pubsub.cpp)。
 

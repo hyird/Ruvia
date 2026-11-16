@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -37,12 +38,18 @@ namespace tls_paths_test {
 
 using namespace std::chrono_literals;
 
+// A bound far above any cooperative yield of the worker, so only a starved
+// control lane reaches it; the tail spans many TLS records.
+constexpr std::size_t hot_stream_writes = std::size_t{16} * 1024;
+constexpr std::size_t hot_stream_tail_bytes = std::size_t{1024} * 1024;
+
 class tls_path_controller final {
 public:
     RUVIA_ROUTES_BEGIN(tls_path_controller)
     RUVIA_GET("/tls", secure);
     RUVIA_GET("/tls-peer", peer_identity);
     RUVIA_GET("/tls-truncated", truncated);
+    RUVIA_GET("/tls-hot-stream", hot_stream);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> secure(ruvia::context& context) {
@@ -62,6 +69,27 @@ public:
         }
         co_await context.stream().write("partial");
         throw std::runtime_error("upstream failed");
+    }
+
+    // Writes the peer takes at once must still let the worker run its
+    // control lane; a body spanning many TLS records then arrives whole.
+    ruvia::task<void> hot_stream(ruvia::context& context) {
+        if (co_await context.stream_text().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        auto control_ran = std::make_shared<bool>(false);
+        if (!context.worker().defer_completion([control_ran] {
+            *control_ran = true;
+        })) {
+            throw std::runtime_error("cannot defer the TLS control completion");
+        }
+        auto& writer = context.stream();
+        for (std::size_t written = 0; !*control_ran && written != hot_stream_writes; ++written) {
+            co_await writer.write("x");
+        }
+        co_await writer.write(*control_ran ? "|control-ran|" : "|control-starved|");
+        co_await writer.write(std::string(hot_stream_tail_bytes, 'y'));
+        co_await writer.end();
     }
 };
 
@@ -208,6 +236,17 @@ std::string https_get(asio::io_context& io, const asio::ip::tcp::endpoint& endpo
 bool serves_secure_body(const std::string& response, std::string_view expected = "secure") {
     const auto body_start = response.find("\r\n\r\n");
     return response.starts_with("HTTP/1.1 200 ") && body_start != std::string::npos && std::string_view(response).substr(body_start + 4) == expected;
+}
+
+// The hot stream reports that the control lane ran before the stream gave up
+// on it, and its many-record tail arrives byte for byte.
+bool hot_stream_yields_then_completes(const std::string& response) {
+    const auto body_start = response.find("\r\n\r\n");
+    if (!response.starts_with("HTTP/1.1 200 ") || body_start == std::string::npos) {
+        return false;
+    }
+    const auto body = std::string_view(response).substr(body_start + 4);
+    return body.find("|control-ran|") != std::string_view::npos && static_cast<std::size_t>(std::count(body.begin(), body.end(), 'y')) == hot_stream_tail_bytes;
 }
 
 // RFC 9112 §9.8: an HTTP/1.0 response body is delimited by the close, so a
@@ -580,4 +619,28 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
         app.request_stop();
         runner.join();
     }
+}
+
+// TLS writes that complete within their initiation continue without a worker
+// queue turn, yet a hot stream still yields to the worker's control lane, and
+// a body spanning many TLS records still completes.
+TEST(Ruvia, https_hot_stream_yields_to_worker_control_lane) {
+    ruvia::test::tls_identity identity("localhost");
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
+
+    static std::binary_semaphore started{0};
+    auto& app = ruvia::app();
+    app.workers({.worker_count_ = 1}).listen({.address_ = "127.0.0.1", .https_ = endpoint.port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}}).on_start([] {
+        started.release();
+    });
+    ruvia::test::app_run runner(app);
+    const bool ready = started.try_acquire_for(10s);
+    EXPECT_TRUE(ready);
+    if (ready) {
+        EXPECT_TRUE(hot_stream_yields_then_completes(https_get(io, endpoint, identity.ca_file_, "localhost", true, "/tls-hot-stream")));
+    }
+    app.request_stop();
+    runner.join();
 }

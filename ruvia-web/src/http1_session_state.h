@@ -19,6 +19,7 @@
 #include <variant>
 #include <vector>
 
+#include <asio/bind_immediate_executor.hpp>
 #include <asio/buffer.hpp>
 #include <asio/error.hpp>
 #include <asio/ip/tcp.hpp>
@@ -128,7 +129,10 @@ struct connection_write_outcome final {
 };
 
 // Initiates the async_write of what follows the first `written` bytes.
-// The native stream reports each transfer's progress.
+// The native stream reports each transfer's progress. A transfer that
+// completes within its initiation continues inline under the stream's
+// cooperative budget and nesting bound, rather than taking a turn of the
+// worker queue; TLS reaches the socket through the same stream.
 template <typename stream_type, std::size_t buffer_count, typename handler_type>
 void async_write_after(stream_type& stream, std::array<asio::const_buffer, buffer_count> buffers, std::size_t written, handler_type&& handler) {
     for (auto& buffer : buffers) {
@@ -143,15 +147,24 @@ void async_write_after(stream_type& stream, std::array<asio::const_buffer, buffe
             written = 0;
         }
     }
+    const auto completion_executor = [&stream] {
+        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
+            return stream.immediate_executor();
+        } else {
+            return stream.next_layer().immediate_executor();
+        }
+    }();
     if constexpr (buffer_count == 1) {
-        asio::async_write(stream, buffers[0], std::forward<handler_type>(handler));
+        asio::async_write(stream, buffers[0], asio::bind_immediate_executor(completion_executor, std::forward<handler_type>(handler)));
     } else {
-        asio::async_write(stream, buffers, std::forward<handler_type>(handler));
+        asio::async_write(stream, buffers, asio::bind_immediate_executor(completion_executor, std::forward<handler_type>(handler)));
     }
 }
 
 // Plain TCP offers the buffers to one non-blocking send while its inline
-// budget allows; only a remainder suspends, without another task frame.
+// budget allows; the remainder, and every TLS write, goes through
+// async_write_after(), which suspends only when the transfer really pends or
+// its completion is posted to yield the worker. No other task frame is used.
 // Every transfer reports native progress to its bound scanner entry.
 // Buffer descriptors are owned; their bytes stay borrowed until co_await ends.
 template <typename stream_type, std::size_t buffer_count>

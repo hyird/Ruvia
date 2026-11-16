@@ -79,19 +79,27 @@ void http2_connection::submit_header_frames(http2_stream_state& stream, http2_en
 }
 
 void http2_connection::send_data(std::uint32_t stream_id, std::string_view bytes, http2_end_stream end_stream) {
-    // The caller clamped `bytes` to both send windows, so nghttp2 serializes
-    // all of it while this call drains the session; nothing is retained.
-    outbound_data_type data{.bytes_ = bytes};
+    // The caller clamped `bytes` to both send windows, so nghttp2 sends all of
+    // it while this call drains the session: every accepted byte is copied into
+    // the output buffer before the drain returns, and the borrow ends on every
+    // exit, so nothing nghttp2 retains can reach the caller's storage.
+    struct borrow_guard final {
+        outbound_data_type& data_;
+        ~borrow_guard() {
+            data_ = {};
+        }
+    } borrow{outbound_data_};
+    outbound_data_ = {.bytes_ = bytes, .borrowed_ = true};
     nghttp2_data_provider2 provider{};
-    provider.source.ptr = &data;
+    provider.source.ptr = &outbound_data_;
     provider.read_callback = &http2_connection::read_outbound_data;
     check_nghttp2(nghttp2_submit_data2(session_.get(), static_cast<std::uint8_t>(http2_ends_stream(end_stream) ? NGHTTP2_FLAG_END_STREAM : NGHTTP2_FLAG_NONE), static_cast<std::int32_t>(stream_id), &provider));
     flush_session();
-    if (!data.finished_) {
-        // nghttp2 kept a pointer to this frame's source; the session cannot continue.
+    if (!outbound_data_.finished_) {
+        // nghttp2 deferred or dropped part of this source; the session cannot continue.
         fail_connection(http2_error_code::internal_error);
         flush_output();
-        throw std::logic_error("nghttp2 deferred DATA within its send window");
+        throw std::logic_error("nghttp2 did not send DATA within its send window");
     }
 }
 

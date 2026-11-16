@@ -23,7 +23,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <exception>
 #include <limits>
 #include <memory>
@@ -146,6 +145,13 @@ struct http2_session_callbacks final {
             return connection.on_frame_send(*frame);
         });
     }
+    // NO_COPY DATA (see read_outbound_data): the frame is complete in output_
+    // on return, so nghttp2 keeps draining within the same mem_send2 call.
+    static int send_data(nghttp2_session*, nghttp2_frame* frame, const std::uint8_t* header, std::size_t length, nghttp2_data_source* source, void* user_data) {
+        return guard(user_data, [=](http2_connection& connection) {
+            return connection.append_data_frame(*frame, bytes_view(header, http2_frame_header_bytes), length, *source);
+        });
+    }
     static int on_extension_chunk(nghttp2_session*, const nghttp2_frame_hd* header, const std::uint8_t* data, std::size_t length, void* user_data) {
         return guard(user_data, [=](http2_connection& connection) {
             return connection.on_extension_chunk(*header, bytes_view(data, length));
@@ -173,22 +179,50 @@ struct http2_session_callbacks final {
     }
 };
 
-nghttp2_ssize http2_connection::read_outbound_data(nghttp2_session*, std::int32_t, std::uint8_t* buffer, std::size_t length, std::uint32_t* data_flags, nghttp2_data_source* source, void*) noexcept {
-    auto* data = static_cast<outbound_data_type*>(source->ptr);
-    if (data == nullptr) {
+nghttp2_ssize http2_connection::read_outbound_data(nghttp2_session*, std::int32_t, std::uint8_t*, std::size_t length, std::uint32_t* data_flags, nghttp2_data_source* source, void*) noexcept {
+    const auto* data = static_cast<const outbound_data_type*>(source->ptr);
+    if (data != nullptr && !data->borrowed_) {
+        // The failed drain ended its borrow; this session cannot continue.
+        return NGHTTP2_ERR_CALLBACK_FAILURE;
+    }
+    // The payload stays in the source until append_data_frame has copied it,
+    // so a frame nghttp2 drops before sending consumes nothing.
+    *data_flags |= NGHTTP2_DATA_FLAG_NO_COPY;
+    const auto available = data != nullptr ? data->bytes_.size() : 0;
+    const auto payload = (std::min)(length, available);
+    if (payload == available) {
         *data_flags |= NGHTTP2_DATA_FLAG_EOF;
-        return 0;
     }
-    const auto copied = (std::min)(length, data->bytes_.size());
-    if (copied != 0) {
-        std::memcpy(buffer, data->bytes_.data(), copied);
-        data->bytes_.remove_prefix(copied);
+    return static_cast<nghttp2_ssize>(payload);
+}
+
+int http2_connection::append_data_frame(const nghttp2_frame& frame, std::string_view header, std::size_t payload_bytes, const nghttp2_data_source& source) {
+    // RFC 9113 §6.1: nghttp2's padlen counts the Pad Length octet plus at most
+    // 255 octets of zero padding.
+    static constexpr std::array<char, 255> zero_padding{};
+    auto* data = static_cast<outbound_data_type*>(source.ptr);
+    if (data != nullptr && !data->borrowed_) {
+        // The drain that sized this frame failed and its borrow has ended.
+        return NGHTTP2_ERR_CALLBACK_FAILURE;
     }
-    if (data->bytes_.empty()) {
-        *data_flags |= NGHTTP2_DATA_FLAG_EOF;
-        data->finished_ = true;
+    const auto bytes = data != nullptr ? data->bytes_ : std::string_view{};
+    const auto padding = frame.data.padlen;
+    if (payload_bytes > bytes.size() || padding > zero_padding.size() + 1) {
+        throw std::logic_error("nghttp2 DATA frame does not match its source");
     }
-    return static_cast<nghttp2_ssize>(copied);
+    const auto pad_length = static_cast<char>(padding != 0 ? padding - 1 : 0);
+    const std::array pieces{
+        header,
+        std::string_view(&pad_length, padding != 0 ? 1 : 0),
+        bytes.substr(0, payload_bytes),
+        std::string_view(zero_padding.data(), padding > 1 ? padding - 1 : 0),
+    };
+    output_.append_segment(pieces, static_cast<std::uint32_t>(frame.hd.stream_id), true);
+    if (data != nullptr) {
+        data->bytes_.remove_prefix(payload_bytes);
+        data->finished_ = data->bytes_.empty();
+    }
+    return 0;
 }
 
 http2_connection::http2_connection(http_connection_role role, const http2_connection_options& options) :
@@ -230,6 +264,7 @@ void http2_connection::create_session() {
     nghttp2_session_callbacks_set_on_stream_close_callback(callbacks.get(), &http2_session_callbacks::on_stream_close);
     nghttp2_session_callbacks_set_before_frame_send_callback(callbacks.get(), &http2_session_callbacks::before_frame_send);
     nghttp2_session_callbacks_set_on_frame_send_callback(callbacks.get(), &http2_session_callbacks::on_frame_send);
+    nghttp2_session_callbacks_set_send_data_callback(callbacks.get(), &http2_session_callbacks::send_data);
     nghttp2_session_callbacks_set_on_extension_chunk_recv_callback(callbacks.get(), &http2_session_callbacks::on_extension_chunk);
     nghttp2_session_callbacks_set_unpack_extension_callback(callbacks.get(), &http2_session_callbacks::unpack_extension);
     nghttp2_session_callbacks_set_pack_extension_callback2(callbacks.get(), &http2_session_callbacks::pack_extension);
@@ -356,12 +391,11 @@ void http2_connection::flush_session() {
         if (produced == 0) {
             break;
         }
+        // Every DATA frame bypasses this path through append_data_frame, so
+        // each chunk here is one control frame or the client connection preface.
         const auto bytes = bytes_view(data, static_cast<std::size_t>(produced));
-        const auto header = parse_http2_frame_header(std::span<const char>(bytes.data(), bytes.size()));
-        const bool preface = bytes.size() == http2_client_preface.size() && bytes == http2_client_preface;
-        const bool is_data = !preface && header && header->type_ == static_cast<std::uint8_t>(http2_frame_type::data);
         try {
-            output_.append_segment(bytes, is_data ? header->stream_id_ : 0, is_data);
+            output_.append_segment(std::span<const std::string_view>(&bytes, 1), 0, false);
         } catch (...) {
             // nghttp2 already counts these bytes as sent; the wire can no longer
             // be made consistent.

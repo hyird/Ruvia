@@ -1266,6 +1266,55 @@ TEST(Ruvia, http2_public_data_consumption_is_bounded_and_does_not_retain_input_s
     }
 }
 
+// One submission larger than SETTINGS_MAX_FRAME_SIZE leaves as several DATA
+// frames. Every frame is owned before submit_data() returns, so releasing the
+// caller's input changes no wire byte; only the last frame ends the stream.
+TEST(Ruvia, http2_public_multi_frame_data_is_owned_before_submit_returns) {
+    auto client = ruvia::http2_connection::client({});
+    constexpr std::size_t body_size = 2 * ruvia::http2_default_max_frame_size + 7232;
+    const auto request = client.submit_request_head(ruvia::http_request_head_view{.method_ = "POST", .scheme_ = "https", .authority_ = "example.test", .target_ = "/upload", .content_ = ruvia::http_request_content_plan::known_length(body_size)});
+    EXPECT_TRUE(std::holds_alternative<std::uint32_t>(request));
+    if (!std::holds_alternative<std::uint32_t>(request)) {
+        return;
+    }
+    const auto id = std::get<std::uint32_t>(request);
+    (void)ruvia::test::drain_output(client);
+    std::string expected(body_size, '\0');
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+        expected[index] = static_cast<char>('a' + index % 26);
+    }
+    {
+        std::string input = expected;
+        const auto submitted = client.submit_data(id, input, ruvia::http2_end_stream::end_stream, input.size());
+        EXPECT_TRUE(submitted.status_ == ruvia::http_data_submit_status::complete);
+        EXPECT_EQ(submitted.consumed_bytes_, body_size);
+        input.assign(input.size(), 'x');
+        std::string().swap(input);
+    }
+    EXPECT_EQ(client.pending_data_output_bytes(id), body_size);
+    std::string output;
+    const auto batch = client.take_output_batch((std::numeric_limits<std::size_t>::max)(), output);
+    EXPECT_TRUE(batch.status_ == ruvia::http2_output_batch_status::taken);
+    std::string received;
+    received.reserve(body_size);
+    std::string_view remaining(output);
+    while (!remaining.empty()) {
+        const auto frame = ruvia::parse_http2_frame_header(remaining);
+        EXPECT_TRUE(frame && frame->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data) && frame->stream_id_ == id);
+        if (!frame || remaining.size() < ruvia::http2_frame_header_bytes + frame->length_) {
+            break;
+        }
+        EXPECT_LE(frame->length_, ruvia::http2_default_max_frame_size);
+        EXPECT_EQ((frame->flags_ & 1U) != 0, remaining.size() == ruvia::http2_frame_header_bytes + frame->length_);
+        received.append(remaining.substr(ruvia::http2_frame_header_bytes, frame->length_));
+        remaining.remove_prefix(ruvia::http2_frame_header_bytes + frame->length_);
+    }
+    EXPECT_TRUE(remaining.empty());
+    EXPECT_TRUE(received == expected);
+    EXPECT_EQ(client.pending_data_output_bytes(id), std::size_t{0});
+    EXPECT_TRUE(!client.wants_write());
+}
+
 // RFC 9113 §6.9: even an empty DATA frame waits for positive connection and
 // stream windows. An empty terminal submission or finish without trailers is
 // backpressured without changing state until both windows open.

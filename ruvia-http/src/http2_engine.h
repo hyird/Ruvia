@@ -445,6 +445,8 @@ private:
 // Sole owner of HTTP/2 outbound bytes and their consumed prefix. nghttp2
 // serializes frames; the connection appends each frame it emits as one segment
 // so batches stay frame-aligned and DATA payload bytes stay attributable.
+// DATA frames arrive through nghttp2's NO_COPY path as header and payload
+// pieces, every other frame as one serialized piece.
 class http2_output_buffer final {
 public:
     struct segment_type final {
@@ -461,22 +463,28 @@ public:
         return consumed_ < bytes_.size();
     }
 
-    // Appends one complete frame (or the client connection preface) as a
-    // segment; both reservations precede the copy, so a throwing allocation
-    // leaves the pending output unchanged.
-    void append_segment(std::string_view bytes_value, std::uint32_t stream_id, bool is_data) {
-        if (bytes_value.empty()) {
-            return;
-        }
+    // Appends one complete frame (or the client connection preface), given as
+    // consecutive pieces, as a single segment. Both reservations precede the
+    // first copy, so a throwing allocation leaves the pending output unchanged.
+    void append_segment(std::span<const std::string_view> pieces, std::uint32_t stream_id, bool is_data) {
         // Reclaim an amortizable prefix before new frames grow the live suffix.
         compact_consumed_prefix();
-        reserve_segment();
-        if (bytes_value.size() > bytes_.max_size() - bytes_.size()) {
-            throw std::length_error("HTTP/2 output buffer size overflow");
+        std::size_t size = 0;
+        for (const auto piece : pieces) {
+            if (piece.size() > bytes_.max_size() - bytes_.size() - size) {
+                throw std::length_error("HTTP/2 output buffer size overflow");
+            }
+            size += piece.size();
         }
-        reserve_geometric(bytes_, bytes_.size() + bytes_value.size());
+        if (size == 0) {
+            return;
+        }
+        reserve_segment();
+        reserve_geometric(bytes_, bytes_.size() + size);
         const auto begin = bytes_.size();
-        bytes_.append(bytes_value.data(), bytes_value.size());
+        for (const auto piece : pieces) {
+            bytes_.append(piece.data(), piece.size());
+        }
         segments_.push_back(segment_type{begin, bytes_.size(), stream_id, is_data});
     }
 
@@ -1238,10 +1246,16 @@ private:
         bool reject_connected_tunnel_{false};
     };
 
-    // One outbound DATA submission. It lives on submit_data()'s stack and
-    // nghttp2 copies from it while the same call drains the session.
+    // The DATA source every send_data() hands nghttp2. It borrows the caller's
+    // bytes only while that call drains the session: each DATA frame's payload
+    // is copied straight into output_, and `bytes_` advances only past payload
+    // a frame actually appended. On every exit the borrow ends; a failed drain
+    // is fatal, so later callbacks abort instead of reading released storage.
+    // One source suffices: callbacks never re-enter send_data(), and failure
+    // closes all outbound work.
     struct outbound_data_type final {
         std::string_view bytes_;
+        bool borrowed_{false};
         bool finished_{false};
     };
 
@@ -1274,6 +1288,9 @@ private:
     int on_stream_close(std::uint32_t stream_id, std::uint32_t error_code);
     int before_frame_send(const nghttp2_frame& frame);
     int on_frame_send(const nghttp2_frame& frame);
+    // nghttp2 NO_COPY send: appends one DATA frame (header, Pad Length,
+    // payload borrowed from `source`, zero padding) to output_ as one segment.
+    int append_data_frame(const nghttp2_frame& frame, std::string_view header, std::size_t payload_bytes, const nghttp2_data_source& source);
     int on_extension_chunk(const nghttp2_frame_hd& header, std::string_view data);
 
     int begin_request_headers(const nghttp2_frame& frame);
@@ -1330,15 +1347,16 @@ private:
     void commit_connect_response_head(http2_stream_state& stream, bool terminal_remote_half);
     void apply_response_priority(http2_stream_state& stream, const http_response_headers& headers);
     // Sends `bytes` (already clamped to both send windows) as DATA within this
-    // call; nghttp2 copies them while the session drains.
+    // call; the session drain copies them into output_ before it returns.
     void send_data(std::uint32_t stream_id, std::string_view bytes, http2_end_stream end_stream);
     // Commits the local END_STREAM, then sends it as empty DATA or with the
     // staged trailer fields.
     void end_local_stream(http2_stream_state& stream, bool empty_data);
     [[nodiscard]] http_submit_status submit_extension_frame(http2_frame_type type, std::uint32_t stream_id, http2_extension_payload& payload);
-    // nghttp2 DATA source: copies the submitting call's bytes. A null source is
-    // the empty END_STREAM a rejected client CONNECT owes, which may wait for
-    // flow-control credit inside nghttp2.
+    // nghttp2 DATA source: sizes the next frame from the submitting call's
+    // bytes and selects NO_COPY, so append_data_frame copies the payload once,
+    // straight into output_. A null source is the empty END_STREAM a rejected
+    // client CONNECT owes, which may wait for flow-control credit inside nghttp2.
     static nghttp2_ssize read_outbound_data(nghttp2_session* session, std::int32_t stream_id, std::uint8_t* buffer, std::size_t length, std::uint32_t* data_flags, nghttp2_data_source* source, void* user_data) noexcept;
     // An empty END_STREAM DATA frame needs positive connection and stream send
     // windows (nghttp2 defers zero-window DATA).
@@ -1384,6 +1402,7 @@ private:
     nghttp2_mem memory_table_;
     std::unique_ptr<nghttp2_session, session_deleter> session_;
     http2_output_buffer output_;
+    outbound_data_type outbound_data_;
     http2_field_list fields_;
     http2_stream_table streams_;
     // RFC 9218 priority signals received for streams the peer has not opened yet.

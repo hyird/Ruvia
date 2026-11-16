@@ -2,20 +2,21 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <span>
 #include <system_error>
 #include <type_traits>
 #include <utility>
 
-#include <asio/associated_allocator.hpp>
-#include <asio/associated_cancellation_slot.hpp>
-#include <asio/associated_executor.hpp>
+#include <asio/associator.hpp>
 #include <asio/bind_cancellation_slot.hpp>
 #include <asio/buffer.hpp>
 #include <asio/cancellation_signal.hpp>
 #include <asio/error.hpp>
+#include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/post.hpp>
+#include <asio/require.hpp>
 #include <asio/ssl/stream.hpp>
 
 #include "connection_lifecycle.h"
@@ -24,9 +25,59 @@
 #include "worker_ref.h"
 
 // The accepted server socket as a stream: prefix replay, lifecycle byte
-// accounting and native write progress, its TLS transport, and how a TCP
-// connection session closes.
+// accounting and native write progress, bounded inline completion of its
+// writes, its TLS transport, and how a TCP connection session closes.
 namespace ruvia::detail {
+
+class inbound_socket_stream;
+template <typename handler_type, bool writing>
+struct inbound_socket_completion;
+
+// The immediate executor (Asio associated_immediate_executor) bound to the
+// connection's gather writes. An operation completing within its initiation
+// continues inline on the owner worker while the stream's cooperative budget
+// and this thread's nesting bound allow; otherwise its completion is posted to
+// the worker queue, as Asio's default immediate completion is. It refers to
+// its stream, which outlives every operation that can complete through it.
+class inbound_immediate_executor final {
+public:
+    explicit inbound_immediate_executor(inbound_socket_stream& stream) noexcept :
+        stream_(&stream) {}
+
+    template <typename function_type>
+    void execute(function_type&& function) const;
+
+    // Whether this thread is inside an inline completion rather than one the
+    // event loop delivered.
+    [[nodiscard]] static bool completing_inline() noexcept {
+        return depth_ != 0;
+    }
+
+    friend bool operator==(const inbound_immediate_executor&, const inbound_immediate_executor&) noexcept = default;
+
+private:
+    class nesting final {
+    public:
+        nesting() noexcept {
+            ++depth_;
+        }
+        ~nesting() {
+            --depth_;
+        }
+        nesting(const nesting&) = delete;
+        nesting& operator=(const nesting&) = delete;
+    };
+
+    // An inline completion stays on the stack of its initiation, and a TLS
+    // write initiates its next record from there, so nesting is bounded.
+    static constexpr std::uint8_t max_depth = 8;
+    // Inline completions running on this thread. Kept per thread, not per
+    // stream, because it is restored after a completion that may have ended,
+    // and destroyed, the stream.
+    static inline thread_local std::uint8_t depth_{};
+
+    inbound_socket_stream* stream_;
+};
 
 // The caller owns the socket and the already-read prefix until all I/O joins.
 // Prefix delivery is asynchronous, like socket reads, and never reads a byte twice.
@@ -34,6 +85,7 @@ namespace ruvia::detail {
 // Every socket transfer reports to `lifecycle`; a sent byte is write progress of
 // its bound scanner entry, so TLS output renews write_timeout per ciphertext
 // flush rather than per plaintext write.
+// The socket belongs to its worker's io_context.
 class inbound_socket_stream final {
 public:
     using executor_type = asio::ip::tcp::socket::executor_type;
@@ -41,6 +93,7 @@ public:
 
     explicit inbound_socket_stream(asio::ip::tcp::socket& socket, std::span<const std::byte> prefix = {}, connection_lifecycle* lifecycle = nullptr) noexcept :
         socket_(socket),
+        io_executor_(worker_io_executor(socket)),
         prefix_(prefix),
         lifecycle_(lifecycle) {}
 
@@ -64,6 +117,9 @@ public:
     }
     [[nodiscard]] bool inline_write_available() const noexcept {
         return remaining_inline_writes_ != 0;
+    }
+    [[nodiscard]] inbound_immediate_executor immediate_executor() noexcept {
+        return inbound_immediate_executor(*this);
     }
     void shutdown(asio::ip::tcp::socket::shutdown_type what, std::error_code& error) {
         socket_.shutdown(what, error);
@@ -98,7 +154,7 @@ public:
     template <typename buffers_type, typename handler_type>
     void async_read_some(const buffers_type& buffers, handler_type&& handler) {
         if (prefix_.empty()) {
-            socket_.async_read_some(buffers, completion<std::decay_t<handler_type>, false>{std::forward<handler_type>(handler), socket_.get_executor(), this});
+            socket_.async_read_some(buffers, inbound_socket_completion<std::decay_t<handler_type>, false>{std::forward<handler_type>(handler), this});
             return;
         }
         const auto bytes = consume_prefix(buffers);
@@ -109,45 +165,22 @@ public:
 
     template <typename buffers_type, typename handler_type>
     void async_write_some(const buffers_type& buffers, handler_type&& handler) {
-        socket_.async_write_some(buffers, completion<std::decay_t<handler_type>, true>{std::forward<handler_type>(handler), socket_.get_executor(), this});
+        socket_.async_write_some(buffers, inbound_socket_completion<std::decay_t<handler_type>, true>{std::forward<handler_type>(handler), this});
     }
 
 private:
-    template <typename handler_type, bool writing>
-    struct completion final {
-        handler_type handler_;
-        inbound_socket_stream::executor_type fallback_executor_;
-        inbound_socket_stream* owner_;
-        using executor_type = asio::associated_executor_t<handler_type, inbound_socket_stream::executor_type>;
-        using allocator_type = asio::associated_allocator_t<handler_type>;
-        using cancellation_slot_type = asio::associated_cancellation_slot_t<handler_type>;
-        [[nodiscard]] executor_type get_executor() const noexcept {
-            return asio::get_associated_executor(handler_, fallback_executor_);
+    friend class inbound_immediate_executor;
+    template <typename, bool>
+    friend struct inbound_socket_completion;
+
+    [[nodiscard]] static asio::io_context::executor_type worker_io_executor(asio::ip::tcp::socket& socket) noexcept {
+        const auto executor = socket.get_executor();
+        const auto* io_executor = executor.target<asio::io_context::executor_type>();
+        if (io_executor == nullptr) {
+            std::terminate();
         }
-        [[nodiscard]] allocator_type get_allocator() const noexcept {
-            return asio::get_associated_allocator(handler_);
-        }
-        [[nodiscard]] cancellation_slot_type get_cancellation_slot() const noexcept {
-            return asio::get_associated_cancellation_slot(handler_);
-        }
-        void operator()(const std::error_code& error, std::size_t bytes) {
-            owner_->remaining_inline_writes_ = max_inline_writes;
-            auto* lifecycle = owner_->lifecycle_;
-            if (lifecycle != nullptr) {
-                if constexpr (writing) {
-                    lifecycle->note_transport_write(bytes, error);
-                } else {
-                    lifecycle->note_read(bytes);
-                }
-                // Protocol drivers also cancel reads for a successful drain.
-                // Timeout, shutdown and explicit abort record their cause first.
-                if (error != asio::error::operation_aborted && error != asio::error::bad_descriptor) {
-                    lifecycle->note_error(error);
-                }
-            }
-            std::move(handler_)(error, bytes);
-        }
-    };
+        return *io_executor;
+    }
     template <typename buffers_type>
     std::size_t consume_prefix(const buffers_type& buffers) noexcept {
         const auto bytes = asio::buffer_copy(buffers, asio::buffer(prefix_.data(), prefix_.size()));
@@ -155,12 +188,79 @@ private:
         return bytes;
     }
     asio::ip::tcp::socket& socket_;
+    asio::io_context::executor_type io_executor_;
     std::span<const std::byte> prefix_;
     connection_lifecycle* lifecycle_;
-    // A hot producer must yield through the ordinary async path periodically.
+    // A hot producer must yield through the event loop periodically. Each
+    // non-blocking send and each inline completion spends one; a completion
+    // the event loop delivers refills it. Consecutive writes share it.
     static constexpr std::uint8_t max_inline_writes = 128;
     std::uint8_t remaining_inline_writes_{max_inline_writes};
 };
+
+// Reports one transfer of `owner_` before its handler runs. Asio's
+// associators forward to the wrapped handler (see below): a write bound to
+// inbound_immediate_executor may complete inline, while any other operation
+// keeps Asio's default immediate completion through the worker queue.
+template <typename handler_type, bool writing>
+struct inbound_socket_completion final {
+    handler_type handler_;
+    inbound_socket_stream* owner_;
+
+    void operator()(const std::error_code& error, std::size_t bytes) {
+        // An inline completion already spent its unit in the executor.
+        if (!inbound_immediate_executor::completing_inline()) {
+            owner_->remaining_inline_writes_ = inbound_socket_stream::max_inline_writes;
+        }
+        auto* lifecycle = owner_->lifecycle_;
+        if (lifecycle != nullptr) {
+            if constexpr (writing) {
+                lifecycle->note_transport_write(bytes, error);
+            } else {
+                lifecycle->note_read(bytes);
+            }
+            // Protocol drivers also cancel reads for a successful drain.
+            // Timeout, shutdown and explicit abort record their cause first.
+            if (error != asio::error::operation_aborted && error != asio::error::bad_descriptor) {
+                lifecycle->note_error(error);
+            }
+        }
+        std::move(handler_)(error, bytes);
+    }
+};
+
+// Runs within the initiation of an operation on the stream, so the stream is
+// alive on entry. The completion may end the stream's owner: after it, only
+// this thread's nesting depth is touched.
+template <typename function_type>
+void inbound_immediate_executor::execute(function_type&& function) const {
+    auto& stream = *stream_;
+    if (depth_ < max_depth && stream.io_executor_.running_in_this_thread() && stream.remaining_inline_writes_ != 0) {
+        --stream.remaining_inline_writes_;
+        const nesting scope;
+        std::forward<function_type>(function)();
+        return;
+    }
+    asio::require(stream.io_executor_, asio::execution::blocking.never).execute(std::forward<function_type>(function));
+}
+
+}  // namespace ruvia::detail
+
+namespace asio {
+
+template <template <typename, typename> class associator_type, typename handler_type, bool writing, typename candidate_type>
+struct associator<associator_type, ruvia::detail::inbound_socket_completion<handler_type, writing>, candidate_type> : associator_type<handler_type, candidate_type> {
+    static typename associator_type<handler_type, candidate_type>::type get(const ruvia::detail::inbound_socket_completion<handler_type, writing>& completion) noexcept {
+        return associator_type<handler_type, candidate_type>::get(completion.handler_);
+    }
+    static auto get(const ruvia::detail::inbound_socket_completion<handler_type, writing>& completion, const candidate_type& candidate) noexcept -> decltype(associator_type<handler_type, candidate_type>::get(completion.handler_, candidate)) {
+        return associator_type<handler_type, candidate_type>::get(completion.handler_, candidate);
+    }
+};
+
+}  // namespace asio
+
+namespace ruvia::detail {
 
 // SSL 的读操作也可能发送 KeyUpdate 等控制记录。取消读允许保留已接收的
 // 密文字节，但不能截断已从 SSL BIO 取出的输出，否则后续复用会丢失记录。
@@ -188,6 +288,10 @@ public:
     template <typename buffers_type, typename handler_type>
     auto async_read_some(const buffers_type& buffers, handler_type&& handler) {
         return socket_.async_read_some(buffers, std::forward<handler_type>(handler));
+    }
+
+    [[nodiscard]] inbound_immediate_executor immediate_executor() noexcept {
+        return socket_.immediate_executor();
     }
 
     template <typename buffers_type, typename handler_type>
