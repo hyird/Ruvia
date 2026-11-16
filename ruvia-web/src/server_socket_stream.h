@@ -30,6 +30,7 @@ namespace ruvia::detail {
 
 // The caller owns the socket and the already-read prefix until all I/O joins.
 // Prefix delivery is asynchronous, like socket reads, and never reads a byte twice.
+// Its address stays fixed until pending I/O joins.
 // Every socket transfer reports to `lifecycle`; a sent byte is write progress of
 // its bound scanner entry, so TLS output renews write_timeout per ciphertext
 // flush rather than per plaintext write.
@@ -42,6 +43,9 @@ public:
         socket_(socket),
         prefix_(prefix),
         lifecycle_(lifecycle) {}
+
+    inbound_socket_stream(const inbound_socket_stream&) = delete;
+    inbound_socket_stream& operator=(const inbound_socket_stream&) = delete;
 
     executor_type get_executor() noexcept {
         return socket_.get_executor();
@@ -58,12 +62,18 @@ public:
     bool non_blocking() const {
         return socket_.non_blocking();
     }
+    [[nodiscard]] bool inline_write_available() const noexcept {
+        return remaining_inline_writes_ != 0;
+    }
     void shutdown(asio::ip::tcp::socket::shutdown_type what, std::error_code& error) {
         socket_.shutdown(what, error);
     }
     template <typename buffers_type>
     std::size_t send(const buffers_type& buffers, asio::socket_base::message_flags flags, std::error_code& error) {
         const auto bytes = socket_.send(buffers, flags, error);
+        if (bytes != 0 && remaining_inline_writes_ != 0) {
+            --remaining_inline_writes_;
+        }
         if (lifecycle_ != nullptr) {
             lifecycle_->note_transport_write(bytes, error);
             lifecycle_->note_error(error);
@@ -88,7 +98,7 @@ public:
     template <typename buffers_type, typename handler_type>
     void async_read_some(const buffers_type& buffers, handler_type&& handler) {
         if (prefix_.empty()) {
-            socket_.async_read_some(buffers, completion<std::decay_t<handler_type>, false>{std::forward<handler_type>(handler), socket_.get_executor(), lifecycle_});
+            socket_.async_read_some(buffers, completion<std::decay_t<handler_type>, false>{std::forward<handler_type>(handler), socket_.get_executor(), this});
             return;
         }
         const auto bytes = consume_prefix(buffers);
@@ -99,7 +109,7 @@ public:
 
     template <typename buffers_type, typename handler_type>
     void async_write_some(const buffers_type& buffers, handler_type&& handler) {
-        socket_.async_write_some(buffers, completion<std::decay_t<handler_type>, true>{std::forward<handler_type>(handler), socket_.get_executor(), lifecycle_});
+        socket_.async_write_some(buffers, completion<std::decay_t<handler_type>, true>{std::forward<handler_type>(handler), socket_.get_executor(), this});
     }
 
 private:
@@ -107,7 +117,7 @@ private:
     struct completion final {
         handler_type handler_;
         inbound_socket_stream::executor_type fallback_executor_;
-        connection_lifecycle* lifecycle_;
+        inbound_socket_stream* owner_;
         using executor_type = asio::associated_executor_t<handler_type, inbound_socket_stream::executor_type>;
         using allocator_type = asio::associated_allocator_t<handler_type>;
         using cancellation_slot_type = asio::associated_cancellation_slot_t<handler_type>;
@@ -121,16 +131,18 @@ private:
             return asio::get_associated_cancellation_slot(handler_);
         }
         void operator()(const std::error_code& error, std::size_t bytes) {
-            if (lifecycle_ != nullptr) {
+            owner_->remaining_inline_writes_ = max_inline_writes;
+            auto* lifecycle = owner_->lifecycle_;
+            if (lifecycle != nullptr) {
                 if constexpr (writing) {
-                    lifecycle_->note_transport_write(bytes, error);
+                    lifecycle->note_transport_write(bytes, error);
                 } else {
-                    lifecycle_->note_read(bytes);
+                    lifecycle->note_read(bytes);
                 }
                 // Protocol drivers also cancel reads for a successful drain.
                 // Timeout, shutdown and explicit abort record their cause first.
                 if (error != asio::error::operation_aborted && error != asio::error::bad_descriptor) {
-                    lifecycle_->note_error(error);
+                    lifecycle->note_error(error);
                 }
             }
             std::move(handler_)(error, bytes);
@@ -145,6 +157,9 @@ private:
     asio::ip::tcp::socket& socket_;
     std::span<const std::byte> prefix_;
     connection_lifecycle* lifecycle_;
+    // A hot producer must yield through the ordinary async path periodically.
+    static constexpr std::uint8_t max_inline_writes = 128;
+    std::uint8_t remaining_inline_writes_{max_inline_writes};
 };
 
 // SSL 的读操作也可能发送 KeyUpdate 等控制记录。取消读允许保留已接收的

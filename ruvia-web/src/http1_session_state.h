@@ -86,7 +86,7 @@ template <typename socket_type, typename const_buffer_sequence_type>
 [[nodiscard]] inline bool try_plain_tcp_sync_write(socket_type& socket, const const_buffer_sequence_type& buffers, std::size_t total_bytes, asio::socket_base::message_flags flags, std::error_code& ec, std::size_t& bytes_written) noexcept {
     ec.clear();
     bytes_written = 0;
-    if (!socket.non_blocking()) {
+    if (!socket.non_blocking() || !socket.inline_write_available()) {
         return false;
     }
     bytes_written = socket.send(buffers, flags, ec);
@@ -127,39 +127,50 @@ struct connection_write_outcome final {
     std::size_t bytes_{};
 };
 
-// Initiates the async_write of what follows the first `written` bytes of
-// `head` then `body`. The native stream reports each transfer's progress.
-template <typename stream_type, typename handler_type>
-void async_write_after(stream_type& stream, std::string_view head, std::string_view body, std::size_t written, handler_type&& handler) {
-    if (written >= head.size()) {
-        asio::async_write(stream, asio::buffer(body.substr(written - head.size())), std::forward<handler_type>(handler));
-        return;
+// Initiates the async_write of what follows the first `written` bytes.
+// The native stream reports each transfer's progress.
+template <typename stream_type, std::size_t buffer_count, typename handler_type>
+void async_write_after(stream_type& stream, std::array<asio::const_buffer, buffer_count> buffers, std::size_t written, handler_type&& handler) {
+    for (auto& buffer : buffers) {
+        if (written == 0) {
+            break;
+        }
+        if (written >= buffer.size()) {
+            written -= buffer.size();
+            buffer = {};
+        } else {
+            buffer += written;
+            written = 0;
+        }
     }
-    const std::array<asio::const_buffer, 2> remaining{asio::buffer(head.substr(written)), asio::buffer(body)};
-    asio::async_write(stream, remaining, std::forward<handler_type>(handler));
+    if constexpr (buffer_count == 1) {
+        asio::async_write(stream, buffers[0], std::forward<handler_type>(handler));
+    } else {
+        asio::async_write(stream, buffers, std::forward<handler_type>(handler));
+    }
 }
 
-// Awaitable write of `head` then `body`. Plain TCP first offers both to one
-// non-blocking send; only a remainder suspends, as an async_write awaited in
-// place, so a write the socket accepts at once costs no coroutine frame.
-// Every transfer, synchronous or not, is reported by the native stream as
-// progress of its bound scanner entry. The views must stay valid until the
-// co_await completes.
-template <typename stream_type>
+// Plain TCP offers the buffers to one non-blocking send while its inline
+// budget allows; only a remainder suspends, without another task frame.
+// Every transfer reports native progress to its bound scanner entry.
+// Buffer descriptors are owned; their bytes stay borrowed until co_await ends.
+template <typename stream_type, std::size_t buffer_count>
 class connection_gather_write final {
 public:
-    connection_gather_write(stream_type& stream, std::string_view head, std::string_view body) noexcept :
+    connection_gather_write(stream_type& stream, std::array<asio::const_buffer, buffer_count> buffers) noexcept :
         stream_(&stream),
-        head_(head),
-        body_(body) {}
+        buffers_(buffers) {}
 
     connection_gather_write(const connection_gather_write&) = delete;
     connection_gather_write& operator=(const connection_gather_write&) = delete;
     connection_gather_write* operator&() = delete;
     [[nodiscard]] bool await_ready() noexcept {
         if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
-            const std::array<asio::const_buffer, 2> buffers{asio::buffer(head_), asio::buffer(body_)};
-            return try_plain_tcp_sync_write(*stream_, buffers, head_.size() + body_.size(), 0, written_.error_, written_.bytes_);
+            if constexpr (buffer_count == 1) {
+                return try_plain_tcp_sync_write(*stream_, buffers_[0], buffers_[0].size(), 0, written_.error_, written_.bytes_);
+            } else {
+                return try_plain_tcp_sync_write(*stream_, buffers_, asio::buffer_size(buffers_), 0, written_.error_, written_.bytes_);
+            }
         } else {
             return false;
         }
@@ -184,13 +195,12 @@ private:
 
         template <typename handler_type>
         void operator()(handler_type&& handler) const {
-            async_write_after(*owner_->stream_, owner_->head_, owner_->body_, owner_->written_.bytes_, std::forward<handler_type>(handler));
+            async_write_after(*owner_->stream_, owner_->buffers_, owner_->written_.bytes_, std::forward<handler_type>(handler));
         }
     };
 
     stream_type* stream_;
-    std::string_view head_;
-    std::string_view body_;
+    std::array<asio::const_buffer, buffer_count> buffers_;
     connection_write_outcome written_;
     std::optional<asio_completion_awaiter<std::size_t, remainder_initiation>> remainder_;
 };

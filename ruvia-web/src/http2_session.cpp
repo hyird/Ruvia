@@ -1795,7 +1795,7 @@ task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_e
                 // RFC 8441 tunnel); this clock lets write_timeout close a peer
                 // that stopped reading regardless. Every transfer renews it.
                 const connection_scanner::entry::write_scope write_stall_clock(engine.scanner_entry());
-                const auto write_result = co_await connection_gather_write(stream, write_scratch, {});
+                const auto write_result = co_await connection_gather_write(stream, std::array<asio::const_buffer, 1>{asio::buffer(write_scratch)});
                 write_error = write_result.error_;
             }
             if (write_error) {

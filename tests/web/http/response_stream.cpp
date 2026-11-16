@@ -102,9 +102,14 @@ TEST(Ruvia, OutboundBytesPreservesEmptyInputs) {
 
 namespace response_stream_test {
 
+// Exceeds socket queues while the peer withholds reads: the first write
+// really remains in flight, regardless of inline-completion policy.
+constexpr std::size_t pending_stream_bytes = 8 * 1024 * 1024;
+
 struct stream_lane_observation final {
     std::atomic<bool> write_overlap_rejected_{};
     std::atomic<bool> end_overlap_rejected_{};
+    std::atomic<bool> overlap_checked_{};
     std::atomic<bool> completed_{};
     std::atomic<bool> uncommitted_write_rejected_{};
     std::atomic<bool> repeated_commit_rejected_{};
@@ -175,10 +180,12 @@ class stream_lane_routes final {
             }
         }
         std::string payload{"first"};
+        payload.append(pending_stream_bytes, 'f');
         auto first = writer.write(payload);
         auto last = writer.writeln("second");
         auto end = writer.end();
         payload.assign("changed");
+        payload.shrink_to_fit();
         {
             auto discarded = writer.write("discarded");
             static_cast<void>(discarded);
@@ -200,6 +207,7 @@ class stream_lane_routes final {
         } catch (const std::logic_error&) {
             observed.end_overlap_rejected_ = true;
         }
+        observed.overlap_checked_ = true;
         co_await writes.join();
         co_await std::move(last);
         co_await std::move(end);
@@ -395,14 +403,23 @@ TEST(Ruvia, response_stream_cold_outputs_share_a_lane_only_when_started) {
     ruvia::test::http_server_fixture server(io);
     stream_lane_observed->write_overlap_rejected_ = false;
     stream_lane_observed->end_overlap_rejected_ = false;
+    stream_lane_observed->overlap_checked_ = false;
     stream_lane_observed->completed_ = false;
     std::string response{};
+    response.reserve(response_stream_test::pending_stream_bytes + 1024);
     {
         asio::ip::tcp::socket client(io);
+        client.open(asio::ip::tcp::v4());
+        client.set_option(asio::socket_base::receive_buffer_size(64 * 1024));
         client.connect(server.endpoint());
         const std::string_view request = "GET /server-lazy-stream-output HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
         asio::write(client, asio::buffer(request));
-        std::array<char, 1024> input{};
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!stream_lane_observed->overlap_checked_ && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        EXPECT_TRUE(stream_lane_observed->overlap_checked_);
+        std::array<char, 16 * 1024> input{};
         std::error_code ec;
         while (!ec) {
             const auto read = client.read_some(asio::buffer(input), ec);
@@ -413,6 +430,11 @@ TEST(Ruvia, response_stream_cold_outputs_share_a_lane_only_when_started) {
     EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
     const auto first = response.find("first");
     EXPECT_TRUE(first != std::string::npos);
+    std::string expected{"first"};
+    expected.append(response_stream_test::pending_stream_bytes, 'f');
+    if (first != std::string::npos) {
+        EXPECT_EQ(std::string_view(response).substr(first, expected.size()), expected);
+    }
     EXPECT_TRUE(response.find("second\n", first) != std::string::npos);
     EXPECT_TRUE(stream_lane_observed->write_overlap_rejected_);
     EXPECT_TRUE(stream_lane_observed->end_overlap_rejected_);

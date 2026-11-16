@@ -411,7 +411,7 @@ public:
             }
         }
 #endif
-        const auto first_written = co_await connection_gather_write(stream, head.view(), first_.bytes());
+        const auto first_written = co_await connection_gather_write(stream, std::array<asio::const_buffer, 2>{asio::buffer(head.view()), asio::buffer(first_.bytes())});
         if (first_written.error_ || !response_plan.send_body()) {
             co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, first_written.error_, first_written.bytes_);
         }
@@ -427,7 +427,7 @@ public:
                 co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, std::make_error_code(std::errc::io_error), response_head_bytes);
             }
             progress.begin_next_write();
-            if (const auto written = co_await connection_gather_write(stream, chunk.bytes(), {}); written.error_) {
+            if (const auto written = co_await connection_gather_write(stream, std::array<asio::const_buffer, 1>{asio::buffer(chunk.bytes())}); written.error_) {
                 co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, written.error_, response_head_bytes);
             }
         }
@@ -1677,14 +1677,11 @@ private:
         state_.release_context();
     }
 
-    // The caller's coroutine frame retains the buffers and temporary scanner phase.
-    // Return the native awaiter instead of allocating another task frame per write.
-    template <typename buffers_type>
-    [[nodiscard]] auto write_to_stream(const buffers_type& buffers) {
-        return ruvia::async_asio([this, &buffers](auto handler) mutable {
-            ensure_peer_writable();
-            asio::async_write(stream_, buffers, std::move(handler));
-        });
+    // Keep the peer check before either the inline offer or its async remainder.
+    template <std::size_t buffer_count>
+    [[nodiscard]] auto write_to_stream(std::array<asio::const_buffer, buffer_count> buffers) {
+        ensure_peer_writable();
+        return connection_gather_write(stream_, buffers);
     }
 
     // Asio's TLS write_some copies a gather sequence into this much stack
@@ -1795,8 +1792,8 @@ private:
         std::error_code ec;
         {
             const connection_scanner::entry::phase_scope write_phase(scanner_entry_, connection_scanner::phase::writing);
-            const auto write_result = co_await write_to_stream(asio::buffer(head_.view()));
-            ec = write_result.error_code();
+            const auto write_result = co_await write_to_stream(std::array<asio::const_buffer, 1>{asio::buffer(head_.view())});
+            ec = write_result.error_;
         }
         if (ec) {
             fail_write(ec, "failed to write HTTP response stream head");
@@ -1872,7 +1869,7 @@ private:
         {
             const connection_scanner::entry::phase_scope write_phase(scanner_entry_, connection_scanner::phase::writing);
             const auto write_result = co_await write_to_stream(buffers);
-            ec = write_result.error_code();
+            ec = write_result.error_;
         }
         if (ec) {
             fail_write(ec, "failed to write HTTP response stream body");
@@ -1938,7 +1935,7 @@ private:
         {
             const connection_scanner::entry::phase_scope write_phase(scanner_entry_, connection_scanner::phase::writing);
             const auto write_result = co_await write_to_stream(buffers);
-            ec = write_result.error_code();
+            ec = write_result.error_;
         }
         if (ec) {
             fail_write(ec, "failed to write HTTP response stream end");
@@ -2186,7 +2183,7 @@ public:
     template <typename handler_type>
     void write_remaining(handler_type&& handler) {
         progress_->set_phase(connection_scanner::phase::writing);
-        async_write_after(*stream_, output_->view(), body_, written_.bytes_, std::forward<handler_type>(handler));
+        async_write_after(*stream_, std::array<asio::const_buffer, 2>{asio::buffer(output_->view()), asio::buffer(body_)}, written_.bytes_, std::forward<handler_type>(handler));
     }
 
     [[nodiscard]] auto async_write_remaining() {
