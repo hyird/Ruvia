@@ -1,32 +1,16 @@
-# Ruvia 用户文档与 API 参考手册
+# Ruvia 文档索引
 
-本文档目录提供 Ruvia 框架（`ruvia::core`、`ruvia::http`、`ruvia::web`）的使用指南与公开 API 参考手册。所有说明均基于当前仓库非 `detail` 公开头文件与 `examples/` 可运行示例。
+每个 CMake target 对应一份完整公开 API 手册。安装头是公开边界；`detail` 符号与 `src/` 内部头不属于用户契约。
 
-## 文档导航
+## 1. Target 手册
 
-| 文档 | 内容范围 |
-| --- | --- |
-| [doc/README.md](README.md) | 架构总览、CMake 构建与工程接入、生命周期与所有权准则、错误处理约定、示例程序全集索引 |
-| [doc/web-guide.md](web-guide.md) | `ruvia::web` 服务端核心：应用配置（`ruvia::app()`）、控制器与路由宏、中间件、`context` / `context_request`、声明式模型 `RUVIA_MODEL` 与校验、静态文件、运维能力与内存级测试 `test_app` |
-| [doc/streaming-websocket.md](streaming-websocket.md) | 流式请求/响应与 SSE、HTTP 高级协议能力、WebSocket、CONNECT / CONNECT-UDP，以及 HTTP/1.1、HTTP/2、HTTP/3 的统一链式出站客户端 |
-| [doc/data-and-auth.md](data-and-auth.md) | SQL 数据库（MariaDB / PostgreSQL 连接池、直接查询、事务、迁移、SQL/DDL/过程构建器）、强类型关系型 ORM、Redis 客户端（命令、Pipeline、事务、Streams、Pub/Sub、RediSearch ORM）与 JWT 认证 |
-| [doc/core-and-http.md](core-and-http.md) | `ruvia::core` 运行时（`task<T>`、`event_loop_pool`、`blocking_pool`、有界通道、停止令牌、定时器、线程堆收集）与 `ruvia::http` 独立 Sans-I/O 协议层（HTTP/1、HTTP/2、HTTP/3、HPACK、QPACK、QUIC、WebSocket、内容压缩、Multipart、SSE） |
+| CMake Target | 完整公开 API 与使用指南 | 公开头目录 |
+| --- | --- | --- |
+| `ruvia::core` | [ruvia-core.md](ruvia-core.md) | [`ruvia-core/include/`](../ruvia-core/include) |
+| `ruvia::http` | [ruvia-http.md](ruvia-http.md) | [`ruvia-http/include/`](../ruvia-http/include) |
+| `ruvia::web` | [ruvia-web.md](ruvia-web.md) | [`ruvia-web/include/`](../ruvia-web/include) |
 
----
-
-## 1. 分层架构与命名空间
-
-Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念均位于顶层命名空间 `namespace ruvia`（HTTP 状态码常量与 WebSocket 关闭码常量分别位于嵌套命名空间 `namespace ruvia::http_status` 与 `namespace ruvia::websocket_close_status`）：
-
-| 库目录 | CMake Target | 公开头文件 | 职责与边界 |
-| --- | --- | --- | --- |
-| `ruvia-core` | `ruvia::core` | `ruvia-core/include/*.h` | 协程任务（`task<T>` / `root_task<T>`）、事件循环（`event_loop` / `event_loop_pool` / `event_loop_attachment`）、有界通道（`channel` / `one_shot`）、阻塞卸载池（`blocking_pool`）与 mimalloc 线程堆收集；仅公开依赖 standalone Asio 与 `Threads::Threads` |
-| `ruvia-http` | `ruvia::http` | `ruvia-http/include/*.h` | 独立 sans-I/O 协议实现：HTTP/1.0、HTTP/1.1、HTTP/2、HTTP/3、HPACK、QPACK、QUIC、WebSocket、内容压缩（gzip / deflate / br / zstd）、Multipart、SSE、RFC 9297 Datagram / Capsule 与 RFC 9298 `CONNECT-UDP`；HTTP/2 使用 nghttp2，HTTP/3 使用 nghttp3 与 ngtcp2 core，不依赖 `ruvia::core`、Asio、socket I/O 或 OpenSSL |
-| `ruvia-web` | `ruvia::web` | `ruvia-web/include/*.h` | Web 应用框架：服务器与路由、中间件、声明式 Model/校验、TLS/mTLS/SNI、出站 HTTP 客户端、SQL 数据库/ORM、Redis/RediSearch ORM 与 JWT；公开依赖 `ruvia::core` 与 `ruvia::http` |
-
-> **头文件使用原则**：只包含 `ruvia-{core,http,web}/include/` 下平铺的公开头文件，不使用其中任何 `detail` 命名空间符号。
-
-从 `1.0.0` 起，同一主版本内保持非 `detail` 公开 API 的源码兼容，包括公开宏、配置类型、错误码及所有权和生命周期契约；新增能力以兼容方式加入，破坏性调整进入下一主版本。CMake 包兼容性在 `0.x` 要求主版本和次版本均相同，从 `1.x` 起要求主版本相同。此承诺适用于相同平台、工具链和功能开关组合；不承诺跨版本 ABI 兼容，升级后应重新编译下游程序。
+手册按公开头组织，包含类型、函数与重载、公开成员、枚举、常量和宏；条件功能在所属 target 中说明，不另设平行手册。核心生命周期、协议状态机与 Web 驱动的契约分别在其定义 target 中维护，跨层只链接引用。
 
 ---
 
@@ -36,7 +20,7 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 
 根 `CMakeLists.txt` 提供以下构建与功能开关：
 
-| CMake 选项 | 默认值 | 公开编译宏（`ruvia::web` PUBLIC） | 说明 |
+| CMake 选项 | 默认值 | 公开编译宏 | 说明 |
 | --- | --- | --- | --- |
 | `RUVIA_BUILD_CORE` | `ON` | `ASIO_STANDALONE`（`ruvia::core` PUBLIC） | 构建 `ruvia::core` |
 | `RUVIA_BUILD_HTTP` | `ON` | — | 构建 `ruvia::http` |
@@ -47,7 +31,7 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 | `RUVIA_ENABLE_HTTP3` | `ON` | `RUVIA_ENABLE_HTTP3` | 启用 nghttp3/ngtcp2 协议层与 Web QUIC TLS 接入；开启时自动开启 `RUVIA_ENABLE_HTTP2` |
 | `RUVIA_ENABLE_MARIADB` | `OFF` | `RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_DATABASE` | 启用 MariaDB 驱动与 `"db_entity.h"` / `"db_entity_codec.h"` / `"db_executor.h"` / `"db_migration.h"` / `"db_query.h"` / `"db_repository.h"` / `"db_schema.h"` / `"db_sql_scan.h"` 公开头 |
 | `RUVIA_ENABLE_POSTGRESQL` | `OFF` | `RUVIA_ENABLE_POSTGRESQL`、`RUVIA_ENABLE_DATABASE` | 启用 PostgreSQL 驱动、ORM 与 `"db_entity.h"` / `"db_entity_codec.h"` / `"db_executor.h"` / `"db_migration.h"` / `"db_query.h"` / `"db_repository.h"` / `"db_schema.h"` / `"db_sql_scan.h"` 公开头 |
-| `RUVIA_ENABLE_REDIS` | `OFF` | `RUVIA_ENABLE_REDIS` | 启用 `"redis_executor.h"` / `"redis_orm.h"`、服务端 `session_middleware` 与数据库查询缓存 |
+| `RUVIA_ENABLE_REDIS` | `OFF` | `RUVIA_ENABLE_REDIS` | 启用 `"redis_executor.h"` / `"redis_orm.h"` / `"session.h"`、服务端 `session_middleware` 与数据库查询缓存 |
 | `RUVIA_ENABLE_JWT` | `OFF` | `RUVIA_ENABLE_JWT` | 启用 `"jwt.h"` |
 
 顶层构建在未指定 `CMAKE_TOOLCHAIN_FILE` 时从环境变量 `VCPKG_ROOT` 选择 vcpkg，并加载项目 triplet、按开关选择 manifest 特性。子项目由宿主提供工具链与依赖清单。未启用功能不编译对应源码，也不安装相应公开头文件。
@@ -88,6 +72,8 @@ target_link_libraries(my_service PRIVATE ruvia::web)
 
 消费方提供与 Ruvia 匹配的依赖清单和工具链：非 Windows 为 mimalloc 启用普通 `override` 特性；Windows 使用普通 mimalloc 依赖与上述静态 CRT，不需要 overlay、对象导出或 EXE 后处理，也不覆盖宿主的标准分配接口。独立 HTTP 组件不依赖 mimalloc。`add_subdirectory` 宿主自行提供依赖清单和工具链。
 
+从 `1.0.0` 起，同一主版本内保持非 `detail` 公开 API 的源码兼容，包括公开宏、配置类型、错误码及所有权和生命周期契约；新增能力以兼容方式加入，破坏性调整进入下一主版本。CMake 包兼容性在 `0.x` 要求主版本和次版本均相同，从 `1.x` 起要求主版本相同。此承诺适用于相同平台、工具链和功能开关组合；不承诺跨版本 ABI 兼容，升级后应重新编译下游程序。
+
 #### 静态库中的控制器链接（`ruvia_link_controllers`）
 
 控制器通过 `RUVIA_ROUTES_BEGIN(Controller)` 宏在 `main()` 之前的静态初始化阶段自动注册路由。如果将控制器拆分为独立的 `STATIC_LIBRARY` 或 `OBJECT_LIBRARY`，普通 `target_link_libraries` 可能会因可执行文件未直接引用控制器符号而丢弃目标文件。`ruviaConfig.cmake` 在找到 `web` 组件时提供了 `ruvia_link_controllers` 辅助函数：
@@ -103,42 +89,7 @@ ruvia_link_controllers(my_service user_controllers)
 
 ---
 
-## 3. 核心架构与生命周期准则
-
-### 3.1 Shared-Nothing Worker 线程模型
-
-- **单 Worker 独占连接生命周期**：生产应用 `ruvia::app()` 按 `application_worker_config::worker_count_` 启动同构业务 worker 线程。每个 worker 独占一个 standalone Asio `io_context`、控制器实例、中间件实例以及绑定的 `db_client` / `redis_client` 连接池。POSIX 上每个 worker 以 `SO_REUSEPORT` 自行绑定监听器；Windows 由独立 Acceptor 线程以 `SO_EXCLUSIVEADDRUSE` 独占监听。
-- **连接亲和**：socket 一经业务 worker 接收（POSIX 自行 accept；Windows 接管 Acceptor 派发的未绑 IOCP 裸 `SOCKET` 并首次绑定自身 IOCP），其后的 TCP/TLS I/O、HTTP/1 / HTTP/2 / HTTP/3 解析、路由执行与协议定时器全程留在该 worker 线程，无需加锁访问 worker 局部状态（`c.worker_state<T>()`）。`request_stop()` 直接断开全部连接，不设排空阶段。
-- **跨线程调度与卸载**：
-  - 跨 worker 通信通过 `web_worker_ref::post`、`worker_ref::post`（端点取自 `event_loop::worker()`）或有界通道 `make_channel` / `make_one_shot` 进行。
-  - 阻塞或 CPU 密集型计算必须通过 `c.run_blocking(...)` 或 `ruvia::run_blocking(...)` 显式卸载到 worker 事件循环的 `blocking_pool`；独立事件循环（`event_loop_pool`、`attach_event_loop`）默认自带 1 线程池，`blocking_pool_` 选项可改为借用比它存活更久的池，或置 `nullptr` 不用池（此时返回 `blocking_status::unavailable`，主机不是 IP 字面量的数据库或 Redis 客户端也无法构造）。**卸载闭包必须按值/移动持有自有数据，严禁在阻塞池线程中访问 `ruvia::context` 或任何 worker 局部状态**。
-
-### 3.2 协程与作用域操作契约
-
-- **`ruvia::task<T>`**：全库统一的惰性（lazy）协程。调用返回 `task<T>` 的函数仅分配协程帧而不开始执行，直到被右值 `co_await` 或传入 `event_loop::start()`。`context`、`db_executor`、`redis_executor` 等对象上的异步 I/O 方法返回的 `task<T>` 同时绑定到所属请求或客户端的生命周期。
-  - **未启动（cold）**的 `task<T>` 可直接析构丢弃，或在所属请求或客户端结束时自动回收。
-  - **已启动（started）但尚未完成**的 `task<T>` 严禁直接析构（会直接触发 `std::terminate()`）。请求取消（`stop_source::request_stop()`）后，仍必须 `co_await` 或 `join` 等待其完成退出。
-
-### 3.3 内存资源与借用生命周期
-
-- **原生分配器与借用防悬垂保护**：
-  - 拥有型文本与集合直接使用标准容器（`std::string` / `std::vector`），非 Windows 静态构建由 `mimalloc` 全局接管分配与回收，不设额外请求 Arena 或 Worker 内存池。
-  - `c.req().header(...)`、`c.req().query(...)`、`c.req().param(...)`、`c.req().text()` 等返回的 `std::string_view` / `std::span` 均借用自当前请求缓冲，仅在当前请求（或流式读取的下一次 `read()` 之前）有效。
-  - 公开 API 参数广泛使用 `ruvia::borrowed_text`，并在返回借用视图的成员函数上标注 `RUVIA_LIFETIMEBOUND` 且 `= delete` 右值重载，在编译期阻止绑定临时 `std::string` 右值导致的悬垂引用。
-  - 构造响应体时（如 `c.text(...)`、`c.body(...)`），支持传入 `std::string_view`（复制到响应中）、`std::string&&`（零拷贝接管所有权）、字符串字面量或 `ruvia::static_text("...")`（静态存储期零拷贝）。
-
-### 3.4 配置结构体与错误处理约定
-
-- **配置结构体字段命名**：所有配置/选项结构体（`*_config`、`*_options`、`*_rule` 等）的公开成员变量均以**下划线 `_` 结尾**（例如 `listen_config{.address_ = "0.0.0.0", .http_ = 8080}`），支持 C++20 指定初始化器（designated initializers）。
-- **配置容器**：拥有型文本与集合使用 `std::string` / `std::vector`。
-- **错误处理形状**：
-  - **正常协议/队列状态推进**：通过状态枚举或结果类型表示（如 `post_status::queue_full`、`channel_send_status::full`、`blocking_status::timed_out`、`wait_status::closed`）。
-  - **操作失败或业务/协议错误**：抛出类型化异常（如路由中抛出 `ruvia::http_error`（可携带校验 issues）由错误处理器转换为对应 HTTP 响应；协议原语抛出 `ruvia::http_protocol_error`，携带状态码与稳定机器码 `code()`；客户端抛出 `db_error`、`redis_error`）。
-  - **纯解析/值校验边界**：返回 `std::optional<T>`、`std::variant<T, Error>`，或直接返回值并在格式/规则非法时抛出 `std::invalid_argument` / 携带 issues 的 `ruvia::http_error`（如 `ruvia::parse_integer<T>`、`ruvia::from_json<T>`）。
-
----
-
-## 4. 示例程序全集索引
+## 3. 示例程序全集索引
 
 仓库 `examples/` 下包含 30 个可独立运行的示例程序（开启 `-DRUVIA_BUILD_EXAMPLES=ON` 构建）：
 

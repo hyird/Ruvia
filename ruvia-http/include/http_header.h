@@ -761,7 +761,7 @@ template <http_header_field_source source_type>
 }
 
 // Singular convenience accessors over received fields select the first
-// matching field line (see doc/core-and-http.md) without copying its value.
+// matching field line (see doc/ruvia-http.md#api-http-header-h) without copying its value.
 template <http_header_field_source source_type>
 [[nodiscard]] constexpr std::optional<std::string_view> find_first_http_header(const source_type& fields, std::string_view name) noexcept {
     if constexpr (http_header_field_message<source_type>) {

@@ -57,8 +57,8 @@ private:
 // speaking HTTP (for example, TLS bytes on an HTTP port). Input whose first
 // line (after ignored empty lines; the available bytes while no CRLF has
 // arrived) has a whitespace-separated word naming an HTTP version ("HTTP/" in
-// any case, or token "/" DIGITs "." DIGITs) is HTTP and is answered with 400
-// (RFC 9112 sections 2.2 and 3). Otherwise input is dropped once its first
+// any case, or token "/" DIGITs "." DIGITs) is HTTP and is not dropped.
+// See RFC 9112 sections 2.2 and 3. Otherwise input is dropped once its first
 // line is CRLF-terminated, or at once when its first byte cannot begin a
 // method token. Any other parse error is answered.
 [[nodiscard]] bool should_drop_invalid_cleartext_http1_input(std::string_view buffer, http_parse_error error) noexcept;

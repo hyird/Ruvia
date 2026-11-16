@@ -252,8 +252,8 @@ private:
 };
 
 // Allocation-free HTTP/1.1 interim-head writer. It validates the complete
-// borrowed field set and exact 64-field/64-KiB bounds before touching the
-// output buffer, throwing http1_response_head_error for a head it cannot send.
+// borrowed field set against max_http_header_fields/max_http_header_bytes
+// before touching output, throwing http1_response_head_error for an unsendable head.
 // No Server or Date field is injected: the encoded fields are exactly those
 // represented by http_interim_response_head.
 [[nodiscard]] std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer);
