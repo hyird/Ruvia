@@ -635,11 +635,12 @@ using http_unique_field_lookup = unique_lookup<std::string_view>;
 
 class http_header_range_view;
 
-// A message exposing its fields through headers() (http_request,
-// http_response, http_client_response_head).
+// A message exposing its fields through headers(). The range must survive the
+// accessor call: return an lvalue reference or a borrowed range.
 template <typename message_type>
 concept http_header_field_message = !http_header_field_range<message_type> && requires(const std::remove_cvref_t<message_type>& message) {
     { message.headers() } -> http_header_field_range;
+    requires std::ranges::borrowed_range<decltype(message.headers())>;
 };
 
 // Anything a function can read header fields from: a sized forward range of

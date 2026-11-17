@@ -1912,6 +1912,10 @@ static_assert(!std::is_constructible_v<http_interim_response_head, ruvia::http_s
 
 namespace {
 
+struct message_with_copied_headers final {
+    std::vector<ruvia::http_header> headers() const;
+};
+
 template <typename source_type>
 concept unique_header_lookup_available = requires(source_type&& source) {
     ruvia::find_unique_http_header(std::forward<source_type>(source), "X-Test");
@@ -1983,6 +1987,10 @@ static_assert(!first_header_lookup_available<const ruvia::http_response>);
 // Read-only operations returning owned values still accept temporary owners.
 static_assert(std::is_constructible_v<ruvia::http_header_range_view, std::vector<ruvia::http_header>>);
 static_assert(std::is_constructible_v<ruvia::http_header_range_view, ruvia::http_response>);
+static_assert(!std::is_constructible_v<ruvia::http_header_range_view, const message_with_copied_headers&>);
+static_assert(!first_header_lookup_available<const message_with_copied_headers&>);
+static_assert(!unique_header_lookup_available<const message_with_copied_headers&>);
+static_assert(std::is_constructible_v<ruvia::http_header_range_view, ruvia::http_interim_response_head>);
 static_assert(body_decode_available<ruvia::http1_body_decoder&>);
 static_assert(!body_decode_available<ruvia::http1_body_decoder>);
 static_assert(body_finish_input_available<ruvia::http1_body_decoder&>);

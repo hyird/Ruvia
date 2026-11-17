@@ -1747,6 +1747,7 @@ template <typename message_type>
 concept http_header_field_message = !http_header_field_range<message_type>
     && requires(const std::remove_cvref_t<message_type>& message) {
            { message.headers() } -> http_header_field_range;
+           requires std::ranges::borrowed_range<decltype(message.headers())>;
        };
 
 template <typename source_type>
@@ -1761,7 +1762,7 @@ concept http_header_field_source = std::same_as<std::remove_cvref_t<source_type>
 | `borrowed_http_headers` | 零拷贝首部视图 span，供请求头描述、响应、握手与客户端选项结构体持有。与 `borrowed_text` 相同，接受借用 span 和连续拥有型容器左值，拒绝临时拥有型容器（`std::vector`、`std::array`）与 `std::initializer_list`，因为其底层存储会在结构体被消费前到期。大小与 `std::span<const http_header_view>` 相同。借用规则见 [`"borrowed_text.h"`](#api-borrowed-text-h)。 |
 | `http_header_field` | 具有可转换为 `std::string_view` 的 `name()` 与 `value()` 的字段类型（`http_header`、`http_header_view` 等）。 |
 | `http_header_field_range` | 元素满足 `http_header_field` 的有大小前向范围；允许迭代器按值产出借用字段，不要求字段对象连续存储。 |
-| `http_header_field_message` | 本身不是字段范围、但通过 `headers()` 暴露字段范围的消息（`http_request`、`http_response`、`http_client_response_head`）。 |
+| `http_header_field_message` | 本身不是字段范围、但通过 `headers()` 返回字段范围左值引用或借用范围的消息（如 `http_request`、`http_response`、`http_client_response_head`）。拒绝按值返回拥有型容器的消息，即使消息本身是左值。 |
 | `http_header_field_source` | 可读取字段的一切来源：字段范围、上述消息，或已绑定的 `http_header_range_view`。 |
 | `unique_lookup<T>` | 在允许重名的集合中查找单个名称的结果（接收字段、JSON 对象成员、SQL 结果列共用此模板）。`value_` 仅在 `status_ == found` 时有意义；视图或指针类型的 `value_` 借用被搜索的存储。 |
 | `add_occurrence(value)` | 状态迁移 `absent → found(value) → repeated`（清空 `value_`）；`repeated` 为终态。 |
