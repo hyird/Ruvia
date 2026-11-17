@@ -381,7 +381,7 @@ task<void> remove_keys(redis_executor redis, std::vector<std::string> keys, requ
     const operation_deadline deadline_value(options.timeout_);
     auto deletion = delete_key_batch(redis, keys, options, deadline_value);
     // The command owns the keys; release their source before network IO.
-    std::vector<std::string>(keys).swap(keys);
+    std::vector<std::string>().swap(keys);
     co_await std::move(deletion);
 }
 
@@ -585,8 +585,8 @@ task<db_rows> db_query_cache_state::query(std::string key, std::chrono::millisec
     if (filled.awaited_) {
         filled.result_ = std::move(encoded_bytes);
     }
-    std::string(encoded_bytes).swap(encoded_bytes);
-    std::string(key).swap(key);
+    std::string().swap(encoded_bytes);
+    std::string().swap(key);
     lead.finish();
     if (write.has_value()) {
         try {

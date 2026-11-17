@@ -128,39 +128,36 @@ void tls_tunnel_output::abort() noexcept {
 }
 task<void> tls_tunnel_output::run_writer() {
     try {
-        co_await run_writer_inner();
+        for (;;) {
+            if (error_) {
+                co_return;
+            }
+            if (size_ == 0) {
+                flushed_.notify();
+                if (stopping_) {
+                    co_return;
+                }
+                co_await available_.wait();
+                continue;
+            }
+            const auto count = std::min(size_, bytes_.size() - head_);
+            const auto result_value = co_await async_asio<std::size_t>([this, count](auto handler) {
+                asio::async_write(socket_, asio::buffer(bytes_.data() + head_, count), std::move(handler));
+            });
+            if (lifecycle_ != nullptr) {
+                lifecycle_->note_write(result_value.result());
+            }
+            if (result_value.error_code()) {
+                fail(result_value.error_code());
+                co_return;
+            }
+            head_ = (head_ + result_value.result()) % bytes_.size();
+            size_ -= result_value.result();
+            flushed_.notify();
+        }
     } catch (...) {
         fail(std::make_error_code(std::errc::io_error));
         throw;
-    }
-}
-task<void> tls_tunnel_output::run_writer_inner() {
-    for (;;) {
-        if (error_) {
-            co_return;
-        }
-        if (size_ == 0) {
-            flushed_.notify();
-            if (stopping_) {
-                co_return;
-            }
-            co_await available_.wait();
-            continue;
-        }
-        const auto count = std::min(size_, bytes_.size() - head_);
-        const auto result_value = co_await async_asio<std::size_t>([this, count](auto handler) {
-            asio::async_write(socket_, asio::buffer(bytes_.data() + head_, count), std::move(handler));
-        });
-        if (lifecycle_ != nullptr) {
-            lifecycle_->note_write(result_value.result());
-        }
-        if (result_value.error_code()) {
-            fail(result_value.error_code());
-            co_return;
-        }
-        head_ = (head_ + result_value.result()) % bytes_.size();
-        size_ -= result_value.result();
-        flushed_.notify();
     }
 }
 task<std::error_code> tls_tunnel_output::flush() {

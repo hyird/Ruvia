@@ -208,6 +208,7 @@ flowchart LR
 - **编译期借用防线**：返回借用视图的成员标注 `RUVIA_LIFETIMEBOUND` 并删除右值宿主重载；`borrowed_text` / `borrowed_span` 参数拒绝右值拥有容器与 `std::initializer_list`（契约见 [ruvia-http.md](ruvia-http.md#api-borrowed-text-h)）。
 - **响应体所有权**：`outbound_bytes` 构造即复制视图输入、零拷贝接管精确 `std::string&&`；响应 builder 消费已拥有字节、仅 `static_text` 借用静态存储（[7.1](#api-context-h)、[7.2](#api-outbound-bytes-h)）。
 - **异步入口拥有化**：返回冷 `task` 的出站写入、文件响应与客户端请求在返回前取得输入所有权；调用方缓冲区可在 `co_await` 前释放。
+- **源缓冲释放**：事务失败语句的 SQL/参数在回滚 I/O 前释放；缓存命令拥有参数后，写入/删除的源缓冲在 Redis I/O 前释放。
 - **协程契约**：`task<T>` 惰性、仅右值 `co_await`，已启动任务必须等待完成（[ruvia-core.md](ruvia-core.md#api-task-h)）；`operation_options` 的超时与停止令牌规则见 [ruvia-core.md](ruvia-core.md#api-operation-options-h)。
 - **请求取消**：`c.stop_token()` 观察 Worker 停止、子请求取消与流式响应的客户端离开；`db()`、`redis()`、`run_blocking()` 自动绑定它，显式令牌与之合并。取消是协作式的，不抢占 CPU 工作。
 

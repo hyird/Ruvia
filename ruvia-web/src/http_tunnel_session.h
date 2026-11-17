@@ -70,7 +70,6 @@ private:
     static int write_bio(BIO* bio, const char* bytes, std::size_t size, std::size_t* written) noexcept;
     static long control_bio(BIO*, int command, long, void*) noexcept;
     [[nodiscard]] task<void> run_writer();
-    [[nodiscard]] task<void> run_writer_inner();
     void fail(std::error_code error) noexcept;
 
     SSL& ssl_;
@@ -409,8 +408,8 @@ private:
     static void abort_thunk_default(void* raw) noexcept {
         static_cast<http_tunnel_session*>(raw)->abort();
     }
-    // The returned view borrows delivered_ until the next read starts; an
-    // empty chunk is never returned.
+    // The returned view borrows delivered_ (preread input) or read_buffer_
+    // until the next read starts; an empty chunk is never returned.
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read_chunk(operation_options operation) {
         auto lease = claim_operation_lane(read_active_, tunnel_lane_in_progress);
         inbound_discard(delivered_, delivered_reservation_);
@@ -437,8 +436,7 @@ private:
             if (!has_more) {
                 receive_ended_ = true;
             } else if (!read_buffer_.empty()) {
-                inbound_append(delivered_, delivered_reservation_, read_buffer_);
-                co_return as_bytes(std::string_view(delivered_));
+                co_return as_bytes(std::string_view(read_buffer_));
             }
         }
         co_return std::nullopt;
@@ -502,7 +500,7 @@ private:
     inbound_buffer_reservation read_reservation_;
     std::string pending_;
     inbound_buffer_reservation pending_reservation_;
-    // The chunk the last read returned.
+    // The preread chunk the last read returned.
     std::string delivered_;
     inbound_buffer_reservation delivered_reservation_;
     bool ended_{false};

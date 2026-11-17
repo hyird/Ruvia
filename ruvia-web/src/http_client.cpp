@@ -131,7 +131,7 @@ task<void> http_client_registry::prepare_origin(preparation_owner_type input, op
     if (input->config_.scheme_ == http_scheme::https) {
         std::exception_ptr failure;
         try {
-            input->config_.tls_ = co_await prepare_client_tls_config(worker_, input->config_.tls_, {.timeout_ = timeout.timeout(), .stop_token_ = stop});
+            input->config_.tls_ = co_await prepare_client_tls_config(worker_, std::move(input->config_.tls_), {.timeout_ = timeout.timeout(), .stop_token_ = stop});
         } catch (...) {
             failure = std::current_exception();
         }

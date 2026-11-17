@@ -39,9 +39,8 @@
 namespace {
 
 constexpr auto scan_interval = std::chrono::milliseconds(10);
-// A tunnel's reused read window takes a little over 4 KiB: one fits the
-// connection budget with room for a small chunk, two fit the worker budget,
-// three do not. A streamed body's 8 KiB read buffer fits neither.
+// One tunnel read window fits the connection budget and two fit the worker
+// budget, but three do not. A streamed body's 8 KiB read buffer fits neither.
 constexpr std::size_t connection_budget = 6000;
 constexpr std::size_t worker_budget = 10000;
 
@@ -133,7 +132,11 @@ class inbound_memory_routes final {
             if (!chunk) {
                 break;
             }
+            const std::string expected(reinterpret_cast<const char*>(chunk->data()), chunk->size());
             co_await tunnel_value.write("ok\n");
+            if (std::string_view(reinterpret_cast<const char*>(chunk->data()), chunk->size()) != expected) {
+                throw std::runtime_error("tunnel read view changed during write");
+            }
         }
         co_await tunnel_value.write(limited ? "limited\n" : "end\n");
     }
@@ -263,7 +266,7 @@ TEST(Ruvia, streamed_request_body_reads_count_against_the_connection_inbound_bud
     server.finish();
 }
 
-TEST(Ruvia, tunnel_reads_count_against_the_connection_inbound_budget) {
+TEST(Ruvia, tunnel_reads_reuse_one_window_within_the_connection_inbound_budget) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, inbound_memory_config());
     test_client client(io, server.endpoint());
@@ -271,7 +274,8 @@ TEST(Ruvia, tunnel_reads_count_against_the_connection_inbound_budget) {
     client.send(std::string(20000, 't'));
     client.finish_sending();
     const auto output = client.read_to_end();
-    EXPECT_TRUE(output.ends_with("limited\n"));
+    EXPECT_TRUE(output.starts_with("ok\n"));
+    EXPECT_TRUE(output.ends_with("end\n"));
     client.close();
     server.finish();
 }

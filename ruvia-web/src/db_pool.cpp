@@ -674,8 +674,8 @@ task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t inde
     }
     try {
         // Release the failed statement's storage before awaiting ROLLBACK.
-        std::string(sql).swap(sql);
-        std::vector<db_value>(params).swap(params);
+        std::string().swap(sql);
+        std::vector<db_value>().swap(params);
         co_await retire_failed_transaction_slot(index, timeout, failure);
     } catch (...) {
         close_slot(index);

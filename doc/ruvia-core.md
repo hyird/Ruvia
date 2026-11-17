@@ -217,6 +217,7 @@ flowchart LR
 
 - **协程参数**：`task` 协程的按值参数在调用时移入协程帧，冷任务也拥有它们；引用参数与协程 lambda 的捕获只被借用，必须存活到任务完成。协程 lambda 不应带捕获，输入改用按值参数传入（见 [1.3](#13-最短接入)）。
 - **入口拥有化**：跨越挂起点的公开异步入口在返回冷操作前拥有其输入：`run_blocking` 按值持有 `worker_ref`、`fn` 与 `operation_options`；`channel_sender::send_wait` 持有待发送值；`pool_lease_scheduler::acquire` 复制 `operation_options`。
+- **转发边界**：无额外语义的任务转发直接返回底层 `task`；跨挂起保活、取消绑定、RAII、异常收敛与结果转换仍保留必要的协程帧。
 - **借用宿主**：以下 API 只借用调用方提供的宿主，宿主必须地址稳定并覆盖借用期；临时量入口一律 `= delete`。
 
 | API | 借用对象 | 已删除的入口 |

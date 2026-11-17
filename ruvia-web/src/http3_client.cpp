@@ -1900,8 +1900,8 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                         return false;
                     }, []() noexcept {
                         return true;
-                    }, [&](std::string_view chunk) -> task<bool> {
-                        co_return co_await self.send_body(item, chunk);
+                    }, [&](std::string_view chunk) {
+                        return self.send_body(item, chunk);
                     }, [&]() -> task<bool> {
                         std::vector<http_header_view> trailers;
                         if (const auto* upload = request.upload()) {
