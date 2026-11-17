@@ -4666,7 +4666,7 @@ JSON 解析的整文档资源预算（含嵌套数组），用于 `parse_json`�
 
 #### 12.4.11 `json_value` 与 `json_object`
 
-**借用契约**：`parse()` 返回领域结果；成功 token 校验整个输入后**借用**它，不复制；输入必须比视图及其 `get<T>()` 结果活得久。`std::basic_string` 右值传给 `parse` 的重载 `= delete`，在编译期阻止悬垂。作为模型字段时，`parse_json` 解析会复制 token（拥有），请求绑定可能借用请求体。
+**存储契约**：`parse(borrowed_text)` 校验整个输入后借用原始字节，不复制；输入必须比 token 及派生视图活得久。`parse(std::string&&)` 校验成功才接管精确的非 const `std::string` 右值，无须复制；失败不消费输入。两者均保留输入的前后空白。作为模型字段时，`parse_json` 解析会复制 token（拥有），请求绑定可能借用请求体。
 **移动契约**：移动构造保留借用/拥有；移动赋值让目标拥有结果（复制借用内容）；成功移动或右值字段转移后源恢复为默认 token（`json_value` 为 `null`，`json_object` 为 `{}`），重置不分配，源仍可查询、赋值或序列化；重绑定失败保留双方；自移动无操作。任一方改变后需重新取 `view()`。
 **比较**：`operator==` 逐字节比较保留的 token，不做 JSON 规范化。
 **序列化**：作为模型字段时原样输出 `view()`。
@@ -4688,9 +4688,8 @@ JSON 解析的整文档资源预算（含嵌套数组），用于 `parse_json`�
 | `enum class kind_type : unsigned char { object, array, string, number, boolean, null }` | token 种类 |
 | `json_value() noexcept` | `null` |
 | `template <typename model_type> requires detail::is_model<model_type> explicit json_value(const model_type& value)` | 以模型 writer 写出的对象文本构造拥有型 token；与 `to_json_value` 同一路径 |
-| `static model_parse_result<json_value> parse(std::string_view body, model_parse_options options = {})` | 校验 `body` 为恰好一个 JSON 值并借用；非法返回 `invalid_format`（`message()` 为 `"invalid JSON value"`） |
-| `template <typename traits_type, typename allocator_type> static model_parse_result<json_value> parse(std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete` | 拒绝临时字符串 |
-| `template <typename traits_type, typename allocator_type> static model_parse_result<json_value> parse(const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete` | 同上 |
+| `static model_parse_result<json_value> parse(borrowed_text body, model_parse_options options = {})` | 校验并借用恰好一个 JSON 值；非法返回 `invalid_format`（`message()` 为 `"invalid JSON value"`） |
+| `static model_parse_result<json_value> parse(std::string&& body, model_parse_options options = {})` | 同上校验；成功接管原字符串 |
 | `json_value(const json_value&) = delete` | 禁止拷贝构造：token 可能借用输入，复制需显式 `parse` 或移动赋值取得拥有 |
 | `json_value& operator=(const json_value&) = delete` | 禁止拷贝赋值 |
 | `json_value(json_value&&) noexcept = default` | 保留借用/拥有；源恢复为 `null`（见移动契约） |
@@ -4707,6 +4706,7 @@ JSON 解析的整文档资源预算（含嵌套数组），用于 `parse_json`�
 | `template <typename t_type> requires detail::is_model_field<t_type> json_field_lookup<t_type> get(std::string_view field) const&` | 成员查找，语义同 `json_object::get`；非对象 token 一律 `absent` |
 | `template <typename t_type> requires detail::is_model_field<t_type> json_field_lookup<t_type> get(std::string_view field) const&& = delete` | 禁止在右值 token 上查找：结果可能借用即将销毁的 token 字节 |
 | `template <typename visitor_type> bool for_each_element(visitor_type&& visitor) const` | 数组元素逐个以 `const json_value&` 调用（只在回调期间有效）；回调返回 `false` 中止；非数组或中止返回 `false` |
+| `template <typename visitor_type> bool visit_pointer(std::string_view pointer, visitor_type&& visitor) const&` | 按 [RFC 6901 §3–4](https://www.rfc-editor.org/rfc/rfc6901#section-3) 解析字符串形式的 JSON Pointer。唯一命中时同步调用返回 `void` 的回调；参数借用原始 token，只在回调期间有效。指针非法、路径不存在或成员重复时返回 `false`，不调用回调。临时 token 上不可调用。 |
 
 **`ruvia::json_object`**（只接受对象；默认构造表示 `{}`）：
 
@@ -4714,9 +4714,8 @@ JSON 解析的整文档资源预算（含嵌套数组），用于 `parse_json`�
 | --- | --- |
 | `json_object() noexcept` | `{}` |
 | `template <typename model_type> requires detail::is_model<model_type> explicit json_object(const model_type& value)` | 以模型 writer 写出的对象文本构造拥有型 token；与 `to_json_object` 同一路径 |
-| `static model_parse_result<json_object> parse(std::string_view body, model_parse_options options = {})` | 校验 `body` 为恰好一个 JSON 对象并借用；否则返回 `invalid_format`（`message()` 为 `"invalid JSON object"`） |
-| `template <typename traits_type, typename allocator_type> static model_parse_result<json_object> parse(std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete` | 拒绝临时字符串 |
-| `template <typename traits_type, typename allocator_type> static model_parse_result<json_object> parse(const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete` | 同上 |
+| `static model_parse_result<json_object> parse(borrowed_text body, model_parse_options options = {})` | 校验并借用恰好一个 JSON 对象；否则返回 `invalid_format`（`message()` 为 `"invalid JSON object"`） |
+| `static model_parse_result<json_object> parse(std::string&& body, model_parse_options options = {})` | 同上校验；成功接管原字符串 |
 | `json_object(const json_object&) = delete` | 禁止拷贝构造（同 `json_value`） |
 | `json_object& operator=(const json_object&) = delete` | 禁止拷贝赋值 |
 | `json_object(json_object&&) noexcept = default` | 保留借用/拥有；源恢复为 `{}`（见移动契约） |

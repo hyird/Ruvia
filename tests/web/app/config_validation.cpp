@@ -153,14 +153,14 @@ private:
     ruvia::task<ruvia::http_response> owned(ruvia::context&) {
         ruvia::http_response response;
         std::string body(256 * 1024, 'm');
-        response.owned_body(std::move(body));
+        response.body(std::move(body));
         co_return response;
     }
 
     ruvia::task<ruvia::http_response> throwing(ruvia::context&) {
         ruvia::http_response response;
         std::string body(256 * 1024, 'e');
-        response.owned_body(std::move(body));
+        response.body(std::move(body));
         throw std::runtime_error("testing memory failure");
         co_return response;
     }
@@ -168,7 +168,7 @@ private:
     ruvia::task<ruvia::http_response> cancelled(ruvia::context& c) {
         ruvia::http_response response;
         std::string body(256 * 1024, 'c');
-        response.owned_body(std::move(body));
+        response.body(std::move(body));
         // Exercise explicit downstream cancellation without a request-level timer.
         ruvia::stop_source stop;
         stop.request_stop();

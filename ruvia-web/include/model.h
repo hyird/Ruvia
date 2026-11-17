@@ -2788,11 +2788,18 @@ protected:
         storage_.assign_owned(std::move(output));
     }
 
-    [[nodiscard]] static model_parse_result<derived_type> parse_token(std::string_view body, model_parse_options options, bool require_object, const char* error_message) {
+    template <typename body_type>
+    [[nodiscard]] static model_parse_result<derived_type> parse_token(body_type&& body, model_parse_options options, bool require_object, const char* error_message) {
         if (!is_complete_json_value(body, options, require_object)) {
             return model_parse_result<derived_type>(model_parse_error(model_parse_error::code_type::invalid_format, error_message));
         }
-        return model_parse_result<derived_type>(derived_type(borrowed_model_token_tag{}, body));
+        if constexpr (std::same_as<body_type, std::string>) {
+            derived_type token;
+            token.storage_.assign_owned(std::move(body));
+            return model_parse_result<derived_type>(std::move(token));
+        } else {
+            return model_parse_result<derived_type>(derived_type(borrowed_model_token_tag{}, body));
+        }
     }
 
     void assign_owned(std::string_view value) {
@@ -2837,13 +2844,13 @@ public:
     explicit json_value(const model_type& value) :
         base_type(value) {}
 
-    [[nodiscard]] static model_parse_result<json_value> parse(std::string_view body, model_parse_options options = {});
+    [[nodiscard]] static model_parse_result<json_value> parse(borrowed_text body, model_parse_options options = {});
 
-    template <typename traits_type, typename allocator_type>
-    static model_parse_result<json_value> parse(std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
-
-    template <typename traits_type, typename allocator_type>
-    static model_parse_result<json_value> parse(const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
+    // Validate first; on success take over an exact std::string rvalue.
+    template <std::same_as<std::string> string_type>
+    [[nodiscard]] static model_parse_result<json_value> parse(string_type&& body, model_parse_options options = {}) {
+        return parse_token(std::move(body), options, false, "invalid JSON value");
+    }
 
     json_value(const json_value&) = delete;
     json_value& operator=(const json_value&) = delete;
@@ -2920,7 +2927,25 @@ public:
     template <typename visitor_type>
     [[nodiscard]] bool for_each_element(visitor_type&& visitor) const;
 
+    // RFC 6901 string form. Calls a synchronous visitor with a borrowed token;
+    // returns false without invoking it if the pointer cannot resolve uniquely.
+    template <typename visitor_type>
+        requires requires(visitor_type&& visitor, const json_value& value) { { std::forward<visitor_type>(visitor)(value) } -> std::same_as<void>; }
+    [[nodiscard]] bool visit_pointer(std::string_view pointer, visitor_type&& visitor) const& {
+        const auto selected = find_pointer(pointer);
+        if (!selected) {
+            return false;
+        }
+        const json_value token(detail::borrowed_model_token_tag{}, *selected);
+        std::forward<visitor_type>(visitor)(token);
+        return true;
+    }
+    template <typename visitor_type>
+    bool visit_pointer(std::string_view, visitor_type&&) const&& = delete;
+
 private:
+    [[nodiscard]] std::optional<std::string_view> find_pointer(std::string_view pointer) const&;
+
     friend class json_object;
     template <typename, fixed_string>
     friend class detail::json_token_base;
@@ -2946,13 +2971,12 @@ public:
     explicit json_object(const model_type& value) :
         base_type(value) {}
 
-    [[nodiscard]] static model_parse_result<json_object> parse(std::string_view body, model_parse_options options = {});
+    [[nodiscard]] static model_parse_result<json_object> parse(borrowed_text body, model_parse_options options = {});
 
-    template <typename traits_type, typename allocator_type>
-    static model_parse_result<json_object> parse(std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
-
-    template <typename traits_type, typename allocator_type>
-    static model_parse_result<json_object> parse(const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
+    template <std::same_as<std::string> string_type>
+    [[nodiscard]] static model_parse_result<json_object> parse(string_type&& body, model_parse_options options = {}) {
+        return parse_token(std::move(body), options, true, "invalid JSON object");
+    }
 
     json_object(const json_object&) = delete;
     json_object& operator=(const json_object&) = delete;
@@ -2983,12 +3007,12 @@ private:
     using base_type::base_type;
 };
 
-inline model_parse_result<json_value> json_value::parse(std::string_view body, model_parse_options options) {
-    return parse_token(body, options, false, "invalid JSON value");
+inline model_parse_result<json_value> json_value::parse(borrowed_text body, model_parse_options options) {
+    return parse_token(body.view(), options, false, "invalid JSON value");
 }
 
-inline model_parse_result<json_object> json_object::parse(std::string_view body, model_parse_options options) {
-    return parse_token(body, options, true, "invalid JSON object");
+inline model_parse_result<json_object> json_object::parse(borrowed_text body, model_parse_options options) {
+    return parse_token(body.view(), options, true, "invalid JSON object");
 }
 
 template <typename visitor_type>
@@ -3028,7 +3052,91 @@ template <typename visitor_type>
     }) == json_object_visit_result::complete;
 }
 
+[[nodiscard]] inline unique_lookup<std::string_view> find_json_member(std::string_view object, std::string_view field) {
+    unique_lookup<std::string_view> match;
+    const auto visited = visit_json_object_fields(object, [&match, field](std::string_view key, std::string_view value) {
+        if (key == field) {
+            skip_json_whitespace(value);
+            match.add_occurrence(value);
+        }
+        return match.status_ != unique_lookup_status::repeated;
+    });
+    if (visited == json_object_visit_result::invalid) {
+        throw std::logic_error("json_object token is not a complete JSON object");
+    }
+    return match;
+}
+
 }  // namespace detail
+
+inline std::optional<std::string_view> json_value::find_pointer(std::string_view pointer) const& {
+    auto selected = view();
+    if (pointer.empty()) {
+        return selected;
+    }
+    skip_json_whitespace(selected);
+    std::string decoded;
+    while (!pointer.empty()) {
+        if (pointer.front() != '/') {
+            return std::nullopt;
+        }
+        pointer.remove_prefix(1);
+        const auto separator = pointer.find('/');
+        auto key = pointer.substr(0, separator);
+        pointer = separator == std::string_view::npos ? std::string_view{} : pointer.substr(separator);
+
+        if (selected.front() == '{') {
+            if (const auto escape = key.find('~'); escape != std::string_view::npos) {
+                decoded.assign(key.substr(0, escape));
+                for (auto i = escape; i < key.size(); ++i) {
+                    auto byte = key[i];
+                    if (byte == '~') {
+                        if (++i == key.size() || (key[i] != '0' && key[i] != '1')) {
+                            return std::nullopt;
+                        }
+                        byte = key[i] == '0' ? '~' : '/';
+                    }
+                    decoded.push_back(byte);
+                }
+                key = decoded;
+            }
+            const auto match = detail::find_json_member(selected, key);
+            if (match.status_ != unique_lookup_status::found) {
+                return std::nullopt;
+            }
+            selected = match.value_;
+        } else if (selected.front() == '[') {
+            if (key.empty() || (key.size() > 1 && key.front() == '0')) {
+                return std::nullopt;
+            }
+            const auto index = parse_integer<std::size_t>(key);
+            if (!index) {
+                return std::nullopt;
+            }
+            auto remaining = *index;
+            std::optional<std::string_view> element;
+            (void)consume_json_array_elements(selected, 0, [&](std::string_view& input) {
+                const auto start = input;
+                if (!skip_json_value(input, 1)) {
+                    return false;
+                }
+                if (remaining == 0) {
+                    element = start.substr(0, start.size() - input.size());
+                    return false;
+                }
+                --remaining;
+                return true;
+            });
+            if (!element) {
+                return std::nullopt;
+            }
+            selected = *element;
+        } else {
+            return std::nullopt;
+        }
+    }
+    return selected;
+}
 
 }  // namespace ruvia
 
@@ -3310,31 +3418,11 @@ template <typename t_type>
 template <typename t_type>
     requires detail::is_model_field<t_type>
 [[nodiscard]] inline json_field_lookup<t_type> json_object::get(std::string_view field) const& {
-    std::optional<std::string_view> match;
-    const auto visited = visit_json_object_fields(view(), [&match, field](std::string_view key, std::string_view value_view) {
-        if (key != field) {
-            return true;
-        }
-        if (match) {
-            return false;
-        }
-        match = value_view;
-        return true;
-    });
-    switch (visited) {
-        case json_object_visit_result::stopped:
-            return json_field_lookup<t_type>(unique_lookup_status::repeated);
-        case json_object_visit_result::invalid:
-            // Every construction path validates the complete object.
-            throw std::logic_error("json_object token is not a complete JSON object");
-        case json_object_visit_result::complete:
-            break;
+    const auto match = detail::find_json_member(view(), field);
+    if (match.status_ != unique_lookup_status::found) {
+        return json_field_lookup<t_type>(match.status_);
     }
-    if (!match) {
-        return json_field_lookup<t_type>(unique_lookup_status::absent);
-    }
-    skip_json_whitespace(*match);
-    const json_value value(detail::borrowed_model_token_tag{}, *match);
+    const json_value value(detail::borrowed_model_token_tag{}, match.value_);
     return json_field_lookup<t_type>(value.get<t_type>());
 }
 

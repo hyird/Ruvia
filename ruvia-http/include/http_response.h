@@ -1,11 +1,13 @@
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 
 #include "borrowed_text.h"
@@ -85,12 +87,15 @@ public:
     [[nodiscard]] http_response_body_segment_view body_segment(std::size_t index) const& RUVIA_LIFETIMEBOUND;
     http_response_body_segment_view body_segment(std::size_t index) const&& = delete;
     void body(std::string_view value);
-    void owned_body(std::string&& value) noexcept;
+    template <std::same_as<std::string> string_type>
+    void body(string_type&& value) noexcept {
+        body_.set_owned(std::move(value));
+    }
     // Borrows `value` without copying; keep its bytes valid and unchanged while
     // this response or a moved-to response retains the body.
     void static_body(borrowed_text value) noexcept;
     // Own bytes read from a file: all of it, a byte range, or a multipart
-    // byte-range payload of it. Unlike owned_body(), the body remains a file
+    // byte-range payload of it. Unlike body(), the body remains a file
     // representation, even when empty.
     void file_bytes_body(std::string&& value) noexcept;
     // Own the native path and preserve the

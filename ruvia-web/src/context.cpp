@@ -84,7 +84,7 @@ void mark_plain_text_defaults(http_response& response) {
 [[nodiscard]] http_response make_owned_json_response(std::string& body, const response_options& options) {
     auto response = detail::make_response(options);
     set_default_content_type(response, http_content_type::application_json);
-    response.owned_body(std::move(body));
+    response.body(std::move(body));
     return response;
 }
 
@@ -158,7 +158,7 @@ http_response request_exchange<host_type>::body(response_options options) const 
 template <typename host_type>
 http_response request_exchange<host_type>::body(outbound_bytes body, response_options options) const {
     auto response = detail::make_response(options);
-    response.owned_body(std::move(body).into_string());
+    response.body(std::move(body).into_string());
     return response;
 }
 
@@ -173,7 +173,7 @@ template <typename host_type>
 http_response request_exchange<host_type>::text(outbound_bytes body, response_options options) const {
     auto response = detail::make_response(options);
     mark_plain_text_defaults(response);
-    response.owned_body(std::move(body).into_string());
+    response.body(std::move(body).into_string());
     return response;
 }
 
@@ -237,7 +237,7 @@ template <typename host_type>
 http_response request_exchange<host_type>::html(outbound_bytes body, response_options options) const {
     auto response = detail::make_response(options);
     set_default_content_type(response, http_content_type::text_html_utf8);
-    response.owned_body(std::move(body).into_string());
+    response.body(std::move(body).into_string());
     return response;
 }
 

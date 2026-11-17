@@ -1035,6 +1035,17 @@ TEST(Ruvia, response_public_body_owns_its_source) {
     EXPECT_EQ(response.body_bytes(), std::string_view("owned copy"));
 }
 
+TEST(Ruvia, response_public_body_takes_rvalue_string_storage) {
+    http_response response;
+    std::string payload(4096, 'x');
+    const auto* storage = payload.data();
+
+    response.body(std::move(payload));
+
+    EXPECT_EQ(response.body_bytes().data(), storage);
+    EXPECT_EQ(response.body_bytes().size(), std::size_t{4096});
+}
+
 TEST(Ruvia, public_response_file_view_exposes_read_only_descriptor) {
     const std::filesystem::path path("public-fixture.bin");
     const auto identity = ruvia::http_response_file_identity::checked({1, 2, 3, 4});

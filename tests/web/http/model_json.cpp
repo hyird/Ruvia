@@ -111,8 +111,9 @@ static_assert(parse_result_offers_take_value<string_parse_result>);
 static_assert(!parse_result_offers_take_value<string_parse_result&>);
 static_assert(!parse_result_offers_take_value<const string_parse_result>);
 static_assert(dynamic_token_accepts_input<ruvia::json_value, std::string&>);
-static_assert(!dynamic_token_accepts_input<ruvia::json_value, std::string>);
-static_assert(!dynamic_token_accepts_input<ruvia::json_object, std::string>);
+static_assert(dynamic_token_accepts_input<ruvia::json_value, std::string>);
+static_assert(dynamic_token_accepts_input<ruvia::json_object, std::string>);
+static_assert(!dynamic_token_accepts_input<ruvia::json_value, const std::string>);
 static_assert(!dynamic_token_accepts_input<ruvia::json_object, const std::string>);
 
 TEST(Ruvia, model_parse_result_separates_owned_values_structure_and_rule_diagnostics) {
@@ -919,6 +920,51 @@ TEST(Ruvia, json_object_parse_requires_a_complete_object) {
     EXPECT_FALSE(ruvia::json_object::parse("[1,2]").has_value());
     EXPECT_FALSE(ruvia::json_object::parse("null").has_value());
     EXPECT_FALSE(ruvia::json_object::parse(R"({"name":"ada"} 1)").has_value());
+}
+
+TEST(Ruvia, dynamic_json_parse_takes_valid_rvalue_storage_only) {
+    const auto check = []<typename token_type> {
+        std::string input = " \n{\"body\":\"" + std::string(4096, 'x') + "\"}\t ";
+        const auto* storage = input.data();
+        const auto size = input.size();
+        const auto borrowed = token_type::parse(input).take_value();
+        EXPECT_EQ(borrowed.view().data(), storage);
+        const auto token = token_type::parse(std::move(input)).take_value();
+        EXPECT_EQ(token.view().data(), storage);
+        EXPECT_EQ(token.view().size(), size);
+        EXPECT_TRUE(token.view().starts_with(" \n{") && token.view().ends_with("}\t "));
+
+        std::string invalid = "{\"unterminated\":";
+        EXPECT_FALSE(token_type::parse(std::move(invalid)).has_value());
+        EXPECT_EQ(invalid, "{\"unterminated\":");
+    };
+    check.template operator()<ruvia::json_value>();
+    check.template operator()<ruvia::json_object>();
+}
+
+TEST(Ruvia, json_pointer_visits_the_original_token_and_rejects_ambiguity) {
+    const std::string_view source = R"( {"":[null],"key":[{"a/b":"value","~1":7}],"duplicate":1,"\u0064uplicate":2} )";
+    const auto root = ruvia::json_value::parse(source).take_value();
+    const auto storage = source.find("\"value\"");
+    EXPECT_TRUE(root.visit_pointer("/key/0/a~1b", [&](const ruvia::json_value& value) {
+        EXPECT_EQ(value.view(), "\"value\"");
+        EXPECT_EQ(value.view().data(), source.data() + storage);
+    }));
+    EXPECT_TRUE(root.visit_pointer("/key/0/~01", [](const ruvia::json_value& value) {
+        EXPECT_EQ(value.view(), "7");
+    }));
+    EXPECT_TRUE(root.visit_pointer("//0", [](const ruvia::json_value& value) {
+        EXPECT_TRUE(value.is_null());
+    }));
+    EXPECT_TRUE(root.visit_pointer("", [&](const ruvia::json_value& value) {
+        EXPECT_EQ(value.view(), source);
+    }));
+
+    for (const auto invalid : {"key", "/missing", "/duplicate", "/key/-", "/key/01", "/key/+0", "/key/1", "/key/9223372036854775808000", "/key/0/~2", "/key/0/~", "/key/0/a~1b/0"}) {
+        EXPECT_FALSE(root.visit_pointer(invalid, [](const ruvia::json_value&) {
+            ADD_FAILURE();
+        })) << invalid;
+    }
 }
 
 TEST(Ruvia, json_object_default_represents_an_empty_object) {

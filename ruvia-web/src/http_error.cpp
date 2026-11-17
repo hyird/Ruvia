@@ -90,7 +90,7 @@ namespace {
     http_response response;
     response.status(error.status());
     response.header_stable_view("Content-Type", "application/problem+json");
-    response.owned_body(serialize_error_response(error));
+    response.body(serialize_error_response(error));
     return response;
 }
 

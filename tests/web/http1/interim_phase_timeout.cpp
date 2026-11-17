@@ -110,7 +110,7 @@ constexpr auto trickle_period = 1500ms;
 
 ruvia::task<void> serve_buffered_response(ruvia::request_stream& stream) {
     ruvia::http_response response;
-    response.owned_body(std::string(completion_body_bytes, 'w'));
+    response.body(std::string(completion_body_bytes, 'w'));
     stream.respond(std::move(response));
     co_return;
 }
