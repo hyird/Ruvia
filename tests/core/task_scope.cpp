@@ -49,14 +49,14 @@ ruvia::task<void> observe_join(ruvia::task_scope::join_operation join, bool& com
     completed = true;
 }
 
-ruvia::task<void> join_and_destroy_on_failure(std::optional<ruvia::task_scope>& primary, bool& completed_after_node_release) {
+ruvia::task<void> join_and_destroy_on_failure(std::optional<ruvia::task_scope>& primary, const bool& deferred_turn, bool& completed_after_node_release) {
     bool caught = false;
     try {
         co_await primary->join();
     } catch (const std::runtime_error& error) {
         caught = std::string_view(error.what()) == "child failed";
     }
-    completed_after_node_release = caught && primary->size() == 0;
+    completed_after_node_release = caught && primary->size() == 0 && deferred_turn;
     primary.reset();
 }
 
@@ -64,11 +64,16 @@ ruvia::task<void> verify_stop_callback_reentrant_join_waits_for_finish(ruvia::wo
     std::optional<ruvia::task_scope> primary(std::in_place, worker_value);
     ruvia::task_scope observer(worker_value);
     bool active_during_stop_callback = false;
+    bool deferred_turn = false;
     bool completed_after_node_release = false;
     ruvia::stop_registration registration;
     primary->token().register_callback(registration, [&] {
         active_during_stop_callback = primary.has_value() && primary->size() == 1;
-        observer.spawn(join_and_destroy_on_failure(primary, completed_after_node_release));
+        observer.spawn(join_and_destroy_on_failure(primary, deferred_turn, completed_after_node_release));
+        // Work deferred before the join becomes ready must run before it resumes.
+        EXPECT_TRUE(worker_value.defer_completion([&deferred_turn] {
+            deferred_turn = true;
+        }));
     });
     primary->spawn(fail());
     while (primary.has_value()) {

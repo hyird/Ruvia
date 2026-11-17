@@ -203,7 +203,7 @@ flowchart LR
 | `one_shot_completion::complete`、`one_shot_receiver::close` | 等待方经绑定 Worker 的 `defer_resume` 恢复 |
 | `pool_lease_scheduler::release` / `close` | 在调用返回前提交槽位或 `closed`，协程在后续轮次恢复 |
 | `worker_signal::notify` | 摘下全部等待者，逐个在后续轮次恢复 |
-| `task_scope` 子任务完成 | 在后续轮次结算失败、回收帧；最后一个子任务结算时内联恢复 `join` |
+| `task_scope` 子任务完成 | 在后续轮次结算失败、回收帧；最后一个子任务结算后，经 `defer_resume` 唤醒已挂起的 `join` |
 | 停止令牌触发（等待已挂起） | 在请求线程持锁提交 `cancelled`，恢复经绑定 Worker 延迟执行 |
 | `worker_timer_registration::cancel_and_notify` | 在 Worker 自身线程调用时投递完成回调，不重入 |
 | `worker_ref::defer_completion` | 后续轮次执行，不内联 |

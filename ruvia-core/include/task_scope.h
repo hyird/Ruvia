@@ -89,17 +89,9 @@ private:
     struct retiring_guard;
 
     struct task_scope_open_type final {};
-    class task_scope_joining_type final {
-    public:
-        explicit task_scope_joining_type(std::coroutine_handle<> continuation) noexcept :
-            continuation_(continuation) {}
-
-        [[nodiscard]] std::coroutine_handle<> continuation() const noexcept {
-            return continuation_;
-        }
-
-    private:
-        std::coroutine_handle<> continuation_;
+    struct task_scope_joining_type final {
+        // Empty once the join is ready, including while its resumption is queued.
+        std::coroutine_handle<> continuation_{};
     };
     struct task_scope_joined_type final {};
 

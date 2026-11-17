@@ -140,20 +140,22 @@ bool task_scope::join_operation::await_ready() {
     }
     started_ = true;
     if (scope_->active_ == 0 && scope_->retiring_ == nullptr) {
-        scope_->lifecycle_.template emplace<task_scope_joined_type>();
+        scope_->lifecycle_.template emplace<task_scope_joining_type>();
         return true;
     }
     return false;
 }
 
 void task_scope::join_operation::await_suspend(std::coroutine_handle<> continuation) noexcept {
-    scope_->lifecycle_.template emplace<task_scope_joining_type>(continuation);
+    scope_->lifecycle_.template emplace<task_scope_joining_type>(task_scope_joining_type{continuation});
 }
 
 void task_scope::join_operation::await_resume() {
-    if (!std::holds_alternative<task_scope_joined_type>(scope_->lifecycle_)) {
+    const auto* joining = std::get_if<task_scope_joining_type>(&scope_->lifecycle_);
+    if (joining == nullptr || joining->continuation_) {
         std::terminate();
     }
+    scope_->lifecycle_.template emplace<task_scope_joined_type>();
     scope_->rethrow_failure();
 }
 
@@ -162,13 +164,10 @@ void task_scope::resume_join_if_idle() noexcept {
         return;
     }
     auto* joining = std::get_if<task_scope_joining_type>(&lifecycle_);
-    if (joining == nullptr) {
-        return;
+    if (joining != nullptr && joining->continuation_) {
+        // Keep the join pending until await_resume(), even after queuing it.
+        worker_.defer_resume(std::exchange(joining->continuation_, {}));
     }
-    auto continuation = joining->continuation();
-    lifecycle_.template emplace<task_scope_joined_type>();
-    // The joiner may destroy this scope inline.
-    continuation.resume();
 }
 
 void task_scope::child_complete(void* raw) noexcept {
