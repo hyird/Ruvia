@@ -432,9 +432,8 @@ bool http_cors_policy::rewrite_response_headers(borrowed_text request_origin, ed
     // http_response takes all of them or none.
     response_headers.transact([this, origin, granted](editable_http_headers candidate) {
         candidate.remove_if(is_http_cors_controlled_response_header);
-        if (!allow_any_origin_) {
-            merge_http_vary_token(candidate, "Origin");
-        }
+        // Even a wildcard grant depends on a valid Origin being present.
+        merge_http_vary_token(candidate, "Origin");
         if (!granted) {
             return;
         }

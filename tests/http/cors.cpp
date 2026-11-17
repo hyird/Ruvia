@@ -136,6 +136,18 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
     }
 }
 
+TEST(RuviaHttpPublicApi, cors_proxy_wildcard_varies_by_origin_presence) {
+    const ruvia::http_cors_policy policy(ruvia::http_cors_policy_options{.allowed_origins_ = {"*"}});
+    for (const std::string_view origin : {"", "https://app.example.com"}) {
+        ruvia::http_response response;
+        response.header("Vary", "Accept-Encoding");
+        const bool granted = !origin.empty();
+        EXPECT_EQ(policy.rewrite_response_headers(origin, response), granted);
+        EXPECT_EQ(response.header("Access-Control-Allow-Origin"), granted ? std::optional<std::string_view>("*") : std::nullopt);
+        EXPECT_EQ(response.header("Vary"), std::optional<std::string_view>("Accept-Encoding, Origin"));
+    }
+}
+
 // Fetch forbids credentials with a wildcard origin, so a policy that would
 // answer any origin cannot also allow credentials.
 TEST(RuviaHttpPublicApi, cors_policy_rejects_credentials_with_any_origin) {
