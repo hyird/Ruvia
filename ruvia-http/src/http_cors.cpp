@@ -325,9 +325,8 @@ bool http_cors_policy::allows_method(std::string_view method) const noexcept {
     if (allow_any_method_) {
         return true;
     }
-    return std::ranges::any_of(allowed_methods_, [method](std::string_view allowed) noexcept {
-        return http_ascii_equals_ignore_case(allowed, method);
-    });
+    // HTTP method tokens are case-sensitive (RFC 9110 §9.1).
+    return std::ranges::find(allowed_methods_, method) != allowed_methods_.end();
 }
 
 bool http_cors_policy::allows_request_header(std::string_view name) const noexcept {

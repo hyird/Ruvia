@@ -5781,7 +5781,7 @@ public:
 | --- | --- |
 | `allow_any_origin()` / `allow_credentials()` / `reflect_request_headers()` | 归一化后的有效设置（含上节默认推导） |
 | `allows_origin(origin)` | `origin` 必须是合法序列化源或 `"null"`；任意 Origin 时为真；`"null"` 仅在精确列表包含 `"null"` 时为真；精确源按方案与 authority ASCII 大小写不敏感比较；尾缀规则依次检查方案、端口、主机（非子域模式允许主机相等，子域模式要求标签边界上的 DNS 子域）；IP 字面量 Origin 不匹配尾缀规则 |
-| `allows_method(method)` | 合法方法 token，且允许任意方法或在列表中（ASCII 大小写不敏感） |
+| `allows_method(method)` | 合法方法 token，且允许任意方法或在列表中（区分大小写，RFC 9110 §9.1） |
 | `allows_request_header(name)` | 合法字段名，且反射模式或在列表中（大小写不敏感） |
 | `evaluate_preflight(input)` | `method_` 必须精确为 `"OPTIONS"`、`origin_` 非空且被允许、`access_control_request_method_`（去除 OWS 后）非空且被允许；`access_control_request_headers_` 非空时每个名称都须被允许且列表语法完整合法（固定授权模式也一样）。接受时按序生成：`Access-Control-Allow-Origin`（任意 Origin 为 `*`，否则回显 Origin）、`Access-Control-Allow-Credentials: true`（启用凭据时）、`Access-Control-Allow-Methods`（配置列表，未配置时为请求的方法）、`Access-Control-Allow-Headers`（反射模式为请求列表合并成的单一字段，否则为配置列表；为空时省略）、`Access-Control-Max-Age`（配置时）、预检 `Vary`。拒绝时返回默认结果 |
 | `evaluate_preflight(method, headers, maximum)` / `evaluate_preflight(request, maximum)` | 要求唯一的 `Origin` 与 `Access-Control-Request-Method`；逐行单遍扫描 `Access-Control-Request-Headers`，不先拼接输入。所有行共享调用方给定的名称数量上限（含重复名称；默认不额外收紧宿主限额），拒绝 `*`、空行与非法列表；仅反射输出时构造合并文本。输入结构体重载复用同一主链。 |
