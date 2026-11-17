@@ -502,6 +502,26 @@ TEST(Ruvia, http1_compressed_stream_peer_reset_allows_following_response) {
     EXPECT_EQ(ruvia::app().stats().connection_failures_, failures_before);
 }
 
+TEST(Ruvia, http1_request_decoding_offloads_small_and_large_encoded_inputs) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    for (const bool large_encoded : {false, true}) {
+        const auto plain = large_encoded ? make_body(512 * 1024, 5) : std::string(96 * 1024, 'x');
+        const auto encoded = ruvia::encode_http_content(ruvia::http_content_coding::gzip, plain, {.max_encoded_bytes_ = plain.size() + 4096});
+        ASSERT_TRUE(encoded.has_value());
+        EXPECT_EQ(encoded->size() > 64 * 1024, large_encoded);
+        std::string request("POST /compression-echo-decoded HTTP/1.1\r\nHost: localhost\r\nContent-Encoding: gzip\r\nContent-Length: ");
+        request.append(std::to_string(encoded->size()));
+        request.append("\r\nConnection: close\r\n\r\n");
+        request.append(*encoded);
+        const auto response = fetch_response(server.endpoint(), request);
+        ASSERT_TRUE(response.has_value());
+        EXPECT_TRUE(response->starts_with("HTTP/1.1 200 "));
+        EXPECT_EQ(response_body(*response), plain);
+    }
+    server.finish();
+}
+
 TEST(Ruvia, http1_inline_compression_reuses_worker_encoders_with_identical_bytes) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, compressing_server());

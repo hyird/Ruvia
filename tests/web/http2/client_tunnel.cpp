@@ -262,6 +262,13 @@ TEST(Ruvia, http2_client_capsule_stream_retains_results_and_cold_operations_afte
                     co_await std::move(write);
                     retained = co_await stream.read();
                     EXPECT_TRUE(retained && retained->type() == 0x123456789ULL && retained->text() == std::string(4099, 'c') && retained->bytes().size() == 4099);
+                    std::string owned(4099, '\0');
+                    owned.front() = 'a';
+                    owned.back() = 'z';
+                    owned.reserve(owned.size() + 16);
+                    co_await stream.write(63, std::move(owned));
+                    const auto binary = co_await stream.read();
+                    EXPECT_TRUE(binary && binary->type() == 63 && binary->text() == std::string("a").append(4097, '\0').append("z"));
                     co_await stream.write(0, "");
                     auto empty = co_await stream.read();
                     EXPECT_TRUE(empty && empty->type() == 0 && empty->text().empty() && empty->bytes().empty());

@@ -1056,36 +1056,10 @@ void ensure_route_params(const std::string_view* param_names, const std::string_
     throw error;
 }
 
-// Decoded bytes a request body may produce on the event loop. A body that
-// decodes past it (a large body, or a few-KiB compression bomb) is decoded
-// again on the worker's bounded blocking pool. Without a pool, or when the pool
-// rejects the job, it is decoded inline: the handler requires the content, and
-// the route's decoded-size cap still bounds the work.
+// Decode at most 64 KiB on the event loop before moving larger work to its
+// bounded blocking pool. Without a pool, the route's decoded-size cap applies
+// to inline work; a rejected offload propagates as 503.
 inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
-
-[[nodiscard]] task<std::variant<std::string, http_content_decode_error>> decode_request_content(const worker_ref& worker_value, const stop_token& stop_token_value, std::span<const http_content_coding> codings, std::string_view raw, http_content_decode_options options) {
-    if (worker_value.blocking_pool() != nullptr && options.max_decoded_bytes_ > inline_request_decode_bytes) {
-        if (raw.size() <= inline_request_decode_bytes) {
-            auto inline_result = decode_http_content(codings, raw, {.max_decoded_bytes_ = inline_request_decode_bytes});
-            const auto* failure = std::get_if<http_content_decode_error>(&inline_result);
-            if (failure == nullptr || *failure != http_content_decode_error::decoded_size_exceeded) {
-                co_return inline_result;
-            }
-        }
-        // The job carries only its own copies; request memory stays on this worker.
-        std::array<http_content_coding, max_content_codings> owned_codings{};
-        const auto coding_count = (std::min)(codings.size(), max_content_codings);
-        std::copy_n(codings.data(), coding_count, owned_codings.data());
-        std::string owned_raw(raw);
-        auto offloaded = co_await run_blocking(worker_value, [owned_codings, coding_count, owned_raw = std::move(owned_raw), limit = options.max_decoded_bytes_]() {
-            return decode_http_content(std::span<const http_content_coding>(owned_codings.data(), coding_count), owned_raw, {.max_decoded_bytes_ = limit});
-        }, {.stop_token_ = stop_token_value});
-        // A codec failure on the pool is rethrown here; pool saturation or
-        // shutdown throws blocking_operation_rejected (mapped to 503).
-        co_return std::move(offloaded).take_value();
-    }
-    co_return decode_http_content(codings, raw, options);
-}
 
 // Rejects an invalid or unsupported Content-Encoding; the result owns the codings span.
 [[nodiscard]] http_content_coding_field_result require_decodable_request_coding(const http_request& request, detail::unsupported_request_content_coding::read_type read) {
@@ -1138,7 +1112,26 @@ task<view_type> read_request_body(const context& context_value, operation_option
         detail::context_access::mark_body_identity(context_value);
         co_return as_view(raw);
     }
-    auto decode_result = co_await decode_request_content(services.worker(), context_value.stop_token(), codings, raw, {.max_decoded_bytes_ = services.max_decoded_request_body_bytes()});
+    const auto max_decoded_bytes = services.max_decoded_request_body_bytes();
+    bool offload = services.worker().blocking_pool() != nullptr && max_decoded_bytes > inline_request_decode_bytes;
+    std::variant<std::string, http_content_decode_error> decode_result;
+    if (!offload || raw.size() <= inline_request_decode_bytes) {
+        decode_result = decode_http_content(codings, raw, {.max_decoded_bytes_ = offload ? inline_request_decode_bytes : max_decoded_bytes});
+        const auto* failure = std::get_if<http_content_decode_error>(&decode_result);
+        offload = offload && failure != nullptr && *failure == http_content_decode_error::decoded_size_exceeded;
+    }
+    if (offload) {
+        // The job owns every input; cancellation may retire this request while
+        // the blocking operation still runs.
+        std::array<http_content_coding, max_content_codings> owned_codings{};
+        const auto coding_count = (std::min)(codings.size(), max_content_codings);
+        std::copy_n(codings.data(), coding_count, owned_codings.data());
+        std::string owned_raw(raw);
+        auto decoded = co_await run_blocking(services.worker(), [owned_codings, coding_count, owned_raw = std::move(owned_raw), limit = max_decoded_bytes]() {
+            return decode_http_content(std::span<const http_content_coding>(owned_codings.data(), coding_count), owned_raw, {.max_decoded_bytes_ = limit});
+        }, {.stop_token_ = context_value.stop_token()});
+        decode_result = std::move(decoded).take_value();
+    }
     auto* decoded_content = std::get_if<std::string>(&decode_result);
     if (decoded_content == nullptr) {
         throw make_http_protocol_error(std::get<http_content_decode_error>(decode_result), http_coding_field::content_encoding);

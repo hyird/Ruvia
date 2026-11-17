@@ -2985,7 +2985,7 @@ RFC 9297 可靠 Capsule Protocol。只能经 `http_tunnel::capsules()` 创建。
 | `~http_capsule_stream()` | 析构 |
 | `task<std::optional<http_capsule>> read(operation_options operation = {}) &` | 读取下一个 Capsule；`nullopt` 为 EOF；未知类型也交付，由协议使用方忽略不理解的类型 |
 | `task<std::optional<http_capsule>> read(operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
-| `task<void> write(std::uint64_t type, outbound_bytes payload, operation_options operation = {}) &` | 返回冷任务前拥有输入（精确 `std::string` 右值不复制） |
+| `task<void> write(std::uint64_t type, outbound_bytes payload, operation_options operation = {}) &` | 返回冷任务前接管已拥有的负载并前插帧头；容量足够时不另建拼接缓冲 |
 | `task<void> write(std::uint64_t, outbound_bytes, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
 | `task<void> finish(operation_options operation = {}) &` | 结束发送方向 |
 | `task<void> finish(operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |

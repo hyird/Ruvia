@@ -465,16 +465,9 @@ task<void> http_capsule_stream::write_frame(std::string_view prefix, outbound_by
             throw;
         }
     };
-    // An owned payload moves only when nothing precedes it; otherwise one
-    // buffer receives prefix and payload.
-    std::string bytes_value;
-    if (prefix.empty()) {
-        bytes_value = std::move(payload_value).into_string();
-    } else {
-        const auto payload_view = payload_value.view();
-        bytes_value.reserve(prefix.size() + payload_view.size());
-        bytes_value.append(prefix);
-        bytes_value.append(payload_view);
+    auto bytes_value = std::move(payload_value).into_string();
+    if (!prefix.empty()) {
+        bytes_value.insert(0, prefix);
     }
     return state_->output_scope_.attach(write(detail::capsule_write_input{detail::capsule_state_pin(*state_), std::move(bytes_value), datagram, std::move(operation)}));
 }

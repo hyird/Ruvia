@@ -1684,12 +1684,14 @@ using request_body_limits_test::exchange_raw_request;
 using request_body_limits_test::exercise_lazy_body_reads;
 
 TEST(Ruvia, web_request_decode_accepts_gzip_content) {
-    const std::string plain(2048, 'x');
-    const std::string encoded = gzip_compress(plain);
-    EXPECT_TRUE(!encoded.empty());
-    const auto observation_value = read_context_gzip_body(encoded);
-    EXPECT_TRUE(!observation_value.error_status_.has_value());
-    EXPECT_EQ(observation_value.body_, plain);
+    for (const auto size : {2048, 96 * 1024}) {
+        const std::string plain(size, 'x');
+        const std::string encoded = gzip_compress(plain);
+        EXPECT_TRUE(!encoded.empty());
+        const auto observation_value = read_context_gzip_body(encoded);
+        EXPECT_TRUE(!observation_value.error_status_.has_value());
+        EXPECT_EQ(observation_value.body_, plain);
+    }
 }
 
 TEST(Ruvia, web_request_decode_accepts_empty_encoded_representation) {
