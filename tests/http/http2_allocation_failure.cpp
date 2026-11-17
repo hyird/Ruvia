@@ -676,3 +676,23 @@ TEST(Ruvia, http1_body_decoder_stays_failed_after_transfer_codec_allocation_erro
     EXPECT_EQ(output->bytes(), "ordinary body");
     EXPECT_TRUE(decoder.decode(std::string_view(wire).substr(decoded.consumed_bytes()), scratch).holds<ruvia::decode_complete>());
 }
+
+TEST(Ruvia, identity_content_encoder_enters_failed_state_when_copying_output_throws) {
+    const std::string input(4096, 'x');
+    const ruvia::http_content_encode_options options{.max_encoded_bytes_ = input.size()};
+    ruvia::http_content_encoder encoder(ruvia::http_content_coding::identity);
+    ASSERT_THROW({
+        allocation_scope scope(0);
+        (void)encoder.encode(input, options);
+    },
+        std::bad_alloc);
+    EXPECT_EQ(encoder.state(), ruvia::decoder_state::failed);
+    std::string output;
+    EXPECT_THROW(encoder.finish(output), std::logic_error);
+
+    encoder.reset();
+    const auto encoded = encoder.encode(input, options);
+    ASSERT_TRUE(encoded.has_value());
+    EXPECT_EQ(*encoded, input);
+    EXPECT_EQ(encoder.state(), ruvia::decoder_state::finished);
+}

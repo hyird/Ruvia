@@ -3294,7 +3294,7 @@ public:
 | `finish(output)` | 结束流并追加剩余字节；幂等。 |
 | `encode(input, options)` | 在 `max_encoded_bytes_` 精确输出上限内编码一个完整表示（上限语义见 [7.2.1](#api-http-content-codec-h)）。等同 `write()` + `finish()` 消费流，下一个表示前须 `reset()`。 |
 | `reset()` | 让任意阶段的编码器回到全新活动流。zlib 与 zstd 复用工作内存；Brotli 无原生重置，重建状态可能分配。重置失败（抛异常）使编码器保持 `failed`。 |
-| `state()` | `active`：可 `write()` / `encode()`；`finished`：成功 `finish()` 或 `encode()`（含返回 `std::nullopt`）之后；`failed`：`write()` / `finish()` / `encode()` / `reset()` 抛出任何异常之后。只有成功的 `reset()` 回到 `active`。 |
+| `state()` | `active`：可 `write()` / `encode()`；`finished`：成功 `finish()` 或 `encode()`（含返回 `std::nullopt`）之后；`failed`：活动流编码或重置期间抛出异常后，包括 `identity` 复制输出时的分配失败。只有成功的 `reset()` 回到 `active`。 |
 
 状态规则：任何异常都是终态，因为输入/输出可能已部分推进。`finished` 时 `write()` / `encode()` 抛 `std::logic_error` 且不改变 `output`，`finish()` 为无操作；`failed` 时 `write()` / `finish()` / `encode()` 抛 `std::logic_error`。`coding()` 与 `state()` 在任何状态可用。`output` 可以在调用之间清空，并在编码器销毁后仍有效。分配异常在编解码器经其 C API 返回时保留原类型；内部 OOM 时直接退出的 Brotli 构建无法在此边界恢复。
 

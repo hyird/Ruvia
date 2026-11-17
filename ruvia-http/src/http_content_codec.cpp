@@ -212,17 +212,17 @@ std::optional<std::string> http_content_encoder::encode(std::string_view input, 
     if (phase_ != phase::active) {
         throw std::logic_error("HTTP content encoder is no longer writable");
     }
-    if (impl_ == nullptr) {
-        phase_ = phase::finished;
-        if (input.size() > options.max_encoded_bytes_) {
-            return std::nullopt;
-        }
-        return std::string(input);
-    }
     std::string output;
     bool fits = false;
     try {
-        fits = impl_->encode(input, output, false, true, options.max_encoded_bytes_);
+        if (impl_ == nullptr) {
+            fits = input.size() <= options.max_encoded_bytes_;
+            if (fits) {
+                output.assign(input);
+            }
+        } else {
+            fits = impl_->encode(input, output, false, true, options.max_encoded_bytes_);
+        }
     } catch (...) {
         phase_ = phase::failed;
         throw;
