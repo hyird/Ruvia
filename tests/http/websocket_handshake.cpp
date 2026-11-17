@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <new>
 #include <optional>
@@ -754,6 +755,24 @@ TEST(Ruvia, websocket_client_handshake_result_view_is_used_while_response_lives)
 }
 
 namespace {
+template <typename fields_type>
+concept accepts_negotiation_fields = requires(const ruvia::websocket_client_negotiation& client, fields_type&& fields) {
+    client.validate_fields(std::forward<fields_type>(fields));
+};
+
+static_assert(accepts_negotiation_fields<std::span<const ruvia::http_header>>);
+static_assert(accepts_negotiation_fields<const std::vector<ruvia::http_header>&>);
+static_assert(!accepts_negotiation_fields<std::vector<ruvia::http_header>>);
+static_assert(!accepts_negotiation_fields<const std::initializer_list<ruvia::http_header>&>);
+static_assert(!accepts_negotiation_fields<std::initializer_list<ruvia::http_header>>);
+
+template <typename field_type>
+concept accepts_braced_negotiation_fields = requires(const ruvia::websocket_client_negotiation& client, const field_type& field) {
+    client.validate_fields({field});
+};
+
+static_assert(!accepts_braced_negotiation_fields<ruvia::http_header>);
+
 void add(std::vector<ruvia::http_header>& head, std::string_view name, std::string_view value) {
     head.emplace_back(name, value);
 }

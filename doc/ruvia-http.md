@@ -9748,6 +9748,8 @@ public:
     [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_fields(std::span<const http_header> fields) const;
     template </* 临时拥有型 http_header 范围 */ typename fields_type>
     std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_fields(fields_type&&) const = delete;
+    template </* http_header */ typename element_type>
+    std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_fields(std::initializer_list<element_type>) const = delete;
 };
 }
 ```
@@ -9760,7 +9762,7 @@ public:
 | 构造函数 | 执行同样的校验（失败抛 `std::invalid_argument`），然后生成最多 3 个请求字段：`Sec-WebSocket-Version: 13`、有提议时 `Sec-WebSocket-Protocol`、启用压缩时 `Sec-WebSocket-Extensions` |
 | `request_fields()` | 上述请求字段，借用本对象；右值重载删除 |
 | `validate_fields(fields)` | 只校验 `fields` 中服务端的 `Sec-WebSocket-Protocol` 与 `Sec-WebSocket-Extensions` 选择，不检查状态码或连接专用字段；成功视图借用 `fields`。版本专用的响应校验函数在自己的状态检查后执行同一选择校验 |
-| `validate_fields(fields_type&&) = delete` | 拒绝临时拥有型容器（如右值 `std::vector<http_header>`），结果视图否则会悬空 |
+| 已删除的 `validate_fields` 重载 | 拒绝临时拥有型容器及字段初始化列表，包括具名列表；结果视图借用字段存储，不能比该存储活得久 |
 
 #### 13.2.3 自由函数
 

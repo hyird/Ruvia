@@ -1,10 +1,13 @@
 #pragma once
 
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <variant>
 
 #include "borrowed_text.h"
@@ -80,6 +83,9 @@ public:
     [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_fields(std::span<const http_header> fields) const;
     template <detail::http_temporary_owning_range<http_header> fields_type>
     std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_fields(fields_type&&) const = delete;
+    template <typename element_type>
+        requires std::same_as<std::remove_cv_t<element_type>, http_header>
+    std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_fields(std::initializer_list<element_type>) const = delete;
 
 private:
     friend std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> detail::validate_websocket_client_selection(const websocket_client_negotiation&, std::span<const http_header>, bool);
