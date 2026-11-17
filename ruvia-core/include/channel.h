@@ -236,16 +236,19 @@ private:
 
 template <typename t_type>
 void channel_state<t_type>::close(bool retire_receiver) {
+    bool drain = false;
     {
         auto lock = lock_state();
-        receiver_closed_ = receiver_closed_ || retire_receiver;
+        // The first receiver retirement owns the drain, including when a
+        // buffered value's destructor closes or destroys the receiver again.
+        drain = retire_receiver && !std::exchange(receiver_closed_, true);
         if (std::holds_alternative<channel_open>(lifecycle_)) {
             lifecycle_.template emplace<channel_closed>();
             wait_slot_.complete(wait_status::closed);
             complete_send_waiters(channel_send_status::closed);
         }
     }
-    if (retire_receiver) {
+    if (drain) {
         discard_buffered();
     }
 }
@@ -689,10 +692,10 @@ public:
     }
     const worker_ref& worker() const&& = delete;
 
-    // Retire the receive side: buffered values are destroyed on the calling
-    // thread and later receives report closed. Worker shutdown keeps its
-    // worker_stopping outcome. The shared state itself lives until all
-    // endpoints and tasks owning it retire.
+    // Retire the receive side: the first caller destroys buffered values on
+    // its thread. Reentrant calls do not restart the drain. Later receives
+    // report closed, or worker_stopping if the worker has stopped. The state
+    // itself lives until all endpoints and tasks owning it retire.
     void close() const {
         if (state_) {
             // A buffered payload destructor may destroy this receiver and the

@@ -1133,7 +1133,7 @@ flowchart LR
 | `receive_operation receive(operation_options = {}) const&& = delete;` | 要求具名接收端，避免临时接收端析构把操作变成已关闭 |
 | `[[nodiscard]] const worker_ref& worker() const& noexcept;` | 每次接收必须运行的 Worker；被移动的接收端调用时 `std::terminate()` |
 | `const worker_ref& worker() const&& = delete;` | 拒绝从临时接收端借出 |
-| `void close() const;` | 退役接收侧：缓冲值在调用线程销毁，之后接收报告 `closed`；Worker 停机保持 `worker_stopping` |
+| `void close() const;` | 退役接收侧：首次退役的调用线程销毁缓冲值，重入不会重复排空。之后接收报告 `closed`；Worker 停机保持 `worker_stopping` |
 
 **`class channel_receiver<T>::receive_operation final`**：冷操作规则见 [2.2](#22-惰性任务与冷操作)；冷丢弃不影响通道。
 

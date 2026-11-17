@@ -317,6 +317,8 @@ struct teardown_endpoints final {
     bool armed_{false};
     bool release_endpoints_{false};
     int armed_destructions_{0};
+    bool destroying_{false};
+    bool nested_destruction_{false};
 };
 
 // The defaulted move keeps the endpoint reference in the moved-from source, so
@@ -333,13 +335,18 @@ struct teardown_payload final {
             return;
         }
         ++endpoints_->armed_destructions_;
+        const bool was_destroying = std::exchange(endpoints_->destroying_, true);
+        endpoints_->nested_destruction_ |= was_destroying;
         if (endpoints_->sender_) {
             endpoints_->sender_->close();
         }
         if (endpoints_->release_endpoints_) {
             endpoints_->receiver_.reset();
             endpoints_->sender_.reset();
+        } else {
+            endpoints_->receiver_->close();
         }
+        endpoints_->destroying_ = was_destroying;
     }
 
     teardown_endpoints* endpoints_;
@@ -362,7 +369,7 @@ bool test_retired_payload_destructors_can_tear_down_the_channel() {
             success = endpoints.sender_->send(teardown_payload(endpoints)).accepted() && endpoints.sender_->send(teardown_payload(endpoints)).accepted() && success;
             endpoints.armed_ = true;
             endpoints.receiver_->close();
-            success = endpoints.armed_destructions_ == 2 && success;
+            success = endpoints.armed_destructions_ == 2 && !endpoints.nested_destruction_ && success;
             endpoints.armed_ = false;
             if (release_endpoints) {
                 success = !endpoints.sender_ && !endpoints.receiver_ && success;
