@@ -229,8 +229,8 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
     }
 }
 
-task<std::vector<redis_value>> redis_pool::execute_pipeline(std::vector<redis_owned_command> commands, operation_options options, bool wrap_transaction) {
-    return execute_commands<std::vector<redis_value>>(std::move(commands), std::move(options), std::nullopt, std::nullopt, nullptr, wrap_transaction);
+task<std::vector<redis_value>> redis_pool::execute_pipeline(std::vector<redis_owned_command> commands, operation_options options, request_io_metrics* io_metrics, bool wrap_transaction) {
+    return execute_commands<std::vector<redis_value>>(std::move(commands), std::move(options), std::nullopt, std::nullopt, io_metrics, wrap_transaction);
 }
 
 namespace {

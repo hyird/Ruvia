@@ -232,7 +232,7 @@ public:
     // The caller keeps `args` alive until the operation completes. `deadline`
     // is copied, so repeated commands share the operation's absolute bound.
     task<redis_value> execute_borrowed(redis_command_args_view args, operation_options options, operation_deadline deadline);
-    task<std::vector<redis_value>> execute_pipeline(std::vector<redis_owned_command> commands, operation_options options, bool wrap_transaction = false);
+    task<std::vector<redis_value>> execute_pipeline(std::vector<redis_owned_command> commands, operation_options options, request_io_metrics* io_metrics, bool wrap_transaction = false);
 
 private:
     // Every deadline belongs to a connection's transport; the slot pool only

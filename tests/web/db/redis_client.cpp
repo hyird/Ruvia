@@ -237,7 +237,7 @@ ruvia::task<void> stop_unless_done(const ruvia::worker_ref& worker, ruvia::stop_
     }
 }
 
-TEST(Ruvia, redis_request_session_with_a_user_token_keeps_request_cancellation) {
+void check_request_cancellation_with_user_token(bool pipeline) {
     using namespace std::chrono_literals;
     auto& io_context = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io_context);
@@ -254,7 +254,14 @@ TEST(Ruvia, redis_request_session_with_a_user_token_keeps_request_cancellation) 
             waiting = true;
             try {
                 // The startup peer never replies: only a cancellation ends the wait.
-                (void)co_await context.redis().with_options({.stop_token_ = user.token()}).blpop(keys, ruvia::redis_block_wait::indefinitely());
+                const auto redis = context.redis().with_options({.stop_token_ = user.token()});
+                if (pipeline) {
+                    auto batch = redis.pipeline();
+                    batch.ping();
+                    (void)co_await std::move(batch).exec();
+                } else {
+                    (void)co_await redis.blpop(keys, ruvia::redis_block_wait::indefinitely());
+                }
             } catch (const ruvia::redis_error& error) {
                 cancelled_by_request = error.code() == ruvia::backend_error_code::cancelled && !user.stop_requested();
             }
@@ -293,6 +300,14 @@ TEST(Ruvia, redis_request_session_with_a_user_token_keeps_request_cancellation) 
         ruvia::close_socket(peer);
         EXPECT_EQ(cancelled_by_request, std::optional<bool>(true));
     });
+}
+
+TEST(Ruvia, redis_request_session_with_a_user_token_keeps_request_cancellation) {
+    check_request_cancellation_with_user_token(false);
+}
+
+TEST(Ruvia, redis_pipeline_with_a_user_token_keeps_request_cancellation) {
+    check_request_cancellation_with_user_token(true);
 }
 
 TEST(Ruvia, redis_stream_read_options_route_claim_as_blocking_and_reject_unknown_options) {

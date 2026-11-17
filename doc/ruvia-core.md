@@ -276,7 +276,7 @@ flowchart LR
 - **计时起点**：相对上限自 `co_await` 启动计时；绝对截止期原样使用，可与调用方其他阶段共享。
 - **已取消 / 已过期**：已过期的绝对截止期不是错误。接收与等待已有可交付结果时仍优先交付，无结果才以 `cancelled` / `timed_out` 结束；准入型操作 `channel_sender::send_wait` 与 `run_blocking` 则在预留槽位或投递工作前检查启动时已请求的取消与已过期的截止期，拒绝新工作。
 - **嵌套预算**：已启动操作把剩余预算交给嵌套操作时传 `{.timeout_ = deadline.timeout()}`（同一绝对截止期），不重新折算为相对时长。
-- **合并**：`override_operation_options` 只收紧上限并以显式 token 替换原 token；累计取消只经 `linked_operation_options`。出站客户端的 `with_options` 沿用同一规则，见 [ruvia-web.md](ruvia-web.md#api-http-client-h)。
+- **合并**：`override_operation_options` 只收紧上限并以显式 token 替换原 token；合并时仅复制实际继承的 token，覆盖值直接移入。累计取消只经 `linked_operation_options`。出站客户端的 `with_options` 沿用同一规则，见 [ruvia-web.md](ruvia-web.md#api-http-client-h)。
 - **配置时长**：配置输入（超时、心跳、探活）使用 [`timeout_duration`](#api-timeout-duration-h)；未配置用 `std::nullopt` 表示，零或负值不能代替未配置。缓存 TTL、会话有效期与限流窗口不属于该契约。
 - **显式解包**：`timeout_duration` 读取计数用 `.value().count()`；与经过时长比较前必须 `.value()`，混合类型比较不可编译。
 

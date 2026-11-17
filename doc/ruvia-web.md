@@ -6900,6 +6900,7 @@ if (replies[1].integer() < 1) {
 
 - **链式与具名**：临时 batch 可直接 `co_await redis.pipeline().set("k", "v").get("k").exec()`；具名 batch 用 `co_await std::move(batch).exec()`。
 - **exec 语义**：`exec() &&` 同步消费 builder 后返回 lazy 任务，任务独立拥有全部命令；结果按入队顺序为原始 `redis_value`，每个元素与执行器上同名命令解码前的回复一致。
+- **pipeline 驱动**：仅在链接两个不同且可停止的取消源时保留包装协程；其他情况直接进入连接池任务。
 - **pipeline 错误**：整批共用普通池一次租约与同一连接；命令级错误回复保留在对应 `redis_value`（`kind_type::error`），其余回复照常读取。
 - **transaction 错误**：`MULTI` / 排队 / `EXEC` 阶段任一错误回复抛 `redis_error(command_failed)`（消息含回复序号）；返回 `EXEC` 数组的元素，执行期错误仍以 `kind_type::error` 元素出现。
 - **屏障范围**：`WAIT` / `WAITAOF` 只保护同一 pipeline 中位于其前的写入，不保护此前独立调用的写入；`WAITAOF` 写作 `.command("WAITAOF", "1", "1", "1000")`，检查返回数组的本地与副本 fsync 计数。

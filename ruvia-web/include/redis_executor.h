@@ -994,7 +994,6 @@ private:
         return append_owned(std::move(command));
     }
 
-    [[nodiscard]] static task<std::vector<redis_value>> execute_owned(detail::request_io_metrics* io_metrics, detail::redis_command_payload payload);
     void expire_capability() noexcept;
 
     detail::redis_pool* pool_;

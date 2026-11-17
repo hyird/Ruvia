@@ -58,6 +58,23 @@ void require_bounded_redis_wait(const operation_options& options, const char* me
 
 namespace {
 
+task<std::vector<redis_value>> execute_redis_transaction(request_io_metrics* io_metrics, redis_command_payload payload) {
+    scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
+    const linked_operation_options linked(payload.options_, payload.request_stop_);
+    auto replies = co_await payload.pool_.get().execute_pipeline(std::move(payload.commands_), linked.options(), nullptr, true);
+    if (replies.empty()) {
+        throw redis_error(backend_error_code::protocol_error, "redis transaction returned no replies");
+    }
+    for (std::size_t i = 0; i < replies.size(); ++i) {
+        throw_if_redis_transaction_reply_error(replies[i], i);
+    }
+    auto& exec_reply = replies.back();
+    if (exec_reply.kind() != redis_value::kind_type::array) {
+        throw redis_error(backend_error_code::command_failed, "unexpected redis transaction reply");
+    }
+    co_return std::move(redis_types_access::elements(exec_reply));
+}
+
 [[nodiscard]] bool is_redis_token(std::string_view value, std::string_view token) {
     return http_ascii_equals_ignore_case(value, token);
 }
@@ -497,33 +514,15 @@ redis_batch<mode>& redis_batch<mode>::append_owned(detail::redis_owned_command c
 }
 
 template <redis_batch_mode mode>
-task<std::vector<redis_value>> redis_batch<mode>::execute_owned(detail::request_io_metrics* io_metrics, detail::redis_command_payload payload_value) {
-    detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::redis);
-    const linked_operation_options linked(payload_value.options_, payload_value.request_stop_);
-    if constexpr (mode == redis_batch_mode::pipeline) {
-        co_return co_await payload_value.pool_.get().execute_pipeline(std::move(payload_value.commands_), linked.options());
-    } else {
-        auto replies = co_await payload_value.pool_.get().execute_pipeline(std::move(payload_value.commands_), linked.options(), true);
-        if (replies.empty()) {
-            throw redis_error(backend_error_code::protocol_error, "redis transaction returned no replies");
-        }
-        for (std::size_t i = 0; i < replies.size(); ++i) {
-            detail::throw_if_redis_transaction_reply_error(replies[i], i);
-        }
-        auto exec_reply = std::move(replies.back());
-        if (exec_reply.kind() != redis_value::kind_type::array) {
-            throw redis_error(backend_error_code::command_failed, "unexpected redis transaction reply");
-        }
-
-        // Transfer the owned EXEC elements without copying reply nodes.
-        co_return std::move(detail::redis_types_access::elements(exec_reply));
-    }
-}
-
-template <redis_batch_mode mode>
 task<std::vector<redis_value>> redis_batch<mode>::exec() && {
     auto payload_value = consume();
-    return registration_.attach(execute_owned(io_metrics_, std::move(payload_value)));
+    if constexpr (mode == redis_batch_mode::pipeline) {
+        return registration_.attach(detail::start_request_linked(payload_value.options_, payload_value.request_stop_, [pool = &payload_value.pool_.get(), commands = std::move(payload_value.commands_), io_metrics = io_metrics_](const operation_options& options) mutable {
+            return pool->execute_pipeline(std::move(commands), options, io_metrics);
+        }));
+    } else {
+        return registration_.attach(detail::execute_redis_transaction(io_metrics_, std::move(payload_value)));
+    }
 }
 
 template class redis_batch<redis_batch_mode::pipeline>;

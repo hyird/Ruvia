@@ -110,7 +110,11 @@ struct operation_options final {
 // mixed pair resolves the relative limit against the merge time and keeps the
 // earlier deadline.
 [[nodiscard]] inline operation_options override_operation_options(const operation_options& base, operation_options overrides) {
-    operation_options merged = base;
+    // Keep the conditional non-const so the supplied token moves.
+    operation_options merged{
+        .timeout_ = base.timeout_,
+        .stop_token_ = overrides.stop_token_.has_state() ? std::move(overrides.stop_token_) : stop_token(base.stop_token_),
+    };
     if (overrides.timeout_.has_value()) {
         if (!merged.timeout_.has_value()) {
             merged.timeout_ = overrides.timeout_;
@@ -130,9 +134,6 @@ struct operation_options final {
                 merged.timeout_ = operation_timeout(std::min(current_deadline, candidate_deadline));
             }
         }
-    }
-    if (overrides.stop_token_.has_state()) {
-        merged.stop_token_ = std::move(overrides.stop_token_);
     }
     return merged;
 }
