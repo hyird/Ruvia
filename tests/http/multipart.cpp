@@ -1736,6 +1736,22 @@ TEST(Ruvia, sse_parser_replaces_ill_formed_utf8_and_ignores_ids_with_nul) {
     EXPECT_EQ(parse_stream({"data: \xE2\x82\ndata: \xAC\n\n"}), (std::vector<parsed_event>{{"message", "\xEF\xBF\xBD\n\xEF\xBF\xBD", ""}}));
 }
 
+TEST(Ruvia, sse_parser_stops_buffering_an_id_at_nul_regardless_of_input_split) {
+    using namespace std::string_view_literals;
+    constexpr auto input = "id: old\r\nid: 12345678\0ignored-suffix\r\ndata: ok\r\n\r\n"sv;
+    const std::vector<parsed_event> expected{{"message", "ok", "old"}};
+    for (std::size_t split = 0; split <= input.size(); ++split) {
+        SCOPED_TRACE(split);
+        ruvia::sse_parser parser({.event_limit_ = ruvia::protocol_byte_limit::limited(8)});
+        EXPECT_EQ(parse_chunks(parser, {input.substr(0, split), input.substr(split)}), expected);
+    }
+
+    ruvia::sse_parser parser({.event_limit_ = ruvia::protocol_byte_limit::limited(8)});
+    const auto over_limit = parser.parse("id: 123456789\0ignored-suffix\n"sv);
+    ASSERT_TRUE(over_limit.holds<ruvia::sse_parse_failure>());
+    EXPECT_EQ(over_limit.get_if<ruvia::sse_parse_failure>()->error(), ruvia::sse_parse_error::event_limit_exceeded);
+}
+
 TEST(Ruvia, sse_parser_fails_an_event_over_its_limit_and_reset_reuses_it) {
     ruvia::sse_parser parser({.event_limit_ = ruvia::protocol_byte_limit::limited(8)});
     // Seven data bytes and their LF fill the limit exactly.

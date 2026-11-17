@@ -161,9 +161,11 @@ sse_parse_result sse_parser::parse(std::string_view input) & {
             }
             continue;
         }
-        const auto stop = rest.find_first_of("\r\n");
+        const auto stop = field_ == field_kind::id ? rest.find_first_of("\r\n\0", 0, 3) : rest.find_first_of("\r\n");
+        const bool ignored_id = stop != std::string_view::npos && rest[stop] == '\0';
         const auto bytes = rest.substr(0, stop);
-        if (phase_ == line_phase::value && !append_value(bytes)) {
+        // Enforce the same prefix budget even if the NUL arrives in this call.
+        if (phase_ == line_phase::value && (ignored_id ? event_limit_.addition_exceeds(buffered_bytes(), bytes.size()) : !append_value(bytes))) {
             fail();
             return sse_parse_result(position, sse_parse_failure(sse_parse_error::event_limit_exceeded));
         }
@@ -171,6 +173,11 @@ sse_parse_result sse_parser::parse(std::string_view input) & {
             return sse_parse_result(input.size(), decode_need_input{});
         }
         position += stop + 1;
+        if (ignored_id) {
+            http_clear_string_retaining_small(value_);
+            field_ = field_kind::ignored;
+            continue;
+        }
         skip_line_feed_ = rest[stop] == '\r';
         if (phase_ == line_phase::comment) {
             reset_line();
@@ -272,10 +279,6 @@ bool sse_parser::end_line() {
         case field_kind::event:
         case field_kind::id: {
             const bool is_id = field_ == field_kind::id;
-            // An id containing NUL is ignored.
-            if (is_id && value_.find('\0') != std::string::npos) {
-                break;
-            }
             if (!replace_ill_formed_utf8(value_, event_limit_.read_ceiling() - data_.size() - event_type_.size())) {
                 return false;
             }
