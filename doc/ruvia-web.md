@@ -1806,7 +1806,7 @@ auto sub = co_await c.dispatch({.method_ = "GET", .target_ = "/api/internal/prof
 | `secret_` | `borrowed_text` | `{}` | 非空时写 HMAC 签名值 |
 | `attributes_` | `cookie_options` | `{}` | 属性（[`http_cookie.h`](ruvia-http.md#api-http-cookie-h)）；`max_age_ = 0s` 删除 |
 
-`response_options`（只由接收它的调用读取，不保存；`status_` 未设置时用 builder 默认值）：
+`response_options`（调用期间读取，返回后不再借用源容器；`status_` 未设置时用 builder 默认值）：
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |

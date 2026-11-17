@@ -1269,10 +1269,14 @@ template <typename stream_id_type, typename writer_type, typename reset_type>
         body_failure_handled = true;
         response = co_await respond_http_request_body_failure(routes, request, *body_failure, request_services, tail);
     }
-    auto preparation = co_await tail.prepare_or_finish(response, options, routes, request_services);
+    const auto first = tail.prepare(response, options, request_services.worker());
+    const auto* first_ready = first.ready();
+    auto preparation = first_ready != nullptr ? *first_ready : co_await tail.finish_prepare(first, response, options, routes, request_services);
     if (body_failure.has_value() && !body_failure_handled) {
         response = co_await respond_http_request_body_failure(routes, request, *body_failure, request_services, tail);
-        preparation = co_await tail.prepare_or_finish(response, options, routes, request_services);
+        const auto after_body_failure = tail.prepare(response, options, request_services.worker());
+        const auto* ready = after_body_failure.ready();
+        preparation = ready != nullptr ? *ready : co_await tail.finish_prepare(after_body_failure, response, options, routes, request_services);
     }
     if (request_services.get_stop_token().stop_requested()) {
         reset_stream(true);
@@ -1285,7 +1289,9 @@ template <typename stream_id_type, typename writer_type, typename reset_type>
         options.connection_failure_.invoke(remote_address, written.file_failure_->fault());
         tail.disable_response_coding();
         response = co_await routes.respond_exception(request, written.file_failure_->response_error(), request_services);
-        preparation = co_await tail.prepare_or_finish(response, options, routes, request_services);
+        const auto after_file_failure = tail.prepare(response, options, request_services.worker());
+        const auto* ready = after_file_failure.ready();
+        preparation = ready != nullptr ? *ready : co_await tail.finish_prepare(after_file_failure, response, options, routes, request_services);
         written = co_await writer.write(stream_id, response, preparation.write_plan_);
         if (written.file_failure_ && !written.committed_status_) {
             reset_stream(false);

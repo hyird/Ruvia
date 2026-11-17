@@ -1355,19 +1355,21 @@ TEST(Ruvia, context_response_options_keep_repeated_header_lines_in_order) {
             http_header_view{"Link", "</style.css>; rel=preload; as=style"},
             http_header_view{"Link", "</app.js>; rel=preload; as=script"},
         };
-        const auto response = context.text("linked", {.headers_ = headers});
-        std::vector<std::string_view> links;
-        for (const auto& header : response.headers()) {
-            if (header.name() == std::string_view("Link")) {
-                links.push_back(header.value());
+        for (const bool error_response : {false, true}) {
+            const auto response = error_response ? context.error({.status_ = ruvia::http_status::conflict}, {.headers_ = headers}) : context.text("linked", {.headers_ = headers});
+            std::vector<std::string_view> links;
+            for (const auto& header : response.headers()) {
+                if (header.name() == std::string_view("Link")) {
+                    links.push_back(header.value());
+                }
             }
+            EXPECT_EQ(links.size(), std::size_t{2});
+            if (links.size() != 2) {
+                co_return;
+            }
+            EXPECT_EQ(links[0], std::string_view("</style.css>; rel=preload; as=style"));
+            EXPECT_EQ(links[1], std::string_view("</app.js>; rel=preload; as=script"));
         }
-        EXPECT_EQ(links.size(), std::size_t{2});
-        if (links.size() != 2) {
-            co_return;
-        }
-        EXPECT_EQ(links[0], std::string_view("</style.css>; rel=preload; as=style"));
-        EXPECT_EQ(links[1], std::string_view("</app.js>; rel=preload; as=script"));
         co_return;
     });
 }

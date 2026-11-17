@@ -63,6 +63,8 @@ namespace ruvia {
 
 namespace {
 
+void apply_response_options(http_response& response, const response_options& options);
+
 // text() and stream_text(): plain UTF-8 text plus nosniff, so a browser never
 // sniffs application text into an active content type. An
 // X-Content-Type-Options the application set keeps its value.
@@ -271,12 +273,8 @@ http_response request_exchange<host_type>::error(const http_error_info& info, re
     if (detail::response_options_carry_header(extra, "Content-Type")) {
         throw std::invalid_argument("error() owns the Content-Type field");
     }
-    if (detail::is_default_response_options(extra)) {
-        return detail::make_default_error_response(info);
-    }
-    const auto fields = detail::make_response(extra);
     auto response = detail::make_default_error_response(info);
-    response.transfer_headers_from(fields, http_response_header_transfer::apply);
+    apply_response_options(response, extra);
     return response;
 }
 
@@ -406,10 +404,7 @@ void write_priority(http_response& response, http_priority_fields fields_value) 
     return authority.substr(0, authority.find_first_of("/?#")).find('\\') != std::string_view::npos;
 }
 
-}  // namespace
-
-http_response detail::make_response(const response_options& options) {
-    http_response response;
+void apply_response_options(http_response& response, const response_options& options) {
     if (options.status_) {
         response.status(*options.status_);
     }
@@ -426,6 +421,13 @@ http_response detail::make_response(const response_options& options) {
     if (options.priority_) {
         write_priority(response, *options.priority_);
     }
+}
+
+}  // namespace
+
+http_response detail::make_response(const response_options& options) {
+    http_response response;
+    apply_response_options(response, options);
     return response;
 }
 
