@@ -277,11 +277,6 @@ public:
         }
     }
 
-    void discard_input() noexcept {
-        pending_consume_ = 0;
-        input_->consume(input_->size());
-    }
-
     void record_termination(websocket_termination cause) noexcept {
         if (termination_ == websocket_termination::none) {
             termination_ = cause;
@@ -471,7 +466,8 @@ std::optional<websocket_event> websocket_connection::next_event() & {
             return std::nullopt;
         }
         if (impl_->close_phase_ == close_phase_type::awaiting_peer_eof) {
-            impl_->discard_input();
+            impl_->pending_consume_ = 0;
+            impl_->input_->clear_retaining_small(websocket_retained_buffer_bytes);
             return std::nullopt;
         }
 

@@ -1269,8 +1269,10 @@ TEST(Ruvia, ws_public_client_fragmented_message_with_ping_and_close) {
     EXPECT_TRUE(acknowledged && acknowledged->close());
     // Bytes after the close handshake are discarded while waiting.
     EXPECT_TRUE(connection.feed("x") == websocket_feed_status::accepted);
-    input.append("x");
+    input.append(std::string(128 * 1024, 'x'));
     EXPECT_TRUE(!connection.next_event());
+    EXPECT_TRUE(input.empty());
+    EXPECT_LE(input.capacity(), websocket_retained_buffer_bytes);
     EXPECT_TRUE(connection.submit_frame(websocket_opcode::text, "late") == websocket_frame_submit_status::not_open);
     connection.notify_transport_eof();
     const auto end = connection.next_event();

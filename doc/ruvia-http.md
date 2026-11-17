@@ -10055,7 +10055,7 @@ using websocket_mask_key_generator_type = bool (*)(void*, websocket_mask_key_typ
 | --- | --- |
 | `open` | 连接打开，可收发 |
 | `awaiting_peer_close` | 本端 Close 已写出，等待对端 Close |
-| `awaiting_peer_eof` | 客户端已完成关闭握手，按 RFC 6455 §7.1.1 由服务端先关闭传输：驱动继续读取（`feed()` / `next_event()` 丢弃输入），直到 `notify_transport_eof()` 进入传输结束；若长时间无 EOF，客户端可经 `abort()` 先关闭 |
+| `awaiting_peer_eof` | 客户端已完成关闭握手，按 RFC 6455 §7.1.1 由服务端先关闭传输：驱动继续读取，`feed()` 忽略输入，`next_event()` 清空输入并释放超过 16 KiB 的输入缓冲，直到 `notify_transport_eof()` 进入传输结束；若长时间无 EOF，客户端可经 `abort()` 先关闭 |
 | `inactive` | 连接不再活动（已结束、已终止或编解码器重置失败） |
 
 | `websocket_frame_submit_status` | 含义 |
