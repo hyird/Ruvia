@@ -4909,7 +4909,7 @@ public:
 | `empty()` | 既非通配也没有字段名 |
 | `field_names()` | 排序后的小写字段名；视图借用 `*this`，在下一次 `update` / `update_headers` 或对象销毁前有效；右值重载 `= delete` |
 | `parse_http_vary(...)` | 构造并 `update` / `update_headers` 一次的便捷函数 |
-| `format_http_vary_cache_key(vary, request_headers)` | 通配时返回 `std::nullopt`；否则按 `field_names()` 顺序为每个字段生成一行：请求含该字段时为 `name:1:value`（多行以 `", "` 连接，每个值去除首尾 OWS 并把内部连续 SP/HTAB 折叠为单个空格），缺失时为 `name:0`，每行以 `\n` 结尾。缺失与空值因此可区分 |
+| `format_http_vary_cache_key(vary, request_headers)` | 通配时返回 `std::nullopt`；否则按 `field_names()` 顺序为每个字段生成一行：请求含该字段时为 `name:1:value`（多行以 `", "` 连接，每个值去除首尾 OWS 并把内部连续 SP/HTAB 折叠为单个空格，直接追加到最终键），缺失时为 `name:0`，每行以 `\n` 结尾。缺失与空值因此可区分 |
 | `http_vary_requests_match(vary, a, b)` | 两个请求的缓存键均存在且相等时返回 `true`；通配时恒为 `false` |
 
 #### 9.1.8 `Age` 计算

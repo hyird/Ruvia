@@ -79,7 +79,7 @@ public:
     }
 
     [[nodiscard]] task<void> connect(operation_options options = {}) {
-        return connect_owned(owner_.shared_from_this(), std::move(options));
+        return connect_on_worker(owner_.shared_from_this(), std::move(options));
     }
 
     void require_ready() const {
@@ -141,11 +141,8 @@ private:
         }
     }
 
-    [[nodiscard]] static task<void> connect_owned(std::shared_ptr<owner_type> state_value, operation_options options) {
-        co_await state_value->lifecycle_.connect_on_worker(std::move(options));
-    }
-
-    task<void> connect_on_worker(operation_options options) {
+    // This startup frame retains the client until completion.
+    task<void> connect_on_worker([[maybe_unused]] std::shared_ptr<owner_type> owner_lifetime, operation_options options) {
         require_current(" must connect on its bound event loop");
         auto expected = client_phase::fresh;
         if (!phase_.compare_exchange_strong(expected, client_phase::connecting, std::memory_order_acq_rel, std::memory_order_acquire)) {

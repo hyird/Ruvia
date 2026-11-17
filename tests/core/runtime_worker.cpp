@@ -54,6 +54,94 @@ static_assert(std::is_constructible_v<task_scope, const worker_ref&>);
 static_assert(!std::is_constructible_v<task_scope, worker_ref&&>);
 static_assert(!std::is_constructible_v<task_scope, const worker_ref&&>);
 
+struct task_result_source final {
+    int constructions_{0};
+    int moves_{0};
+    int live_{0};
+    bool fail_move_{false};
+};
+
+struct task_result_value final {
+    explicit task_result_value(task_result_source& source) noexcept :
+        source_(&source) {
+        ++source_->constructions_;
+        ++source_->live_;
+    }
+    task_result_value(task_result_value&& other) :
+        source_(other.source_) {
+        ++source_->moves_;
+        if (source_->fail_move_) {
+            throw std::runtime_error("task result move failed");
+        }
+        ++source_->live_;
+    }
+    task_result_value(const task_result_value&) = delete;
+    task_result_value& operator=(const task_result_value&) = delete;
+    task_result_value& operator=(task_result_value&&) = delete;
+    ~task_result_value() {
+        --source_->live_;
+    }
+
+    task_result_source* source_;
+};
+
+task<task_result_value> make_task_result(task_result_source& source) {
+    co_return source;
+}
+
+struct failing_task_result_source final {
+    operator int() const {
+        throw std::runtime_error("task result conversion failed");
+    }
+};
+
+task<int> make_failing_task_result() {
+    co_return failing_task_result_source{};
+}
+
+task<void> observe_task_result_construction() {
+    task_result_source source;
+    auto cold = make_task_result(source);
+    EXPECT_EQ(source.constructions_, 0);
+    {
+        const auto value = co_await std::move(cold);
+        EXPECT_EQ(value.source_, &source);
+        EXPECT_EQ(source.constructions_, 1);
+        EXPECT_EQ(source.moves_, 1);
+        EXPECT_EQ(source.live_, 1);
+    }
+    EXPECT_EQ(source.live_, 0);
+
+    task_result_source failing_source{.fail_move_ = true};
+    try {
+        const auto value = co_await make_task_result(failing_source);
+        ADD_FAILURE() << "task result move did not throw";
+    } catch (const std::runtime_error& error) {
+        EXPECT_STREQ(error.what(), "task result move failed");
+    }
+    EXPECT_EQ(failing_source.constructions_, 1);
+    EXPECT_EQ(failing_source.moves_, 1);
+    EXPECT_EQ(failing_source.live_, 0);
+
+    try {
+        static_cast<void>(co_await make_failing_task_result());
+        ADD_FAILURE() << "task result conversion did not throw";
+    } catch (const std::runtime_error& error) {
+        EXPECT_STREQ(error.what(), "task result conversion failed");
+    }
+}
+
+TEST(Ruvia, TaskResultConstructionAndExtractionPreserveExceptions) {
+    event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 8});
+    const auto loop = loops.loop(0);
+    auto root = loop.start(observe_task_result_construction());
+    loops.start();
+    root.wait();
+    loops.request_stop();
+    loops.join();
+    std::move(root).get();
+}
+
 struct root_assignment_result final {
     explicit root_assignment_result(int value, std::function<void()>* on_retire = nullptr, std::unique_ptr<root_task<root_assignment_result>> child = {}) noexcept :
         value_(value),

@@ -181,6 +181,8 @@ struct http_client_config_storage final {
     http_client_config_storage(const http_client_config_storage& source_value) :
         http_client_config_storage(source_value, http_client_origin_spec{.scheme_ = source_value.scheme_, .origin_ = source_value.fixed_origin_ ? std::optional(source_value.origin()) : std::nullopt}) {}
 
+    http_client_config_storage(http_client_config_storage&&) noexcept = default;
+
     std::string host_;
     std::string dial_host_;
     std::uint16_t dial_port_;

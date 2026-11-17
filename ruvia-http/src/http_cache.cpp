@@ -531,23 +531,20 @@ void finish_rewritten_cache_control_max_age(std::string& output, std::optional<s
     append_decimal(output, *client_max_age);
 }
 
-[[nodiscard]] std::string normalize_vary_field_value(std::string_view raw) {
+void append_normalized_vary_field_value(std::string_view raw, std::string& output) {
     const auto trimmed = http_trim_ows(raw);
-    std::string normalized;
-    normalized.reserve(trimmed.size());
     bool in_ows = false;
     for (const char ch : trimmed) {
         if (ch == ' ' || ch == '\t') {
             if (!in_ows) {
-                normalized.push_back(' ');
+                output.push_back(' ');
                 in_ows = true;
             }
         } else {
-            normalized.push_back(ch);
+            output.push_back(ch);
             in_ows = false;
         }
     }
-    return normalized;
 }
 
 // Fields a message carries once; a later 304 line replaces the earlier one.
@@ -648,7 +645,7 @@ std::optional<std::string> format_http_vary_cache_key(const http_vary_spec& vary
             } else {
                 key.append(", ");
             }
-            key.append(normalize_vary_field_value(header.value()));
+            append_normalized_vary_field_value(header.value(), key);
         }
         if (!present) {
             key.append(":0");

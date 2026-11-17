@@ -156,6 +156,11 @@ struct task_promise_completed final {};
 
 template <typename t_type>
 struct task_promise_value final {
+    template <typename input_type>
+        requires std::constructible_from<t_type, input_type&&>
+    explicit task_promise_value(input_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, input_type&&>) :
+        value_(std::forward<input_type>(value)) {}
+
     t_type value_;
 };
 
@@ -175,9 +180,9 @@ public:
     }
 
     template <typename input_type>
-        requires(!std::is_void_v<result_type> && std::constructible_from<result_type, input_type>)
-    void complete(input_type&& value) noexcept(std::is_nothrow_constructible_v<result_type, input_type>) {
-        state_.template emplace<completed_type>(result_type(std::forward<input_type>(value)));
+        requires(!std::is_void_v<result_type> && std::constructible_from<result_type, input_type&&>)
+    void complete(input_type&& value) noexcept(std::is_nothrow_constructible_v<result_type, input_type&&>) {
+        state_.template emplace<completed_type>(std::forward<input_type>(value));
     }
 
     void fail() noexcept {
@@ -209,8 +214,8 @@ template <typename t_type>
 class task_promise_return {
 public:
     template <typename u_type>
-        requires std::constructible_from<t_type, u_type>
-    void return_value(u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type>) {
+        requires std::constructible_from<t_type, u_type&&>
+    void return_value(u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type&&>) {
         state_.complete(std::forward<u_type>(value));
     }
 

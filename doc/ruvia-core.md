@@ -317,6 +317,7 @@ flowchart LR
 | `[[nodiscard]] task_awaiter<T> operator co_await() const&& = delete;` | 拒绝等待常量右值任务；只允许 `co_await std::move(t)` |
 
 - **协程体**：`task<T>` 协程以 `co_return expr;` 完成，`expr` 须可构造 `T`；`task<void>` 以 `co_return;` 或流出函数体完成；未捕获异常保存为结果。
+- **结果构造**：`co_return expr` 直接在 promise 内构造 `T`，不经中间结果移动；构造异常保存为任务失败，提取结果时的移动异常向等待方传播。
 - **初始挂起**：协程总在首条语句前挂起，函数体直到启动才执行。
 - **过对齐**：支持过对齐结果类型；GCC 13/14 可能错位协程帧内的过对齐局部变量，此类局部量应放在独立分配的拥有型存储中。
 

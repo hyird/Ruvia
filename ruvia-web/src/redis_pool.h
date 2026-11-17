@@ -54,6 +54,8 @@ struct redis_config_storage final {
     redis_config_storage(const redis_config_storage& source_value) :
         redis_config_storage(validated_config_tag_type{}, source_value) {}
 
+    redis_config_storage(redis_config_storage&&) noexcept = default;
+
     std::string host_;
     std::uint16_t port_;
     std::string username_;

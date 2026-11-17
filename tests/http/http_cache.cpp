@@ -107,6 +107,19 @@ TEST(RuviaHttpPublicApi, rfc9111_shared_cache_primitives) {
     EXPECT_TRUE(has_etag_v2);
 }
 
+TEST(RuviaHttpPublicApi, vary_cache_key_normalizes_repeated_and_empty_field_values) {
+    const auto vary = ruvia::parse_http_vary("Accept, X-Empty, X-Missing");
+    const std::array<ruvia::http_header_view, 4> request{{
+        {"Accept", " \tapplication/vnd.example+json;\t  charset=utf-8 \t"},
+        {"X-Empty", "\t  \t"},
+        {"Accept", "\ttext/plain;  \tcharset=us-ascii\t"},
+        {"Other", "ignored"},
+    }};
+    const auto key = ruvia::format_http_vary_cache_key(vary, request);
+    ASSERT_TRUE(key.has_value());
+    EXPECT_EQ(*key, "accept:1:application/vnd.example+json; charset=utf-8, text/plain; charset=us-ascii\nx-empty:1:\nx-missing:0\n");
+}
+
 TEST(RuviaHttpPublicApi, targeted_cache_control_selects_first_valid_targeted_field) {
     // RFC 9213 §2.1: a targeted field is an SF-Dictionary; the first valid one in priority order wins.
     const auto cdn_cc = ruvia::parse_targeted_cache_control("max-age=60, max-age=300, stale-while-revalidate=45; param=1, no-store=?0, must-revalidate=?1");

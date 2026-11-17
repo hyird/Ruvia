@@ -215,10 +215,6 @@ struct db_migrator_options_storage final {
         table_(source_value.table_),
         lock_timeout_(source_value.lock_timeout_) {}
 
-    db_migrator_options_storage(const db_migrator_options_storage& source_value) :
-        table_(source_value.table_),
-        lock_timeout_(source_value.lock_timeout_) {}
-
     std::string table_;
     timeout_duration lock_timeout_;
 };
