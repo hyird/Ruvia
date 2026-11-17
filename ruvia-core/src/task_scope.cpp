@@ -3,7 +3,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <exception>
-#include <new>
+#include <memory>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -75,21 +75,21 @@ void task_scope::spawn(task<void> task_value) & {
     ++active_;
     node_type* node_value = nullptr;
     try {
-        node_value = new node_type(*this, std::move(task_value));
+        auto pending = std::make_unique<node_type>(*this, std::move(task_value));
+        if (join_started()) {
+            throw std::logic_error("cannot spawn a task after task scope join started");
+        }
+        // Node allocation can reenter and retire a scoped cold frame.
+        pending->task_.prepare_direct_start();
+        node_value = pending.release();
     } catch (...) {
-        // Destroy the still-cold child before allowing a join to retire its owner.
+        // If allocation never transferred the child, retire it before releasing admission.
         {
             task<void> discarded(std::move(task_value));
         }
         --active_;
         resume_join_if_idle();
         throw;
-    }
-    if (join_started()) {
-        delete node_value;
-        --active_;
-        resume_join_if_idle();
-        throw std::logic_error("cannot spawn a task after task scope join started");
     }
 
     node_value->task_.coroutine_.promise().control_.set_completion(node_value, &task_scope::child_complete);

@@ -61,6 +61,12 @@ if(RUVIA_BUILD_CORE)
     # GCC 16 在该选项下把协程返回对象按位拷贝到返回槽后再析构原对象，冷帧随之被提前销毁。
     set_property(SOURCE core/scoped_operation.cpp APPEND PROPERTY COMPILE_OPTIONS
         "$<$<CXX_COMPILER_ID:Clang,AppleClang>:-fno-elide-constructors>")
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+        ruvia_add_test(ruvia_core_scoped_spawn_allocation_tests ruvia::core TIMEOUT 30 SOURCES
+            core/scoped_spawn_allocation.cpp)
+        target_link_options(ruvia_core_scoped_spawn_allocation_tests PRIVATE "LINKER:--wrap=_Znwm")
+    endif()
 endif()
 
 if(RUVIA_BUILD_HTTP)

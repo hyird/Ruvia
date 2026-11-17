@@ -347,7 +347,7 @@ flowchart LR
 | `~task_scope();` | 有活动子任务或 `join` 已启动未完成时 `std::terminate()`；全部子任务已完成但未 join 时，首个失败以上下文 `"task scope child"` 交给 `report_unhandled_failure` |
 | `task_scope(const task_scope&) = delete;`、`task_scope& operator=(const task_scope&) = delete;` | 子任务节点与 join 借用作用域地址 |
 | `task_scope(task_scope&&) = delete;`、`task_scope& operator=(task_scope&&) = delete;` | 同上 |
-| `void spawn(task<void> task) &;` | 须在绑定 Worker 调用；在调用栈内立即启动子任务直到其首次挂起；`join` 启动后、空任务、不在 Worker 上均抛 `std::logic_error`；分配失败时冷子任务被销毁并重抛 |
+| `void spawn(task<void> task) &;` | 须在绑定 Worker 调用；在调用栈内立即启动子任务直到其首次挂起；`join` 已启动、任务为空或已失效、不在 Worker 上均抛 `std::logic_error`；分配失败时冷子任务被销毁并重抛 |
 | `void spawn(task<void>) && = delete;` | 拒绝临时作用域 |
 | `void request_stop() & noexcept;` | 请求作用域停止令牌 |
 | `[[nodiscard]] stop_token token() const&;` | 只读观察作用域令牌，不分配、不请求停止 |
