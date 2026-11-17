@@ -6463,6 +6463,8 @@ public:
 
 `decode()` / `finish_input()` 的左值入口均带 `RUVIA_LIFETIMEBOUND`，结果不因此拥有正文或 Trailer。正文仍零拷贝借用 `available` / `scratch`；Trailer 借用解码器内部字段存储，必须在下一次 `decode()`、`finish_input()`、`reset()` 或解码器析构前消费。显式传入 `std::string_view` 不能延长输入 owner 寿命；必须同时满足输入 / scratch 与解码器各自的借用区间。
 
+下一次有效解码调用在继续排出传输解码输出前回收已发布的 Trailer 存储，沿用[分块解码器](#api-http1-chunked-body-h)的缓冲保留上限。
+
 终态：已完成或已失败的解码器不再消费输入，`decode()` 与 `finish_input()` 以 0 消费字节重放终态结果，绝不触碰后续消息的字节，直到 `reset()`。
 
 ### 10.4 `"http1_chunked_body.h"`

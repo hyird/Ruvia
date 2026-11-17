@@ -138,6 +138,12 @@ private:
         ended,
     };
 
+    enum class chunked_phase_type : std::uint8_t {
+        reading,
+        trailers_published,
+        finished,
+    };
+
     void start();
     [[nodiscard]] http1_body_decode_result run(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes, bool eof);
     [[nodiscard]] http1_body_decode_result step(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes, bool eof);
@@ -168,7 +174,7 @@ private:
     std::size_t pending_delimiter_bytes_{0};
     bool discard_content_{false};
     bool eof_{false};
-    bool trailers_reported_{false};
+    chunked_phase_type chunked_phase_{chunked_phase_type::reading};
     transfer_phase_type transfer_phase_{transfer_phase_type::needs_framed_input};
 };
 

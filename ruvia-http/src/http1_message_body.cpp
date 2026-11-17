@@ -79,7 +79,7 @@ void http1_body_decoder::start() {
     pending_delimiter_bytes_ = 0;
     discard_content_ = false;
     eof_ = false;
-    trailers_reported_ = false;
+    chunked_phase_ = chunked_phase_type::reading;
     transfer_phase_ = transfer_phase_type::needs_framed_input;
     const auto& codings = framing_.transfer_codings();
     if (!codings.empty()) {
@@ -154,7 +154,13 @@ http1_body_decode_result http1_body_decoder::step(std::string_view available, st
 }
 
 http1_body_decode_result http1_body_decoder::step_content(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes, bool eof) {
-    if (trailers_reported_) {
+    if (chunked_phase_ == chunked_phase_type::trailers_published) {
+        // The empty terminal replay retires the published trailer storage
+        // without touching input for a following message.
+        (void)chunked_->decode({});
+        chunked_phase_ = chunked_phase_type::finished;
+    }
+    if (chunked_phase_ == chunked_phase_type::finished) {
         // The chunked framing is complete, so a coding it leaves unfinished is
         // a coding error, not missing input.
         return finish_transfer(0, scratch, http1_body_decode_error::invalid_transfer_coding);
@@ -243,7 +249,7 @@ http1_body_decode_result http1_body_decoder::step_chunked(std::string_view avail
             return need_input_or_incomplete(chunk_consumed, eof);
         }
         if (const auto* chunked_end = decoded.get_if<http1_chunk_decode_complete>()) {
-            trailers_reported_ = true;
+            chunked_phase_ = chunked_phase_type::trailers_published;
             return http1_body_decode_result(chunk_consumed, http1_body_trailers(chunked_end->trailers()));
         }
         const auto body = decoded.get_if<decode_output>()->bytes();

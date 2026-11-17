@@ -19,6 +19,8 @@
 #include <variant>
 
 #include "http1_chunked_body.h"
+#include "http1_connection_plan.h"
+#include "http1_message_body.h"
 #include "http2_connection.h"
 #include "http_cookie_jar.h"
 #include "http_multipart.h"
@@ -537,4 +539,26 @@ TEST(Ruvia, chunked_decoder_reclaims_oversized_trailer_storage) {
     ASSERT_TRUE(rejected.holds<ruvia::http1_chunk_decode_failure>());
     EXPECT_EQ(rejected.get_if<ruvia::http1_chunk_decode_failure>()->error(), ruvia::http1_chunk_decode_error::invalid_framing);
     EXPECT_EQ(live_allocations.load(), baseline);
+}
+
+TEST(Ruvia, http1_body_decoder_releases_trailers_before_finishing) {
+    std::string wire = "0\r\n";
+    for (std::size_t i = 0; i < ruvia::max_http_header_fields; ++i) {
+        wire.append("X-Trace: ok\r\n");
+    }
+    wire.append("\r\n");
+    ruvia::http1_body_decoder decoder(ruvia::http1_message_framing::chunked());
+    const auto baseline = live_allocations.load();
+
+    const auto result = decoder.decode(wire, {});
+    const auto* trailers = result.get_if<ruvia::http1_body_trailers>();
+    ASSERT_NE(trailers, nullptr);
+    ASSERT_EQ(trailers->fields().size(), ruvia::max_http_header_fields);
+    EXPECT_EQ(trailers->fields().back().value(), "ok");
+
+    const auto closed = decoder.finish_input("NEXT", {});
+    const auto remaining = live_allocations.load();
+    EXPECT_TRUE(closed.holds<ruvia::decode_complete>());
+    EXPECT_EQ(closed.consumed_bytes(), 0U);
+    EXPECT_EQ(remaining, baseline);
 }
