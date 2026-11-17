@@ -12,6 +12,7 @@
 #include <utility>
 #include <variant>
 
+#include "borrowed_text.h"
 #include "http_message.h"
 #include "http_range.h"
 #include "http_status.h"
@@ -318,7 +319,7 @@ private:
 
 class http_owned_response_bytes final {
 public:
-    [[nodiscard]] std::string_view bytes() const& noexcept {
+    [[nodiscard]] std::string_view bytes() const& noexcept RUVIA_LIFETIMEBOUND {
         return bytes_;
     }
     [[nodiscard]] std::string_view bytes() const&& = delete;
@@ -347,7 +348,7 @@ public:
         return length_;
     }
 
-    [[nodiscard]] http_response_file_view view() const& noexcept {
+    [[nodiscard]] http_response_file_view view() const& noexcept RUVIA_LIFETIMEBOUND {
         return http_response_file_view(native_path_.c_str(), size_, offset_, length_, identity_, &opened_);
     }
     [[nodiscard]] http_response_file_view view() const&& = delete;
@@ -401,19 +402,21 @@ public:
     [[nodiscard]] std::size_t segment_count() const noexcept {
         return plan_.segments().size();
     }
-    [[nodiscard]] http_response_body_segment_view segment(std::size_t index) const {
+    [[nodiscard]] http_response_body_segment_view segment(std::size_t index) const& RUVIA_LIFETIMEBOUND {
         const auto& item = plan_.segments()[index];
         if (item.kind_ == http_multipart_byte_range_plan::segment_kind::metadata) {
             return {.bytes_ = plan_.metadata().substr(item.metadata_offset_, item.metadata_length_)};
         }
         return {.file_ = http_response_file_view(native_path_.c_str(), size_, item.file_offset_, item.file_length_, identity_, &opened_)};
     }
+    http_response_body_segment_view segment(std::size_t) const&& = delete;
     [[nodiscard]] std::uint64_t content_length() const noexcept {
         return plan_.content_length();
     }
-    [[nodiscard]] http_response_file_view file() const noexcept {
+    [[nodiscard]] http_response_file_view file() const& noexcept RUVIA_LIFETIMEBOUND {
         return http_response_file_view(native_path_.c_str(), size_, 0, size_, identity_, &opened_);
     }
+    http_response_file_view file() const&& = delete;
 
 private:
     friend class http_response_body;
@@ -447,27 +450,27 @@ public:
     }
     http_response_body& operator=(http_response_body&&) = delete;
 
-    [[nodiscard]] const http_static_response_bytes* static_bytes() const& noexcept {
+    [[nodiscard]] const http_static_response_bytes* static_bytes() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_static_response_bytes>(&value_);
     }
     [[nodiscard]] const http_static_response_bytes* static_bytes() const&& = delete;
 
-    [[nodiscard]] const http_owned_response_bytes* owned_bytes() const& noexcept {
+    [[nodiscard]] const http_owned_response_bytes* owned_bytes() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_owned_response_bytes>(&value_);
     }
     [[nodiscard]] const http_owned_response_bytes* owned_bytes() const&& = delete;
 
-    [[nodiscard]] const http_owned_response_file* owned_file() const& noexcept {
+    [[nodiscard]] const http_owned_response_file* owned_file() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_owned_response_file>(&value_);
     }
     [[nodiscard]] const http_owned_response_file* owned_file() const&& = delete;
 
-    [[nodiscard]] const http_multipart_response_body* multipart_body() const& noexcept {
+    [[nodiscard]] const http_multipart_response_body* multipart_body() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_multipart_response_body>(&value_);
     }
     [[nodiscard]] const http_multipart_response_body* multipart_body() const&& = delete;
 
-    [[nodiscard]] std::string_view bytes() const& noexcept {
+    [[nodiscard]] std::string_view bytes() const& noexcept RUVIA_LIFETIMEBOUND {
         if (const auto* body = static_bytes()) {
             return body->bytes();
         }
@@ -478,7 +481,7 @@ public:
     }
     [[nodiscard]] std::string_view bytes() const&& = delete;
 
-    [[nodiscard]] std::optional<http_response_file_view> file() const& noexcept {
+    [[nodiscard]] std::optional<http_response_file_view> file() const& noexcept RUVIA_LIFETIMEBOUND {
         if (const auto* body = owned_file()) {
             return body->view();
         }
