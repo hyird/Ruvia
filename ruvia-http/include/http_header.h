@@ -595,10 +595,13 @@ using borrowed_http_headers = borrowed_span<http_header_view>;
 
 static_assert(sizeof(borrowed_http_headers) == sizeof(std::span<const http_header_view>));
 
+// Field text must remain valid after the accessor returns.
 template <typename field_type>
 concept http_header_field = requires(const std::remove_reference_t<field_type>& field) {
     { field.name() } -> std::convertible_to<std::string_view>;
     { field.value() } -> std::convertible_to<std::string_view>;
+    requires(!detail::http_temporary_owning_char_string<decltype(field.name())>);
+    requires(!detail::http_temporary_owning_char_string<decltype(field.value())>);
 };
 
 template <typename range_type>

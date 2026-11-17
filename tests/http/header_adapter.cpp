@@ -14,6 +14,16 @@
 
 namespace {
 
+template <typename name_type, typename value_type>
+struct header_field_with_accessors final {
+    name_type name() const;
+    value_type value() const;
+};
+
+static_assert(!ruvia::http_header_field_range<std::vector<header_field_with_accessors<std::string, std::string_view>>>);
+static_assert(!ruvia::http_header_field_range<std::vector<header_field_with_accessors<std::string_view, std::string>>>);
+static_assert(ruvia::http_header_field_range<std::vector<header_field_with_accessors<const std::string&, const std::string&>>>);
+
 // A forward-only, by-value range over a single text block and offset table.
 class packed_fields final {
     struct entry final {
