@@ -43,37 +43,39 @@ constexpr std::string_view sse_default_event_type = "message";
 // maximal subpart of an ill-formed sequence with one U+FFFD. The decoder never
 // consumes an ASCII byte, so repairing each field value after the line split
 // matches decoding the stream first.
-void replace_ill_formed_utf8(std::string& value) {
+[[nodiscard]] bool replace_ill_formed_utf8(std::string& value, std::size_t max_bytes) {
     const std::string_view bytes(value);
-    std::size_t index = 0;
-    while (index < bytes.size()) {
+    std::string repaired;
+    std::size_t copy_start = 0;
+    for (std::size_t index = 0; index < bytes.size();) {
         if (static_cast<unsigned char>(bytes[index]) < 0x80) {
             ++index;
             continue;
         }
         const auto sequence = scan_utf8_sequence(bytes, index);
         if (!sequence.well_formed_) {
-            break;
+            const auto valid_bytes = index - copy_start;
+            const auto available = max_bytes - repaired.size();
+            if (valid_bytes > available || sse_replacement_character.size() > available - valid_bytes) {
+                return false;
+            }
+            if (copy_start == 0) {
+                repaired.reserve(bytes.size());
+            }
+            repaired.append(bytes.substr(copy_start, valid_bytes));
+            repaired.append(sse_replacement_character);
+            copy_start = index + sequence.length_;
         }
         index += sequence.length_;
     }
-    if (index == bytes.size()) {
-        return;
-    }
-    std::string repaired;
-    repaired.reserve(bytes.size());
-    repaired.append(bytes.substr(0, index));
-    while (index < bytes.size()) {
-        if (static_cast<unsigned char>(bytes[index]) < 0x80) {
-            repaired.push_back(bytes[index]);
-            ++index;
-            continue;
+    if (copy_start != 0) {
+        if (bytes.size() - copy_start > max_bytes - repaired.size()) {
+            return false;
         }
-        const auto sequence = scan_utf8_sequence(bytes, index);
-        repaired.append(sequence.well_formed_ ? bytes.substr(index, sequence.length_) : sse_replacement_character);
-        index += sequence.length_;
+        repaired.append(bytes.substr(copy_start));
+        value.swap(repaired);
     }
-    value.swap(repaired);
+    return true;
 }
 
 }  // namespace
@@ -131,7 +133,11 @@ sse_parse_result sse_parser::parse(std::string_view input) & {
             }
             skip_line_feed_ = rest[stop] == '\r';
             if (unnamed) {
-                if (dispatch()) {
+                if (!dispatch()) {
+                    fail();
+                    return sse_parse_result(position, sse_parse_failure(sse_parse_error::event_limit_exceeded));
+                }
+                if (event_published_) {
                     return sse_parse_result(position, sse_event(event_type_.empty() ? sse_default_event_type : std::string_view(event_type_), data_, last_event_id_));
                 }
                 continue;
@@ -251,16 +257,18 @@ bool sse_parser::end_line() {
             data_.push_back('\n');
             break;
         case field_kind::event:
-            replace_ill_formed_utf8(value_);
-            event_type_.swap(value_);
-            break;
-        case field_kind::id:
+        case field_kind::id: {
+            const bool is_id = field_ == field_kind::id;
             // An id containing NUL is ignored.
-            if (value_.find('\0') == std::string::npos) {
-                replace_ill_formed_utf8(value_);
-                last_event_id_buffer_.swap(value_);
+            if (is_id && value_.find('\0') != std::string::npos) {
+                break;
             }
+            if (!replace_ill_formed_utf8(value_, event_limit_.read_ceiling() - data_.size() - event_type_.size())) {
+                return false;
+            }
+            (is_id ? last_event_id_buffer_ : event_type_).swap(value_);
             break;
+        }
         case field_kind::retry:
             if (retry_digits_ && retry_valid_) {
                 reconnection_time_ = std::chrono::milliseconds(static_cast<std::chrono::milliseconds::rep>(retry_value_));
@@ -274,13 +282,15 @@ bool sse_parser::end_line() {
 }
 
 bool sse_parser::dispatch() {
+    if (!replace_ill_formed_utf8(data_, event_limit_.read_ceiling() - event_type_.size())) {
+        return false;
+    }
     last_event_id_ = last_event_id_buffer_;
     if (data_.empty()) {
         http_clear_string_retaining_small(event_type_);
-        return false;
+        return true;
     }
     data_.pop_back();
-    replace_ill_formed_utf8(data_);
     event_published_ = true;
     return true;
 }

@@ -3658,7 +3658,7 @@ public:
 };
 ```
 
-`sse_parser_options::event_limit_` 默认 `protocol_byte_limit::limited(default_max_sse_event_bytes)`（16 MiB，见 [`"http_protocol.h"`](#api-http-protocol-h)），限制正在组装的事件所缓冲的字节：数据行及其 LF、事件类型、待提交的 event 或 id 字段值；注释与被忽略字段不占配额。
+`sse_parser_options::event_limit_` 默认 `protocol_byte_limit::limited(default_max_sse_event_bytes)`（16 MiB，见 [`"http_protocol.h"`](#api-http-protocol-h)）。预算涵盖数据行及其 LF、事件类型和待提交的 `event` 或 `id` 字段值，包括 UTF-8 替换产生的字节。注释与被忽略字段不占配额。
 
 | `sse_parse_error` | 含义 |
 | --- | --- |

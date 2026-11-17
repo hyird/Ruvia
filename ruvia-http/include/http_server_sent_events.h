@@ -33,7 +33,8 @@ struct sse_message final {
 struct sse_parser_options final {
     // Bytes buffered for the event being assembled: its data lines with their
     // LFs, its event type, and a pending event or id field value. Comments and
-    // ignored fields buffer nothing. Exceeding it fails the stream.
+    // ignored fields buffer nothing. UTF-8 replacement bytes count toward the
+    // same limit. Exceeding it fails the stream.
     protocol_byte_limit event_limit_{protocol_byte_limit::limited(default_max_sse_event_bytes)};
 };
 
@@ -145,7 +146,7 @@ private:
     // False when the bytes would exceed the event limit.
     [[nodiscard]] bool append_value(std::string_view bytes);
     [[nodiscard]] bool end_line();
-    // True when the blank line dispatches an event.
+    // False when UTF-8 repair would exceed the event limit.
     [[nodiscard]] bool dispatch();
     void reset_line() noexcept;
     void release_event_buffers() noexcept;

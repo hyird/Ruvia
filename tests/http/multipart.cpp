@@ -1764,6 +1764,21 @@ TEST(Ruvia, sse_parser_fails_an_event_over_its_limit_and_reset_reuses_it) {
     EXPECT_EQ(parser.state(), ruvia::decoder_state::failed);
 }
 
+TEST(Ruvia, sse_parser_bounds_utf8_replacement_in_buffered_fields) {
+    ruvia::sse_parser parser({.event_limit_ = ruvia::protocol_byte_limit::limited(4)});
+    for (const std::string_view input : {"data: \xFF\xFF\n\n", "data: \377ab\n\n", "event: e\ndata: \xFF\n\n", "event: \xFF\xFF\n", "id: \xFF\xFF\n\n"}) {
+        SCOPED_TRACE(input);
+        const auto failed = parser.parse(input);
+        const auto* failure = failed.get_if<ruvia::sse_parse_failure>();
+        ASSERT_NE(failure, nullptr);
+        EXPECT_EQ(failure->error(), ruvia::sse_parse_error::event_limit_exceeded);
+        EXPECT_EQ(parser.state(), ruvia::decoder_state::failed);
+        EXPECT_TRUE(parser.last_event_id().empty());
+        parser.reset();
+    }
+    EXPECT_EQ(parse_chunks(parser, {"data: \xFF\n\n"}), (std::vector<parsed_event>{{"message", "\xEF\xBF\xBD", ""}}));
+}
+
 TEST(Ruvia, sse_parser_finish_discards_an_incomplete_event) {
     ruvia::sse_parser parser;
     EXPECT_EQ(parse_chunks(parser, {"id: 9\n\nretry: 50\ndata: pending\n", "data: partial"}), std::vector<parsed_event>{});
