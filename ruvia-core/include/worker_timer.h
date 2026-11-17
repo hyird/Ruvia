@@ -143,6 +143,8 @@ public:
     // worker and std::logic_error when started twice. A relative timeout
     // starts now.
     void start(const worker_ref& worker, const char* affinity_message);
+    void start(worker_ref&&, const char*) = delete;
+    void start(const worker_ref&&, const char*) = delete;
 
     [[nodiscard]] const stop_token& token() const noexcept {
         return token_;

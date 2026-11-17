@@ -44,6 +44,16 @@
 
 namespace {
 
+template <typename worker_type>
+concept can_start_wait_bounds = requires(ruvia::wait_bounds& bounds, worker_type&& worker) {
+    bounds.start(std::forward<worker_type>(worker), "wrong worker");
+};
+
+static_assert(can_start_wait_bounds<ruvia::worker_ref&>);
+static_assert(can_start_wait_bounds<const ruvia::worker_ref&>);
+static_assert(!can_start_wait_bounds<ruvia::worker_ref&&>);
+static_assert(!can_start_wait_bounds<const ruvia::worker_ref&&>);
+
 template <typename worker_type, typename... token_types>
 concept can_sleep_for = requires(worker_type&& worker, token_types&&... tokens) { ruvia::sleep_for(std::forward<worker_type>(worker), std::chrono::milliseconds(1), std::forward<token_types>(tokens)...); };
 

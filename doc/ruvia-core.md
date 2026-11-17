@@ -956,6 +956,7 @@ flowchart LR
 | `wait_bounds(wait_bounds&& other) noexcept;` | 仅冷状态可移动，已启动时 `std::terminate()` |
 | `wait_bounds(const wait_bounds&) = delete;`、`wait_bounds& operator=(const wait_bounds&) = delete;`、`wait_bounds& operator=(wait_bounds&&) = delete;` | 已启动后被定时器引用 |
 | `void start(const worker_ref& worker, const char* affinity_message);` | 所有者 `await_ready` 第一步；借用 `worker` 至析构；不在该 Worker 抛 `std::logic_error(affinity_message)`，重复启动抛 `std::logic_error`；相对上限从此刻计时 |
+| `start(worker_ref&&, ...)`、`start(const worker_ref&&, ...)` | 编译期拒绝临时 Worker 句柄 |
 | `[[nodiscard]] const stop_token& token() const noexcept;` | 操作令牌 |
 | `[[nodiscard]] bool stop_requested() const noexcept;` | 令牌已请求停止 |
 | `[[nodiscard]] bool deadline_passed() const noexcept;` | 截止期已过 |
