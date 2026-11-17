@@ -640,6 +640,27 @@ TEST(Ruvia, chunked_body_decoder_rejects_bare_lf_without_waiting_for_crlf) {
     }
 }
 
+TEST(Ruvia, chunked_body_decoder_rejects_a_bare_lf_after_chunk_data_immediately) {
+    using ruvia::http1_chunk_decode_error;
+    http1_chunked_body_decoder buffered;
+    const auto failure_with_body = buffered.decode("1\r\nx\n");
+    const auto* buffered_error = failure_with_body.get_if<http1_chunk_decode_failure>();
+    ASSERT_NE(buffered_error, nullptr);
+    EXPECT_EQ(buffered_error->error(), http1_chunk_decode_error::invalid_framing);
+    EXPECT_EQ(failure_with_body.consumed_bytes(), 4U);
+
+    http1_chunked_body_decoder fragmented;
+    const auto body = fragmented.decode("1\r\nx");
+    ASSERT_TRUE(body.holds<decode_output>());
+    EXPECT_EQ(body.consumed_bytes(), 4U);
+    const auto failure_after_body = fragmented.decode("\n");
+    const auto* fragmented_error = failure_after_body.get_if<http1_chunk_decode_failure>();
+    ASSERT_NE(fragmented_error, nullptr);
+    EXPECT_EQ(fragmented_error->error(), http1_chunk_decode_error::invalid_framing);
+    EXPECT_EQ(failure_after_body.consumed_bytes(), 0U);
+    EXPECT_EQ(fragmented.state(), decoder_state::failed);
+}
+
 TEST(Ruvia, chunked_body_decoder_accepts_many_trailer_fields_within_byte_budget) {
     std::string fields_value = "0\r\n";
     for (std::size_t index = 0; index < 80; ++index) {

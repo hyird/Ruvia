@@ -301,20 +301,21 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view av
                 cursor += bytes_value;
                 if (remaining_ == 0) {
                     state_ = progress::delimiter;
-                    // A buffered delimiter is consumed with the final data bytes,
-                    // so consumed_bytes covers the whole chunk.
-                    if (available.size() - cursor >= 2 && !consume_delimiter(available, cursor)) {
+                    // Consume a complete delimiter with the final data bytes.
+                    if (consume_delimiter(available, cursor) == delimiter_status::invalid) {
                         return fail(cursor, http1_chunk_decode_error::invalid_framing);
                     }
                 }
                 return http1_chunk_decode_result(cursor, decode_output(body));
             }
             case progress::delimiter:
-                if (available.size() - cursor < 2) {
-                    return http1_chunk_decode_result(cursor, decode_need_input{});
-                }
-                if (!consume_delimiter(available, cursor)) {
-                    return fail(cursor, http1_chunk_decode_error::invalid_framing);
+                switch (consume_delimiter(available, cursor)) {
+                    case delimiter_status::incomplete:
+                        return http1_chunk_decode_result(cursor, decode_need_input{});
+                    case delimiter_status::invalid:
+                        return fail(cursor, http1_chunk_decode_error::invalid_framing);
+                    case delimiter_status::consumed:
+                        break;
                 }
                 break;
             case progress::trailers: {
@@ -355,14 +356,18 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view av
     }
 }
 
-// Requires both delimiter bytes to be buffered at cursor.
-bool http1_chunked_body_decoder::consume_delimiter(std::string_view available, std::size_t& cursor) noexcept {
-    if (!available.substr(cursor).starts_with("\r\n")) {
-        return false;
+http1_chunked_body_decoder::delimiter_status http1_chunked_body_decoder::consume_delimiter(std::string_view available, std::size_t& cursor) noexcept {
+    constexpr std::string_view crlf = "\r\n";
+    const auto prefix = available.substr(cursor, crlf.size());
+    if (!crlf.starts_with(prefix)) {
+        return delimiter_status::invalid;
     }
-    cursor += 2;
+    if (prefix.size() != crlf.size()) {
+        return delimiter_status::incomplete;
+    }
+    cursor += crlf.size();
     state_ = progress::size_line;
-    return true;
+    return delimiter_status::consumed;
 }
 
 bool http1_chunked_body_decoder::publish_trailers(std::string_view trailers) {

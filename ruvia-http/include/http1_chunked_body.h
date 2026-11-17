@@ -159,9 +159,12 @@ private:
         trailers,
         complete,
     };
+    enum class delimiter_status : std::uint8_t { incomplete,
+        consumed,
+        invalid };
 
     [[nodiscard]] http1_chunk_decode_result fail(std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept;
-    [[nodiscard]] bool consume_delimiter(std::string_view available, std::size_t& cursor) noexcept;
+    [[nodiscard]] delimiter_status consume_delimiter(std::string_view available, std::size_t& cursor) noexcept;
     [[nodiscard]] bool publish_trailers(std::string_view trailers);
 
     protocol_byte_limit body_limit_;

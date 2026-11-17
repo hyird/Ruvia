@@ -6598,7 +6598,7 @@ if (const auto* done = result.get_if<ruvia::http1_chunk_decode_complete>()) {
 - RFC 9112 不限制 chunk 数量；零长度 chunk 结束正文，因此空 chunk 不会重复出现。
 - 每个 chunk-size 行（含扩展）与编码后的 Trailer 区段（含最终空行）各自独立受 `max_http_header_bytes`（64 KiB）约束。搜索在上限处停止，到达上限仍无终止符时报告 `framing_limit_exceeded`，不检查之后的字节。
 - 同一消息所有 chunk-size 行中超出最短十六进制长度的字节（前导零与 chunk-ext）累计共享一份 `max_http_header_bytes` 预算（RFC 9112 §7.1.1），超出报告 `framing_limit_exceeded`（请求映射为 `413 chunked_framing_too_large`）。允许前缀内的格式错误仍报告 `invalid_framing`。
-- chunk-size 行中的裸 LF 在到达时即被拒绝（每个 LF 必须结束一个 CRLF，RFC 9112 §7.1）。
+- **CRLF 分帧**：chunk-size 行和 chunk 数据分隔符中的裸 LF 到达即被拒绝（RFC 9112 §7.1）；数据后只有 CR 时，保留它并等待 LF。
 - Trailer 区段还须满足 `http_field_section_budget` 字节规则（每字段 `name.size() + value.size() + 4`，结束空行加 2；见 [`"http_field_section_budget.h"`](#api-http-field-section-budget-h) 的 `http_trailer_section_budget()`）。obs-fold 按 `obs_fold_` 处理，禁止字段按 `trailer_message_` 丢弃。
 - 完成结果按接收顺序发布剩余字段：字段名小写、值去掉首尾 OWS。字段归解码器所有，仅当区段保留了字段时才分配存储；视图有效至下一次 `decode()` 或 `reset()`，或解码器被移动、被赋值、析构。
 - 终态：已完成或已失败的解码器不再消费输入，`decode()` 以 0 消费字节重放终态结果（完成结果不再携带 Trailer），直到 `reset()`。
