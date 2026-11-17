@@ -432,6 +432,30 @@ TEST(Ruvia, multipart_parser_releases_oversized_buffers_at_terminal_poll_and_res
     EXPECT_EQ(live_allocations.load(), empty);
 }
 
+TEST(Ruvia, multipart_parser_releases_large_unfolding_scratch_before_streaming_body) {
+    const auto boundary = ruvia::parse_multipart_boundary("multipart/form-data; boundary=b");
+    const std::string ignored_value(16 * 1024, 'x');
+    for (const std::string_view separator : {" ", "\r\n "}) {
+        const auto headers = "--b\r\nContent-Disposition: form-data; name=field\r\nContent-Type: text/plain\r\nX-Ignored:" + std::string(separator) + ignored_value + "\r\n\r\n";
+        ruvia::multipart_parser parser({.boundary_ = std::get<ruvia::multipart_boundary>(boundary)});
+        parser.feed(headers);
+        const auto before = live_allocations.load();
+        const auto waiting = parser.poll();
+        const auto after = live_allocations.load();
+        ASSERT_TRUE(waiting.holds<ruvia::decode_need_input>());
+        EXPECT_EQ(after, before) << separator.size();
+
+        parser.feed("payload\r\n--b--\r\n");
+        const auto result = parser.poll();
+        const auto* part = result.get_if<ruvia::multipart_stream_part>();
+        ASSERT_NE(part, nullptr);
+        EXPECT_EQ(part->name(), "field");
+        EXPECT_EQ(part->content_type(), "text/plain");
+        EXPECT_EQ(part->body(), "payload");
+        EXPECT_TRUE(parser.poll().holds<ruvia::decode_complete>());
+    }
+}
+
 TEST(Ruvia, cookie_jar_releases_storage_when_a_large_value_is_replaced) {
     ruvia::http_cookie_jar jar(ruvia::http_scheme::https, "example.test", {.max_cookie_bytes_ = 4096});
     const auto now = std::chrono::system_clock::time_point{};

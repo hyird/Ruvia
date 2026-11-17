@@ -840,6 +840,10 @@ multipart_parser::step_result_type multipart_parser::consume_headers() {
     } else {
         emplace_owned_multipart_text(current_content_type_).assign(part_headers->content_type().data(), part_headers->content_type().size());
     }
+    if (unfolded) {
+        // Every retained field now owns its bytes.
+        http_clear_string_retaining_small(current_headers_);
+    }
     --remaining_parts_;
     remaining_metadata_bytes_ -= headers_end + 4;
     consume(headers_end + 4);

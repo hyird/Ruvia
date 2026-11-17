@@ -3576,7 +3576,7 @@ multipart_body_parse_result parse_multipart_body(body_type&&, multipart_parse_op
 | `state()` | `active` / `finished` / `failed`。 |
 | `reset() noexcept` | 以构造时的边界与限额开始新正文。 |
 
-- **缓冲回收**：`poll()` 返回正文结束或失败时，以及 `reset()` 时，释放超过 4 KiB 的暂存缓冲。最后一个 part 的视图在返回时仍有效。
+- **缓冲回收**：part 元数据复制完成后即释放超过 4 KiB 的首部展开缓冲。`poll()` 返回正文结束或失败时，以及 `reset()` 时，释放其他超过 4 KiB 的暂存缓冲。最后一个 part 的视图在返回时仍有效。
 
 `parse_multipart_body(body, options)` 无 I/O 地解析完整 `multipart/form-data` 正文，结果中 part 正文借用 `body`；来自折叠首部块的名称、文件名与 `Content-Type` 拥有存储，未改写的首部块继续借用 `body`。`= delete` 模板重载拒绝拥有字符的右值临时字符串（如临时 `std::string`），因为返回的 part 会借用它。
 
