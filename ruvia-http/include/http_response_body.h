@@ -25,7 +25,7 @@ using http_native_path_char_type = std::filesystem::path::value_type;
 using http_native_path_string_type = std::basic_string<http_native_path_char_type>;
 using http_native_path_view_type = std::basic_string_view<http_native_path_char_type>;
 
-[[nodiscard]] inline http_native_path_view_type http_native_path_view(const std::filesystem::path& path) noexcept {
+[[nodiscard]] inline http_native_path_view_type http_native_path_view(const std::filesystem::path& path RUVIA_LIFETIMEBOUND) noexcept {
     return http_native_path_view_type(path.native());
 }
 http_native_path_view_type http_native_path_view(const std::filesystem::path&&) = delete;
@@ -59,7 +59,7 @@ public:
     [[nodiscard]] constexpr bool requires_validation() const noexcept {
         return checked_;
     }
-    [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words() const& noexcept {
+    [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words() const& noexcept RUVIA_LIFETIMEBOUND {
         return words_;
     }
     [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words() const&& = delete;

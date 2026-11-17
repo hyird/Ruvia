@@ -2814,7 +2814,7 @@ using http_native_path_char_type = std::filesystem::path::value_type;
 using http_native_path_string_type = std::basic_string<http_native_path_char_type>;
 using http_native_path_view_type = std::basic_string_view<http_native_path_char_type>;
 
-[[nodiscard]] inline http_native_path_view_type http_native_path_view(const std::filesystem::path& path) noexcept;
+[[nodiscard]] inline http_native_path_view_type http_native_path_view(const std::filesystem::path& path RUVIA_LIFETIMEBOUND) noexcept;
 http_native_path_view_type http_native_path_view(const std::filesystem::path&&) = delete;
 inline void http_assign_native_path(http_native_path_string_type& output, const std::filesystem::path& path);
 [[nodiscard]] inline std::filesystem::path http_make_path_from_native_path(const http_native_path_char_type* path);
@@ -2837,7 +2837,7 @@ public:
     [[nodiscard]] static constexpr http_response_file_identity unchecked() noexcept;
     [[nodiscard]] static constexpr http_response_file_identity checked(std::array<std::uint64_t, 4> words) noexcept;
     [[nodiscard]] constexpr bool requires_validation() const noexcept;
-    [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words() const& noexcept;
+    [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words() const&& = delete;
     friend constexpr bool operator==(const http_response_file_identity&, const http_response_file_identity&) noexcept = default;
 };
