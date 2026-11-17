@@ -667,20 +667,34 @@ bool http_vary_requests_match(const http_vary_spec& vary, const http_header_rang
 }
 
 std::optional<std::uint64_t> parse_http_age(std::string_view field_value) noexcept {
-    const auto trimmed = http_trim_ows(field_value);
-    if (trimmed.empty() || trimmed.front() == '"') {
+    // RFC 9111 §5.1: discard later members before validating the first.
+    while (!field_value.empty() && is_http_ows_char(field_value.front())) {
+        field_value.remove_prefix(1);
+    }
+    std::uint64_t age = 0;
+    std::size_t digits = 0;
+    for (; digits < field_value.size() && field_value[digits] >= '0' && field_value[digits] <= '9'; ++digits) {
+        age = accumulate_decimal_digit(age, static_cast<unsigned>(field_value[digits] - '0'));
+    }
+    if (digits == 0) {
         return std::nullopt;
     }
-    return parse_delta_seconds(trimmed);
+    field_value.remove_prefix(digits);
+    while (!field_value.empty() && is_http_ows_char(field_value.front())) {
+        field_value.remove_prefix(1);
+    }
+    return field_value.empty() || field_value.front() == ',' ? std::optional(age) : std::nullopt;
 }
 
 std::uint64_t compute_http_cache_age(const http_header_range_view& response_headers, std::time_t request_time, std::time_t response_time, std::time_t now) noexcept {
     std::optional<std::time_t> date_value;
     std::optional<std::uint64_t> age_value;
+    bool age_seen = false;
     for (const auto field : response_headers) {
         if (!date_value.has_value() && http_ascii_equals_ignore_case(field.name(), "Date")) {
             date_value = parse_http_date(field.value());
-        } else if (!age_value.has_value() && http_ascii_equals_ignore_case(field.name(), "Age")) {
+        } else if (!age_seen && http_ascii_equals_ignore_case(field.name(), "Age")) {
+            age_seen = true;
             age_value = parse_http_age(field.value());
         }
     }

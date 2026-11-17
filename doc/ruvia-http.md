@@ -4932,8 +4932,8 @@ struct http_cache_age_input final {
 ```
 
 - `http_cache_age_input`：RFC 9111 §4.2.3 的输入。`date_value_` 为响应 `Date`，`age_value_` 为响应 `Age`，`request_time_` / `response_time_` 为本地发出请求与收到响应的时刻，`now_` 为当前时刻（均为 Unix 秒）。
-- `parse_http_age`：去除首尾 OWS 后按 delta-seconds 解析 `Age`；拒绝空值、引号形式与非数字，溢出饱和为 `std::uint64_t` 最大值。
-- `compute_http_cache_age`：按 RFC 9111 §4.2.3 计算 `current_age`：`apparent_age = max(0, response_time - date_value)`（无 `Date` 时为 0），`corrected_age_value = age_value + (response_time - request_time)`，`corrected_initial_age = max(apparent_age, corrected_age_value)`，再加上 `resident_time = now - response_time`。所有差值为负时取 0，加法饱和不回绕。五参数重载与结构体重载等价。首部块重载取第一个可解析的 `Date` 行与第一个可解析的 `Age` 行。
+- **`parse_http_age`**：按 RFC 9111 §5.1 只解析首个逗号分隔成员。去除首尾 OWS 后，空值、引号形式或非数字返回 `std::nullopt`；溢出饱和为 `std::uint64_t` 最大值。
+- **`compute_http_cache_age`**：按 RFC 9111 §4.2.3 计算 `current_age`：`apparent_age = max(0, response_time - date_value)`（无 `Date` 时为 0），`corrected_age_value = age_value + (response_time - request_time)`，`corrected_initial_age = max(apparent_age, corrected_age_value)`，再加上 `resident_time = now - response_time`。负差值取 0，加法饱和。首部块重载取第一个可解析的 `Date` 行；只检查第一行 `Age`，即使该行的首个成员无效也不回退到后续行。
 
 #### 9.1.9 `304 Not Modified` 首部
 

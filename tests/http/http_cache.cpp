@@ -11,10 +11,24 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "http_header.h"
 #include "http_response.h"
+
+TEST(RuviaHttpPublicApi, cache_age_uses_only_the_first_received_member) {
+    EXPECT_EQ(ruvia::parse_http_age(" \t12 \t, 99"), 12U);
+    EXPECT_EQ(ruvia::parse_http_age("18446744073709551616, 1"), (std::numeric_limits<std::uint64_t>::max)());
+    for (const std::string_view invalid : {", 99", "invalid, 99", "\"12\", 99", "12 3, 99"}) {
+        EXPECT_EQ(ruvia::parse_http_age(invalid), std::nullopt) << invalid;
+    }
+
+    for (const auto& [first, expected] : {std::pair<std::string_view, std::uint64_t>{"12, 99", 17}, {"", 5}, {"bad, 12", 5}}) {
+        const std::array<ruvia::http_header_view, 2> headers{{{"aGe", first}, {"Age", "99"}}};
+        EXPECT_EQ(ruvia::compute_http_cache_age(headers, 100, 102, 105), expected) << first;
+    }
+}
 
 TEST(RuviaHttpPublicApi, rfc9111_shared_cache_primitives) {
     const auto cc = ruvia::parse_cache_control("public, max-age=120, s-maxage=300, stale-while-revalidate=30, stale-if-error=600, must-revalidate");

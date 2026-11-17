@@ -284,6 +284,7 @@ struct http_cache_age_input final {
     std::time_t now_{0};
 };
 
+// RFC 9111 section 5.1: parse the first Age member and discard any others.
 [[nodiscard]] std::optional<std::uint64_t> parse_http_age(std::string_view field_value) noexcept;
 
 [[nodiscard]] constexpr std::uint64_t compute_http_cache_age(const http_cache_age_input& input) noexcept {
