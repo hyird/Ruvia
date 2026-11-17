@@ -3764,7 +3764,7 @@ co_return c.text(body.text());
 
 #### 11.3.10 `class http_client_informational_response final`
 
-由 `http_client_response` 保留的不可变 1xx 元数据。
+由 `http_client_response` 保留的不可变 1xx 元数据；HTTP/1、HTTP/2、HTTP/3 均转移协议解析已拥有的字段存储，不重复复制。
 
 | 声明 | 说明 |
 | --- | --- |

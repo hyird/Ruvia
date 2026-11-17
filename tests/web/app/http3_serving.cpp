@@ -666,13 +666,13 @@ ruvia::task<void> exercise_independent_informational(ruvia::event_loop loop, ruv
     auto request = client.get("/connection-hints");
     request.configure({.informational_ = [&](ruvia::http_status_code status, std::span<const ruvia::http_header> fields, ruvia::stop_token stop) -> ruvia::task<void> {
         EXPECT_EQ(status.value(), 103);
-        EXPECT_TRUE(std::ranges::any_of(fields, [](const ruvia::http_header& field) {
-            return field.name() == "x-hint" && field.value() == "connection-controls";
-        }));
         entered = true;
         while (!released && !stop.stop_requested()) {
             (void)co_await ruvia::sleep_for(loop.worker(), 1ms, stop);
         }
+        EXPECT_TRUE(std::ranges::any_of(fields, [](const ruvia::http_header& field) {
+            return field.name() == "x-hint" && field.value() == "connection-controls";
+        }));
     }});
     auto first = [&]() -> ruvia::task<void> {
         auto response = co_await std::move(request).send();

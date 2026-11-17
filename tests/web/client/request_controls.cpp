@@ -16,6 +16,7 @@
 #include "http_client.h"
 #include "http_content_codec.h"
 #include "http_content_coding.h"
+#include "http_header.h"
 #include "http_request_head_view.h"
 #include "task_scope.h"
 #ifdef RUVIA_ENABLE_HTTP2
@@ -366,6 +367,7 @@ void informational_backpressure(bool fail_callback) {
     ruvia::worker_signal peer_done(worker);
     bool finished = false;
     std::exception_ptr peer_failure;
+    const std::string hint(512, 'h');
     const auto serve = [&]() -> asio::awaitable<void> {
         co_await acceptor.async_accept(socket, asio::use_awaitable);
         std::array<char, ruvia::http2_client_preface.size()> preface;
@@ -392,6 +394,7 @@ void informational_backpressure(bool fail_callback) {
             std::string fields;
             if (++requests == 1) {
                 ruvia::hpack_encoder::encode_header(fields, ":status", "103");
+                ruvia::hpack_encoder::encode_header(fields, "x-hint", hint);
                 ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, 4, header->stream_id_, fields);
                 fields.clear();
             }
@@ -424,11 +427,13 @@ void informational_backpressure(bool fail_callback) {
         const auto first = [&]() -> ruvia::task<void> {
             try {
                 auto request = client.client().get("/first");
-                request.configure({.informational_ = [&](ruvia::http_status_code, std::span<const ruvia::http_header>, ruvia::stop_token stop) -> ruvia::task<void> {
+                request.configure({.informational_ = [&](ruvia::http_status_code status, std::span<const ruvia::http_header> fields, ruvia::stop_token stop) -> ruvia::task<void> {
                     callback_entered = true;
                     entered.notify();
                     ruvia::stop_group cancellation{stop, release.token()};
                     (void)co_await ruvia::sleep_for(worker, std::chrono::hours(1), cancellation.token());
+                    EXPECT_EQ(status, ruvia::http_status::early_hints);
+                    EXPECT_EQ(ruvia::find_unique_http_header(fields, "x-hint").value_, hint);
                     if (fail_callback) {
                         throw informational_callback_error("informational callback failed");
                     }

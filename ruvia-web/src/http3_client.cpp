@@ -527,11 +527,13 @@ public:
         }
         item->signal_.notify();
     }
-    void consume_stream_event(stream& item, const http3_informational_head_event& value) {
+    void consume_stream_event(stream& item, http3_informational_head_event& value) {
         if (item.retry_425_) {
             return;
         }
-        item.response_.retain_informational(value.head().status(), value.head().headers(), value.request_content_signal());
+        const auto content_signal = value.request_content_signal();
+        auto head = std::move(value).take_head();
+        item.response_.retain_informational(head.status(), std::move(head).take_headers(), content_signal);
         read_progress(item);
     }
     void consume_stream_event(stream& item, http3_response_head_event& value) {

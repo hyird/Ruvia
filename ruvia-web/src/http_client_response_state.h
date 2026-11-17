@@ -12,7 +12,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -647,17 +646,10 @@ public:
         return true;
     }
 
-    // One retention path: consume response-owned fields or copy borrowed fields.
-    // Owned fields must already use this response's resource. A 100 (Continue)
-    // releases request content gated on it.
-    template <typename fields_type>
-        requires(std::is_same_v<std::remove_cvref_t<fields_type>, std::span<const http_header>> || std::is_same_v<fields_type, std::vector<http_header>>)
-    void retain_informational(http_status_code status, fields_type&& fields_value, std::optional<http_client_request_content_signal> request_content_signal) {
-        constexpr bool transferring = std::is_same_v<fields_type, std::vector<http_header>>;
+    // Transfer parsed fields only after checking their retained-byte budget.
+    // A 100 (Continue) releases request content gated on it.
+    void retain_informational(http_status_code status, std::vector<http_header>&& fields_value, std::optional<http_client_request_content_signal> request_content_signal) {
         http_client_informational_response head(status);
-        if constexpr (!transferring) {
-            head.headers_.reserve(fields_value.size());
-        }
         // Fieldless heads still consume response-budgeted vector storage.
         // Each head's own field count is bounded by its decoder; across heads
         // only the retained bytes are bounded, so many small interim heads
@@ -667,13 +659,8 @@ public:
             if (!budget.add(field.name().size()) || !budget.add(field.value().size()) || !budget.add(http_field_line_overhead)) {
                 throw http_client_error(make_error_code(http_client_errc::protocol_error), "informational response metadata exceeds byte limit");
             }
-            if constexpr (!transferring) {
-                head.headers_.emplace_back(field.name(), field.value());
-            }
         }
-        if constexpr (transferring) {
-            head.headers_ = std::move(fields_value);
-        }
+        head.headers_ = std::move(fields_value);
         informational_.push_back(std::move(head));
         informational_budget_ = budget;
         if (upload_ && request_content_signal == http_client_request_content_signal::continue_) {

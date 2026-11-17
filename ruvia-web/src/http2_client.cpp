@@ -736,13 +736,15 @@ void http_client_connection::on_http2_event(http2_event& event) {
     }
     if (const auto* push = event.push_promise()) {
         pool_.accept_http2_push(*this, *push);
-    } else if (const auto* interim = event.informational_head()) {
+    } else if (auto* interim = event.informational_head()) {
         auto* stream = find_http2_stream(interim->stream_id());
         if (stream == nullptr || stream->complete_ || stream->failed()) {
             return;
         }
         try {
-            stream->state_->retain_informational(interim->head().status(), interim->head().headers(), interim->request_content_signal());
+            const auto content_signal = interim->request_content_signal();
+            auto head = std::move(*interim).take_head();
+            stream->state_->retain_informational(head.status(), std::move(head).take_headers(), content_signal);
             if (stream->state_->informational_callback_ && !stream->state_->informational_active()) {
                 stream->state_->begin_informational();
                 stream->timer_.read_deadline_.reset();

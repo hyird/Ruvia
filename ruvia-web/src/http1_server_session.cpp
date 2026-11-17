@@ -721,7 +721,26 @@ public:
         operation_interrupt interrupt(interrupts_, worker_, operation, &read_cancellation_, &wake_read, "request body read");
         const read_interrupt_scope running(read_interrupt_, interrupt);
         try {
-            co_return co_await read_next();
+            if (chunked()) {
+                if (continue_pending_) {
+                    co_await send_continue();
+                }
+                auto chunk = co_await read_chunked();
+                if (!chunk) {
+                    mark_finished();
+                }
+                co_return chunk;
+            }
+            if (!known_length()) {
+                co_return std::nullopt;
+            }
+            if (exceeds_limit(declared_length())) {
+                throw_request_body_too_large();
+            }
+            if (continue_pending_) {
+                co_await send_continue();
+            }
+            co_return co_await read_known_length(declared_length());
         } catch (...) {
             if (interrupt.interrupted()) {
                 scanner_entry_.set_phase(connection_scanner::phase::idle);
@@ -756,7 +775,77 @@ public:
                     mark_finished();
                     co_return initial_body_and_pipeline_.substr(0, content_length);
                 }
-                co_return co_await read_known_length_all(body, body_reservation, content_length);
+                const auto initial_body_bytes = std::min(content_length, initial_body_and_pipeline_.size());
+                if (continue_pending_) {
+                    co_await send_continue();
+                }
+
+                // The initial segment is shorter than the body, so it is all body and no
+                // pipelined bytes follow it; an earlier read() may also have left a
+                // buffered remainder. Take both before reading the socket.
+                const auto initial_unread = delivered_bytes_ < initial_body_bytes ? initial_body_bytes - delivered_bytes_ : std::size_t{0};
+                const auto remaining_after_initial = content_length - delivered_bytes_ - initial_unread;
+                const auto buffered_unread = read_cursor_ < buffer_.size() ? std::min(buffer_.size() - read_cursor_, remaining_after_initial) : std::size_t{0};
+                const auto preread_unread = initial_unread + buffered_unread;
+                if (preread_unread != 0) {
+                    const auto after_preread = body.size() + preread_unread;
+                    const auto remaining_after_preread = remaining_after_initial - buffered_unread;
+                    if (remaining_after_preread == 0) {
+                        inbound_reserve(body, body_reservation, after_preread);
+                    } else {
+                        (void)reserve_known_length_growth(body, body_reservation, after_preread, remaining_after_preread);
+                    }
+                }
+                if (initial_unread != 0) {
+                    body.append(initial_body_and_pipeline_.substr(delivered_bytes_, initial_unread));
+                    delivered_bytes_ = initial_body_bytes;
+                }
+                initial_body_and_pipeline_ = {};
+                if (buffered_unread != 0) {
+                    body.append(buffer_.data() + read_cursor_, buffered_unread);
+                    read_cursor_ += buffered_unread;
+                    delivered_bytes_ += buffered_unread;
+                }
+
+                // Read the rest straight into the tail of `body`, never past the declared
+                // length, so no bytes of a pipelined request are taken. Capacity starts at
+                // min(declared length, known_length_min_read_bytes) and then grows
+                // geometrically from what has actually arrived, so a peer that sends only
+                // headers cannot make the declared Content-Length allocate past that floor.
+                // `body` is resized once per growth step and the reads fill the window up
+                // to its size, so each byte is initialized at most once before a read
+                // overwrites it; `filled` marks the bytes the socket has written.
+                if (delivered_bytes_ < content_length) {
+                    scanner_entry_.set_phase(connection_scanner::phase::reading_payload);
+                }
+                auto filled = body.size();
+                while (delivered_bytes_ < content_length) {
+                    const auto remaining_body = content_length - delivered_bytes_;
+                    if (filled == body.size()) {
+                        const auto final_size = reserve_known_length_growth(body, body_reservation, filled, remaining_body);
+                        inbound_resize(body, body_reservation, std::min(final_size, body.capacity()));
+                    }
+                    const auto writable = std::min(remaining_body, body.size() - filled);
+                    throw_if_read_interrupted_keeping(body, filled);
+                    auto read_completion = co_await ruvia::async_asio<std::size_t>([this, &body, filled, writable](auto handler) mutable {
+                        stream_.async_read_some(asio::buffer(body.data() + filled, writable), asio::bind_cancellation_slot(read_cancellation_.slot(), std::move(handler)));
+                    });
+                    const auto ec = read_completion.error_code();
+                    const auto bytes_read = read_completion.result();
+                    if (ec == asio::error::operation_aborted) {
+                        throw_if_read_interrupted_keeping(body, filled);
+                    }
+                    if (ec || bytes_read == 0) {
+                        // The unread window never received bytes; it must not survive as body.
+                        body.resize(filled);
+                        throw_incomplete_request_body();
+                    }
+                    filled += bytes_read;
+                    delivered_bytes_ += bytes_read;
+                    scanner_entry_.touch();
+                }
+                mark_finished();
+                co_return std::string_view(body);
             }
             if (!chunked()) {
                 co_return std::string_view(body);
@@ -828,29 +917,6 @@ private:
         if (read_interrupt_ != nullptr) {
             read_interrupt_->throw_if_interrupted();
         }
-    }
-
-    task<std::optional<std::span<const std::byte>>> read_next() {
-        if (chunked()) {
-            if (continue_pending_) {
-                co_await send_continue();
-            }
-            auto chunk = co_await read_chunked();
-            if (!chunk) {
-                mark_finished();
-            }
-            co_return chunk;
-        }
-        if (!known_length()) {
-            co_return std::nullopt;
-        }
-        if (exceeds_limit(declared_length())) {
-            throw_request_body_too_large();
-        }
-        if (continue_pending_) {
-            co_await send_continue();
-        }
-        co_return co_await read_known_length(declared_length());
     }
 
     task<void> send_continue() {
@@ -944,80 +1010,6 @@ private:
         }
         buffer_.commit(bytes_read);
         scanner_entry_.touch();
-    }
-
-    task<std::string_view> read_known_length_all(std::string& body, inbound_buffer_reservation& body_reservation, std::size_t content_length) {
-        const auto initial_body_bytes = std::min(content_length, initial_body_and_pipeline_.size());
-        if (continue_pending_) {
-            co_await send_continue();
-        }
-
-        // The initial segment is shorter than the body, so it is all body and no
-        // pipelined bytes follow it; an earlier read() may also have left a
-        // buffered remainder. Take both before reading the socket.
-        const auto initial_unread = delivered_bytes_ < initial_body_bytes ? initial_body_bytes - delivered_bytes_ : std::size_t{0};
-        const auto remaining_after_initial = content_length - delivered_bytes_ - initial_unread;
-        const auto buffered_unread = read_cursor_ < buffer_.size() ? std::min(buffer_.size() - read_cursor_, remaining_after_initial) : std::size_t{0};
-        const auto preread_unread = initial_unread + buffered_unread;
-        if (preread_unread != 0) {
-            const auto after_preread = body.size() + preread_unread;
-            const auto remaining_after_preread = remaining_after_initial - buffered_unread;
-            if (remaining_after_preread == 0) {
-                inbound_reserve(body, body_reservation, after_preread);
-            } else {
-                (void)reserve_known_length_growth(body, body_reservation, after_preread, remaining_after_preread);
-            }
-        }
-        if (initial_unread != 0) {
-            body.append(initial_body_and_pipeline_.substr(delivered_bytes_, initial_unread));
-            delivered_bytes_ = initial_body_bytes;
-        }
-        initial_body_and_pipeline_ = {};
-        if (buffered_unread != 0) {
-            body.append(buffer_.data() + read_cursor_, buffered_unread);
-            read_cursor_ += buffered_unread;
-            delivered_bytes_ += buffered_unread;
-        }
-
-        // Read the rest straight into the tail of `body`, never past the declared
-        // length, so no bytes of a pipelined request are taken. Capacity starts at
-        // min(declared length, known_length_min_read_bytes) and then grows
-        // geometrically from what has actually arrived, so a peer that sends only
-        // headers cannot make the declared Content-Length allocate past that floor.
-        // `body` is resized once per growth step and the reads fill the window up
-        // to its size, so each byte is initialized at most once before a read
-        // overwrites it; `filled` marks the bytes the socket has written.
-        if (delivered_bytes_ < content_length) {
-            scanner_entry_.set_phase(connection_scanner::phase::reading_payload);
-        }
-        auto filled = body.size();
-        while (delivered_bytes_ < content_length) {
-            const auto remaining_body = content_length - delivered_bytes_;
-            if (filled == body.size()) {
-                const auto final_size = reserve_known_length_growth(body, body_reservation, filled, remaining_body);
-                inbound_resize(body, body_reservation, std::min(final_size, body.capacity()));
-            }
-            const auto writable = std::min(remaining_body, body.size() - filled);
-            throw_if_read_interrupted_keeping(body, filled);
-            auto read_completion = co_await ruvia::async_asio<std::size_t>([this, &body, filled, writable](auto handler) mutable {
-                stream_.async_read_some(asio::buffer(body.data() + filled, writable), asio::bind_cancellation_slot(read_cancellation_.slot(), std::move(handler)));
-            });
-            const auto ec = read_completion.error_code();
-            const auto bytes_read = read_completion.result();
-            if (ec == asio::error::operation_aborted) {
-                throw_if_read_interrupted_keeping(body, filled);
-            }
-            if (ec || bytes_read == 0) {
-                // The unread window never received bytes; it must not survive as body.
-                body.resize(filled);
-                throw_incomplete_request_body();
-            }
-            filled += bytes_read;
-            delivered_bytes_ += bytes_read;
-            scanner_entry_.touch();
-        }
-        mark_finished();
-        co_return std::string_view(body);
     }
 
     task<std::optional<std::span<const std::byte>>> read_known_length(std::size_t content_length) {
