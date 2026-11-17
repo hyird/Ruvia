@@ -1731,6 +1731,19 @@ ruvia::task<void> exercise_route_alt_svc(ruvia::event_loop loop, ruvia::http_cli
         const auto other_upgraded = co_await fetch("b.localhost");
         EXPECT_TRUE(other_upgraded.first == ruvia::http_protocol_version::http3);
         EXPECT_TRUE(other_upgraded.second.starts_with("b.localhost|"));
+        // Refreshing either route must preserve the other's advertisement.
+        for (const std::string_view host : {"a.localhost", "b.localhost"}) {
+            auto options = route_options(authority(host));
+            options.versions_ = ruvia::http_client_versions{.http2_ = false, .http3_ = false};
+            auto refreshed = co_await client.get("/resumption/route").configure(std::move(options)).send();
+            EXPECT_NE(refreshed.protocol_version(), ruvia::http_protocol_version::http3);
+            (void)co_await refreshed.bytes();
+            for (const std::string_view retained_host : {"a.localhost", "b.localhost"}) {
+                const auto retained = co_await fetch(retained_host);
+                EXPECT_EQ(retained.first, ruvia::http_protocol_version::http3);
+                EXPECT_TRUE(retained.second.starts_with(retained_host));
+            }
+        }
     } catch (...) {
         failure = std::current_exception();
     }

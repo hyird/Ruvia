@@ -1429,12 +1429,21 @@ void http_client_pool::observe_alt_svc(const http_client_route& route, std::span
             continue;
         }
         if (first) {
-            for (const auto& service : alternative_services_) {
-                if (names_route(service)) {
-                    previous.push_back(service);
+            // Reserve before extraction: moving and compacting the entries
+            // cannot then fail halfway through retiring the route.
+            previous.reserve(static_cast<std::size_t>(std::ranges::count_if(alternative_services_, names_route)));
+            auto retained = alternative_services_.begin();
+            for (auto position = alternative_services_.begin(); position != alternative_services_.end(); ++position) {
+                if (names_route(*position)) {
+                    previous.push_back(std::move(*position));
+                } else {
+                    if (retained != position) {
+                        *retained = std::move(*position);
+                    }
+                    ++retained;
                 }
             }
-            std::erase_if(alternative_services_, names_route);
+            alternative_services_.erase(retained, alternative_services_.end());
             first = false;
         }
         auto value = http_trim_ows(field.value());

@@ -22,6 +22,7 @@
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/stream.hpp>
 
+#include "asio_completion.h"
 #include "client_host_resolver.h"
 #include "client_tls.h"
 #include "http_client_types.h"
@@ -428,7 +429,12 @@ public:
     // at its end or failed, without reading and without running the TLS
     // engine; idle_status() then classifies it. Only while no other operation
     // is pending: cancel_wait() ends it early.
-    [[nodiscard]] task<void> wait_readable();
+    [[nodiscard]] auto wait_readable() {
+        // A readiness wait consumes nothing; the next exchange owns the bytes.
+        return async_asio([this](auto handler) mutable {
+            stream_->next_layer().socket().async_wait(asio::socket_base::wait_read, std::move(handler));
+        });
+    }
     void cancel_wait() noexcept;
 
     // Raw stream for the CONNECT tunnel adapter, which owns TLS shutdown: the

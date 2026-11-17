@@ -2717,6 +2717,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 - **两种角色一个类型**：服务端路由（`c.websocket()`）、`request_stream::accept_websocket()` 与客户端 `http_client_websocket_request::connect()`（见 [`"http_client.h"`](#api-http-client-h)）都交付 `websocket`；服务端会话借用请求寿命，客户端返回拥有型句柄。
 - **协议承载**：服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 扩展 CONNECT（RFC 8441）与 HTTP/3 扩展 CONNECT（RFC 9220），路由代码统一。
 - **握手写出**：HTTP/1.1 直接散写协议计划的稳定首部切片，不额外拼接完整首部；需要 `100 Continue` 时先于 `101` 写出。
+- **帧写出**：同一输出协程持有协议计划至写出结束；HTTP/1 使用 gather write，HTTP/2/3 按序写出协议输出与借用负载，仅末段携带结束标记。
 - **协议核心类型**：`websocket_message`、`websocket_opcode`、`websocket_termination`、`websocket_close_code` / `websocket_close_status`、`websocket_server_deflate_options`、`websocket_client_deflate_offer` 见 [`"websocket_connection.h"`](ruvia-http.md#api-websocket-connection-h)；`protocol_byte_limit` 见 [`"http_protocol.h"`](ruvia-http.md#api-http-protocol-h)。
 - **生命周期时限**：`websocket_lifecycle_options` 由服务端路由、`accept_websocket()` 与客户端 `lifecycle()` 共用；设置值必须为正，否则配置时抛 `std::invalid_argument`；超时中止传输（不发 Close），`termination()` 记为 `timeout`。
 - **worker 亲和**：会话只能在所属 worker 上使用。
@@ -3386,7 +3387,7 @@ ruvia::app().client({
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `max_concurrent_streams_` | `std::size_t` | `100` | 每连接并发流 |
-| `max_alt_svc_entries_` | `std::size_t` | `16` | 跨路由 Alt-Svc 缓存条目，最久未用先淘汰 |
+| `max_alt_svc_entries_` | `std::size_t` | `16` | 跨路由 Alt-Svc 缓存条目，最久未用先淘汰；重新通告时移动旧记录并保留失败退避 |
 | `enable_early_data_` | `bool` | `false` | 启用 0-RTT；只对无正文、非上传、非隧道的 `GET` / `HEAD` / `OPTIONS` / `TRACE` 提前发送，被拒或 `425` 时握手后最多重发一次 |
 | `max_datagram_bytes_` | `std::size_t` | `1350` | 数据报大小上限 |
 | `max_stream_output_bytes_` | `std::size_t` | `256 * 1024` | 每流待确认输出上限 |
@@ -3420,7 +3421,7 @@ ruvia::app().client({
 | `read_timeout_` | `std::optional<timeout_duration>` | `30000` | 响应读取无活动时限，每次收到字节重启；最终响应头前发送请求内容也重启；等待调用方消费缓冲正文时不算无活动；到期以 timeout 失败 |
 | `request_timeout_` | `std::optional<timeout_duration>` | `30000` | 一次交换的总期限（准入、建连、请求传输、响应头与完整正文，含等待慢消费者）；到期以 timeout 失败并丢弃连接；操作自身超时只能收紧它；已接受 WebSocket 无隐式总寿命 |
 | `acquire_timeout_` | `std::optional<timeout_duration>` | `5000` | 在 `request_timeout_` 内等待连接准入的时限；`request_timeout_` 为 `nullopt` 时也生效 |
-| `idle_timeout_` | `std::optional<timeout_duration>` | `90000` | 池化 HTTP/1 连接或无流 HTTP/2 连接空闲这么久即关闭；空闲 HTTP/1 连接在对端结束或发送字节时立即关闭 |
+| `idle_timeout_` | `std::optional<timeout_duration>` | `90000` | 池化 HTTP/1 连接或无流 HTTP/2 连接空闲这么久即关闭；空闲 HTTP/1 直接等待 socket 就绪，对端结束或发送字节即关闭 |
 | `http2_ping_interval_` | `std::optional<timeout_duration>` | 空 | HTTP/2 无输入达此间隔发 PING，再过一个间隔仍无输入以 timeout 失败；`nullopt` 不发 PING |
 | `max_response_bytes_` | `std::size_t` | `default_max_buffered_body_bytes` | 响应缓冲正文上限 |
 | `versions_` | `http_client_versions` | `{}` | alias 请求默认版本 |

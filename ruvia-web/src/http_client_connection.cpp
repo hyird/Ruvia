@@ -293,7 +293,7 @@ task<void> http_client_connection::watch_idle_http1() {
         }
         const auto period = idle_period_;
         idle_wait_pending_ = true;
-        co_await transport_.wait_readable();
+        (void)co_await transport_.wait_readable();
         if (period != idle_period_ || retired_) {
             // end_idle() cancelled the wait: the connection is in use or closed.
             continue;

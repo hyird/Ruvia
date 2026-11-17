@@ -811,8 +811,6 @@ private:
     [[nodiscard]] bool session_ended() const noexcept {
         return protocol_.termination() != websocket_termination::none;
     }
-    task<std::error_code> write_adapted(const websocket_output_plan& plan);
-    auto write_bytes(const websocket_output_plan& plan);
     void close_stream() noexcept;
     // `cause` is recorded unless an earlier termination cause was.
     void abort_transport(websocket_termination cause, bool force_transport = false) noexcept;
@@ -1398,36 +1396,6 @@ bool websocket_session_connection<stream_type>::accept_submitted_frame(websocket
 }
 
 template <typename stream_type>
-auto websocket_session_connection<stream_type>::write_bytes(const websocket_output_plan& plan) {
-    if constexpr (!native_stream) {
-        return write_adapted(plan);
-    } else {
-        // One gathered write: pending protocol output, then a borrowed payload.
-        const std::array<asio::const_buffer, 2> buffers{asio::buffer(plan.bytes().data(), plan.bytes().size()), asio::buffer(plan.borrowed_bytes().data(), plan.borrowed_bytes().size())};
-        return ruvia::async_asio([this, buffers](auto handler) mutable {
-            // The native stream reports each transfer as write progress,
-            // refreshing heartbeat transport activity and the write_timeout
-            // inactivity clock.
-            asio::async_write(stream_, buffers, std::move(handler));
-        });
-    }
-}
-
-template <typename stream_type>
-task<std::error_code> websocket_session_connection<stream_type>::write_adapted(const websocket_output_plan& plan) {
-    // The websocket protocol's transport disposition maps onto the stream end
-    // at this one boundary; the multiplexed transports only speak http_stream_end.
-    const auto end = plan.disposition() == websocket_transport_disposition::end_transport ? http_stream_end::end : http_stream_end::keep_open;
-    if (plan.borrowed_bytes().empty()) {
-        co_return co_await stream_.write_bytes(plan.bytes(), end);
-    }
-    if (const auto error = co_await stream_.write_bytes(plan.bytes(), http_stream_end::keep_open)) {
-        co_return error;
-    }
-    co_return co_await stream_.write_bytes(plan.borrowed_bytes(), end);
-}
-
-template <typename stream_type>
 task<void> websocket_session_connection<stream_type>::flush_protocol_output_now() {
     struct flush_abort_guard final {
         websocket_session_connection* connection_;
@@ -1453,10 +1421,25 @@ task<void> websocket_session_connection<stream_type>::flush_protocol_output_now(
                 // peer that stopped reading, whatever the reader's phase. An
                 // HTTP/2-adapted stream is bounded by its session's writer.
                 const connection_scanner::entry::write_scope write_stall_clock(scanner_entry_);
-                const auto write_result = co_await write_bytes(plan);
+                const std::array<asio::const_buffer, 2> buffers{asio::buffer(plan.bytes().data(), plan.bytes().size()), asio::buffer(plan.borrowed_bytes().data(), plan.borrowed_bytes().size())};
+                const auto write_result = co_await async_asio([this, buffers](auto handler) mutable {
+                    // Each transfer refreshes heartbeat activity and the
+                    // write_timeout inactivity clock.
+                    asio::async_write(stream_, buffers, std::move(handler));
+                });
                 ec = write_result.error_code();
             } else {
-                ec = co_await write_bytes(plan);
+                // Only this boundary maps the protocol disposition onto the
+                // multiplexed transport's stream end.
+                const auto end = disposition == websocket_transport_disposition::end_transport ? http_stream_end::end : http_stream_end::keep_open;
+                if (plan.borrowed_bytes().empty()) {
+                    ec = co_await stream_.write_bytes(plan.bytes(), end);
+                } else {
+                    ec = co_await stream_.write_bytes(plan.bytes(), http_stream_end::keep_open);
+                    if (!ec) {
+                        ec = co_await stream_.write_bytes(plan.borrowed_bytes(), end);
+                    }
+                }
             }
             if (ec) {
                 guard.cause_ = websocket_termination::io_error;
