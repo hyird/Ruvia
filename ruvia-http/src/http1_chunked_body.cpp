@@ -247,8 +247,11 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view av
     trailers_.clear();
 
     std::size_t cursor = 0;
+    // Keep framing progress local until we can report the consumed prefix.
+    // Owning the trailers may throw after scanning a delimiter and zero chunk.
+    auto phase = std::get<progress>(state_);
     for (;;) {
-        switch (std::get<progress>(state_)) {
+        switch (phase) {
             case progress::size_line: {
                 // Every LF must end a CRLF (RFC 9112 section 7.1), so a bare LF is
                 // rejected as soon as it arrives instead of waiting for a CRLF.
@@ -260,12 +263,12 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view av
                         return fail(cursor, http1_chunk_decode_error::framing_limit_exceeded);
                     }
                     size_line_search_offset_ = line_bytes;
+                    state_ = progress::size_line;
                     return http1_chunk_decode_result(cursor, decode_need_input{});
                 }
                 if (line_feed == 0 || line[line_feed - 1] != '\r') {
                     return fail(cursor, http1_chunk_decode_error::invalid_framing);
                 }
-                size_line_search_offset_ = 0;
                 const auto line_end = line_feed - 1;
                 const auto size_line = parse_http_chunk_size_line(line.substr(0, line_end));
                 if (!size_line) {
@@ -276,19 +279,20 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view av
                 if (max_http_header_bytes - framing_overhead_bytes_ < size_line->overhead_bytes_) {
                     return fail(cursor, http1_chunk_decode_error::framing_limit_exceeded);
                 }
-                framing_overhead_bytes_ += size_line->overhead_bytes_;
                 cursor += line_end + 2;
                 if (size_line->size_ == 0) {
-                    state_ = progress::trailers;
-                    trailer_search_offset_ = 0;
-                } else {
-                    if (body_limit_.addition_exceeds(decoded_bytes_, size_line->size_)) {
-                        return fail(cursor, http1_chunk_decode_error::body_limit_exceeded);
-                    }
-                    decoded_bytes_ += size_line->size_;
-                    remaining_ = size_line->size_;
-                    state_ = progress::body;
+                    phase = progress::trailers;
+                    break;
                 }
+                if (body_limit_.addition_exceeds(decoded_bytes_, size_line->size_)) {
+                    return fail(cursor, http1_chunk_decode_error::body_limit_exceeded);
+                }
+                size_line_search_offset_ = 0;
+                framing_overhead_bytes_ += size_line->overhead_bytes_;
+                decoded_bytes_ += size_line->size_;
+                remaining_ = size_line->size_;
+                phase = progress::body;
+                state_ = phase;
                 break;
             }
             case progress::body: {
@@ -302,8 +306,12 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view av
                 if (remaining_ == 0) {
                     state_ = progress::delimiter;
                     // Consume a complete delimiter with the final data bytes.
-                    if (consume_delimiter(available, cursor) == delimiter_status::invalid) {
+                    const auto delimiter = consume_delimiter(available, cursor);
+                    if (delimiter == delimiter_status::invalid) {
                         return fail(cursor, http1_chunk_decode_error::invalid_framing);
+                    }
+                    if (delimiter == delimiter_status::consumed) {
+                        state_ = progress::size_line;
                     }
                 }
                 return http1_chunk_decode_result(cursor, decode_output(body));
@@ -315,6 +323,7 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view av
                     case delimiter_status::invalid:
                         return fail(cursor, http1_chunk_decode_error::invalid_framing);
                     case delimiter_status::consumed:
+                        phase = progress::size_line;
                         break;
                 }
                 break;
@@ -341,6 +350,7 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view av
                         return fail(cursor, http1_chunk_decode_error::framing_limit_exceeded);
                     }
                     trailer_search_offset_ = trailers.size();
+                    state_ = progress::trailers;
                     return http1_chunk_decode_result(cursor, decode_need_input{});
                 }
                 const auto trailer_bytes = trailer_end + 4;
@@ -366,7 +376,6 @@ http1_chunked_body_decoder::delimiter_status http1_chunked_body_decoder::consume
         return delimiter_status::incomplete;
     }
     cursor += crlf.size();
-    state_ = progress::size_line;
     return delimiter_status::consumed;
 }
 

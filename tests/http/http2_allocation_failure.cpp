@@ -17,6 +17,7 @@
 #include <utility>
 #include <variant>
 
+#include "http1_chunked_body.h"
 #include "http2_connection.h"
 #include "http_cookie_jar.h"
 #include "http_multipart.h"
@@ -423,4 +424,28 @@ TEST(Ruvia, cookie_jar_releases_storage_when_a_large_value_is_replaced) {
 
     EXPECT_EQ(jar.cookie_header("/", true, now), "id=b");
     EXPECT_EQ(replaced, small);
+}
+
+TEST(Ruvia, chunked_decoder_retries_trailers_from_the_same_input_after_allocation_failure) {
+    constexpr std::string_view ending = "\r\n0;ext\r\nX-Trace: retained\r\n\r\n";
+    ruvia::http1_chunked_body_decoder decoder;
+    const auto body = decoder.decode("1\r\nx\r");
+    ASSERT_TRUE(body.holds<ruvia::decode_output>());
+    ASSERT_EQ(body.consumed_bytes(), 4U);
+
+    EXPECT_THROW(
+        {
+            allocation_scope scope(0);
+            (void)decoder.decode(ending);
+        },
+        std::bad_alloc);
+    EXPECT_EQ(decoder.state(), ruvia::decoder_state::active);
+
+    const auto retried = decoder.decode(ending);
+    const auto* complete = retried.get_if<ruvia::http1_chunk_decode_complete>();
+    ASSERT_NE(complete, nullptr);
+    EXPECT_EQ(retried.consumed_bytes(), ending.size());
+    ASSERT_EQ(complete->trailers().size(), 1U);
+    EXPECT_EQ(complete->trailers().front().name(), "x-trace");
+    EXPECT_EQ(complete->trailers().front().value(), "retained");
 }

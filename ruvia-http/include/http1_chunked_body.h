@@ -129,6 +129,7 @@ struct http1_chunked_body_decoder_options final {
 // storage is allocated only for a section that keeps a field, and the view
 // stays valid until the next decode() or reset() call, or until the decoder is
 // moved from, assigned to or destroyed.
+// If storing trailers throws, retry decode() with the same input.
 // A finished or failed decoder consumes no further input: decode() repeats
 // the terminal result (a finished one without its trailers) until reset().
 class http1_chunked_body_decoder final {
@@ -164,7 +165,7 @@ private:
         invalid };
 
     [[nodiscard]] http1_chunk_decode_result fail(std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept;
-    [[nodiscard]] delimiter_status consume_delimiter(std::string_view available, std::size_t& cursor) noexcept;
+    [[nodiscard]] static delimiter_status consume_delimiter(std::string_view available, std::size_t& cursor) noexcept;
     [[nodiscard]] bool publish_trailers(std::string_view trailers);
 
     protocol_byte_limit body_limit_;
