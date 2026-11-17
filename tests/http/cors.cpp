@@ -166,6 +166,28 @@ TEST(RuviaHttpPublicApi, cors_preflight_matches_the_exact_method_token) {
     }
 }
 
+TEST(RuviaHttpPublicApi, cors_preflight_wildcard_supersedes_explicit_methods) {
+    const ruvia::http_cors_policy policy(ruvia::http_cors_policy_options{
+        .allowed_origins_ = {"https://app.example.com"},
+        .allowed_methods_ = {"GET", "*"},
+        .allow_credentials_ = true,
+    });
+    const std::array fields{
+        ruvia::http_header_view{"Origin", "https://app.example.com"},
+        ruvia::http_header_view{"Access-Control-Request-Method", "Report"},
+    };
+    const auto request = ruvia::make_parsed_http_request("OPTIONS", "/resource", fields, {});
+    const auto preflight = policy.evaluate_preflight(request);
+    ASSERT_TRUE(preflight.accepted());
+    const auto methods = ruvia::find_unique_http_header(preflight.headers(), "Access-Control-Allow-Methods");
+    EXPECT_EQ(methods.status_, ruvia::unique_lookup_status::found);
+    EXPECT_EQ(methods.value_, "Report");
+
+    ruvia::http_response response;
+    ASSERT_TRUE(policy.apply_response_headers(request, response));
+    EXPECT_EQ(response.header("Access-Control-Allow-Methods"), std::optional<std::string_view>("Report"));
+}
+
 // Fetch forbids credentials with a wildcard origin, so a policy that would
 // answer any origin cannot also allow credentials.
 TEST(RuviaHttpPublicApi, cors_policy_rejects_credentials_with_any_origin) {

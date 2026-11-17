@@ -27,8 +27,8 @@ struct http_cors_policy_options final {
     // Domain suffixes matched on a label boundary (".example.com", "example.com",
     // "*.example.com", or scheme-qualified "https://.example.com").
     std::vector<std::string> allowed_origin_suffixes_;
-    // Allowed preflight methods (e.g. "GET", "POST", "OPTIONS"), or "*" for any
-    // valid method token.
+    // Allowed preflight methods (e.g. "GET", "POST", "OPTIONS"). A "*" entry
+    // selects any valid method token instead of a fixed response list.
     std::vector<std::string> allowed_methods_;
     // Allowed request header names, or "*" to reflect Access-Control-Request-Headers.
     std::vector<std::string> allowed_headers_;

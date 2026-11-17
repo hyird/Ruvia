@@ -209,6 +209,7 @@ http_cors_policy::http_cors_policy(const http_cors_policy_options& config) :
     if (allow_any_origin_ && allow_credentials_) {
         throw std::invalid_argument("CORS credentials require an explicit allowed origin list");
     }
+    allow_any_method_ = config.allowed_methods_.empty();
     for (const auto& method : config.allowed_methods_) {
         const std::string_view view(method);
         if (view == "*") {
@@ -218,12 +219,11 @@ http_cors_policy::http_cors_policy(const http_cors_policy_options& config) :
         if (!is_valid_http_method_token(view)) {
             throw std::invalid_argument("CORS allowed method must be a valid HTTP method token");
         }
-        allowed_methods_.emplace_back(view);
     }
-    if (allowed_methods_.empty()) {
-        allow_any_method_ = true;
+    if (!allow_any_method_) {
+        allowed_methods_ = config.allowed_methods_;
+        joined_allowed_methods_ = join_tokens(allowed_methods_);
     }
-    joined_allowed_methods_ = join_tokens(allowed_methods_);
 
     for (const auto& header_name : config.allowed_headers_) {
         const std::string_view view(header_name);

@@ -5717,14 +5717,14 @@ struct http_cors_policy_options final {
 | `allow_any_origin_` | `false` | 允许任意 Origin（响应 `Access-Control-Allow-Origin: *`） |
 | `allowed_origins_` | 空 | 精确 WHATWG 序列化源（如 `"https://example.com"`、`"null"`）、`"*"`（等价于任意 Origin），或以 `.` / `*.` 开头（或含 `://.` / `://*.`）的尾缀模式（按 `allowed_origin_suffixes_` 规则处理） |
 | `allowed_origin_suffixes_` | 空 | 在标签边界上匹配的域名尾缀：`"example.com"` 匹配该主机本身及其子域；`".example.com"` / `"*.example.com"` 只匹配子域；可加方案限定（`"https://.example.com"`，方案只能是 `http` / `https`）与端口限定 |
-| `allowed_methods_` | 空 | 允许的预检方法 token；`"*"` 表示任意合法方法 token |
+| `allowed_methods_` | 空 | 允许的预检方法 token；有 `"*"` 时允许任意合法方法 token，不再用同列表的具体方法生成固定授权首部 |
 | `allowed_headers_` | 空 | 允许的请求首部名；`"*"` 表示反射 `Access-Control-Request-Headers` |
 | `reflect_request_headers_` | `false` | 反射 `Access-Control-Request-Headers` |
 | `expose_headers_` | 空 | 写入 `Access-Control-Expose-Headers` 的字段名 |
 | `allow_credentials_` | `false` | 写出 `Access-Control-Allow-Credentials: true`；要求显式 Origin 列表或尾缀 |
 | `max_age_` | 空 | 写出 `Access-Control-Max-Age` |
 
-默认值的有效含义：`allowed_origins_` 与 `allowed_origin_suffixes_` 都没有有效条目时允许任意 Origin；`allowed_methods_` 为空时允许任意合法方法；`allowed_headers_` 为空时反射请求首部。因此默认构造的 `http_cors_policy_options{}` 允许任意 Origin（`*`）、任意合法方法并反射 `Access-Control-Request-Headers`；显式配置某个列表后该维度仅匹配所列项。
+默认值的有效含义：`allowed_origins_` 与 `allowed_origin_suffixes_` 都没有有效条目时允许任意 Origin；`allowed_methods_` 为空时允许任意合法方法；`allowed_headers_` 为空时反射请求首部。因此默认构造的 `http_cors_policy_options{}` 允许任意 Origin（`*`）、任意合法方法并反射 `Access-Control-Request-Headers`。
 
 #### 9.6.2 `struct http_cors_preflight_input` 与 `class http_cors_preflight_result`
 
