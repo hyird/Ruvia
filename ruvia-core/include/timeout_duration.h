@@ -12,14 +12,19 @@
 #include <utility>
 
 namespace ruvia {
+namespace detail {
 
 // Converts directly from the original count domain to the requested tick type.
 // Integral counts up to uintmax_t width stay exact, rounding positive fractions
 // upward and saturating at both bounds. Other conversions use long double;
 // NaN maps to zero, infinities saturate.
-template <typename target_type = std::chrono::steady_clock::duration, typename rep_type, typename period_type>
-[[nodiscard]] constexpr target_type saturating_duration_cast(std::chrono::duration<rep_type, period_type> value) noexcept {
-    static_assert(std::is_integral_v<typename target_type::rep> && std::is_signed_v<typename target_type::rep>);
+template <typename target_type, typename rep_type, typename period_type>
+[[nodiscard]] constexpr target_type saturating_tick_cast(std::chrono::duration<rep_type, period_type> value) noexcept {
+    if constexpr (std::is_unsigned_v<typename target_type::rep> && !std::is_unsigned_v<rep_type>) {
+        if (value.count() <= 0) {
+            return target_type::zero();
+        }
+    }
     using factor = std::ratio_divide<period_type, typename target_type::period>;
     if constexpr (std::is_integral_v<rep_type> && std::numeric_limits<rep_type>::digits <= std::numeric_limits<std::uintmax_t>::digits && (factor::num == 1 || factor::den == 1)) {
         using count_type = std::conditional_t<std::is_signed_v<rep_type>, std::intmax_t, std::uintmax_t>;
@@ -87,7 +92,12 @@ template <typename target_type = std::chrono::steady_clock::duration, typename r
             return negative ? target_type::min() : target_type::max();
         }
         const auto ticks = static_cast<target_rep>(integral + fraction);
-        return target_type(negative ? -ticks : ticks);
+        if constexpr (std::is_signed_v<target_rep>) {
+            if (negative) {
+                return target_type(-ticks);
+            }
+        }
+        return target_type(ticks);
     } else {
         // Discard this alternative for integral conversions so MSVC /WX does
         // not reject an emitted unreachable fallback.
@@ -111,6 +121,14 @@ template <typename target_type = std::chrono::steady_clock::duration, typename r
         }
         return target_type(static_cast<typename target_type::rep>(rounded));
     }
+}
+
+}  // namespace detail
+
+template <typename target_type = std::chrono::steady_clock::duration, typename rep_type, typename period_type>
+[[nodiscard]] constexpr target_type saturating_duration_cast(std::chrono::duration<rep_type, period_type> value) noexcept {
+    static_assert(std::is_integral_v<typename target_type::rep> && std::is_signed_v<typename target_type::rep>);
+    return detail::saturating_tick_cast<target_type>(value);
 }
 
 // Public relative-time inputs retain their original representation until this
@@ -154,15 +172,22 @@ private:
 // starts at steady_clock::now().
 template <typename rep_type, typename period_type>
 [[nodiscard]] inline std::chrono::steady_clock::time_point deadline_after(std::chrono::steady_clock::time_point now, std::chrono::duration<rep_type, period_type> delay) noexcept {
-    const auto steady_delay = saturating_duration_cast(delay);
-    if (steady_delay <= std::chrono::steady_clock::duration::zero()) {
-        return now;
-    }
-    constexpr auto maximum = std::chrono::steady_clock::time_point::max();
-    if (now > maximum - steady_delay) {
+    using clock_type = std::chrono::steady_clock;
+    using duration = clock_type::duration;
+    using wide_duration = std::chrono::duration<std::uintmax_t, clock_type::period>;
+    constexpr auto maximum = (clock_type::time_point::max)();
+    constexpr auto max_ticks = static_cast<std::uintmax_t>((duration::max)().count());
+    // A negative start can leave more room than the signed duration can hold.
+    auto ticks = detail::saturating_tick_cast<wide_duration>(delay).count();
+    const auto room = max_ticks - static_cast<std::uintmax_t>(now.time_since_epoch().count());
+    if (ticks >= room) {
         return maximum;
     }
-    return now + steady_delay;
+    if (ticks > max_ticks) {
+        now += (duration::max)();
+        ticks -= max_ticks;
+    }
+    return now + duration(static_cast<duration::rep>(ticks));
 }
 
 template <typename rep_type, typename period_type>

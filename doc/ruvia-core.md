@@ -822,7 +822,7 @@ flowchart LR
 | 声明 | 契约 |
 | --- | --- |
 | `template <typename target_type = std::chrono::steady_clock::duration, typename rep_type, typename period_type> [[nodiscard]] constexpr target_type saturating_duration_cast(std::chrono::duration<rep_type, period_type> value) noexcept;` | 直接从原始计数域换算到目标 tick；目标 `rep` 须为有符号整数 |
-| `template <typename rep_type, typename period_type> [[nodiscard]] inline std::chrono::steady_clock::time_point deadline_after(std::chrono::steady_clock::time_point now, std::chrono::duration<rep_type, period_type> delay) noexcept;` | 饱和的 `now + delay`：非正延迟得 `now`，越界得 `time_point::max()` |
+| `template <typename rep_type, typename period_type> [[nodiscard]] inline std::chrono::steady_clock::time_point deadline_after(std::chrono::steady_clock::time_point now, std::chrono::duration<rep_type, period_type> delay) noexcept;` | 非正延迟返回 `now`；正延迟向上取整到时钟 tick，仅在相加结果超出时钟上界时饱和 |
 | `template <typename rep_type, typename period_type> [[nodiscard]] inline std::chrono::steady_clock::time_point deadline_after(std::chrono::duration<rep_type, period_type> delay) noexcept;` | 以 `steady_clock::now()` 为起点 |
 | `template <typename rep_type, typename period_type> [[nodiscard]] constexpr std::chrono::milliseconds ceil_milliseconds(std::chrono::duration<rep_type, period_type> value) noexcept;` | 非正为零；正值向上取整到整毫秒并饱和 |
 

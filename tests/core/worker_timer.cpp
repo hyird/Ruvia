@@ -827,6 +827,24 @@ TEST(Ruvia, timer_floating_duration_underflow_keeps_positive_minimum_tick) {
     EXPECT_EQ(ruvia::saturating_duration_cast<std::chrono::milliseconds>(input_type::zero()), std::chrono::milliseconds::zero());
 }
 
+TEST(Ruvia, deadline_after_saturates_the_sum_not_the_positive_delay) {
+    using clock_type = std::chrono::steady_clock;
+    using duration = clock_type::duration;
+    using wide_delay = std::chrono::duration<std::uint64_t, clock_type::period>;
+    using fractional_delay = std::chrono::duration<std::uint64_t, std::ratio_multiply<clock_type::period, std::ratio<3, 2>>>;
+    const auto max_ticks = static_cast<std::uint64_t>((duration::max)().count());
+    const auto start = clock_type::time_point{} - duration{2};
+    const auto maximum = (clock_type::time_point::max)();
+
+    EXPECT_EQ(ruvia::deadline_after(start, wide_delay{max_ticks + 1}), maximum - duration{1});
+    EXPECT_EQ(ruvia::deadline_after(start, wide_delay{max_ticks + 2}), maximum);
+    EXPECT_EQ(ruvia::deadline_after(start, wide_delay{max_ticks + 3}), maximum);
+    EXPECT_EQ(ruvia::deadline_after((clock_type::time_point::min)(), wide_delay{max_ticks + 1}), clock_type::time_point{});
+    const auto half_range = static_cast<duration::rep>((max_ticks + 1) / 2);
+    EXPECT_EQ(ruvia::deadline_after((clock_type::time_point::min)(), fractional_delay{max_ticks + 2}), clock_type::time_point(duration(half_range + 2)));
+    EXPECT_EQ(ruvia::deadline_after(start, duration{-1}), start);
+}
+
 TEST(Ruvia, TimerImmediateShutdownWorks) {
     EXPECT_TRUE(timer_immediate_shutdown_works());
 }
