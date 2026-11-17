@@ -62,7 +62,7 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
     EXPECT_EQ(find_header(preflight_ok.headers(), "Access-Control-Allow-Methods"), std::optional<std::string_view>("GET, POST"));
     EXPECT_EQ(find_header(preflight_ok.headers(), "Access-Control-Allow-Headers"), std::optional<std::string_view>("X-Custom-Auth, Content-Type"));
     EXPECT_EQ(find_header(preflight_ok.headers(), "Access-Control-Max-Age"), std::optional<std::string_view>("600"));
-    EXPECT_EQ(find_header(preflight_ok.headers(), "Vary"), std::optional<std::string_view>("Origin, Access-Control-Request-Method"));
+    EXPECT_EQ(find_header(preflight_ok.headers(), "Vary"), std::optional<std::string_view>("Origin, Access-Control-Request-Method, Access-Control-Request-Headers"));
 
     // Disallowed header or method in preflight is rejected.
     const auto preflight_bad_header = policy.evaluate_preflight({
@@ -101,22 +101,23 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
         EXPECT_EQ(get_resp.header("Vary"), std::optional<std::string_view>("Origin"));
 
         const std::array<ruvia::http_header_view, 3> bad_options_headers{
-            ruvia::http_header_view{"Origin", "https://untrusted.example"},
-            ruvia::http_header_view{"Access-Control-Request-Method", "DELETE"},
+            ruvia::http_header_view{"Origin", "https://app.example.com"},
+            ruvia::http_header_view{"Access-Control-Request-Method", "POST"},
             ruvia::http_header_view{"Access-Control-Request-Headers", "X-Forbidden"},
         };
         const auto opts_bad = ruvia::make_parsed_http_request("OPTIONS", "/resource", bad_options_headers, {});
         ruvia::http_response opts_resp;
         EXPECT_FALSE(policy.apply_response_headers(opts_bad, opts_resp));
         EXPECT_FALSE(opts_resp.header("Access-Control-Allow-Origin").has_value());
-        EXPECT_EQ(opts_resp.header("Vary"), std::optional<std::string_view>("Origin, Access-Control-Request-Method"));
+        EXPECT_EQ(opts_resp.header("Vary"), std::optional<std::string_view>("Origin, Access-Control-Request-Method, Access-Control-Request-Headers"));
 
         ruvia::http_cors_policy reflecting_policy(ruvia::http_cors_policy_options{
             .allowed_origins_ = {"https://app.example.com"},
             .reflect_request_headers_ = true,
         });
         ruvia::http_response reflect_opts_resp;
-        EXPECT_FALSE(reflecting_policy.apply_response_headers(opts_bad, reflect_opts_resp));
+        EXPECT_TRUE(reflecting_policy.apply_response_headers(opts_bad, reflect_opts_resp));
+        EXPECT_EQ(reflect_opts_resp.header("Access-Control-Allow-Headers"), std::optional<std::string_view>("X-Forbidden"));
         EXPECT_EQ(reflect_opts_resp.header("Vary"), std::optional<std::string_view>("Origin, Access-Control-Request-Method, Access-Control-Request-Headers"));
     }
 

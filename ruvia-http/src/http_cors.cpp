@@ -416,7 +416,7 @@ http_cors_preflight_result http_cors_policy::evaluate_preflight(borrowed_text me
     if (!max_age_.empty()) {
         headers.emplace_back("Access-Control-Max-Age", max_age_);
     }
-    headers.emplace_back("Vary", reflect_request_headers_ ? "Origin, Access-Control-Request-Method, Access-Control-Request-Headers" : "Origin, Access-Control-Request-Method");
+    headers.emplace_back("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers");
 
     return http_cors_preflight_result(true, std::move(headers));
 }
@@ -453,9 +453,8 @@ bool http_cors_policy::apply_response_headers(const http_request& request, http_
     if (options) {
         response.add_vary_token("Origin");
         response.add_vary_token("Access-Control-Request-Method");
-        if (reflect_request_headers_) {
-            response.add_vary_token("Access-Control-Request-Headers");
-        }
+        // The requested names affect acceptance even with a fixed allowlist.
+        response.add_vary_token("Access-Control-Request-Headers");
     } else if (!allow_any_origin_) {
         response.add_vary_token("Origin");
     }
