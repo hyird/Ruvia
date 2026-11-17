@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <memory>
 #include <new>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -32,6 +33,22 @@
 
 namespace ruvia::detail {
 namespace {
+
+std::optional<std::string> tls_environment_variable(const char* name) {
+#ifdef _WIN32
+    char* buffer = nullptr;
+    std::size_t size = 0;
+    const auto error = ::_dupenv_s(&buffer, &size, name);
+    std::unique_ptr<char, decltype(&std::free)> value(buffer, &std::free);
+    if (error != 0) {
+        throw std::system_error(error, std::generic_category(), "reading TLS environment variable");
+    }
+    return value ? std::optional<std::string>(value.get()) : std::nullopt;
+#else
+    const char* value = std::getenv(name);
+    return value ? std::optional<std::string>(value) : std::nullopt;
+#endif
+}
 
 using security_callback = int (*)(const SSL*, const SSL_CTX*, int, int, int, void*, void*);
 
@@ -682,19 +699,17 @@ tls_trust_store tls_trust_store::load_default() {
     if (X509_STORE_set_default_paths(store.get()) != 1) {
         throw_tls_credential_error("set_default_verify_paths");
     }
-    const char* configured_file = OPENSSL_issetugid() == 0 ? std::getenv(X509_get_default_cert_file_env()) : nullptr;
-    if (configured_file != nullptr && X509_STORE_load_file(store.get(), configured_file) != 1) {
+    const bool use_environment = OPENSSL_issetugid() == 0;
+    const auto configured_file = use_environment ? tls_environment_variable(X509_get_default_cert_file_env()) : std::nullopt;
+    if (configured_file && X509_STORE_load_file(store.get(), configured_file->c_str()) != 1) {
         throw_tls_credential_error("load configured system TLS trust file");
     }
     // OpenSSL's default hash-directory lookup otherwise reads certificates
     // during peer verification. Materialize those entries now, then retain
     // only objects in a store without filesystem lookup methods.
-    const char* directories = OPENSSL_issetugid() == 0 ? std::getenv(X509_get_default_cert_dir_env()) : nullptr;
-    if (directories == nullptr) {
-        directories = X509_get_default_cert_dir();
-    }
-    const bool configured_directory = OPENSSL_issetugid() == 0 && std::getenv(X509_get_default_cert_dir_env()) != nullptr;
-    std::string_view remaining(directories);
+    const auto configured_directories = use_environment ? tls_environment_variable(X509_get_default_cert_dir_env()) : std::nullopt;
+    const bool configured_directory = configured_directories.has_value();
+    std::string_view remaining = configured_directories ? std::string_view(*configured_directories) : X509_get_default_cert_dir();
 #ifdef _WIN32
     constexpr char separator = ';';
 #else

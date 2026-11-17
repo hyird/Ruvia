@@ -1613,16 +1613,16 @@ TEST(Ruvia, model_owned_moves_preserve_buffers) {
     resource_parent source;
     source.set<"title">(std::string(160, 't'));
     auto& child = source.ensure<"children">().emplace_back();
-    child.set<"label">(std::string(160, 'c'));
+    child.set<"name">(std::string(160, 'c'));
     const char* const title_ptr = source.get<"title">().data();
-    const char* const child_ptr = source.get<"children">()->front().get<"label">().data();
+    const char* const child_ptr = source.get<"children">()->front().get<"name">().data();
 
     resource_parent target;
     target = std::move(source);
     EXPECT_EQ(target.get<"title">().data(), title_ptr);
     ASSERT_TRUE(target.get<"children">().has_value());
     ASSERT_EQ(target.get<"children">()->size(), std::size_t{1});
-    EXPECT_EQ(target.get<"children">()->front().get<"label">().data(), child_ptr);
+    EXPECT_EQ(target.get<"children">()->front().get<"name">().data(), child_ptr);
 }
 
 static_assert(!std::is_copy_constructible_v<resource_parent>);

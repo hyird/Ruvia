@@ -229,8 +229,8 @@ void http_content_decoder_stream::reset() {
             if (!stream->reset()) {
                 throw http_content_codec_error("failed to reset HTTP content decoder");
             }
-        } else if (auto* stream = std::get_if<zstd_decoder_stream>(&*stream_)) {
-            if (!stream->reset()) {
+        } else if (auto* decoder = std::get_if<zstd_decoder_stream>(&*stream_)) {
+            if (!decoder->reset()) {
                 throw http_content_codec_error("failed to reset HTTP content decoder");
             }
         } else {

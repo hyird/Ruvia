@@ -91,8 +91,14 @@ task<task_result_value> make_task_result(task_result_source& source) {
 
 struct failing_task_result_source final {
     operator int() const {
-        throw std::runtime_error("task result conversion failed");
+        if (fail_) {
+            throw std::runtime_error("task result conversion failed");
+        }
+        return 0;
     }
+
+    // Keep the success path reachable to MSVC's whole-program optimizer.
+    volatile bool fail_{true};
 };
 
 task<int> make_failing_task_result() {

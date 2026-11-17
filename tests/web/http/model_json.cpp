@@ -1547,7 +1547,6 @@ void check_character_class_rule(std::string_view value, bool matches, std::strin
     } catch (...) {
         return std::current_exception();
     }
-    return {};
 }
 
 }  // namespace
