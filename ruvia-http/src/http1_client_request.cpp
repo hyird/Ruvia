@@ -27,6 +27,7 @@
 #include "http_header.h"
 #include "http_message.h"
 #include "http_message_framing_fields.h"
+#include "http_protocol.h"
 #include "http_request.h"
 #include "http_request_expectation.h"
 #include "http_request_head_view.h"
@@ -342,6 +343,13 @@ struct request_head_write_plan final {
         return detail::http1_client_request_prepare_result_access::failure(*error);
     }
     const auto headers = static_cast<std::span<const http_header_view>>(request.headers_);
+    const std::array upgrade_fields{
+        http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option},
+        http_header_view{"Upgrade", "connect-udp"},
+    };
+    if (headers.size() > max_http_header_fields - upgrade_fields.size()) {
+        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::header_too_large);
+    }
     for (const auto& field : headers) {
         if (http_ascii_equals_ignore_case(field.name(), "connection")) {
             return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_connection);
@@ -351,12 +359,13 @@ struct request_head_write_plan final {
         }
     }
     detail::http_header_descriptor_storage<http_header_view> staged_fields;
-    staged_fields.reserve(headers.size() + 3U);
+    staged_fields.reserve(headers.size() + upgrade_fields.size() + 1U);
     for (const auto& field : headers) {
         staged_fields.append(field);
     }
-    staged_fields.append(http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option});
-    staged_fields.append(http_header_view{"Upgrade", "connect-udp"});
+    for (const auto& field : upgrade_fields) {
+        staged_fields.append(field);
+    }
     staged_fields.append(http_header_view{"Host", origin.host()});
     const auto all_fields = staged_fields.view();
     const auto emitted_headers = all_fields.first(all_fields.size() - 1U);

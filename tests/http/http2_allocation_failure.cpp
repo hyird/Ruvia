@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -19,6 +20,7 @@
 #include <variant>
 
 #include "http1_chunked_body.h"
+#include "http1_client_request.h"
 #include "http1_connection_plan.h"
 #include "http1_message_body.h"
 #include "http1_server_response.h"
@@ -296,6 +298,26 @@ TEST(Ruvia, http1_response_head_heap_self_append_reuses_reserved_storage) {
         }
         EXPECT_EQ(buffer.view(), expected);
     }
+}
+
+TEST(Ruvia, http1_connect_udp_rejects_excess_fields_before_allocating) {
+    std::array<ruvia::http_header_view, ruvia::max_http_header_fields - 1> fields;
+    fields.fill(ruvia::http_header_view{"X-Test", "value"});
+    fields.front() = ruvia::http_header_view{"Capsule-Protocol", "?1"};
+    const auto origin = ruvia::http_origin_view::https({.host_ = "example.test"});
+    std::array<char, 4096> output;
+    output.fill('z');
+
+    const auto result = [&] {
+        allocation_scope scope(0);
+        return ruvia::prepare_http1_client_request(origin, {.protocol_ = "connect-udp", .target_ = "/udp", .headers_ = fields}, output);
+    }();
+    const auto* error = std::get_if<ruvia::http1_client_request_prepare_error>(&result);
+    ASSERT_NE(error, nullptr);
+    EXPECT_EQ(*error, ruvia::http1_client_request_prepare_error::header_too_large);
+    EXPECT_TRUE(std::ranges::all_of(output, [](char byte) {
+        return byte == 'z';
+    }));
 }
 
 TEST(Ruvia, multipart_range_slicer_can_retry_after_an_allocation_failure) {

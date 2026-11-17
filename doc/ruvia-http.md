@@ -7070,6 +7070,8 @@ using http1_client_request_prepare_result = std::variant<prepared_http1_client_r
 
 校验顺序：先校验线策略（`invalid_close_policy`、`invalid_expectation`、`invalid_target_form`），再按种类校验请求行、字段、内容与上限。
 
+HTTP/1.1 CONNECT-UDP 在暂存字段前先检查字段数量，为自动生成的 `Connection` 和 `Upgrade` 留出预算；超限直接返回 `header_too_large`。
+
 生成规则：
 
 - 请求行之后依次写 `Host`、调用方字段（按原顺序）、内容分帧字段（`Content-Length` 或 `Transfer-Encoding: chunked`）、`Expect: 100-continue`（`expectation_` 要求时）、生成的 `Connection: close`、结束空行。生成的端口与 `Content-Length` token 由度量与写出共用。
