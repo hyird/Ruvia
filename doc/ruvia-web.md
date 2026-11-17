@@ -3510,7 +3510,7 @@ ruvia::app().client({
 
 - **两种拥有者**：独立 `http_client(event_loop, ...)` 可直接用于其他项目，不要求 `application`、路由或 `context`；应用内用 `application::client(config)` 注册，处理器经 `c.client()` / `c.client(alias)` 借用。两者都返回 `http_client_ref` 句柄。
 - **句柄作用域**：请求中的 `http_client_ref` 受请求作用域约束，不能跨请求保存；`with_options(operation_options)` 附加用户取消与更紧期限，但不能替换请求宿主取消。
-- **单次消费构建器**：`http_client_request`、`http_client_connect_request`、`http_client_websocket_request` 的终结方法只接受右值（左值重载 `= delete`）；设置方法保持值类别——临时对象链直接调用终结方法，具名构造器写 `std::move(builder).send()`，重复消费在编译期拒绝。构建器在返回冷任务前拥有全部输入。
+- **单次消费构建器**：`http_client_request`、`http_client_connect_request`、`http_client_websocket_request` 的终结方法只接受右值（左值重载 `= delete`）；设置方法保持值类别——临时对象链直接调用终结方法，具名构造器写 `std::move(builder).send()`，重复消费在编译期拒绝。构建器在返回冷任务前拥有全部输入；无重放需要时移动自有输入，需重放时保留必要副本。
 - **终结动词**：`send()` 一次 HTTP 交换；`upload()` 流式上传交换；`connect()` 建立隧道（CONNECT、CONNECT-UDP、HTTP/1.1 Upgrade）或 WebSocket。
 - **线性正文**：`bytes()`、`json<T>()`、`stream()` 消费同一条线性正文流，不缓存可重读副本；收集同时受 `max_bytes`、alias `max_response_bytes_` 与 worker 结果预算约束。
 - **逐次操作期限**：出站流式与会话 I/O 的末参数为 `operation_options operation = {}`（见 [core](ruvia-core.md#api-operation-options-h)），从操作启动起计时，非正超时在调用处抛 `std::invalid_argument`；请求自身期限与宿主取消仍约束整个交换。

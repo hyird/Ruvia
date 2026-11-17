@@ -334,7 +334,7 @@ struct root_task_launch_guard final {
     std::optional<task<t_type>> task_;
     std::shared_ptr<detail::root_task_state<t_type>> completion_;
 
-    root_task_launch_guard(task<t_type> task_value, std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept :
+    root_task_launch_guard(task<t_type>&& task_value, std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept :
         task_(std::move(task_value)),
         completion_(std::move(state_value)) {}
     root_task_launch_guard(const root_task_launch_guard&) = delete;

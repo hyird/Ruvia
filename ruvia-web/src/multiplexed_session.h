@@ -819,7 +819,7 @@ public:
             co_return;
         }
         try {
-            co_await derived().write_encoded_data(chunk);
+            derived().check_encoded_data_write(co_await derived().write_encoded_data(chunk));
         } catch (...) {
             state_.mark_aborted();
             throw;

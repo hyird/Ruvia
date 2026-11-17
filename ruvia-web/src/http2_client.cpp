@@ -720,18 +720,18 @@ task<void> http_client_connection::deliver_http2_informational(std::uint32_t str
 }
 
 void http_client_connection::on_http2_event(http2_event& event) {
-    if (const auto* origins = event.origin_advertisement()) {
-        pool_.advertisements().retain(index_, http_protocol_version::http2, *origins);
+    if (auto* origins = event.origin_advertisement()) {
+        pool_.advertisements().retain(index_, http_protocol_version::http2, std::move(*origins));
     } else if (const auto* service = event.alternative_service_advertisement()) {
         pool_.advertisements().retain(index_, *service);
         if (service->stream_id_ != 0) {
             if (auto* stream = find_http2_stream(service->stream_id_); stream != nullptr && stream->addresses_origin_ && stream->state_ != nullptr && stream->state_->route_ != nullptr) {
-                const http_header field("alt-svc", service->field_value_);
-                pool_.observe_alt_svc(*stream->state_->route_, std::span<const http_header>(&field, 1));
+                const http_header_view field("alt-svc", service->field_value_);
+                pool_.observe_alt_svc(*stream->state_->route_, std::span<const http_header_view>(&field, 1));
             }
         } else if (alias_route() && service->origin_.size() > 8 && http_ascii_equals_ignore_case(std::string_view(service->origin_).substr(0, 8), "https://") && http_authorities_equal(borrowed_text(std::string_view(service->origin_).substr(8)), borrowed_text(std::string_view(pool_.config().authority_)), 443)) {
-            const http_header field("alt-svc", service->field_value_);
-            pool_.observe_alt_svc(http_client_route{.origin_ = pool_.config().origin(), .authority_ = pool_.config().authority_, .dial_host_ = pool_.config().dial_host_, .dial_port_ = pool_.config().dial_port_, .server_name_ = pool_.config().host_, .alias_origin_ = true, .versions_ = pool_.config().versions_}, std::span<const http_header>(&field, 1));
+            const http_header_view field("alt-svc", service->field_value_);
+            pool_.observe_alt_svc(http_client_route{.origin_ = pool_.config().origin(), .authority_ = pool_.config().authority_, .dial_host_ = pool_.config().dial_host_, .dial_port_ = pool_.config().dial_port_, .server_name_ = pool_.config().host_, .alias_origin_ = true, .versions_ = pool_.config().versions_}, std::span<const http_header_view>(&field, 1));
         }
     }
     if (const auto* push = event.push_promise()) {

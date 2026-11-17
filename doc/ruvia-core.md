@@ -1177,7 +1177,7 @@ flowchart LR
 | `[[nodiscard]] one_shot_complete_result<T> complete(T value) const;` | 任意线程；规则见下 |
 
 - **构造竞争**：另一交付正在构造值时返回 `in_progress` 并退回值；值构造抛出时恢复为未完成并重抛，可重试。
-- **构造期间终止**：构造期间接收端关闭或 Worker 停机时拒绝交付并退回值。
+- **构造期间终止**：构造期间接收端关闭或 Worker 停机时拒绝交付并退回值；直接从交付槽构造退回结果，不经中间负载。
 - **调用期保活**：调用期间（含值的移动与析构）completion 须存活；负载代码同步改绑句柄不改变本次目标。
 
 **`template <typename T> class one_shot_receiver final`**
@@ -1204,7 +1204,7 @@ flowchart LR
 | `void operator&() const = delete;` | 不可取址 |
 | `[[nodiscard]] bool await_ready();` | 须在绑定 Worker（否则 `std::logic_error`）；值就绪、停机、已关闭或已消费（`closed`）、已取消或已过期时直接完成；已有挂起等待者抛 `std::logic_error("one-shot supports one pending receiver")` |
 | `bool await_suspend(std::coroutine_handle<> continuation);` | 挂起为唯一等待者 |
-| `[[nodiscard]] wait_result<T> await_resume();` | 移出值；移动抛出时异常从 `co_await` 传出且值视为已消费 |
+| `[[nodiscard]] wait_result<T> await_resume();` | 在锁外直接从交付槽构造最终结果；移动抛出时异常从 `co_await` 传出且值视为已消费，交付槽在成功或异常出口均清空 |
 
 <a id="api-worker-signal-h"></a>
 ### 7.4 `worker_signal.h`

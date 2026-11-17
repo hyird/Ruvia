@@ -44,6 +44,7 @@
 #include "http_request.h"
 #include "http_request_head_view.h"
 #include "http_response_body.h"
+#include "inline_storage.h"
 #include "ip_address.h"
 #include "ip_address_conversion.h"
 #include "operation_options.h"
@@ -676,19 +677,19 @@ public:
             output->stop();
         }
     }
-    void consume_stream_event(stream& item, const http3_datagram_event& value) {
+    void consume_stream_event(stream& item, http3_datagram_event& value) {
         auto& response = item.response_;
         if (!response.tunnel_ || !response.tunnel_->accepted_ || !response.http3_datagrams_) {
             return;
         }
         const auto bound = pool_.config().max_response_bytes_;
         const auto available = bound - (std::min)(bound, response.http3_datagram_bytes_);
-        const auto payload = value.payload();
-        if (response.http3_datagrams_->size() >= 64 || payload.size() > available) {
+        const auto payload_bytes = value.payload().size();
+        if (response.http3_datagrams_->size() >= 64 || payload_bytes > available) {
             return;
         }
-        response.http3_datagrams_->emplace_back(payload);
-        response.http3_datagram_bytes_ += payload.size();
+        response.http3_datagrams_->push_back(std::move(value).take_payload());
+        response.http3_datagram_bytes_ += payload_bytes;
         response.data_signal_.notify();
     }
     task<void> deliver_informational(std::int64_t id, http_client_response_state* response, operation_deadline timeout) {
@@ -777,14 +778,14 @@ public:
                 consume_event(*closed);
             } else if (const auto* unprocessed = event->request_unprocessed()) {
                 consume_event(*unprocessed);
-            } else if (const auto* datagram = event->datagram()) {
+            } else if (auto* datagram = event->datagram()) {
                 consume_event(*datagram);
             } else if (event->goaway()) {
                 // Streams the server will not process arrive as
                 // http3_request_unprocessed_event.
                 draining_ = true;
             } else if (auto* origins = event->origin_advertisement()) {
-                pool_.advertisements().retain(index_, http_protocol_version::http3, *origins);
+                pool_.advertisements().retain(index_, http_protocol_version::http3, std::move(*origins));
             }
         }
         if (auto* entry = shared_tls_.find(route_); entry != nullptr && entry->session_) {
@@ -1905,14 +1906,8 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                     }, [&](std::string_view chunk) {
                         return self.send_body(item, chunk);
                     }, [&]() -> task<bool> {
-                        std::vector<http_header_view> trailers;
-                        if (const auto* upload = request.upload()) {
-                            trailers.reserve(upload->trailers_.size());
-                            for (const auto& field : upload->trailers_) {
-                                trailers.emplace_back(field.name(), field.value());
-                            }
-                        }
-                        require_accepted(self.quic_->http3().finish_request(item.id_, trailers));
+                        const inline_http_header_views trailers(request.upload() != nullptr ? std::span<const http_header>(request.upload()->trailers_) : std::span<const http_header>{});
+                        require_accepted(self.quic_->http3().finish_request(item.id_, trailers.view()));
                         item.request_end_submitted_ = true;
                         co_await self.flush_stream(item);
                         co_return true;

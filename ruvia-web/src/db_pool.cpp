@@ -466,7 +466,7 @@ task<void> db_pool<driver_type>::connect_slot(std::size_t index, const operation
     if (!config_.reconnect_ && !slot(index).connected_ && !leases_.closing()) {
         throw db_error(backend_error_code::io_error, driver_type::driver, std::string(driver_type::name).append(" session ended, and this pool does not reconnect"));
     }
-    co_await open_slot(index, timeout);
+    return open_slot(index, timeout);
 }
 
 template <typename driver_type>

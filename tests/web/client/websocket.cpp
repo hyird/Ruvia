@@ -514,6 +514,8 @@ TEST(Ruvia, websocket_client_handshake_sends_heads_beyond_the_retained_buffer) {
     const std::string large_value(20 * 1024, 'v');
     std::exception_ptr peer_failure;
     bool received_large_header = false;
+    bool received_owned_route = false;
+    bool received_informational = false;
     const auto serve = [&]() -> asio::awaitable<void> {
         auto socket = co_await peer.async_accept(asio::use_awaitable);
         std::string request{};
@@ -521,7 +523,9 @@ TEST(Ruvia, websocket_client_handshake_sends_heads_beyond_the_retained_buffer) {
         ruvia::http1_server_request_parser parsed;
         const auto head = parsed.parse(request);
         received_large_header = head.holds<ruvia::decode_complete>() && parsed.request().header("x-large") == large_value;
-        const auto response = make_server_handshake_response(request);
+        received_owned_route = head.holds<ruvia::decode_complete>() && parsed.request().header("host") == "socket.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.test" && parsed.request().target() == "/owned/handshake";
+        std::string response("HTTP/1.1 103 Early Hints\r\nX-Hint: owned\r\n\r\n");
+        response.append(make_server_handshake_response(request));
         co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
         std::array<char, 1024> input{};
         std::error_code error;
@@ -539,7 +543,23 @@ TEST(Ruvia, websocket_client_handshake_sends_heads_beyond_the_retained_buffer) {
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url});
         std::exception_ptr failure;
         try {
-            auto websocket = co_await client.client().websocket("/").headers(large_headers).connect();
+            auto pending = [&] {
+                std::string path("/owned/handshake");
+                auto informational = [&](ruvia::http_status_code status, std::span<const ruvia::http_header> fields, ruvia::stop_token) -> ruvia::task<void> {
+                    received_informational = status == ruvia::http_status::early_hints && fields.size() == 1 && ruvia::http_ascii_equals_ignore_case(fields.front().name(), "x-hint") && fields.front().value() == "owned";
+                    co_return;
+                };
+                ruvia::http_client_request_options options{
+                    .timeouts_ = {.connect_ = std::chrono::seconds(2), .read_ = std::chrono::seconds(2)},
+                    .informational_ = std::move(informational),
+                    .authority_ = std::string("socket.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.test"),
+                    .dial_host_ = std::string("127.0.0.1"),
+                    .dial_port_ = peer.local_endpoint().port()
+                };
+                auto builder = client.client().websocket(path);
+                return std::move(builder).headers(large_headers).configure(std::move(options)).connect();
+            }();
+            auto websocket = co_await std::move(pending);
             connected = websocket.connected();
         } catch (...) {
             failure = std::current_exception();
@@ -558,6 +578,8 @@ TEST(Ruvia, websocket_client_handshake_sends_heads_beyond_the_retained_buffer) {
         std::rethrow_exception(peer_failure);
     }
     EXPECT_TRUE(received_large_header);
+    EXPECT_TRUE(received_owned_route);
+    EXPECT_TRUE(received_informational);
     EXPECT_TRUE(connected);
 }
 

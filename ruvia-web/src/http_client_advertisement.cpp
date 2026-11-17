@@ -79,17 +79,12 @@ private:
 };
 
 struct http_client_advertisement_state final {
-    http_client_advertisement_state(http_client_advertisement_memory& owner_value, std::size_t slot, http_protocol_version protocol, const http_origin_advertisement& origins, std::size_t bytes_value) :
+    http_client_advertisement_state(http_client_advertisement_memory& owner_value, std::size_t slot, http_protocol_version protocol, http_origin_advertisement&& origins, std::size_t bytes_value) :
         memory_(owner_value),
         slot_(slot),
         protocol_(protocol),
         bytes_(bytes_value),
-        value_(std::in_place_type<http_origin_advertisement>) {
-        auto& retained = std::get<http_origin_advertisement>(value_);
-        retained.origins_.reserve(origins.origins_.size());
-        for (const auto& origin : origins.origins_) {
-            retained.origins_.emplace_back(origin);
-        }
+        value_(std::in_place_type<http_origin_advertisement>, std::move(origins)) {
         memory_.retain(bytes_value);
     }
     http_client_advertisement_state(http_client_advertisement_memory& owner_value, std::size_t slot, const http_alternative_service_advertisement& service, std::size_t bytes_value) :
@@ -153,7 +148,7 @@ bool http_client_advertisement_queue::admit(std::size_t bytes_value) noexcept {
     }
     return true;
 }
-void http_client_advertisement_queue::retain(std::size_t slot, http_protocol_version protocol, const http_origin_advertisement& origins) {
+void http_client_advertisement_queue::retain(std::size_t slot, http_protocol_version protocol, http_origin_advertisement&& origins) {
     require_current();
     if (!config_.receive_origins_) {
         return;
@@ -173,7 +168,7 @@ void http_client_advertisement_queue::retain(std::size_t slot, http_protocol_ver
     if (!admit(bytes_value)) {
         return;
     }
-    auto owned = std::make_unique<http_client_advertisement_state>(*memory_, slot, protocol, origins, bytes_value);
+    auto owned = std::make_unique<http_client_advertisement_state>(*memory_, slot, protocol, std::move(origins), bytes_value);
     http_client_advertisement advertisement(owned.release());
     pending_.push_back(std::move(advertisement));
 }

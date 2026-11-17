@@ -305,6 +305,7 @@ task<websocket> http_client_websocket_request::connect() && {
 }
 task<websocket> http_client_websocket_request::connect_owned(http_client_websocket_request request) {
     request.client_.registration_.require_active();
+    const auto timeouts = request.request_options_.timeouts_;
     auto& pool = *request.client_.pool_;
     std::shared_ptr<detail::http_client_websocket_handshake> handshake;
     std::optional<detail::http_client_request_storage> stored;
@@ -318,8 +319,8 @@ task<websocket> http_client_websocket_request::connect_owned(http_client_websock
         }
         handshake = std::make_shared<detail::http_client_websocket_handshake>(websocket_client_negotiation_config_view{.subprotocols_ = std::span<const std::string_view>(protocols), .deflate_ = request.deflate_});
         stored.emplace(std::string("GET"), std::move(request.path_), std::move(request.headers_));
-        stored->options_ = detail::copy_http_client_request_settings(request.request_options_);
         stored->informational_ = detail::share_http_client_informational(std::move(request.request_options_.informational_));
+        stored->options_ = std::move(request.request_options_);
         stored->pool_owner_ = request.client_.pool_owner_;
         stored->set_host_stop(request.client_.host_stop_token_);
         stored->set_tunnel(pool.config().authority_, "websocket");
@@ -335,7 +336,7 @@ task<websocket> http_client_websocket_request::connect_owned(http_client_websock
     });
     bool opening_expired = false;
     worker_timer_registration opening_timer;
-    const auto connect_timeout = detail::constrain_http_client_timeout(pool.config().connect_timeout_, request.request_options_.timeouts_.connect_);
+    const auto connect_timeout = detail::constrain_http_client_timeout(pool.config().connect_timeout_, timeouts.connect_);
     if (connect_timeout) {
         (void)opening_timer.schedule(pool.worker(), deadline_after(connect_timeout->value()), [&opening_stop, &opening_expired](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
@@ -373,7 +374,7 @@ task<websocket> http_client_websocket_request::connect_owned(http_client_websock
     result.state_->owner_ = owner;
     result.state_->retire_ = &detail::client_websocket_session::retire;
     result.state_->defaults_ = request.client_.options_;
-    result.state_->read_timeout_ = detail::constrain_http_client_timeout(pool.config().read_timeout_, request.request_options_.timeouts_.read_);
+    result.state_->read_timeout_ = detail::constrain_http_client_timeout(pool.config().read_timeout_, timeouts.read_);
     co_return result;
 }
 http_client_websocket_request http_client_ref::websocket(std::string_view path) const {

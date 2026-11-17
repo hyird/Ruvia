@@ -200,10 +200,13 @@ private:
         throw std::logic_error("HTTP/3 streaming response head submission failed");
     }
 
-    task<void> write_encoded_data(std::string_view chunk) {
-        const auto status = co_await write_http3_stream_data(session_, stream_.id(), signal_, chunk);
+    [[nodiscard]] task<http3_data_write_status> write_encoded_data(std::string_view chunk) {
+        return write_http3_stream_data(session_, stream_.id(), signal_, chunk);
+    }
+
+    void check_encoded_data_write(http3_data_write_status status) {
         if (status == http3_data_write_status::completed) {
-            co_return;
+            return;
         }
         if (status == http3_data_write_status::terminated) {
             throw inbound_transport_error(signal_.terminal_error(), terminated_error_message);
@@ -1080,17 +1083,17 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                         }
                         return finish_upgrade_commit(head_response.status(), context_value);
                     };
-                    auto commit_websocket = [this, stream, &request, &finish_upgrade_commit](context& context_value, const websocket_route_endpoint& endpoint, std::span<const http_header_view> headers) -> task<websocket_upgrade_attempt<http3_tunnel_transport>> {
+                    auto commit_websocket = [this, stream, &request, &finish_upgrade_commit](context& context_value, const websocket_route_endpoint& endpoint, std::span<const http_header_view> headers) -> websocket_upgrade_attempt<http3_tunnel_transport> {
                         const auto validation = codec().validate_websocket_handshake(stream->id(), request, endpoint.handshake_validation());
                         if (const auto* failure = std::get_if<websocket_handshake_error>(&validation)) {
-                            co_return reject_request_stream_websocket(context_value, *failure);
+                            return reject_request_stream_websocket(context_value, *failure);
                         }
                         const auto result = codec().submit_websocket_handshake(stream->id(), request, validation, {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()});
                         const auto* handshake = std::get_if<websocket_extended_connect_negotiation>(&result);
                         if (handshake == nullptr) {
                             throw std::invalid_argument("HTTP/3 WebSocket handshake rejected");
                         }
-                        co_return websocket_upgrade_commit<http3_tunnel_transport>(finish_upgrade_commit(http_status::ok, context_value), handshake->compression(), handshake->subprotocol());
+                        return websocket_upgrade_commit<http3_tunnel_transport>(finish_upgrade_commit(http_status::ok, context_value), handshake->compression(), handshake->subprotocol());
                     };
                     http3_response_stream_sink refusal_sink(*this, *stream, *signal, request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(), options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
                     auto buffered = co_await execute_multiplexed_tunnel_endpoint<http3_tunnel_transport>(refusal_sink, routes, request, *resolved, dispatch_services, options, scanner_entry_, inbound_buffers_, admission.udp_tunnel(), admission.tail(), commit, commit_websocket);
@@ -1192,7 +1195,41 @@ task<void> http3_session::flush() {
         // Writing can close streams (an acknowledged final frame).
         drain_events();
         if (result.status_ == http3_quic_status::accepted && !datagram_.bytes_.empty()) {
-            co_await send_datagram();
+            // ngtcp2 names the path of every packet it writes.
+            const auto destination = http3_udp_endpoint(datagram_.path_.path.remote);
+            const auto source = http3_udp_endpoint(datagram_.path_.path.local);
+            const auto interface_index = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(datagram_.path_.path.user_data));
+            if (!destination || !source) {
+                throw std::logic_error("QUIC output has no valid remote path");
+            }
+#if defined(_WIN32)
+            // The acceptor sends it from the listener's socket; a datagram past its
+            // bounded queue is lost, as UDP may lose any, and QUIC recovery resends.
+            if (!endpoint_.send(*destination, datagram_.bytes_, *source, interface_index)) {
+                connection_lifecycle_.note_write(datagram_.bytes_.size());
+            }
+#else
+            auto error = endpoint_.send(*destination, datagram_.bytes_, *source, interface_index);
+            while (error == asio::error::would_block || error == asio::error::try_again) {
+                // Only a full socket send buffer stalls the writer; the scanner's
+                // write clock bounds it like a blocked TCP write.
+                const connection_scanner::entry::write_scope write_stall_clock(scanner_entry_);
+                if (const auto wait_error = co_await endpoint_.wait_writable()) {
+                    // The socket closed: the datagram is lost, as UDP may lose any.
+                    error = wait_error;
+                    break;
+                }
+                error = endpoint_.send(*destination, datagram_.bytes_, *source, interface_index);
+                if (!error) {
+                    scanner_entry_.note_write_progress();
+                }
+            }
+            if (!error) {
+                connection_lifecycle_.note_write(datagram_.bytes_.size());
+            }
+            // Other send errors (an ICMP-reported unreachable peer) lose the datagram
+            // too; QUIC recovery and the idle timeout handle the peer.
+#endif
             wake_output_waiters();
             if (++burst == http3_flush_burst) {
                 burst = 0;
@@ -1217,44 +1254,6 @@ task<void> http3_session::flush() {
         finish_drain_if_ready();
         arm_timer();
     }
-}
-
-task<void> http3_session::send_datagram() {
-    // ngtcp2 names the path of every packet it writes.
-    const auto destination = http3_udp_endpoint(datagram_.path_.path.remote);
-    const auto source = http3_udp_endpoint(datagram_.path_.path.local);
-    const auto interface_index = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(datagram_.path_.path.user_data));
-    if (!destination || !source) {
-        throw std::logic_error("QUIC output has no valid remote path");
-    }
-#if defined(_WIN32)
-    // The acceptor sends it from the listener's socket; a datagram past its
-    // bounded queue is lost, as UDP may lose any, and QUIC recovery resends.
-    if (!endpoint_.send(*destination, datagram_.bytes_, *source, interface_index)) {
-        connection_lifecycle_.note_write(datagram_.bytes_.size());
-    }
-    co_return;
-#else
-    auto error = endpoint_.send(*destination, datagram_.bytes_, *source, interface_index);
-    while (error == asio::error::would_block || error == asio::error::try_again) {
-        // Only a full socket send buffer stalls the writer; the scanner's
-        // write clock bounds it like a blocked TCP write.
-        const connection_scanner::entry::write_scope write_stall_clock(scanner_entry_);
-        if (co_await endpoint_.wait_writable()) {
-            // The socket closed: the datagram is lost, as UDP may lose any.
-            co_return;
-        }
-        error = endpoint_.send(*destination, datagram_.bytes_, *source, interface_index);
-        if (!error) {
-            scanner_entry_.note_write_progress();
-        }
-    }
-    if (!error) {
-        connection_lifecycle_.note_write(datagram_.bytes_.size());
-    }
-    // Other send errors (an ICMP-reported unreachable peer) lose the datagram
-    // too; QUIC recovery and the idle timeout handle the peer.
-#endif
 }
 
 void http3_session::arm_timer() noexcept {

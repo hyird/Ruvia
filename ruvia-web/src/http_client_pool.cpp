@@ -711,14 +711,14 @@ task<http_client_tunnel_result> http_client_pool::open_tunnel(http_client_reques
     co_return http_client_tunnel_result(std::move(response));
 }
 
-task<http_client_exchange> http_client_pool::open_request(http_client_request_storage request, http_client_upload_config upload, operation_options options) {
+http_client_exchange http_client_pool::open_request(http_client_request_storage request, http_client_upload_config upload, operation_options options) {
     require_accepting();
     http_client_response response(*this);
     auto& state_value = *response.state_;
     state_value.upload_.emplace(state_value.memory_domain().worker(), upload);
     state_value.upload_->content_released_ = upload.expectation_ == http_client_request_expectation::none;
     spawn_request(std::move(request), std::move(options), state_value);
-    co_return http_client_exchange(std::move(response));
+    return http_client_exchange(std::move(response));
 }
 
 task<http_client_response> http_client_pool::execute(http_client_request_storage request, operation_options options) {
@@ -733,7 +733,59 @@ task<http_client_response> http_client_pool::execute(http_client_request_storage
 task<void> http_client_pool::execute_into(http_client_request_storage request, operation_options options, http_client_response_state* state_value) {
     http_client_response keep_alive(state_value);
     try {
-        co_await execute_request_into(std::move(request), std::move(options), state_value);
+        try {
+            throw_if_abandoned(*state_value);
+            // A CONNECT method names a tunnel on every HTTP version, so reject
+            // a regular request before choosing a route or writing any bytes.
+            if (!request.is_tunnel() && http_request_head_view{.method_ = request.method()}.kind() != http_request_head_kind::regular) {
+                throw http_client_error(make_error_code(http_client_errc::invalid_request), "CONNECT requires the tunnel request entry");
+            }
+            // The storage is at its final address in this frame.
+            request.resolve_route(config_);
+        } catch (...) {
+            ++failed_requests_;
+            throw;
+        }
+        // Response heads borrow this route only while the exchange runs.
+        struct route_binding final {
+            http_client_response_state& state_;
+            ~route_binding() {
+                state_.route_ = nullptr;
+            }
+        } route_binding_value{*state_value};
+        state_value->route_ = &request.route();
+        const auto timeout = operation_deadline(options.timeout_).constrained_by(config_.request_timeout_);
+        if (state_value->upload_) {
+            state_value->upload_->redirect_deadline_ = timeout;
+        }
+        const linked_operation_options linked(options, request.host_stop(), dns_stop_.token());
+        const stop_token& cancellation = linked.options().stop_token_;
+        state_value->informational_stop_ = cancellation;
+        const auto acquire_timeout = timeout.constrained_by(state_value->effective_acquire_timeout_);
+        if (requests_buffered_ >= config_.max_buffered_requests_) {
+            ++failed_requests_;
+            throw http_client_error(make_error_code(http_client_errc::queue_full), "HTTP client request buffer is full");
+        }
+        ++requests_buffered_;
+        request_admission admission{*this};
+        try {
+            require_open();
+            co_await prepare_tls(timeout, cancellation);
+            if (request.is_upgrade() && !request.route().versions_.http1_) {
+                throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP Upgrade requires HTTP/1.1");
+            }
+#ifdef RUVIA_ENABLE_HTTP3
+            if (!co_await execute_http3(request, timeout, acquire_timeout, cancellation, *state_value, admission)) {
+#endif
+                co_await execute_tcp_request(request, timeout, acquire_timeout, cancellation, *state_value, admission);
+#ifdef RUVIA_ENABLE_HTTP3
+            }
+#endif
+            ++completed_requests_;
+        } catch (...) {
+            ++failed_requests_;
+            throw;
+        }
     } catch (...) {
         auto failure = std::current_exception();
         {
@@ -1135,96 +1187,33 @@ task<void> http_client_pool::execute_tcp_request(const http_client_request_stora
     } use{*this, *connection_value, request.options_.fresh_connection_};
     state_value.connection_index_ = connection_value->index();
     state_value.connection_serial_ = connection_value->serial();
-    co_await execute_tcp(*connection_value, request, timeout, acquire_timeout, std::move(stop), state_value);
-}
-
-task<void> http_client_pool::execute_request_into(http_client_request_storage request, operation_options options, http_client_response_state* state_value) {
-    try {
-        throw_if_abandoned(*state_value);
-        // An exchange that is not a tunnel must be a regular request on
-        // every HTTP version: a CONNECT method names a tunnel, which only the
-        // tunnel entry may open. Refused before a route, connection or
-        // version is chosen, so nothing reaches the wire.
-        if (!request.is_tunnel() && http_request_head_view{.method_ = request.method()}.kind() != http_request_head_kind::regular) {
-            throw http_client_error(make_error_code(http_client_errc::invalid_request), "CONNECT requires the tunnel request entry");
-        }
-        // The storage is at its final address in this frame.
-        request.resolve_route(config_);
-    } catch (...) {
-        ++failed_requests_;
-        throw;
-    }
-    // The route is borrowed by response heads published during this exchange.
-    struct route_binding final {
-        http_client_response_state& state_;
-        ~route_binding() {
-            state_.route_ = nullptr;
-        }
-    } route_binding_value{*state_value};
-    state_value->route_ = &request.route();
-    const auto timeout = operation_deadline(options.timeout_).constrained_by(config_.request_timeout_);
-    if (state_value->upload_) {
-        state_value->upload_->redirect_deadline_ = timeout;
-    }
-    const linked_operation_options linked(options, request.host_stop(), dns_stop_.token());
-    const stop_token& cancellation = linked.options().stop_token_;
-    state_value->informational_stop_ = cancellation;
-    const auto acquire_timeout = timeout.constrained_by(state_value->effective_acquire_timeout_);
-    if (requests_buffered_ >= config_.max_buffered_requests_) {
-        ++failed_requests_;
-        throw http_client_error(make_error_code(http_client_errc::queue_full), "HTTP client request buffer is full");
-    }
-    ++requests_buffered_;
-    request_admission admission{*this};
-    try {
-        require_open();
-        co_await prepare_tls(timeout, cancellation);
-        if (request.is_upgrade() && !request.route().versions_.http1_) {
-            throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP Upgrade requires HTTP/1.1");
-        }
-#ifdef RUVIA_ENABLE_HTTP3
-        if (co_await execute_http3(request, timeout, acquire_timeout, cancellation, *state_value, admission)) {
-            ++completed_requests_;
-            co_return;
-        }
-#endif
-        co_await execute_tcp_request(request, timeout, acquire_timeout, cancellation, *state_value, admission);
-        ++completed_requests_;
-    } catch (...) {
-        ++failed_requests_;
-        throw;
-    }
-}
-
-task<void> http_client_pool::execute_tcp(http_client_connection& connection_value, const http_client_request_storage& request, const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value) {
+    auto& connection = *connection_value;
     std::optional<std::uint64_t> connected_http1_generation;
 #ifdef RUVIA_ENABLE_HTTP2
     // A cancelled HTTP/1 producer still owns its SSL stream until its
     // serialized exchange unwinds. Join that exchange before reconnecting,
     // including when negotiated HTTP/2-capacity leases share the pool slot.
-    if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
-        // This lease shares a multiplexed session with background drivers and
-        // possibly other requests; a request-local failure must not discard it.
-        // A session that ended and was replaced by an HTTP/1.1 connection has
-        // sent nothing yet: the request continues as an HTTP/1 exchange below.
-        if (co_await connection_value.execute_http2(request, timeout, acquire_timeout, stop_token_value, state_value)) {
+    if (connection.protocol_ == http_client_connection::protocol_type::http2) {
+        // A request-local failure must not discard a shared session. If its
+        // replacement speaks HTTP/1.1, continue with that fresh connection.
+        if (co_await connection.execute_http2(request, timeout, acquire_timeout, stop, state_value)) {
             co_return;
         }
-        connected_http1_generation = connection_value.generation_;
+        connected_http1_generation = connection.generation_;
     }
 #endif
-    if (co_await execute_http1(connection_value, request, timeout, acquire_timeout, stop_token_value, state_value, connected_http1_generation)) {
+    if (co_await execute_http1(connection, request, timeout, acquire_timeout, stop, state_value, connected_http1_generation)) {
         co_return;
     }
 #ifdef RUVIA_ENABLE_HTTP2
-    if (co_await connection_value.execute_http2(request, timeout, acquire_timeout, stop_token_value, state_value)) {
+    if (co_await connection.execute_http2(request, timeout, acquire_timeout, stop, state_value)) {
         co_return;
     }
     // The HTTP/2 session negotiated above ended before this request could use
     // it and its replacement speaks HTTP/1.1. One protocol change per request,
     // unless the origin required HTTP/1.1: then the replacement offered no h2
     // and the change is final.
-    if (!prefers_http11() || !co_await execute_http1(connection_value, request, timeout, acquire_timeout, stop_token_value, state_value, connection_value.generation_)) {
+    if (!prefers_http11() || !co_await execute_http1(connection, request, timeout, acquire_timeout, stop, state_value, connection.generation_)) {
         throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "upstream renegotiated the protocol repeatedly");
     }
 #endif
@@ -1410,7 +1399,7 @@ void http_client_pool::release_response_data(http_client_response_state& state_v
 #endif
 }
 
-void http_client_pool::observe_alt_svc(const http_client_route& route, std::span<const http_header> fields) {
+void http_client_pool::observe_alt_svc(const http_client_route& route, const http_header_range_view& fields) {
 #ifdef RUVIA_ENABLE_HTTP3
     // Only TLS-authenticated responses, for requests that may use HTTP/3 beside
     // a TCP version, advertise alternatives. Entries are keyed by the actual
@@ -1594,13 +1583,14 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
     // HTTP/3 alone dials the route; beside a TCP version it follows only an
     // Alt-Svc this route advertised, and Upgrade stays on HTTP/1.1.
     const bool required = !versions.http1_ && !versions.http2_;
-    // Another response can replace the cache while DNS or the handshake waits,
-    // so the selected endpoint is owned across suspension. TLS verifies the
-    // route's server name, never the advertised transport name.
-    std::string host;
+    // A route belongs to the owning request, but another response can replace
+    // the Alt-Svc cache across suspension. Only an advertised endpoint needs
+    // its own snapshot; TLS always verifies the route's server name.
+    std::string alternative_host;
+    std::string_view host;
     std::uint16_t port = 0;
     if (required) {
-        host.assign(route.dial_host_);
+        host = route.dial_host_;
         port = route.dial_port_;
     } else {
         if (request.is_upgrade()) {
@@ -1615,7 +1605,8 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
             co_return false;
         }
         alternative->used_ = ++alternative_clock_;
-        host.assign(alternative->host_);
+        alternative_host.assign(alternative->host_);
+        host = alternative_host;
         port = alternative->port_;
     }
     const bool fresh = request.options_.fresh_connection_;
@@ -1692,8 +1683,10 @@ task<std::optional<http_tunnel_input>> http_client_pool::read_http3_tunnel_input
     for (;;) {
         state.release_consumed_body_prefix();
         if (state.offset_ < state.buffered_.size()) {
-            http_tunnel_input result{std::string(std::string_view(state.buffered_).substr(state.offset_)), false};
-            state.offset_ = state.buffered_.size();
+            http_tunnel_input result{{}, false};
+            result.bytes_.swap(state.buffered_);
+            result.bytes_.erase(0, std::exchange(state.offset_, 0));
+            state.notify_producer_space();
             co_return result;
         }
         if (!state.pending_.empty()) {

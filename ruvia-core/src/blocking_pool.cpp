@@ -298,18 +298,17 @@ struct blocking_pool::impl_type final {
             busy_[index] = 1;
             lock.unlock();
 
-            move_only_function<void()> task = std::move(node->task_);
             try {
-                task();
+                node->task_();
             } catch (...) {
                 // The blocking wrapper catches the callable's exceptions and
                 // hands them back to the waiter, so reaching this is a raw
                 // post() whose task threw with nobody to receive it.
                 report_unhandled_failure("blocking pool task", std::current_exception());
             }
-            // The task owns the completion it answered; destroy it here rather
-            // than under the lock the next iteration takes.
-            task = nullptr;
+            // The claimed node stays exclusive until recycling. Retire its
+            // completion outside the lock without first relocating the task.
+            node->task_ = nullptr;
 
             lock.lock();
             node->next_ = free_head_;

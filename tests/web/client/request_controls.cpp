@@ -778,7 +778,14 @@ TEST(Ruvia, http_client_plain_connect_omits_origin_cookies_even_for_matching_aut
         const auto verified_body = co_await verified.bytes();
         EXPECT_EQ(verified_body.text(), "ok");
 
-        auto opened = co_await client.client().connect(authority).connect();
+        auto pending = [&] {
+            std::string owned_authority(authority);
+            std::string owned_header(256, 'v');
+            auto builder = client.client().connect(owned_authority);
+            builder.header("X-Owned", owned_header).configure({.timeouts_ = {.connect_ = std::chrono::seconds(2)}, .dial_host_ = std::string("127.0.0.1"), .dial_port_ = acceptor.local_endpoint().port()});
+            return std::move(builder).connect();
+        }();
+        auto opened = co_await std::move(pending);
         EXPECT_NE(opened.tunnel(), nullptr);
         if (opened.tunnel() != nullptr) {
             co_await opened.tunnel()->stream().finish();
@@ -794,6 +801,7 @@ TEST(Ruvia, http_client_plain_connect_omits_origin_cookies_even_for_matching_aut
 
     EXPECT_NE(get_request_head.find("cookie: configured_secret=1; jar_secret=stored\r\n"), std::string::npos);
     EXPECT_TRUE(connect_request_head.starts_with("CONNECT " + authority + " HTTP/1.1\r\n"));
+    EXPECT_NE(connect_request_head.find("X-Owned: " + std::string(256, 'v') + "\r\n"), std::string::npos);
     EXPECT_EQ(connect_request_head.find("Cookie:"), std::string::npos);
     EXPECT_EQ(connect_request_head.find("cookie:"), std::string::npos);
     EXPECT_EQ(connect_request_head.find("configured_secret"), std::string::npos);

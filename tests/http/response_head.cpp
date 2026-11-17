@@ -1061,6 +1061,31 @@ TEST(Ruvia, response_vary_token_ignores_surrounding_whitespace) {
     EXPECT_EQ(existing.header("Vary").value_or(""), "Origin, Accept");
 }
 
+TEST(Ruvia, response_vary_membership_checks_wildcards_and_tokens_in_one_field_walk) {
+    ruvia::http_response response;
+    const ruvia::http_response_header_options append{.mode_ = ruvia::http_response_header_mode::append};
+    response.header("Vary", "Accept-Encoding, \"Origin, *\"");
+    response.header("Vary", "Accept-Language, oRiGiN", append);
+    response.add_vary_token("Origin");
+    EXPECT_EQ(response.headers().size(), std::size_t{2});
+    EXPECT_EQ(response.header("Vary").value_or(""), "Accept-Encoding, \"Origin, *\"");
+
+    response.add_vary_token("Cookie");
+    EXPECT_EQ(response.headers().size(), std::size_t{1});
+    EXPECT_EQ(response.header("Vary").value_or(""), "Accept-Encoding, \"Origin, *\", Accept-Language, oRiGiN, Cookie");
+
+    response.header("Vary", "Accept, *", append);
+    response.add_vary_token("X-New");
+    response.add_vary_token("*");
+    EXPECT_EQ(response.headers().size(), std::size_t{2});
+    EXPECT_EQ(response.headers().begin()[1].value(), "Accept, *");
+
+    ruvia::http_response wildcard;
+    wildcard.header("Vary", "Origin, Accept");
+    wildcard.add_vary_token("*");
+    EXPECT_EQ(wildcard.header("Vary").value_or(""), "*");
+}
+
 TEST(Ruvia, response_header_transfer_appends_disjoint_fields_with_their_rules) {
     const ruvia::http_response_header_options append{.mode_ = ruvia::http_response_header_mode::append};
     for (const auto mode : {ruvia::http_response_header_transfer::merge, ruvia::http_response_header_transfer::assign, ruvia::http_response_header_transfer::apply}) {

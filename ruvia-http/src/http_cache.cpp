@@ -598,10 +598,15 @@ void http_vary_spec::update(std::string_view field_value) {
         if (!is_valid_http_header_name(token)) {
             return true;
         }
-        std::string lower = http_ascii_lowercase(token);
-        const auto it = std::ranges::lower_bound(field_names_, lower);
-        if (it == field_names_.end() || *it != lower) {
-            field_names_.insert(it, std::move(lower));
+        // Probe borrowed text before owning it: repeated Vary names need no
+        // temporary lowercase allocation.
+        const auto it = std::ranges::lower_bound(field_names_, token, [](std::string_view left, std::string_view right) noexcept {
+            return std::lexicographical_compare(left.begin(), left.end(), right.begin(), right.end(), [](unsigned char first, unsigned char second) noexcept {
+                return http_ascii_to_lower(first) < http_ascii_to_lower(second);
+            });
+        });
+        if (it == field_names_.end() || !http_ascii_equals_ignore_case(*it, token)) {
+            field_names_.insert(it, http_ascii_lowercase(token));
         }
         return true;
     });

@@ -104,7 +104,7 @@ public:
         return host_stop_;
     }
 
-    void set_tunnel(std::string_view authority, std::string_view protocol);
+    void set_tunnel(std::string authority, std::string protocol) noexcept;
     void set_websocket(std::shared_ptr<http_client_websocket_handshake> handshake) noexcept {
         websocket_ = std::move(handshake);
     }

@@ -152,7 +152,7 @@ inline stop_state_ref::~stop_state_ref() {
 // return before destroying the stored callback.
 class stop_callback_node final {
 public:
-    stop_callback_node(const stop_state_ref& state_value, move_only_function<void()> callback_value) noexcept :
+    stop_callback_node(const stop_state_ref& state_value, move_only_function<void()>&& callback_value) noexcept :
         state_(state_value),
         callback_(std::move(callback_value)) {}
     ~stop_callback_node() {
@@ -244,11 +244,11 @@ private:
 
     using registration_phase_type = detail::stop_registration_phase;
 
-    stop_registration(const detail::stop_state_ref& state, move_only_function<void()> callback_value) {
+    stop_registration(const detail::stop_state_ref& state, move_only_function<void()>&& callback_value) {
         register_callback(state, std::move(callback_value));
     }
 
-    void register_callback(const detail::stop_state_ref& state, move_only_function<void()> callback_value) {
+    void register_callback(const detail::stop_state_ref& state, move_only_function<void()>&& callback_value) {
         if (!callback_value || !state || !state->stop_possible()) {
             return;
         }

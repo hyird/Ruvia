@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <initializer_list>
 #include <limits>
 #include <memory>
@@ -1108,16 +1109,12 @@ public:
     [[nodiscard]] task<std::pair<db_rows, std::uint64_t>> query_and_count(const db_query& query, const db_query& count) const&
         requires detail::db_copyable_surface<surface_type>
     {
-        return query_mapped_and_count<db_rows>(surface(), query, count, [](db_rows rows) {
-            return rows;
-        });
+        return query_mapped_and_count<db_rows>(surface(), query, count, std::identity{});
     }
     [[nodiscard]] task<std::pair<db_rows, std::uint64_t>> query_and_count(const db_query& query, const db_query& count) &
         requires(!detail::db_copyable_surface<surface_type>)
     {
-        return query_mapped_and_count<db_rows>(surface(), query, count, [](db_rows rows) {
-            return rows;
-        });
+        return query_mapped_and_count<db_rows>(surface(), query, count, std::identity{});
     }
 
     [[nodiscard]] task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) const&

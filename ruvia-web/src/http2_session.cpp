@@ -828,11 +828,14 @@ private:
         throw std::logic_error("HTTP/2 streaming response head submission failed");
     }
 
-    task<void> write_encoded_data(std::string_view chunk) {
-        const auto status = co_await write_http2_stream_data(connection_, stream_id_, &signal_, write_signal_, output_budget_, chunk, http2_end_stream::keep_open);
+    [[nodiscard]] task<http2_stream_data_write_status> write_encoded_data(std::string_view chunk) {
+        return write_http2_stream_data(connection_, stream_id_, &signal_, write_signal_, output_budget_, chunk, http2_end_stream::keep_open);
+    }
+
+    void check_encoded_data_write(http2_stream_data_write_status status) {
         switch (status) {
             case http2_stream_data_write_status::completed:
-                co_return;
+                return;
             case http2_stream_data_write_status::session_terminated:
                 throw inbound_transport_error(signal_.terminal_error(), terminated_error_message);
             case http2_stream_data_write_status::local_aborted:
@@ -1462,17 +1465,17 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         }
                         return finish_upgrade_commit(head_response.status(), context_value);
                     };
-                    auto commit_websocket = [this, stream_id, &request, &finish_upgrade_commit](context& context_value, const websocket_route_endpoint& endpoint, std::span<const http_header_view> headers) -> task<websocket_upgrade_attempt<http2_sans_io_tunnel_transport>> {
+                    auto commit_websocket = [this, stream_id, &request, &finish_upgrade_commit](context& context_value, const websocket_route_endpoint& endpoint, std::span<const http_header_view> headers) -> websocket_upgrade_attempt<http2_sans_io_tunnel_transport> {
                         const auto validation = connection_.validate_websocket_handshake(stream_id, request, endpoint.handshake_validation());
                         if (const auto* failure = std::get_if<websocket_handshake_error>(&validation)) {
-                            co_return reject_request_stream_websocket(context_value, *failure);
+                            return reject_request_stream_websocket(context_value, *failure);
                         }
                         const auto result = connection_.submit_websocket_handshake(stream_id, request, validation, {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()});
                         const auto* handshake = std::get_if<websocket_extended_connect_negotiation>(&result);
                         if (handshake == nullptr || !stream_runtimes_.mark_tunnel(stream_id)) {
                             throw std::invalid_argument("HTTP/2 WebSocket handshake rejected");
                         }
-                        co_return websocket_upgrade_commit<http2_sans_io_tunnel_transport>(finish_upgrade_commit(http_status::ok, context_value), handshake->compression(), handshake->subprotocol());
+                        return websocket_upgrade_commit<http2_sans_io_tunnel_transport>(finish_upgrade_commit(http_status::ok, context_value), handshake->compression(), handshake->subprotocol());
                     };
                     http2_sans_io_response_stream_sink refusal_sink(connection_, stream_id, *stream_runtime, write_signal_, *stream_signal, output_budget_, request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(), options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
                     auto buffered = co_await execute_multiplexed_tunnel_endpoint<http2_sans_io_tunnel_transport>(refusal_sink, routes_, request, *resolved, dispatch_services, options, session_.scanner_entry(), inbound_buffers_, admission.udp_tunnel(), admission.tail(), commit, commit_websocket);
@@ -1516,12 +1519,8 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                     if (connection_.stream_aborted(stream_id)) {
                         stream_signal->stop();
                     }
-                    const stop_group request_stop{dispatch_services.get_stop_token(), stream_signal->terminal_stop_token()};
-                    const auto request_stop_token = request_stop.token();
-                    auto stream_services = dispatch_services;
-                    stream_services.bind_stop_token(request_stop_token);
                     http2_sans_io_response_stream_sink sink_value(connection_, stream_id, *stream_runtime, write_signal_, *stream_signal, output_budget_, request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(), options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
-                    auto result_value = co_await dispatch_response_stream_with(sink_value, routes_, request, *resolved, stream_services, [this, stream_id]() noexcept {
+                    auto result_value = co_await dispatch_response_stream_with(sink_value, routes_, request, *resolved, dispatch_services, [this, stream_id]() noexcept {
                         return connection_.stream_aborted(stream_id);
                     });
                     if (complete_multiplexed_response_stream_dispatch(result_value, stream_runtime->body_failure().has_value(), options, remote_address_, admission.tail(), response, body_failure_handled, reset_dispatch_stream)) {

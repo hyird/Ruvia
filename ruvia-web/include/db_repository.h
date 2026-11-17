@@ -841,11 +841,6 @@ struct db_map_one_projection final {
         return decoder.decode(rows.front());
     }
 };
-struct db_map_raw_rows final {
-    db_rows operator()(db_rows&& rows) const noexcept {
-        return std::move(rows);
-    }
-};
 template <db_mapped_value scalar_type>
 struct db_map_scalar final {
     std::optional<scalar_type> operator()(db_rows&& rows) const {
@@ -1256,7 +1251,7 @@ public:
     [[nodiscard]] task<db_rows> get_raw_many() const {
         std::optional<db_query> active_query;
         const auto& target_query = target(active_query);
-        return db_command_set<executor_type>::template query_mapped<db_rows>(executor_, target_query, detail::db_map_raw_rows{});
+        return executor_.query(target_query);
     }
     template <typename output_type = entity_type>
     [[nodiscard]] task<std::pair<entity_rows<output_type>, db_rows>> get_raw_and_entities() const {
@@ -1660,7 +1655,7 @@ public:
     }
     [[nodiscard]] task<db_rows> get_raw_many() const {
         require_returning("get_raw_many requires RETURNING");
-        return db_command_set<executor_type>::template query_mapped<db_rows>(executor_, query_, detail::db_map_raw_rows{});
+        return executor_.query(query_);
     }
     // RETURNING uses the same owning value and NULL contract as read scalars.
     template <db_mapped_value scalar_type>

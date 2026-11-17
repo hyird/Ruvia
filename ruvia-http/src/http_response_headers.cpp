@@ -1161,7 +1161,10 @@ void http_response_headers::add_vary_token(std::string_view token) {
                 continue;
             }
             const auto value = header_value.value();
-            if (detail::http_has_token(value, "*") || (!wildcard_token && detail::http_has_token(value, token))) {
+            const auto present = detail::http_find_header_token(value, [token](std::string_view member) noexcept {
+                return member == "*" || http_ascii_equals_ignore_case(member, token);
+            });
+            if (!present.empty()) {
                 return;
             }
             if (!wildcard_token && !http_trim_ows(value).empty()) {

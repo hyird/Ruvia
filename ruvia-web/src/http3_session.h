@@ -348,7 +348,6 @@ private:
 
     // Output and timers.
     [[nodiscard]] task<void> flush();
-    [[nodiscard]] task<void> send_datagram();
     void arm_timer() noexcept;
     void timer_fired(worker_timer_outcome outcome) noexcept;
     void enter_closing() noexcept;

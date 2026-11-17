@@ -941,11 +941,8 @@ task<http_response> detail::route_table::respond_error(const http_request& reque
 
     auto context_value = detail::context_access::make(request, services);
     detail::context_access::services(context_value).bind_routes(*this);
-    auto terminal = [error, error_handler](context& terminal_context) -> task<http_response> {
-        if (error_handler == nullptr) {
-            co_return make_default_error_response(error);
-        }
-        co_return co_await invoke_error_handler(terminal_context, error, error_handler);
+    auto terminal = [error, error_handler](context& terminal_context) {
+        return invoke_error_handler(terminal_context, error, error_handler);
     };
     // Drivers call this to answer a rejection or a recovery outcome, so it must
     // always produce a response: a failure escaping the wrapping middleware

@@ -259,7 +259,12 @@ public:
         std::weak_ptr<http_server_state> weak = shared_from_this();
         stop_registration_ = loop_.on_stop([weak = std::move(weak)]() -> task<void> {
             if (auto state = weak.lock()) {
-                co_await retire_owned(std::move(state));
+                state->require_current();
+                state->request_close();
+                runtime_control_completion completion(state->worker_);
+                state->subscribe_closed(completion.make_receipt());
+                co_await completion.wait();
+                (void)completion.failure();
             }
         });
     }
@@ -609,15 +614,6 @@ private:
         if (failure) {
             std::rethrow_exception(failure);
         }
-    }
-    // The loop's own stop retires this member; the group observes failures.
-    static task<void> retire_owned(std::shared_ptr<http_server_state> self) {
-        self->require_current();
-        self->request_close();
-        runtime_control_completion completion(self->worker_);
-        self->subscribe_closed(completion.make_receipt());
-        co_await completion.wait();
-        (void)completion.failure();
     }
 
     event_loop loop_;

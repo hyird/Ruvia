@@ -212,7 +212,7 @@ public:
     http_client_advertisement_queue& operator=(const http_client_advertisement_queue&) = delete;
 
     // Drops (counted by dropped()) an observation beyond the configured bounds.
-    void retain(std::size_t slot, http_protocol_version protocol, const http_origin_advertisement& origins);
+    void retain(std::size_t slot, http_protocol_version protocol, http_origin_advertisement&& origins);
     void retain(std::size_t slot, const http_alternative_service_advertisement& service);
     [[nodiscard]] std::optional<http_client_advertisement> next();
     void retire() noexcept;
@@ -255,7 +255,7 @@ public:
     http_client_pool& operator=(const http_client_pool&) = delete;
 
     [[nodiscard]] task<http_client_response> execute(http_client_request_storage request, operation_options options);
-    [[nodiscard]] task<http_client_exchange> open_request(http_client_request_storage request, http_client_upload_config upload, operation_options options);
+    [[nodiscard]] http_client_exchange open_request(http_client_request_storage request, http_client_upload_config upload, operation_options options);
     [[nodiscard]] task<http_client_tunnel_result> open_tunnel(http_client_request_storage request, http_client_tunnel_config config, operation_options options);
     void close_now() noexcept;
     [[nodiscard]] task<void> join();
@@ -289,7 +289,7 @@ public:
     void release_response_data(http_client_response_state& state_value) noexcept;
     // TLS-authenticated responses of `route` update its entries in this pool's
     // bounded Alt-Svc cache.
-    void observe_alt_svc(const http_client_route& route, std::span<const http_header> fields);
+    void observe_alt_svc(const http_client_route& route, const http_header_range_view& fields);
     [[nodiscard]] task<void> migrate_http3(std::string local_address, std::uint16_t port, operation_options options, stop_token host_stop);
 #ifdef RUVIA_ENABLE_HTTP3
     // `operation` follows the client's per-operation contract: an interrupted
@@ -394,7 +394,6 @@ private:
     [[nodiscard]] task<void> run_http2_push(std::unique_ptr<http2_push_driver> driver);
 #endif
     [[nodiscard]] task<void> execute_into(http_client_request_storage request, operation_options options, http_client_response_state* state);
-    [[nodiscard]] task<void> execute_request_into(http_client_request_storage request, operation_options options, http_client_response_state* state);
     // Routes the request to a reusable connection of its route, a new one
     // within max_open_, or waits within the acquisition bound. The returned
     // connection counts this request among its users_.
@@ -417,7 +416,6 @@ private:
     [[nodiscard]] task<void> run_reclaimer();
     void reclaim_connections() noexcept;
     [[nodiscard]] http_client_connection* find_connection(const http_client_response_state& state) noexcept;
-    [[nodiscard]] task<void> execute_tcp(http_client_connection& connection, const http_client_request_storage& request, const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value);
     // Runs the request as an HTTP/1 exchange on `connection`, reconnecting it
     // when needed. False, with nothing sent, when the connection speaks HTTP/2.
     // `connected_http1_generation` names a connection this request has just

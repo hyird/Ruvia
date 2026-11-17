@@ -333,6 +333,7 @@ struct payload_state final {
     int destroyed_{};
     bool query_on_move_{};
     bool throw_on_move_{};
+    int moves_until_failure_{-1};
 };
 
 struct payload final {
@@ -348,8 +349,11 @@ struct payload final {
             if (state_->query_on_move_) {
                 state_->reenter_();
             }
-            if (state_->throw_on_move_) {
+            if (state_->throw_on_move_ || state_->moves_until_failure_ == 0) {
                 throw std::runtime_error("payload move failed");
+            }
+            if (state_->moves_until_failure_ > 0) {
+                --state_->moves_until_failure_;
             }
         }
         value_ = std::move(other.value_);
@@ -487,6 +491,52 @@ bool test_completion_move_can_close_receiver(bool stop_worker) {
 task<void> verify_payload_value(one_shot_receiver<payload>& receiver, bool& success) {
     const auto result = co_await receiver.wait();
     success = result.has_value() && result.value().value_ && *result.value().value_ == 42;
+}
+
+task<void> exercise_direct_payload_delivery(worker_ref worker, bool& success) {
+    for (const bool buffered : {false, true}) {
+        payload_state state;
+        state.reenter_ = [] {};
+        auto [completion, receiver] = make_one_shot<payload>(worker);
+        bool received = false;
+        task_scope scope(worker);
+        if (!buffered) {
+            scope.spawn(verify_payload_value(receiver, received));
+            state.moves_until_failure_ = 2;
+        }
+        if (!completion.complete(payload(state)).accepted()) {
+            receiver.close();
+            co_await scope.join();
+            co_return;
+        }
+        if (buffered) {
+            state.moves_until_failure_ = 1;
+            co_await verify_payload_value(receiver, received);
+        }
+        co_await scope.join();
+        if (!received || state.destroyed_ != 1 || (co_await receiver.wait()).status() != wait_status::closed) {
+            co_return;
+        }
+    }
+    {
+        payload_state state;
+        auto [completion, receiver] = make_one_shot<payload>(worker);
+        state.reenter_ = [&] {
+            receiver.close();
+        };
+        state.query_on_move_ = true;
+        state.moves_until_failure_ = 2;
+        {
+            const auto rejected = completion.complete(payload(state));
+            if (rejected.status() != one_shot_complete_status::receiver_closed || rejected.rejected() == nullptr || !rejected.rejected()->value_ || *rejected.rejected()->value_ != 42) {
+                co_return;
+            }
+        }
+        if (state.destroyed_ != 1) {
+            co_return;
+        }
+    }
+    success = true;
 }
 
 bool test_concurrent_completion_reservation(bool throw_first) {
@@ -917,6 +967,14 @@ TEST(Ruvia, OneShotCompletionPinsStateDuringReentrantRebinding) {
         EXPECT_FALSE(completion.valid());
         EXPECT_EQ(state.destroyed_, 1);
     }
+}
+
+TEST(Ruvia, OneShotDeliversPayloadWithoutIntermediateMoves) {
+    asio::io_context io;
+    auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 8});
+    bool success = false;
+    ruvia::test::run_worker_tasks(attachment, ruvia::test::one_shot_tests::exercise_direct_payload_delivery(attachment.loop().worker(), success));
+    EXPECT_TRUE(success);
 }
 
 TEST(Ruvia, OneShotCompletionMoveCanCloseReceiver) {

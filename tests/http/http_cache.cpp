@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -118,6 +119,24 @@ TEST(RuviaHttpPublicApi, vary_cache_key_normalizes_repeated_and_empty_field_valu
     const auto key = ruvia::format_http_vary_cache_key(vary, request);
     ASSERT_TRUE(key.has_value());
     EXPECT_EQ(*key, "accept:1:application/vnd.example+json; charset=utf-8, text/plain; charset=us-ascii\nx-empty:1:\nx-missing:0\n");
+}
+
+TEST(RuviaHttpPublicApi, vary_names_sort_folded_ascii_and_own_only_distinct_names) {
+    ruvia::http_vary_spec vary;
+    {
+        const std::string names = "X-Cache-Variation-NameZ, x-cache-variation-namea, X-Cache-Variation-Name_, x-cache-variation-name!, X-Cache-Variation-Name";
+        vary.update(names);
+    }
+    vary.update("X-CACHE-VARIATION-NAMEA, x-cache-variation-namez, X-CACHE-VARIATION-NAME_, x-cache-variation-name!, X-CACHE-VARIATION-NAME");
+    vary.update(vary.field_names().front());
+
+    const auto names = vary.field_names();
+    ASSERT_EQ(names.size(), 5U);
+    EXPECT_EQ(names[0], "x-cache-variation-name");
+    EXPECT_EQ(names[1], "x-cache-variation-name!");
+    EXPECT_EQ(names[2], "x-cache-variation-name_");
+    EXPECT_EQ(names[3], "x-cache-variation-namea");
+    EXPECT_EQ(names[4], "x-cache-variation-namez");
 }
 
 TEST(RuviaHttpPublicApi, targeted_cache_control_selects_first_valid_targeted_field) {

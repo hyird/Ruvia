@@ -63,14 +63,17 @@ struct one_shot_state final {
     [[nodiscard]] worker_wait_slot<std::monostate, one_shot_state>& wait_slot() noexcept {
         return wait_slot_;
     }
-    [[nodiscard]] t_type take_ready_value() {
+    template <typename consume_type>
+    [[nodiscard]] auto consume_ready(consume_type&& consume) {
         struct ready_consumption final {
             std::optional<t_type>& value_;
             ~ready_consumption() {
                 value_.reset();
             }
         } consumption{ready_value_};
-        return std::move(*ready_value_);
+        // Construct the final outcome directly from the slot; an intermediate
+        // payload would add a potentially throwing move before publication.
+        return std::forward<consume_type>(consume)(std::move(*ready_value_));
     }
 
     // First member: unlinks from the worker registry after every other member is gone.
@@ -162,7 +165,9 @@ public:
             }
         }
         if (rejection) {
-            return detail::delivery_access::reject<one_shot_complete_result<t_type>>(*rejection, state->take_ready_value());
+            return state->consume_ready([&](t_type&& ready_value) {
+                return detail::delivery_access::reject<one_shot_complete_result<t_type>>(*rejection, std::move(ready_value));
+            });
         }
         return detail::delivery_access::accept<one_shot_complete_result<t_type>>();
     }
@@ -231,7 +236,9 @@ public:
             if (!result.has_value()) {
                 return wait_result<t_type>::with_status(result.status());
             }
-            return wait_result<t_type>::with_value(wait_.state().take_ready_value());
+            return wait_.state().consume_ready([](t_type&& ready_value) {
+                return wait_result<t_type>::with_value(std::move(ready_value));
+            });
         }
 
     private:

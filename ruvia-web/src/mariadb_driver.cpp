@@ -1055,42 +1055,6 @@ bool mariadb_driver::idle_connection_alive(connection_type& connection) noexcept
 
 namespace {
 
-// A statement as text on a connection its caller holds exclusively: its
-// result, or what mariadb_statement_failure() makes of its responses.
-template <typename result_type>
-task<result_type> run_mysql_text(mariadb_pool& pool, std::size_t index, std::string_view sql, const mariadb_statement_classification& classification, std::span<const db_value> params, const operation_deadline& deadline_value) {
-    constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
-    co_await run_mysql_statement(pool, index, sql, classification, params, deadline_value);
-    auto& connection = *pool.slot(index).connection_;
-    const auto affected_rows = static_cast<std::uint64_t>(mysql_affected_rows(&connection));
-    const auto insert_id = static_cast<std::uint64_t>(mysql_insert_id(&connection));
-    auto output = db_result_access::make_result();
-    auto* raw_result = co_await store_mysql_result(pool, index, deadline_value);
-    // A lost connection also yields no result, and libmariadb resets the
-    // field count when it drops the connection, so only mysql_errno() tells a
-    // failed transfer from a statement without a row set.
-    if (raw_result == nullptr && (mysql_field_count(&connection) != 0 || mysql_errno(&connection) != 0)) {
-        throw mysql_statement_error(pool, index, "mysql_store_result");
-    }
-    if (raw_result != nullptr) {
-        if constexpr (returns_rows) {
-            db_result_access::own_raw_result(output, raw_result, &free_stored_result);
-        } else {
-            free_stored_result(raw_result);
-        }
-    }
-    const bool extra_row_set = co_await finish_mysql_results(pool, index, deadline_value);
-    if (auto failure = mariadb_statement_failure(nullptr, extra_row_set, nullptr, returns_rows, raw_result != nullptr)) {
-        std::rethrow_exception(failure);
-    }
-    if constexpr (returns_rows) {
-        materialize_mysql_rows(output, *raw_result);
-        co_return output;
-    } else {
-        co_return make_mysql_exec_result(affected_rows, insert_id);
-    }
-}
-
 // A statement on a connection its caller holds exclusively (a transaction's
 // statements and control commands): prepared once the connection's cache has
 // it, as text otherwise. A statement the server no longer held runs once more
@@ -1138,7 +1102,35 @@ task<result_type> run_mysql_cached(mariadb_pool& pool, std::size_t index, std::s
             co_return make_mysql_exec_result(run.affected_rows_, run.insert_id_);
         }
     }
-    co_return co_await run_mysql_text<result_type>(pool, index, sql, classification, params, deadline_value);
+    co_await run_mysql_statement(pool, index, sql, classification, params, deadline_value);
+    auto& connection = *slot.connection_;
+    const auto affected_rows = static_cast<std::uint64_t>(mysql_affected_rows(&connection));
+    const auto insert_id = static_cast<std::uint64_t>(mysql_insert_id(&connection));
+    auto output = db_result_access::make_result();
+    auto* raw_result = co_await store_mysql_result(pool, index, deadline_value);
+    // A lost connection also yields no result, and libmariadb resets the
+    // field count when it drops the connection, so only mysql_errno() tells a
+    // failed transfer from a statement without a row set.
+    if (raw_result == nullptr && (mysql_field_count(&connection) != 0 || mysql_errno(&connection) != 0)) {
+        throw mysql_statement_error(pool, index, "mysql_store_result");
+    }
+    if (raw_result != nullptr) {
+        if constexpr (returns_rows) {
+            db_result_access::own_raw_result(output, raw_result, &free_stored_result);
+        } else {
+            free_stored_result(raw_result);
+        }
+    }
+    const bool extra_row_set = co_await finish_mysql_results(pool, index, deadline_value);
+    if (auto failure = mariadb_statement_failure(nullptr, extra_row_set, nullptr, returns_rows, raw_result != nullptr)) {
+        std::rethrow_exception(failure);
+    }
+    if constexpr (returns_rows) {
+        materialize_mysql_rows(output, *raw_result);
+        co_return output;
+    } else {
+        co_return make_mysql_exec_result(affected_rows, insert_id);
+    }
 }
 
 }  // namespace

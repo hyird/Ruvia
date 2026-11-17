@@ -578,8 +578,6 @@ private:
     friend class http_client_connect_request;
     friend class http_client_websocket_request;
     [[nodiscard]] task<http_client_response> dispatch(const http_request_head_view& request, const http_client_request_options& options, const std::shared_ptr<http_client_informational_callback>& informational) const;
-    [[nodiscard]] task<http_client_tunnel_result> dispatch_connect(const http_request_head_view& head, http_client_tunnel_config config, const http_client_request_options& options, const std::shared_ptr<http_client_informational_callback>& informational) const;
-    [[nodiscard]] task<http_client_tunnel_result> dispatch_udp(const http_request_head_view& head, http_client_tunnel_config config, const http_client_request_options& options, const std::shared_ptr<http_client_informational_callback>& informational) const;
     friend class detail::http_client_registry;
     friend class detail::http_client_state;
     friend class detail::worker_client_registry_view;
@@ -672,7 +670,6 @@ private:
     http_client_request(const http_client_ref& client, std::string_view method, std::string_view path);
     static task<http_client_exchange> upload_owned(http_client_request request, http_client_upload_config config);
     static task<http_client_response> follow_redirects(http_client_request request, std::optional<http_client_response> initial_response, std::optional<operation_deadline> initial_deadline);
-    [[nodiscard]] std::vector<http_header_view> field_views() const;
     http_client_ref client_;
     std::string method_;
     std::string target_;

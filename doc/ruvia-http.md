@@ -4903,7 +4903,7 @@ public:
 | 符号 | 语义 |
 | --- | --- |
 | `http_vary_spec` | 多行 `Vary` 的规范化规格（RFC 9111 §4.1）：字段名转为 ASCII 小写、去重，并按固定 ASCII 顺序排序 |
-| `update(field_value)` | 吸收一行 `Vary` 值；非法字段名被跳过；出现 `*` 时置通配并清空名单，此后的 `update` 不再生效。可能抛出 `std::bad_alloc` |
+| `update(field_value)` | 吸收一行 `Vary` 值；先按 ASCII 大小写不敏感查重，仅新增名称才小写化并拥有存储，重复名称不分配；非法字段名被跳过；出现 `*` 时置通配并清空名单，此后的 `update` 不再生效。可能抛出 `std::bad_alloc` |
 | `update_headers(headers)` | 对块中每个 `Vary` 行调用 `update` |
 | `is_wildcard()` | 是否出现 `Vary: *`（响应不可由缓存满足后续请求） |
 | `empty()` | 既非通配也没有字段名 |

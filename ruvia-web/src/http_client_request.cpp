@@ -71,13 +71,11 @@ http_client_request_storage::http_client_request_storage(std::string_view method
 http_client_request_storage::http_client_request_storage(std::string method, std::string target, std::vector<http_header> headers) noexcept :
     method_(std::move(method)),
     target_(std::move(target)),
-    headers_(std::move(headers)),
-    route_authority_(method_) {}
+    headers_(std::move(headers)) {}
 
 http_client_request_storage::http_client_request_storage(std::string_view method, std::string_view target) :
     method_(method),
-    target_(target),
-    route_authority_(method_) {}
+    target_(target) {}
 
 http_client_request_storage::http_client_request_storage(http_client_request_storage&& other) noexcept :
     options_(std::move(other.options_)),
@@ -96,16 +94,16 @@ http_client_request_storage::http_client_request_storage(http_client_request_sto
     tunnel_(std::exchange(other.tunnel_, nullptr)),
     has_body_(std::exchange(other.has_body_, false)),
     upload_(std::exchange(other.upload_, nullptr)),
-    route_authority_(other.route_authority_) {
+    route_authority_(std::move(other.route_authority_)) {
     static_assert(std::is_nothrow_move_constructible_v<decltype(method_)>);
     static_assert(std::is_nothrow_move_constructible_v<decltype(target_)>);
     static_assert(std::is_nothrow_move_constructible_v<decltype(headers_)>);
     static_assert(std::is_nothrow_move_constructible_v<decltype(body_)>);
 }
 
-void http_client_request_storage::set_tunnel(std::string_view authority, std::string_view protocol) {
-    tunnel_authority_.assign(authority);
-    tunnel_protocol_.assign(protocol);
+void http_client_request_storage::set_tunnel(std::string authority, std::string protocol) noexcept {
+    tunnel_authority_ = std::move(authority);
+    tunnel_protocol_ = std::move(protocol);
     is_tunnel_ = true;
 }
 
@@ -517,15 +515,6 @@ task<http_client_tunnel_result> http_client_request::connect(http_client_tunnel_
     return client_.registration_.attach(client_.pool_->open_tunnel(std::move(request), config, client_.options_));
 }
 
-std::vector<http_header_view> http_client_request::field_views() const {
-    std::vector<http_header_view> fields;
-    fields.reserve(headers_.size());
-    for (const auto& field : headers_) {
-        fields.emplace_back(field.name(), field.value());
-    }
-    return fields;
-}
-
 task<http_client_response> http_client_request::send() && {
     client_.registration_.require_active();
     return client_.registration_.attach(follow_redirects(std::move(*this), std::nullopt, std::nullopt));
@@ -679,7 +668,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
             clear_route_overrides(request.request_options_);
             if (!request.client_.pool_->config().fixed_origin_ && has_custom_policy && next->scheme() == request.client_.scheme()) {
                 // An alias without a fixed origin reaches the accepted origin itself.
-                request.request_options_.authority_.emplace(std::string_view(authority));
+                request.request_options_.authority_.emplace(std::move(authority));
             } else {
                 if (request.client_.registry_ == nullptr) {
                     co_return response;
@@ -724,24 +713,23 @@ task<http_client_exchange> http_client_request::upload(http_client_upload_config
 }
 
 task<http_client_exchange> http_client_request::upload_owned(http_client_request request, http_client_upload_config config) {
-    std::optional<task<http_client_exchange>> dispatched;
-    if (request.max_redirects_ == 0) {
-        detail::http_client_request_storage storage(std::move(request.method_), std::move(request.target_), std::move(request.headers_));
-        storage.options_ = std::move(request.request_options_);
-        storage.informational_ = std::move(request.informational_callback_);
-        storage.pool_owner_ = request.client_.pool_owner_;
-        storage.set_host_stop(request.client_.host_stop_token_);
-        dispatched.emplace(request.client_.pool_->open_request(std::move(storage), config, request.client_.options_));
-    } else {
+    auto exchange = [&] {
+        if (request.max_redirects_ == 0) {
+            detail::http_client_request_storage storage(std::move(request.method_), std::move(request.target_), std::move(request.headers_));
+            storage.options_ = std::move(request.request_options_);
+            storage.informational_ = std::move(request.informational_callback_);
+            storage.pool_owner_ = request.client_.pool_owner_;
+            storage.set_host_stop(request.client_.host_stop_token_);
+            return request.client_.pool_->open_request(std::move(storage), config, request.client_.options_);
+        }
         const detail::inline_http_header_views<16> fields(request.headers_);
         detail::http_client_request_storage storage(request.method_, request.target_, fields.view());
         storage.options_ = detail::copy_http_client_request_settings(request.request_options_);
         storage.informational_ = request.informational_callback_;
         storage.pool_owner_ = request.client_.pool_owner_;
         storage.set_host_stop(request.client_.host_stop_token_);
-        dispatched.emplace(request.client_.pool_->open_request(std::move(storage), config, request.client_.options_));
-    }
-    auto exchange = co_await std::move(*dispatched);
+        return request.client_.pool_->open_request(std::move(storage), config, request.client_.options_);
+    }();
     if (request.max_redirects_ != 0 && exchange.body().state_ != nullptr && exchange.body().state_->upload_) {
         exchange.body().state_->upload_->redirect_request_ = std::make_unique<http_client_request>(std::move(request));
     }
@@ -800,13 +788,45 @@ http_client_connect_request& http_client_connect_request::target(std::string_vie
     return *this;
 }
 task<http_client_tunnel_result> http_client_connect_request::connect(http_client_tunnel_config config) && {
-    const detail::inline_http_header_views<16> fields(headers_);
-    auto dispatched = udp_ ? client_.dispatch_udp({.target_ = target_, .headers_ = fields.view()}, config, request_options_, informational_callback_) : client_.dispatch_connect({.method_ = "CONNECT", .protocol_ = protocol_.empty() ? std::optional<borrowed_text>() : std::optional<borrowed_text>(protocol_), .authority_ = authority_, .target_ = target_, .headers_ = fields.view()}, config, request_options_, informational_callback_);
-    std::string(authority_.get_allocator()).swap(authority_);
-    std::string(protocol_.get_allocator()).swap(protocol_);
-    std::string(target_.get_allocator()).swap(target_);
-    std::vector<http_header>(headers_.get_allocator()).swap(headers_);
-    return dispatched;
+    client_.registration_.require_active();
+    {
+        detail::inline_http_header_views<16> fields(headers_.size() + (udp_ ? 1U : 0U));
+        if (udp_) {
+            if (!is_valid_http_origin_form_target(target_) || config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes) {
+                throw std::invalid_argument("invalid CONNECT-UDP request or tunnel policy");
+            }
+        }
+        for (const auto& field : headers_) {
+            if (udp_ && http_ascii_equals_ignore_case(field.name(), "capsule-protocol")) {
+                throw std::invalid_argument("CONNECT-UDP Capsule-Protocol is driver-owned");
+            }
+            fields.push_back(http_header_view{field.name(), field.value()});
+        }
+        if (udp_) {
+            fields.push_back(http_header_view{"Capsule-Protocol", "?1"});
+        }
+        const std::string_view protocol = udp_ ? std::string_view("connect-udp") : std::string_view(protocol_);
+        const std::string_view authority = udp_ && request_options_.authority_ ? std::string_view(*request_options_.authority_) : std::string_view(authority_);
+        const http_request_head_view head{.method_ = "CONNECT", .protocol_ = protocol.empty() ? std::optional<borrowed_text>() : std::optional<borrowed_text>(protocol), .authority_ = authority, .target_ = target_, .headers_ = fields.view()};
+        if (head.kind() != (protocol.empty() ? http_request_head_kind::connect : http_request_head_kind::extended_connect) || config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes || (protocol.empty() ? (!is_valid_http_connect_authority(authority) || !head.target_.empty()) : (!is_valid_http_method_token(protocol) || !is_valid_http_origin_form_target(head.target_) || !parse_http_authority(authority)))) {
+            throw std::invalid_argument("invalid CONNECT request or tunnel policy");
+        }
+        if (protocol == "connect-udp" && validate_http_connect_udp_request_to_send(http_protocol_version::http2, {.method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = client_.scheme() == http_scheme::https ? "https" : "http", .authority_ = authority, .target_ = target_, .headers_ = fields.view()}).has_value()) {
+            throw std::invalid_argument("invalid CONNECT-UDP request head");
+        }
+    }
+    std::string authority = udp_ && request_options_.authority_ ? *request_options_.authority_ : std::move(authority_);
+    std::string protocol = udp_ ? std::string("connect-udp") : std::move(protocol_);
+    if (udp_) {
+        headers_.emplace_back("Capsule-Protocol", "?1");
+    }
+    detail::http_client_request_storage request(std::string("CONNECT"), std::move(target_), std::move(headers_));
+    request.options_ = std::move(request_options_);
+    request.informational_ = std::move(informational_callback_);
+    request.pool_owner_ = client_.pool_owner_;
+    request.set_tunnel(std::move(authority), std::move(protocol));
+    request.set_host_stop(client_.host_stop_token_);
+    return client_.registration_.attach(client_.pool_->open_tunnel(std::move(request), config, client_.options_));
 }
 
 #ifdef RUVIA_ENABLE_HTTP3
@@ -954,48 +974,6 @@ task<http_client_response> http_client_ref::dispatch(const http_request_head_vie
         request.set_body(*known->bytes());
     }
     return registration_.attach(pool_->execute(std::move(request), options_));
-}
-
-task<http_client_tunnel_result> http_client_ref::dispatch_udp(const http_request_head_view& head, http_client_tunnel_config config, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
-    registration_.require_active();
-    if (!is_valid_http_origin_form_target(head.target_) || config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes) {
-        throw std::invalid_argument("invalid CONNECT-UDP request or tunnel policy");
-    }
-    for (const auto& field : head.headers_) {
-        if (http_ascii_equals_ignore_case(field.name(), "capsule-protocol")) {
-            throw std::invalid_argument("CONNECT-UDP Capsule-Protocol is driver-owned");
-        }
-    }
-    detail::inline_http_header_views<16> fields(head.headers_.size() + 1U);
-    for (const auto& field : head.headers_) {
-        fields.push_back(field);
-    }
-    fields.push_back(http_header_view{"Capsule-Protocol", "?1"});
-    // The dispatch owns fields before temporary preparation storage dies.
-    const std::string_view authority = request_options.authority_ ? std::string_view(*request_options.authority_) : std::string_view(pool_->config().authority_);
-    return dispatch_connect({.method_ = "CONNECT", .protocol_ = "connect-udp", .authority_ = authority, .target_ = head.target_, .headers_ = fields.view()}, config, request_options, informational);
-}
-
-task<http_client_tunnel_result> http_client_ref::dispatch_connect(const http_request_head_view& head, http_client_tunnel_config config, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
-    registration_.require_active();
-    // A CONNECT head without a protocol is authority-form and has no target;
-    // with one it is Extended CONNECT to an origin-form target. Any other
-    // head is not a tunnel request.
-    const auto protocol = head.protocol_.has_value() ? head.protocol_->view() : std::string_view{};
-    const auto authority = head.authority_.has_value() ? head.authority_->view() : std::string_view{};
-    if (head.kind() != (protocol.empty() ? http_request_head_kind::connect : http_request_head_kind::extended_connect) || config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes || (protocol.empty() ? (!is_valid_http_connect_authority(authority) || !head.target_.empty()) : (!is_valid_http_method_token(protocol) || !is_valid_http_origin_form_target(head.target_) || !parse_http_authority(authority)))) {
-        throw std::invalid_argument("invalid CONNECT request or tunnel policy");
-    }
-    if (protocol == "connect-udp" && validate_http_connect_udp_request_to_send(http_protocol_version::http2, {.method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = scheme() == http_scheme::https ? "https" : "http", .authority_ = authority, .target_ = head.target_, .headers_ = head.headers_}).has_value()) {
-        throw std::invalid_argument("invalid CONNECT-UDP request head");
-    }
-    detail::http_client_request_storage request("CONNECT", head.target_.view(), head.headers_);
-    request.options_ = detail::copy_http_client_request_settings(request_options);
-    request.informational_ = informational;
-    request.pool_owner_ = pool_owner_;
-    request.set_tunnel(authority, protocol);
-    request.set_host_stop(host_stop_token_);
-    return registration_.attach(pool_->open_tunnel(std::move(request), config, options_));
 }
 
 http_client_stats http_client_ref::stats() const {

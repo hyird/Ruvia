@@ -16,7 +16,7 @@
 namespace ruvia {
 
 struct task_scope::node_type {
-    node_type(task_scope& owner_value, task<void> child_value) :
+    node_type(task_scope& owner_value, task<void>&& child_value) :
         scope_(owner_value),
         task_(std::move(child_value)) {}
 

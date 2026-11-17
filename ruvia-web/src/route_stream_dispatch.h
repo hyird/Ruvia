@@ -642,11 +642,9 @@ struct tunnel_upgrade_session_operation final {
         co_return &session_->tunnel();
     }
 
-    [[nodiscard]] task<websocket_accept_result> accept_request_stream_websocket(context& context_value, const websocket_route_endpoint& websocket_endpoint) {
-        const auto headers = websocket_response_headers(context_value);
-        auto attempt = co_await commit_websocket_(context_value, websocket_endpoint, headers);
+    [[nodiscard]] websocket_accept_result accept_websocket_attempt(const websocket_route_endpoint& websocket_endpoint, websocket_upgrade_attempt<transport_type>&& attempt) {
         if (const auto* rejection = std::get_if<websocket_rejection>(&attempt)) {
-            co_return websocket_accept_access::rejected(*rejection);
+            return websocket_accept_access::rejected(*rejection);
         }
         auto* committed = std::get_if<websocket_upgrade_commit<transport_type>>(&attempt);
         try {
@@ -657,7 +655,16 @@ struct tunnel_upgrade_session_operation final {
         }
         websocket_.emplace(*websocket_session_);
         scanner_entry_.enter_long_lived();
-        co_return websocket_accept_access::accepted(websocket_->value_);
+        return websocket_accept_access::accepted(websocket_->value_);
+    }
+
+    [[nodiscard]] task<websocket_accept_result> accept_request_stream_websocket(context& context_value, const websocket_route_endpoint& websocket_endpoint) {
+        const auto headers = websocket_response_headers(context_value);
+        if constexpr (requires { commit_websocket_(context_value, websocket_endpoint, headers).operator co_await(); }) {
+            co_return accept_websocket_attempt(websocket_endpoint, co_await commit_websocket_(context_value, websocket_endpoint, headers));
+        } else {
+            co_return accept_websocket_attempt(websocket_endpoint, commit_websocket_(context_value, websocket_endpoint, headers));
+        }
     }
 
     [[nodiscard]] task<void> operator()(context& context_value) {

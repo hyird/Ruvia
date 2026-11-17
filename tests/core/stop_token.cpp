@@ -176,10 +176,10 @@ private:
     reset_registration_move_state* state_;
 };
 
-// Moving an inline callable into stop_callback_state is the third move. Firing
+// Moving an inline callable into stop_callback_node is the second move. Firing
 // there puts stop_requested() after register_callback()'s preflight check but
 // before the intrusive node finishes construction.
-constexpr int move_into_callback_state = 3;
+constexpr int move_into_callback_state = 2;
 
 }  // namespace
 
