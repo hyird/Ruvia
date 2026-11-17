@@ -521,6 +521,39 @@ TEST(Ruvia, worker_group_coordinates_startup_serving_and_retirement) {
     EXPECT_EQ(second.state(), state::stopped);
 }
 
+TEST(Ruvia, worker_group_rejects_join_from_any_member_before_stopping) {
+    ruvia::worker_runtime first;
+    ruvia::worker_runtime second;
+    std::promise<std::exception_ptr> rejected_join;
+    ruvia::worker_group group;
+    first.configure({.startup_ = [&] {
+        first.mark_ready();
+    }});
+    second.configure({.startup_ = [&] {
+        second.mark_ready();
+    }});
+    group.add(first);
+    group.add(second);
+    ASSERT_TRUE(group.start());
+    ASSERT_TRUE(second.worker()
+            .post([&] {
+        rejected_join.set_value(group.join());
+    }).accepted());
+
+    const auto failure = rejected_join.get_future().get();
+    EXPECT_FALSE(group.stop_requested());
+    EXPECT_TRUE(first.worker().accepting());
+    EXPECT_TRUE(second.worker().accepting());
+    if (failure) {
+        EXPECT_THROW(std::rethrow_exception(failure), std::logic_error);
+    } else {
+        ADD_FAILURE() << "a group member must not be able to join its group";
+    }
+    EXPECT_EQ(group.join(), nullptr);
+    EXPECT_EQ(first.state(), state::stopped);
+    EXPECT_EQ(second.state(), state::stopped);
+}
+
 TEST(Ruvia, worker_group_stop_before_start_launches_nothing) {
     ruvia::worker_runtime member;
     std::atomic<bool> started{};

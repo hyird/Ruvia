@@ -665,7 +665,7 @@ flowchart LR
 | `[[nodiscard]] bool serve();` | 阶段二，须在 `start()` 成功后；结果规则同 `start()`；只能一次 |
 | `void request_stop() noexcept;` | 同时关闭全部成员准入 |
 | `[[nodiscard]] bool stop_requested() const noexcept;` | 组是否已请求停止 |
-| `[[nodiscard]] std::exception_ptr join(std::exception_ptr primary = nullptr) noexcept;` | 请求停止、等待成员通知结束并 join 全部成员；返回供调用方重抛的失败：给定 `primary` 时为它，否则为注册顺序中首个成员失败 |
+| `[[nodiscard]] std::exception_ptr join(std::exception_ptr primary = nullptr) noexcept;` | 从组内 Worker 调用时返回 `std::logic_error`，不请求停止；否则停止并 join 全部成员，返回 `primary`（若给定）或注册顺序中首个成员失败 |
 
 - **失败传播**：成员失败关闭整个组的准入并唤醒阶段等待，保留原始异常；独立停止的成员中止组，组自身停止则使阶段调用返回 `false`。
 - **上报**：`join` 返回的失败不在此上报；其余成员失败以 `"additional worker"` 上报，等价失败合并为一行并附计数；重复 join 返回首次结果，不重复退役与诊断。

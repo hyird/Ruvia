@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstddef>
 #include <exception>
 #include <mutex>
@@ -164,6 +165,20 @@ bool worker_group::stop_requested() const noexcept {
 }
 
 std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
+    bool called_from_member;
+    {
+        const std::lock_guard lock(mutex_);
+        called_from_member = std::ranges::any_of(members_, [](const worker_runtime* member) {
+            return member->worker().is_current();
+        });
+    }
+    if (called_from_member) {
+        try {
+            throw std::logic_error("cannot join a worker group from one of its members");
+        } catch (...) {
+            return std::current_exception();
+        }
+    }
     request_stop();
     {
         std::unique_lock lock(mutex_);
@@ -179,8 +194,7 @@ std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
         try {
             member->join();
         } catch (...) {
-            // join() only rejects a member's own thread, which can never
-            // own the lifecycle; a stranded owner cannot be recovered.
+            // The lifecycle caller cannot recover a partially joined group.
             std::terminate();
         }
     }
