@@ -605,7 +605,13 @@ concept http_header_field = requires(const std::remove_reference_t<field_type>& 
 };
 
 template <typename range_type>
-concept http_header_field_range = std::ranges::forward_range<const std::remove_cvref_t<range_type>> && std::ranges::sized_range<const std::remove_cvref_t<range_type>> && http_header_field<std::ranges::range_reference_t<const std::remove_cvref_t<range_type>>>;
+concept http_header_field_range = std::ranges::forward_range<const std::remove_cvref_t<range_type>> && std::ranges::sized_range<const std::remove_cvref_t<range_type>> && http_header_field<std::ranges::range_reference_t<const std::remove_cvref_t<range_type>>> && requires(std::ranges::iterator_t<const std::remove_cvref_t<range_type>> cursor) {
+    // A local const reference must not hide an owning field's rvalue guards.
+    requires std::is_reference_v<decltype(*cursor)> || requires {
+        { (*cursor).name() } -> std::convertible_to<std::string_view>;
+        { (*cursor).value() } -> std::convertible_to<std::string_view>;
+    };
+};
 
 // Outcome of looking up one name in a collection that permits repeated names
 // (received fields, JSON object members, SQL result columns). A repeated name

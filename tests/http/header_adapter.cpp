@@ -1,11 +1,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <iterator>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include "http_cors.h"
@@ -23,6 +26,14 @@ struct header_field_with_accessors final {
 static_assert(!ruvia::http_header_field_range<std::vector<header_field_with_accessors<std::string, std::string_view>>>);
 static_assert(!ruvia::http_header_field_range<std::vector<header_field_with_accessors<std::string_view, std::string>>>);
 static_assert(ruvia::http_header_field_range<std::vector<header_field_with_accessors<const std::string&, const std::string&>>>);
+
+constexpr auto copy_header = [](int) {
+    return ruvia::http_header("X-Test", "value");
+};
+using copied_header_range = decltype(std::views::transform(std::array{1}, copy_header));
+static_assert(std::ranges::forward_range<const copied_header_range>);
+static_assert(std::ranges::sized_range<const copied_header_range>);
+static_assert(!std::is_constructible_v<ruvia::http_header_range_view, const copied_header_range&>);
 
 // A forward-only, by-value range over a single text block and offset table.
 class packed_fields final {
