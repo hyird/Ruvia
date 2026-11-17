@@ -247,6 +247,29 @@ TEST(Ruvia, transfer_coding_stack_finished_replays_its_end_without_consuming_inp
     EXPECT_EQ(decoder.state(), ruvia::decoder_state::finished);
 }
 
+TEST(Ruvia, http1_body_decoder_replays_transfer_coded_terminal_results_without_scratch) {
+    ruvia::http_content_codings codings;
+    codings.push_back(http_content_coding::gzip);
+    ruvia::http1_body_decoder decoder(ruvia::http1_message_framing::close_delimited(codings));
+    std::array<char, 64> scratch{};
+
+    EXPECT_THROW((void)decoder.decode("bad gzip", {}), std::invalid_argument);
+    ASSERT_EQ(decoder.state(), ruvia::decoder_state::active);
+    const auto rejected = decoder.decode("bad gzip", scratch);
+    ASSERT_TRUE(rejected.holds<ruvia::http1_body_decode_failure>());
+    const auto replayed = decoder.finish_input("NEXT", {});
+    const auto* failure = replayed.get_if<ruvia::http1_body_decode_failure>();
+    ASSERT_NE(failure, nullptr);
+    EXPECT_EQ(failure->error(), rejected.get_if<ruvia::http1_body_decode_failure>()->error());
+    EXPECT_EQ(replayed.consumed_bytes(), 0U);
+
+    decoder.reset();
+    ASSERT_TRUE(decoder.finish_input({}, scratch).holds<ruvia::decode_complete>());
+    const auto completed = decoder.decode("NEXT", {});
+    EXPECT_TRUE(completed.holds<ruvia::decode_complete>());
+    EXPECT_EQ(completed.consumed_bytes(), 0U);
+}
+
 TEST(Ruvia, http1_body_decoder_rejects_chunk_data_after_the_transfer_coding_ended) {
     const std::string coded = zlib_deflate_compress("done");
     const ruvia::http1_chunk_header size_line(coded.size());

@@ -6457,7 +6457,7 @@ public:
 | 成员 | 说明 |
 |---|---|
 | 构造函数 | 绑定分帧与配置。分帧中的编码不是传输编码时抛 `std::invalid_argument`；编解码器无法启动时抛 `http_content_codec_error`（见 [`"http_content_codec.h"`](#api-http-content-codec-h)）。不可复制、不可移动。 |
-| `decode(available, scratch, max_output_bytes)` | 推进一步。输出在分帧不含传输编码时借用 `available`，否则借用 `scratch`；须在改变任一存储或进行下一次调用前消费输出。仅传输编码内容使用 `scratch`，此时它必须非空，否则抛 `std::invalid_argument`；`max_output_bytes` 必须为正（为 0 抛 `std::invalid_argument`），每步最多发布这么多字节。调用方从 `available` 中精确删除 `consumed_bytes()`。`finish_input()` 之后的 `decode()` 沿用同一 EOF 状态：可以排出已缓冲的输入/输出，但缺失的正文字节报告 `incomplete_body` 而不是请求更多输入。 |
+| `decode(available, scratch, max_output_bytes)` | 推进一步。输出在分帧不含传输编码时借用 `available`，否则借用 `scratch`；须在改变任一存储或进行下一次调用前消费输出。仅在活动状态解码传输编码时要求 `scratch` 非空，否则抛 `std::invalid_argument`；重放终态不需要暂存区。`max_output_bytes` 必须为正（为 0 抛 `std::invalid_argument`），每步最多发布这么多字节。调用方从 `available` 中精确删除 `consumed_bytes()`。`finish_input()` 之后的 `decode()` 沿用同一 EOF 状态：可以排出已缓冲的输入/输出，但缺失的正文字节报告 `incomplete_body` 而不是请求更多输入。 |
 | `finish_input(...)` | 声明 EOF（单调，不可撤销）并提供剩余缓冲字节；之后的调用可以排出解码器输出，但不会再请求网络输入。`close_delimited` 无编码时 EOF 即正常结束；`known_length` 与 `chunked` 在分帧结束前遇到 EOF 报告 `incomplete_body`。 |
 | 删除的 `decode` / `finish_input` 重载 | `&& = delete` 拒绝临时或 `std::move` 后的解码器，避免结果中的 Trailer 视图借用即将销毁的 owner；`&` 上的输入删除重载拒绝右值临时 `std::basic_string`，避免正文输出借用临时输入。两类限制互不替代。 |
 | `discard_content()` | 自此起，分帧界定的内容被消费但不做传输解码、也不发布：单步只报告 need-input、Trailer、结束或分帧失败。用于接收方不得使用（`205` 响应，RFC 9110 §15.3.6）或不再需要（未读请求体）而连接仍可复用的内容。 |

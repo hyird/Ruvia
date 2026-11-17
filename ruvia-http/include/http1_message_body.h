@@ -103,8 +103,8 @@ public:
 
     // Output borrows `available` when the framing names no transfer coding and
     // `scratch` otherwise; consume it before changing either storage or making
-    // the next call. `scratch` is used only for transfer-coded content and
-    // must then be non-empty. One step publishes at most max_output_bytes,
+    // the next call. `scratch` must be non-empty only while actively decoding
+    // transfer-coded content. One step publishes at most max_output_bytes,
     // which must be positive. Erase exactly consumed_bytes() from `available`.
     // After finish_input(), decode() continues with the same EOF state: it can
     // drain buffered input/output, but missing body bytes are an

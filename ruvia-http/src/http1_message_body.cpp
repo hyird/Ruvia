@@ -125,14 +125,14 @@ http1_body_decode_result http1_body_decoder::run(std::string_view available, std
     if (max_output_bytes == 0) {
         throw std::invalid_argument("HTTP/1 body decoder output quota must be greater than zero");
     }
-    if (transfer_ && scratch.empty()) {
-        throw std::invalid_argument("HTTP/1 body decoder scratch must be non-empty for transfer-coded content");
-    }
     if (state_ == decoder_state::failed) {
         return http1_body_decode_result(0, http1_body_decode_failure(error_));
     }
     if (state_ == decoder_state::finished) {
         return http1_body_decode_result(0, decode_complete{});
+    }
+    if (transfer_ && scratch.empty()) {
+        throw std::invalid_argument("HTTP/1 body decoder scratch must be non-empty for transfer-coded content");
     }
     eof_ = eof_ || eof;
     try {
