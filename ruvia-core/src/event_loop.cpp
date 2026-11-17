@@ -376,12 +376,7 @@ public:
             active_loop_ = std::move(loop);
             retirement_begun_ = true;
         }
-        auto self = shared_from_this();
-        if (worker_.is_current()) {
-            start_callback(std::move(self));
-            return;
-        }
-        worker_ref_access::defer_or_terminate(worker_, [self = std::move(self)]() mutable noexcept {
+        worker_ref_access::defer_or_terminate(worker_, [self = shared_from_this()]() mutable noexcept {
             self->start_callback(std::move(self));
         });
     }

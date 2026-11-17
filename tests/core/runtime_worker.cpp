@@ -1775,10 +1775,11 @@ bool test_attachment_report_failure_keeps_native_run_ownership() {
         auto attachment = ruvia::attach_event_loop(io_context, std::move(options));
         const auto loop = attachment.loop();
         std::atomic_bool cleanup_finished{false};
-        auto cleanup = loop.on_stop([&]() -> ruvia::task<void> {
-            co_await finish_shutdown_cleanup(loop.worker(), cleanup_finished);
-        });
         bool report_returned = false;
+        auto cleanup = loop.on_stop([&] {
+            EXPECT_TRUE(report_returned) << "stop cleanup factory reentered report_failure()";
+            return finish_shutdown_cleanup(loop.worker(), cleanup_finished);
+        });
         bool unrelated_work_ran = false;
         asio::post(io_context, [&] {
             loop.report_failure(expected);
