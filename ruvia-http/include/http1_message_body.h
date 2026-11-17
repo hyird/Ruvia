@@ -127,6 +127,8 @@ public:
 
     [[nodiscard]] decoder_state state() const noexcept;
     // Starts another body with the constructed framing and configuration.
+    // Allocation failure while recreating discarded codecs preserves the
+    // previous body's state and progress.
     // Throws http_content_codec_error when a codec cannot restart; the decoder
     // is then unusable.
     void reset();

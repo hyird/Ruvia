@@ -6461,7 +6461,7 @@ public:
 | 删除的 `decode` / `finish_input` 重载 | `&& = delete` 拒绝临时或 `std::move` 后的解码器，避免结果中的 Trailer 视图借用即将销毁的 owner；`&` 上的输入删除重载拒绝右值临时 `std::basic_string`，避免正文输出借用临时输入。两类限制互不替代。 |
 | `discard_content()` | 自此起，分帧界定的内容被消费但不做传输解码、也不发布：单步只报告 need-input、Trailer、结束或分帧失败。用于接收方不得使用（`205` 响应，RFC 9110 §15.3.6）或不再需要（未读请求体）而连接仍可复用的内容。 |
 | `state()` | `active` / `finished` / `failed`。 |
-| `reset()` | 以构造时的分帧与配置开始另一正文。编解码器无法重启时抛 `http_content_codec_error`，此后解码器不可用。 |
+| `reset()` | 以构造时的分帧与配置开始另一正文。重建已丢弃的传输解码器时若分配失败，原正文的状态和进度保持不变。已有编解码器无法重启时抛 `http_content_codec_error`，此后解码器不可用。 |
 
 `decode()` / `finish_input()` 的左值入口均带 `RUVIA_LIFETIMEBOUND`，结果不因此拥有正文或 Trailer。正文仍零拷贝借用 `available` / `scratch`；Trailer 借用解码器内部字段存储，必须在下一次 `decode()`、`finish_input()`、`reset()` 或解码器析构前消费。显式传入 `std::string_view` 不能延长输入 owner 寿命；必须同时满足输入 / scratch 与解码器各自的借用区间。
 

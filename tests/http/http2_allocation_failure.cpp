@@ -562,3 +562,33 @@ TEST(Ruvia, http1_body_decoder_releases_trailers_before_finishing) {
     EXPECT_EQ(closed.consumed_bytes(), 0U);
     EXPECT_EQ(remaining, baseline);
 }
+
+TEST(Ruvia, http1_body_decoder_preserves_completed_body_if_codec_recreation_fails) {
+    ruvia::http_content_codings codings;
+    codings.push_back(ruvia::http_content_coding::gzip);
+    ruvia::http1_body_decoder decoder(ruvia::http1_message_framing::chunked(codings));
+    decoder.discard_content();
+    ASSERT_TRUE(decoder.decode("0\r\n\r\n", {}).holds<ruvia::http1_body_trailers>());
+    ASSERT_TRUE(decoder.decode({}, {}).holds<ruvia::decode_complete>());
+
+    const auto baseline = live_allocations.load();
+    for (const auto failure_index_value : {0U, 1U}) {
+        EXPECT_THROW({
+            allocation_scope scope(failure_index_value);
+            decoder.reset();
+        },
+            std::bad_alloc);
+        EXPECT_EQ(live_allocations.load(), baseline);
+        ASSERT_EQ(decoder.state(), ruvia::decoder_state::finished);
+        const auto replayed = decoder.decode("NEXT", {});
+        EXPECT_TRUE(replayed.holds<ruvia::decode_complete>());
+        EXPECT_EQ(replayed.consumed_bytes(), 0U);
+    }
+
+    decoder.reset();
+    std::array<char, 64> scratch{};
+    const auto rejected = decoder.decode("3\r\nbad\r\n0\r\n\r\n", scratch);
+    const auto* failure = rejected.get_if<ruvia::http1_body_decode_failure>();
+    ASSERT_NE(failure, nullptr);
+    EXPECT_EQ(failure->error(), ruvia::http1_body_decode_error::invalid_transfer_coding);
+}

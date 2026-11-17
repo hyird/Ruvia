@@ -73,14 +73,7 @@ http1_body_decoder::http1_body_decoder(const http1_message_framing& framing, htt
 }
 
 void http1_body_decoder::start() {
-    state_ = decoder_state::active;
-    remaining_ = framing_.content_length();
-    pending_body_bytes_ = 0;
-    pending_delimiter_bytes_ = 0;
-    discard_content_ = false;
-    eof_ = false;
-    chunked_phase_ = chunked_phase_type::reading;
-    transfer_phase_ = transfer_phase_type::needs_framed_input;
+    // Recreate a discarded transfer stack before resetting framing progress.
     const auto& codings = framing_.transfer_codings();
     if (!codings.empty()) {
         if (transfer_) {
@@ -96,6 +89,14 @@ void http1_body_decoder::start() {
             chunked_.emplace(http1_chunked_body_decoder_options{.body_limit_ = config_.body_limit_, .obs_fold_ = config_.obs_fold_, .trailer_message_ = config_.trailer_message_});
         }
     }
+    remaining_ = framing_.content_length();
+    pending_body_bytes_ = 0;
+    pending_delimiter_bytes_ = 0;
+    discard_content_ = false;
+    eof_ = false;
+    chunked_phase_ = chunked_phase_type::reading;
+    transfer_phase_ = transfer_phase_type::needs_framed_input;
+    state_ = decoder_state::active;
 }
 
 void http1_body_decoder::reset() {
