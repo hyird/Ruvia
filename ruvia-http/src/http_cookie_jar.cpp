@@ -238,14 +238,17 @@ bool http_cookie_jar::store_received_cookie(const received_cookie& cookie) {
         }
     } else {
         const auto old_expires = match->expires_;
-        std::optional<std::string> replacement_value;
-        if (match->value_ != cookie.value_ && cookie.value_.size() > match->value_.capacity()) {
-            replacement_value.emplace(cookie.value_);
-        }
-        std::optional<std::string> replacement_domain;
-        if (match->domain_ != cookie.domain_ && cookie.domain_.size() > match->domain_.capacity()) {
-            replacement_domain.emplace(cookie.domain_);
-        }
+        // Stage both changes before touching the stored cookie. Large reductions
+        // return obsolete capacity instead of keeping it outside the byte budget.
+        const auto prepare_text = [](const std::string& stored, std::string_view incoming) -> std::optional<std::string> {
+            const auto capacity = stored.capacity();
+            if (incoming.size() > capacity || (incoming.size() <= capacity / 2 && capacity > std::string{}.capacity())) {
+                return std::string(incoming);
+            }
+            return std::nullopt;
+        };
+        auto replacement_value = prepare_text(match->value_, cookie.value_);
+        auto replacement_domain = prepare_text(match->domain_, cookie.domain_);
         if (replacement_value.has_value()) {
             match->value_.swap(*replacement_value);
         } else if (match->value_ != cookie.value_) {

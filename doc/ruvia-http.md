@@ -5685,7 +5685,7 @@ public:
 
 - 路径取 `Set-Cookie` 的 `Path`，缺失或无效时取 `default_cookie_path(target)`。
 - **过期**：`Max-Age` 优先于 `Expires`。`Max-Age <= 0` 或 `Expires <= now` 删除同一标识的条目（不存在也返回 `true`）。有效 `Max-Age` 在解析时封顶为 `max_cookie_age_seconds`；`Expires` 最晚为 `now + 400 天`。期限计算保留时钟精度，超出可表示范围时饱和到时钟上界。两者均缺省时为会话 Cookie。
-- 标识为（名称、路径、`Partitioned` 标志、域）：域为空时以源站主机代替，域比较大小写不敏感。命中时就地替换值、域、过期时间、`Secure` 与 `Partitioned`。
+- 标识为（名称、路径、`Partitioned` 标志、域）：域为空时以源站主机代替，域比较大小写不敏感。命中时替换值、域、过期时间、`Secure` 与 `Partitioned`；值或域缩至原缓冲容量一半以下（含一半）时释放过大的堆缓冲。
 - 新条目插入在第一个路径更短的条目之前，使输出顺序满足 RFC 6265 §5.4：路径更长者在前，同长度保持插入顺序。
 - 容量：新增条目在条目数已达 `max_cookies_` 时被拒绝；新增或替换后字节总数超过 `max_cookie_bytes_` 时被拒绝。容器不会为腾出空间而淘汰未过期的条目，过期条目在吸收或生成首部时惰性淘汰。
 

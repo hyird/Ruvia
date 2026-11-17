@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -17,6 +18,7 @@
 #include <variant>
 
 #include "http2_connection.h"
+#include "http_cookie_jar.h"
 #include "http_multipart.h"
 #include "http_range.h"
 #include "http_response.h"
@@ -396,4 +398,29 @@ TEST(Ruvia, multipart_parser_releases_oversized_buffers_at_terminal_poll_and_res
     parser.feed(empty_body);
     EXPECT_TRUE(parser.poll().holds<ruvia::decode_complete>());
     EXPECT_EQ(live_allocations.load(), empty);
+}
+
+TEST(Ruvia, cookie_jar_releases_storage_when_a_large_value_is_replaced) {
+    ruvia::http_cookie_jar jar(ruvia::http_scheme::https, "example.test", {.max_cookie_bytes_ = 4096});
+    const auto now = std::chrono::system_clock::time_point{};
+    const auto large_cookie = "id=" + std::string(4000, 'x');
+    const auto shorter_cookie = "id=" + std::string(256, 'y');
+
+    ASSERT_TRUE(jar.absorb_set_cookie("/", "id=a", now));
+    const auto small = live_allocations.load();
+    ASSERT_TRUE(jar.absorb_set_cookie("/", large_cookie, now));
+    const auto large = live_allocations.load();
+    ASSERT_GT(large, small);
+    EXPECT_THROW(
+        {
+            allocation_scope scope(0);
+            (void)jar.absorb_set_cookie("/", shorter_cookie, now);
+        },
+        std::bad_alloc);
+    EXPECT_EQ(jar.cookie_header("/", true, now), large_cookie);
+    ASSERT_TRUE(jar.absorb_set_cookie("/", "id=b", now));
+    const auto replaced = live_allocations.load();
+
+    EXPECT_EQ(jar.cookie_header("/", true, now), "id=b");
+    EXPECT_EQ(replaced, small);
 }
