@@ -63,6 +63,7 @@
 #include "task.h"
 #include "task_scope.h"
 #include "tcp_socket_policy.h"
+#include "timeout_duration.h"
 #include "tls.h"
 #include "tls_server.h"
 #include "worker_capabilities.h"
@@ -541,7 +542,7 @@ task<void> worker_connections::rotate_tls_ticket_keys() {
                 } catch (...) {
                     ruvia::report_unhandled_failure("TLS session ticket key rotation", std::current_exception());
                 }
-                next = std::min(next, now + tls_ticket_key_retry_delay);
+                next = std::min(next, deadline_after(now, tls_ticket_key_retry_delay));
             }
             next = std::min(next, ring.next_rotation(now));
         }

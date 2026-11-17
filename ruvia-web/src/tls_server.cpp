@@ -44,6 +44,7 @@
 #include "server_listener.h"
 #include "server_options.h"
 #include "task.h"
+#include "timeout_duration.h"
 #include "tls.h"
 #include "worker_ref.h"
 #if defined(RUVIA_ENABLE_HTTP3)
@@ -173,6 +174,13 @@ std::shared_ptr<const detail::tls_certificate_snapshot> detail::tls_certificate_
 namespace ruvia::detail {
 namespace {
 
+constexpr auto ticket_epoch_length = std::chrono::duration_cast<std::chrono::steady_clock::duration>(tls_session_lifetime);
+
+[[nodiscard]] std::uint64_t ticket_elapsed_ticks(std::chrono::steady_clock::time_point origin, std::chrono::steady_clock::time_point now) noexcept {
+    // Across the clock's epoch the elapsed ticks may not fit a signed duration.
+    return now <= origin ? 0 : static_cast<std::uint64_t>(now.time_since_epoch().count()) - static_cast<std::uint64_t>(origin.time_since_epoch().count());
+}
+
 [[nodiscard]] std::optional<tls_session_ticket_key> generate_ticket_key() noexcept {
     tls_session_ticket_key key;
     if (!fill_random_bytes(key.name_) || !fill_random_bytes(key.hmac_key_) || !fill_random_bytes(key.aes_key_)) {
@@ -218,14 +226,13 @@ tls_session_ticket_key_ring::tls_session_ticket_key_ring(std::chrono::steady_clo
 }
 
 std::uint64_t tls_session_ticket_key_ring::epoch_at(std::chrono::steady_clock::time_point now) const noexcept {
-    if (now <= origin_) {
-        return 0;
-    }
-    return static_cast<std::uint64_t>((now - origin_) / tls_session_lifetime);
+    return ticket_elapsed_ticks(origin_, now) / static_cast<std::uint64_t>(ticket_epoch_length.count());
 }
 
 std::chrono::steady_clock::time_point tls_session_ticket_key_ring::next_rotation(std::chrono::steady_clock::time_point now) const noexcept {
-    return origin_ + (epoch_at(now) + 1) * std::chrono::duration_cast<std::chrono::steady_clock::duration>(tls_session_lifetime);
+    using duration = std::chrono::steady_clock::duration;
+    const auto offset = ticket_elapsed_ticks(origin_, now) % static_cast<std::uint64_t>(ticket_epoch_length.count());
+    return deadline_after((std::max)(now, origin_), ticket_epoch_length - duration(static_cast<duration::rep>(offset)));
 }
 
 bool tls_session_ticket_key_ring::copy_to(std::chrono::steady_clock::time_point now, tls_session_ticket_key_set& target) {

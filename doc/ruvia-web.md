@@ -1212,7 +1212,7 @@ ruvia::app().callbacks({
 **定位要点**
 
 - **协议**：监听协商 TLS 1.2 或 1.3；TLS 1.2 套件仅 ECDHE + AEAD，按服务器偏好；拒绝重协商；ALPN 选择 `h2`、`http/1.1` 或 `http/1.0`。配对 HTTP/3 用相同身份，TLS 1.3 与 ALPN `h3`。
-- **会话**：会话在同一监听的各 worker 间恢复，且只在建立时的 `server_name`（ASCII 大小写无关）下恢复，跨 `replace_tls_identities()` 有效；票据密钥每两小时（会话寿命）轮换，最后一次用于新票据后一个周期销毁。
+- **会话**：会话在同一监听的各 worker 间恢复，且只在建立时的 `server_name`（ASCII 大小写无关）下恢复，跨 `replace_tls_identities()` 有效；票据密钥按单调时钟每两小时（会话寿命）轮换，最后一次用于新票据后一个周期销毁。轮换与重试截止时间超出时钟范围时饱和到最大时间点。
 - **票据续发**：TLS 1.3 恢复成功后仍签发新票据，支持客户端单次消费票据后连续恢复；TLS 1.2 仅在旧密钥解密时续发。避免复用同一票据的隐私建议见 [RFC 9846 §C.4](https://www.rfc-editor.org/rfc/rfc9846.html#appendix-C.4)。
 - **421 检查（RFC 9110 §7.4）**：目标为 `https` 资源的请求，若本连接出示的证书的 subjectAltName DNS/IP 项（仅整标签通配；忽略 subject CN）不含其主机，则回 421；HTTP/2 只拒绝该流。明文监听对 `https` 目标回 421。`trusted_proxy_config` 中的对端豁免两项检查。
 - **身份三选一**：`identities_` 为固定身份、证书库中的一个 ID、或证书库上的每握手选择器。固定身份选择顺序：精确 `sni_` 主机 → 通配 `sni_` 主机 → `local_addresses_` 项 → `primary_`；未提供或不匹配 `server_name` 的客户端仍被服务（产品选择，不发 RFC 9325 §3.7 `unrecognized_name`）。
