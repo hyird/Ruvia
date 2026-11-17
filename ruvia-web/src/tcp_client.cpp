@@ -135,7 +135,8 @@ public:
         co_return as_bytes(std::string_view(buffer_.data(), result.bytes_));
     }
 
-    [[nodiscard]] task<void> write(std::string bytes, operation_options options) {
+    // The enclosing owned operation keeps these bytes alive until completion.
+    [[nodiscard]] task<void> write(std::string_view bytes, operation_options options) {
         auto lease = claim_operation_lane(write_active_, "TCP client write already in progress");
         operation_deadline timeout(override_operation_options({.timeout_ = write_timeout_}, options).timeout_);
         worker_cancellation_registration cancellation(cancellation_, write_id_);
@@ -262,7 +263,7 @@ private:
     [[nodiscard]] static task<void> write_owned(std::shared_ptr<tcp_client_state> state, std::string bytes, operation_options options) {
         state->lifecycle_.require_ready();
         try {
-            co_await state->backend_.write(std::move(bytes), std::move(options));
+            co_await state->backend_.write(bytes, std::move(options));
         } catch (const std::system_error&) {
             state->request_close();
             throw;

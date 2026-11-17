@@ -1803,18 +1803,9 @@ private:
         if (chunk.empty() || !compression_.active()) {
             return write_encoded(chunk);
         }
-        return write_compressed(chunk);
-    }
-
-    task<void> write_compressed(std::string_view chunk) {
-        try {
-            co_await compression_.write(chunk, [this](std::string_view encoded) {
-                return write_encoded(encoded);
-            });
-        } catch (...) {
-            state_.mark_aborted();
-            throw;
-        }
+        return compression_.write(chunk, state_, [this](std::string_view encoded) {
+            return write_encoded(encoded);
+        });
     }
 
     task<void> write_encoded(std::string_view chunk) {

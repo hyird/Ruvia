@@ -196,7 +196,7 @@ private:
 
 namespace ruvia::detail {
 
-// Owns the response-coding lifecycle of HTTP/1 and HTTP/2 stream sinks.
+// Owns the response-coding lifecycle of HTTP/1 and multiplexed stream sinks.
 // The transport only delivers encoded slices; it never reconstructs whether a
 // coding was selected, whether the body is suppressed, or whether an encoder
 // exists. The encoder itself is borrowed from the worker's codecs for the
@@ -275,23 +275,27 @@ public:
         state_.emplace<failed_type>();
     }
 
-    // The one slicing loop of both protocols: encodes one application write in
-    // input_slice_bytes steps and hands every non-empty encoded slice to
-    // `deliver` (the sink's framed write, returning task<void>). Only the last
-    // slice flushes, so each application write ends with exactly one codec
-    // flush, which keeps SSE events prompt without flushing every slice.
+    // Encodes one application write in input_slice_bytes steps and hands every
+    // non-empty encoded slice to the sink's framed write. Only the last slice
+    // flushes, keeping SSE events prompt without flushing every slice. Encoding
+    // and delivery failures abort the response before reaching its handler.
     template <typename deliver_type>
-    task<void> write(std::string_view chunk, deliver_type deliver) {
-        std::size_t offset = 0;
-        while (offset < chunk.size()) {
-            const auto count = (std::min)(input_slice_bytes, chunk.size() - offset);
-            const auto slice = chunk.substr(offset, count);
-            offset += count;
-            encode_slice(slice, offset == chunk.size());
-            if (!encoded_chunk_.empty()) {
-                co_await deliver(std::string_view(encoded_chunk_));
+    task<void> write(std::string_view chunk, response_stream_state& response_state, deliver_type deliver) {
+        try {
+            std::size_t offset = 0;
+            while (offset < chunk.size()) {
+                const auto count = (std::min)(input_slice_bytes, chunk.size() - offset);
+                const auto slice = chunk.substr(offset, count);
+                offset += count;
+                encode_slice(slice, offset == chunk.size());
+                if (!encoded_chunk_.empty()) {
+                    co_await deliver(std::string_view(encoded_chunk_));
+                }
+                release_output();
             }
-            release_output();
+        } catch (...) {
+            response_state.mark_aborted();
+            throw;
         }
     }
 

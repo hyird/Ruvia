@@ -2618,6 +2618,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 - **输出中断**：输出操作的超时或停止中止本请求流（HTTP/2、HTTP/3 重置流，HTTP/1 关闭连接，已写出部分无法撤回）并抛 `std::system_error`；启动前令牌已停止则不发出任何字节。
 - **HTTP/1 分帧**：响应带合法 `Content-Length` 且无 `Transfer-Encoding` 时定长写出，非空定长头随首次正文写出；超长写入抛 `std::length_error` 且不发送超额字节，`end()` 时不足抛 `std::invalid_argument`；未知长度时 HTTP/1.1 用 `chunked`，HTTP/1.0 以关闭连接界定；框架压缩生效时移除 `Content-Length` 并退回分块。
 - **写入块所有权**：`write()` 返回冷任务前完成输入拥有化，统一输出操作持有正文直到写出结束；丢弃未启动操作释放该块且不占用输出通道。
+- **流式压缩**：HTTP/1–3 共用分片编码与交付驱动；编码或写出失败由该驱动统一中止响应。
 - **明文写出**：HTTP/1 缓冲、流式响应与 HTTP/2 复用非阻塞 gather 写原语，不额外拼接分帧和正文。
 - **写出调度**：明文余量与 TLS 共用有界即时完成；可立即完成者在 worker 内联继续，未就绪或达到合作、嵌套上界时排队让出执行权。
 - **TLS 分帧**：有界分块帧及较大的定长首块合并写出，小首块不新增拼接，大块保留 gather write；拼接空间只随当前流式响应存活，不随空闲连接保留。
@@ -3972,7 +3973,7 @@ co_await client.shutdown();
 | `std::string_view alpn() const&& = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
 | `task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &` | 至多 4 KiB；`nullopt` 为 EOF（TCP FIN、TLS `close_notify` 或截断）；字节在下一次读取启动或 `shutdown` join 前有效；EOF 不结束写方向 |
 | `task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
-| `task<void> write(outbound_bytes bytes, operation_options operation = {}) &` | 返回冷任务前拥有输入（精确 `std::string` 右值不复制），全部写完后完成；失败可能已发出前缀并总会退役流 |
+| `task<void> write(outbound_bytes bytes, operation_options operation = {}) &` | 返回冷任务前拥有输入（精确 `std::string` 右值不复制），后端仅借用任务持有的存储；全部写完后完成；失败可能已发出前缀并总会退役流 |
 | `task<void> write(outbound_bytes, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
 | `void request_stop() noexcept` | 立即拆除整条连接（不是发送半关闭）；TLS 先尽力有界发送 `close_notify` |
 | `task<void> shutdown() &` | 中止并等待操作与套接字退役；不是 TLS 优雅关闭或半关闭；须在 `worker()` 上运行 |
