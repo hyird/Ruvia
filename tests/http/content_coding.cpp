@@ -1525,6 +1525,16 @@ TEST(Ruvia, url_visit_pairs_count) {
     }
 }
 
+TEST(Ruvia, url_visit_pairs_splits_only_at_the_first_equals) {
+    constexpr std::string_view input = "flag&key=a=b%26c&key==&tail";
+    std::vector<std::pair<std::string_view, std::string_view>> pairs;
+    EXPECT_TRUE(ruvia::visit_url_encoded_pairs(input, [&](std::string_view name, std::string_view value) {
+        pairs.emplace_back(name, value);
+    }));
+    const std::vector<std::pair<std::string_view, std::string_view>> expected{{"flag", ""}, {"key", "a=b%26c"}, {"key", "="}, {"tail", ""}};
+    EXPECT_EQ(pairs, expected);
+}
+
 TEST(Ruvia, url_visit_pairs_stops_early) {
     std::size_t visited = 0;
     const bool completed = ruvia::visit_url_encoded_pairs("a=1&b=2&c=3", [&visited](std::string_view, std::string_view) {

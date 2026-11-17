@@ -244,13 +244,15 @@ template <typename visitor_type>
 [[nodiscard]] bool visit_url_encoded_pairs(std::string_view input, visitor_type&& visitor, url_empty_pair_policy empty_pairs = url_empty_pair_policy::skip) {
     auto& visitor_ref = visitor;
     for (;;) {
-        const auto pair_end = input.find('&');
-        const auto pair = pair_end == std::string_view::npos ? input : input.substr(0, pair_end);
+        // Find the first separator, then scan only the remaining value.
+        const auto separator = input.find_first_of("=&");
+        const bool has_value = separator != std::string_view::npos && input[separator] == '=';
+        const auto pair_end = has_value ? input.find('&', separator + 1) : separator;
+        const auto pair = input.substr(0, pair_end);
 
         if (!pair.empty() || empty_pairs == url_empty_pair_policy::preserve) {
-            const auto equals = pair.find('=');
-            const auto name = equals == std::string_view::npos ? pair : pair.substr(0, equals);
-            const auto value = equals == std::string_view::npos ? std::string_view{} : pair.substr(equals + 1);
+            const auto name = has_value ? pair.substr(0, separator) : pair;
+            const auto value = has_value ? pair.substr(separator + 1) : std::string_view{};
             if (!detail::dispatch_url_encoded_pair_visitor(visitor_ref, name, value)) {
                 return false;
             }
