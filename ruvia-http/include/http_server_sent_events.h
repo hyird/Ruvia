@@ -156,6 +156,7 @@ private:
     std::string event_type_;
     // A pending event or id value, committed at its line end.
     std::string value_;
+    // Published only at a blank line; an empty ID is a valid pending update.
     std::string last_event_id_buffer_;
     std::string last_event_id_;
     std::optional<std::chrono::milliseconds> reconnection_time_{};
@@ -168,6 +169,7 @@ private:
     bool name_overflow_{false};
     bool retry_digits_{false};
     bool retry_valid_{true};
+    bool event_id_pending_{false};
     // The views of the last returned event still borrow data_ and event_type_.
     bool event_published_{false};
     // The previous input ended in CR: an LF opening the next one belongs to it.

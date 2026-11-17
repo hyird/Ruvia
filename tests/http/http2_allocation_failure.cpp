@@ -317,3 +317,41 @@ TEST(Ruvia, sse_parser_releases_large_discarded_field_storage_before_the_next_ev
         EXPECT_TRUE(event->last_event_id().empty());
     }
 }
+
+TEST(Ruvia, sse_parser_transfers_large_ids_and_discards_unpublished_updates) {
+    const std::string large_id(128 * 1024, 'x');
+    const auto field = "id: " + large_id + '\n';
+    const auto oversized_data = "data: " + large_id + "x\n\n";
+    ruvia::sse_parser parser({.event_limit_ = ruvia::protocol_byte_limit::limited(large_id.size())});
+    const auto empty = live_allocations.load();
+
+    ASSERT_TRUE(parser.parse(field).holds<ruvia::decode_need_input>());
+    EXPECT_TRUE(parser.last_event_id().empty());
+    const auto pending = live_allocations.load();
+    ASSERT_GT(pending, empty);
+
+    const auto dispatched = parser.parse("data: ok\n\n");
+    const auto published = live_allocations.load();
+    const auto* event = dispatched.get_if<ruvia::sse_event>();
+    ASSERT_NE(event, nullptr);
+    EXPECT_EQ(event->last_event_id(), large_id);
+    EXPECT_EQ(published, pending);
+
+    ASSERT_TRUE(parser.parse("id:\n\n").holds<ruvia::decode_need_input>());
+    EXPECT_TRUE(parser.last_event_id().empty());
+    EXPECT_EQ(live_allocations.load(), empty);
+
+    ASSERT_TRUE(parser.parse("id: previous\n\n").holds<ruvia::decode_need_input>());
+    ASSERT_TRUE(parser.parse(field).holds<ruvia::decode_need_input>());
+    parser.finish();
+    EXPECT_EQ(parser.last_event_id(), "previous");
+    EXPECT_EQ(live_allocations.load(), empty);
+
+    parser.reset();
+    ASSERT_TRUE(parser.parse("id: previous\n\n").holds<ruvia::decode_need_input>());
+    ASSERT_TRUE(parser.parse(field).holds<ruvia::decode_need_input>());
+    const auto failed = parser.parse(oversized_data);
+    EXPECT_TRUE(failed.holds<ruvia::sse_parse_failure>());
+    EXPECT_EQ(parser.last_event_id(), "previous");
+    EXPECT_EQ(live_allocations.load(), empty);
+}

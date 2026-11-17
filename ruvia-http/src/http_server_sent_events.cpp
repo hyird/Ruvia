@@ -178,11 +178,14 @@ void sse_parser::finish() noexcept {
     reset_line();
     http_clear_string_retaining_small(data_);
     http_clear_string_retaining_small(event_type_);
+    http_clear_string_retaining_small(last_event_id_buffer_);
+    event_id_pending_ = false;
     state_ = decoder_state::finished;
 }
 
 void sse_parser::reset() noexcept {
     event_published_ = false;
+    event_id_pending_ = false;
     reset_line();
     http_clear_string_retaining_small(data_);
     http_clear_string_retaining_small(event_type_);
@@ -265,6 +268,7 @@ bool sse_parser::end_line() {
                 return false;
             }
             (is_id ? last_event_id_buffer_ : event_type_).swap(value_);
+            event_id_pending_ = event_id_pending_ || is_id;
             break;
         }
         case field_kind::retry:
@@ -283,7 +287,10 @@ bool sse_parser::dispatch() {
     if (!replace_ill_formed_utf8(data_, event_limit_.read_ceiling() - event_type_.size())) {
         return false;
     }
-    last_event_id_ = last_event_id_buffer_;
+    if (std::exchange(event_id_pending_, false)) {
+        last_event_id_.swap(last_event_id_buffer_);
+        http_clear_string_retaining_small(last_event_id_buffer_);
+    }
     if (data_.empty()) {
         http_clear_string_retaining_small(event_type_);
         return true;
@@ -315,6 +322,8 @@ void sse_parser::fail() noexcept {
     reset_line();
     http_clear_string_retaining_small(data_);
     http_clear_string_retaining_small(event_type_);
+    http_clear_string_retaining_small(last_event_id_buffer_);
+    event_id_pending_ = false;
     state_ = decoder_state::failed;
 }
 
