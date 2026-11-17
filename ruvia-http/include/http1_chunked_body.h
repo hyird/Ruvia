@@ -148,8 +148,8 @@ public:
     http1_chunk_decode_result decode(input_type&&, std::size_t = 0) & = delete;
 
     [[nodiscard]] decoder_state state() const noexcept;
-    // Starts a new body with the constructed configuration, keeping trailer
-    // storage capacity.
+    // Starts a new body with the constructed configuration, keeping only
+    // small trailer storage.
     void reset() noexcept;
 
 private:
@@ -167,6 +167,7 @@ private:
     [[nodiscard]] http1_chunk_decode_result fail(std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept;
     [[nodiscard]] static delimiter_status consume_delimiter(std::string_view available, std::size_t& cursor) noexcept;
     [[nodiscard]] bool publish_trailers(std::string_view trailers);
+    void clear_trailers() noexcept;
 
     protocol_byte_limit body_limit_;
     http1_trailer_obs_fold obs_fold_;

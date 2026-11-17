@@ -6609,6 +6609,7 @@ if (const auto* done = result.get_if<ruvia::http1_chunk_decode_complete>()) {
 - **CRLF 分帧**：chunk-size 行和 chunk 数据分隔符中的裸 LF 到达即被拒绝（RFC 9112 §7.1）；数据后只有 CR 时，保留它并等待 LF。
 - Trailer 区段还须满足 `http_field_section_budget` 字节规则（每字段 `name.size() + value.size() + 4`，结束空行加 2；见 [`"http_field_section_budget.h"`](#api-http-field-section-budget-h) 的 `http_trailer_section_budget()`）。obs-fold 按 `obs_fold_` 处理，禁止字段按 `trailer_message_` 丢弃。
 - 完成结果按接收顺序发布剩余字段：字段名小写、值去掉首尾 OWS。字段归解码器所有，仅当区段保留了字段时才分配存储；视图有效至下一次 `decode()` 或 `reset()`，或解码器被移动、被赋值、析构。
+- **缓冲回收**：下一次 `decode()` 或 `reset()` 使 Trailer 视图失效时，释放超过 4 KiB 的字段容器；校验失败或分配异常时同样回收。
 - **分配失败**：保存 Trailer 抛出异常时，本次调用不提交分帧进度，可用相同输入重试。
 - 终态：已完成或已失败的解码器不再消费输入，`decode()` 以 0 消费字节重放终态结果（完成结果不再携带 Trailer），直到 `reset()`。
 

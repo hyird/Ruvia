@@ -501,3 +501,40 @@ TEST(Ruvia, proxy_parser_reclaims_large_scratch_after_its_views_expire) {
     EXPECT_EQ(parser.state(), ruvia::decoder_state::failed);
     EXPECT_EQ(live_allocations.load(), empty);
 }
+
+TEST(Ruvia, chunked_decoder_reclaims_oversized_trailer_storage) {
+    constexpr auto field_count = ruvia::max_http_header_fields;
+    std::string wire = "0\r\n";
+    for (std::size_t index = 0; index < field_count; ++index) {
+        wire.append("X-Trace: ok\r\n");
+    }
+    const auto malformed = wire + "invalid-trailer\r\n\r\n";
+    wire.append("\r\n");
+
+    for (const bool reset : {false, true}) {
+        ruvia::http1_chunked_body_decoder decoder;
+        const auto baseline = live_allocations.load();
+        const auto result = decoder.decode(wire);
+        const auto* complete = result.get_if<ruvia::http1_chunk_decode_complete>();
+        ASSERT_NE(complete, nullptr);
+        ASSERT_EQ(complete->trailers().size(), field_count);
+        EXPECT_EQ(complete->trailers().back().value(), "ok");
+        if (reset) {
+            decoder.reset();
+            EXPECT_EQ(decoder.state(), ruvia::decoder_state::active);
+        } else {
+            const auto replayed = decoder.decode("NEXT");
+            ASSERT_TRUE(replayed.holds<ruvia::http1_chunk_decode_complete>());
+            EXPECT_EQ(replayed.consumed_bytes(), 0U);
+            EXPECT_TRUE(replayed.get_if<ruvia::http1_chunk_decode_complete>()->trailers().empty());
+        }
+        EXPECT_EQ(live_allocations.load(), baseline);
+    }
+
+    ruvia::http1_chunked_body_decoder decoder;
+    const auto baseline = live_allocations.load();
+    const auto rejected = decoder.decode(malformed);
+    ASSERT_TRUE(rejected.holds<ruvia::http1_chunk_decode_failure>());
+    EXPECT_EQ(rejected.get_if<ruvia::http1_chunk_decode_failure>()->error(), ruvia::http1_chunk_decode_error::invalid_framing);
+    EXPECT_EQ(live_allocations.load(), baseline);
+}

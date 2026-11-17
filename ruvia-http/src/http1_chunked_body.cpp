@@ -10,11 +10,13 @@
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "binary_text_encoding.h"
 #include "http_field_text.h"
 #include "http_field_validation.h"
 #include "http_header.h"
+#include "http_io_buffer.h"
 #include "http_request.h"
 #include "http_response.h"
 
@@ -233,7 +235,7 @@ void http1_chunked_body_decoder::reset() noexcept {
     remaining_ = 0;
     decoded_bytes_ = 0;
     framing_overhead_bytes_ = 0;
-    trailers_.clear();
+    clear_trailers();
 }
 
 http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view available, std::size_t max_body_bytes) & {
@@ -243,9 +245,6 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view av
     if (const auto* error = std::get_if<http1_chunk_decode_error>(&state_)) {
         return http1_chunk_decode_result(0, http1_chunk_decode_failure(*error));
     }
-    // Published trailers live until this next call.
-    trailers_.clear();
-
     std::size_t cursor = 0;
     // Keep framing progress local until we can report the consumed prefix.
     // Owning the trailers may throw after scanning a delimiter and zero chunk.
@@ -361,6 +360,7 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view av
                 return http1_chunk_decode_result(cursor + trailer_bytes, http1_chunk_decode_complete(trailers_));
             }
             case progress::complete:
+                clear_trailers();
                 return http1_chunk_decode_result(cursor, http1_chunk_decode_complete(std::span<const http_header>()));
         }
     }
@@ -400,21 +400,25 @@ bool http1_chunked_body_decoder::publish_trailers(std::string_view trailers) {
         }
         trailers_.push_back(http_header::copy_with_lowercase_name(name, value));
     };
-    bool valid = false;
     try {
-        valid = visit_http1_trailer_block(trailers, obs_fold_, publish);
+        return visit_http1_trailer_block(trailers, obs_fold_, publish);
     } catch (...) {
-        trailers_.clear();
+        clear_trailers();
         throw;
     }
-    if (!valid) {
+}
+
+void http1_chunked_body_decoder::clear_trailers() noexcept {
+    if (trailers_.capacity() > http_retained_string_bytes / sizeof(http_header)) {
+        std::vector<http_header>{}.swap(trailers_);
+    } else {
         trailers_.clear();
     }
-    return valid;
 }
 
 http1_chunk_decode_result http1_chunked_body_decoder::fail(std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept {
     state_ = error;
+    clear_trailers();
     return http1_chunk_decode_result(consumed_bytes, http1_chunk_decode_failure(error));
 }
 
