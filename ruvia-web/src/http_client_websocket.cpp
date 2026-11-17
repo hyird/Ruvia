@@ -150,11 +150,11 @@ private:
 
 class client_websocket_session final : public std::enable_shared_from_this<client_websocket_session> {
 public:
-    client_websocket_session(http_client_pool& pool, http_client_tunnel tunnel, const http_client_websocket_handshake& handshake, websocket_client_deflate_offer deflate, websocket_lifecycle_options lifecycle, std::size_t message_limit) :
+    client_websocket_session(http_client_pool& pool, http_client_tunnel tunnel, http_client_websocket_handshake&& handshake, websocket_client_deflate_offer deflate, websocket_lifecycle_options lifecycle, std::size_t message_limit) :
         worker_(pool.worker()),
         retire_signal_(worker_),
         scanner_(worker_, scanner_options(lifecycle)),
-        connection_(http_client_websocket_transport(std::move(tunnel), entry_), worker_, entry_, normalize_websocket_lifecycle_options(lifecycle), protocol_byte_limit::limited(message_limit), {}, {.compression_ = handshake.compression_, .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_key, .deflater_ = deflate.deflater_}, std::string(handshake.selected_subprotocol_)),
+        connection_(http_client_websocket_transport(std::move(tunnel), entry_), worker_, entry_, normalize_websocket_lifecycle_options(lifecycle), protocol_byte_limit::limited(message_limit), {}, {.compression_ = handshake.compression_, .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_key, .deflater_ = deflate.deflater_}, std::move(handshake.selected_subprotocol_)),
         scanner_guard_(scanner_, entry_, {&connection_, &abort_transport, &abort_transport}) {
         entry_.enter_long_lived();
         scanner_.start();
@@ -365,7 +365,7 @@ task<websocket> http_client_websocket_request::connect_owned(http_client_websock
     if (!tunnel) {
         throw http_client_error(make_error_code(http_client_errc::handshake_rejected), "WebSocket handshake rejected", opened->response()->status());
     }
-    auto owner = std::make_shared<detail::client_websocket_session>(pool, std::move(*tunnel), *handshake, request.deflate_, request.lifecycle_, request.max_message_bytes_);
+    auto owner = std::make_shared<detail::client_websocket_session>(pool, std::move(*tunnel), std::move(*handshake), request.deflate_, request.lifecycle_, request.max_message_bytes_);
     auto result = detail::make_websocket_facade(owner->connection_);
     result.state_->read_ = &detail::client_websocket_session::read;
     result.state_->close_ = &detail::client_websocket_session::close;

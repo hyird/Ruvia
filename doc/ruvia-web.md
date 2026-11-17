@@ -2716,6 +2716,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 - **两种角色一个类型**：服务端路由（`c.websocket()`）、`request_stream::accept_websocket()` 与客户端 `http_client_websocket_request::connect()`（见 [`"http_client.h"`](#api-http-client-h)）都交付 `websocket`；服务端会话借用请求寿命，客户端返回拥有型句柄。
 - **协议承载**：服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 扩展 CONNECT（RFC 8441）与 HTTP/3 扩展 CONNECT（RFC 9220），路由代码统一。
+- **升级寿命**：服务端 WebSocket / CONNECT 的提交回调与会话由同一升级协程持有；异常上抛前先完成已建立会话的关闭与回收。
 - **握手写出**：HTTP/1.1 直接散写协议计划的稳定首部切片，不额外拼接完整首部；需要 `100 Continue` 时先于 `101` 写出。
 - **帧写出**：同一输出协程持有协议计划至写出结束；HTTP/1 使用 gather write，HTTP/2/3 按序写出协议输出与借用负载，仅末段携带结束标记。
 - **协议核心类型**：`websocket_message`、`websocket_opcode`、`websocket_termination`、`websocket_close_code` / `websocket_close_status`、`websocket_server_deflate_options`、`websocket_client_deflate_offer` 见 [`"websocket_connection.h"`](ruvia-http.md#api-websocket-connection-h)；`protocol_byte_limit` 见 [`"http_protocol.h"`](ruvia-http.md#api-http-protocol-h)。
@@ -2846,7 +2847,7 @@ ruvia::task<void> echo(ruvia::context& c) {
 | `websocket_message_writer begin_text(websocket_send_options = {}) && = delete` | 禁止在临时对象上调用：返回的对象借用本对象，临时对象销毁后失效 |
 | `websocket_message_writer begin_binary(websocket_send_options options = {}) &` | 开始一条分片发送的二进制消息，契约同上 |
 | `websocket_message_writer begin_binary(websocket_send_options = {}) && = delete` | 禁止在临时对象上调用：返回的对象借用本对象，临时对象销毁后失效 |
-| `std::string_view subprotocol() const& noexcept` | 协商选中的子协议，未选中为空 |
+| `std::string_view subprotocol() const& noexcept` | 协商选中的子协议，未选中为空；客户端会话接管握手中的字符串存储 |
 | `std::string_view subprotocol() const&& = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
 | `std::optional<std::uint16_t> peer_close_code() const noexcept` | 对端 Close 帧状态码 |
 | `std::string_view peer_close_reason() const& noexcept` | 对端 Close 原因 |

@@ -494,16 +494,18 @@ struct websocket_accept_access final {
     return head_response;
 }
 
-// `establish(context&) -> task<void>` commits the upgrade response head,
-// emplaces `session` and runs the route's stream handler on it.
-// `finish(session_type&, std::exception_ptr) -> task<void>` closes an
-// established session and reports a handler failure; it always runs once a
-// session exists, before any handler exception is surfaced.
+// The factory and optional session live in this frame; the operation may
+// borrow both until its completion callback has finished.
+// operation(context&) commits the upgrade and runs its stream handler.
+// operation(session&, exception_ptr) always finishes an established session
+// before any handler exception is surfaced.
 // Returns a buffered response only when the application answered without
 // upgrading; an established or abandoned upgrade returns std::nullopt.
-template <typename session_type, typename establish_type, typename finish_type>
-[[nodiscard]] task<std::optional<http_response>> run_http_upgrade_route(const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, std::optional<session_type>& session, establish_type& establish, finish_type& finish) {
-    const auto terminal = callback_access::bind<task<void>(context&)>(establish);
+template <typename operation_type, typename factory_type>
+[[nodiscard]] task<std::optional<http_response>> run_http_upgrade_route(const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, factory_type make_operation) {
+    std::optional<typename operation_type::session_type> session;
+    auto operation = make_operation(session);
+    const auto terminal = callback_access::bind<task<void>(context&)>(operation);
     std::optional<http_response> buffered;
     std::exception_ptr failure;
     try {
@@ -512,7 +514,7 @@ template <typename session_type, typename establish_type, typename finish_type>
         failure = std::current_exception();
     }
     if (session.has_value()) {
-        co_await finish(*session, failure);
+        co_await operation(*session, failure);
         co_return std::nullopt;
     }
     if (failure != nullptr) {
@@ -695,24 +697,23 @@ struct tunnel_upgrade_session_operation final {
 
 template <typename transport_type, typename commit_upgrade_type, typename commit_websocket_type>
 [[nodiscard]] task<std::optional<http_response>> execute_tunnel_upgrade_session(const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, const http_server_options& options, connection_scanner::entry& scanner_entry, inbound_buffer_account& inbound, bool udp, std::string_view pending, commit_upgrade_type commit_upgrade, commit_websocket_type commit_websocket) {
-    const auto& endpoint = *resolved.route().endpoint().tunnel();
     using operation_type = tunnel_upgrade_session_operation<transport_type, commit_upgrade_type, commit_websocket_type>;
-    std::optional<typename operation_type::session_type> session;
-    operation_type operation{
-        .request_ = request,
-        .resolved_ = resolved,
-        .endpoint_ = endpoint,
-        .services_ = services,
-        .options_ = options,
-        .scanner_entry_ = scanner_entry,
-        .inbound_ = inbound,
-        .udp_ = udp,
-        .pending_ = pending,
-        .commit_upgrade_ = commit_upgrade,
-        .commit_websocket_ = commit_websocket,
-        .session_ = session,
-    };
-    co_return co_await run_http_upgrade_route(routes, request, resolved, services, session, operation, operation);
+    return run_http_upgrade_route<operation_type>(routes, request, resolved, services, [&, udp, pending, commit_upgrade = std::move(commit_upgrade), commit_websocket = std::move(commit_websocket)](auto& session) mutable {
+        return operation_type{
+            .request_ = request,
+            .resolved_ = resolved,
+            .endpoint_ = *resolved.route().endpoint().tunnel(),
+            .services_ = services,
+            .options_ = options,
+            .scanner_entry_ = scanner_entry,
+            .inbound_ = inbound,
+            .udp_ = udp,
+            .pending_ = pending,
+            .commit_upgrade_ = commit_upgrade,
+            .commit_websocket_ = commit_websocket,
+            .session_ = session,
+        };
+    });
 }
 
 template <typename stream_type, typename commit_upgrade_type>
@@ -753,21 +754,20 @@ struct websocket_upgrade_session_operation final {
 
 template <typename stream_type, typename commit_upgrade_type>
 [[nodiscard]] task<std::optional<http_response>> execute_websocket_upgrade_session(const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, const http_server_options& options, connection_scanner::entry& scanner_entry, inbound_buffer_account& inbound, std::string_view pending_frames, commit_upgrade_type commit_upgrade) {
-    const auto& websocket_endpoint = *resolved.route().endpoint().websocket();
     using operation_type = websocket_upgrade_session_operation<stream_type, commit_upgrade_type>;
-    std::optional<typename operation_type::session_type> session;
-    operation_type operation{
-        .resolved_ = resolved,
-        .websocket_endpoint_ = websocket_endpoint,
-        .services_ = services,
-        .options_ = options,
-        .scanner_entry_ = scanner_entry,
-        .inbound_ = inbound,
-        .pending_frames_ = pending_frames,
-        .commit_upgrade_ = commit_upgrade,
-        .session_ = session,
-    };
-    co_return co_await run_http_upgrade_route(routes, request, resolved, services, session, operation, operation);
+    return run_http_upgrade_route<operation_type>(routes, request, resolved, services, [&, pending_frames, commit_upgrade = std::move(commit_upgrade)](auto& session) mutable {
+        return operation_type{
+            .resolved_ = resolved,
+            .websocket_endpoint_ = *resolved.route().endpoint().websocket(),
+            .services_ = services,
+            .options_ = options,
+            .scanner_entry_ = scanner_entry,
+            .inbound_ = inbound,
+            .pending_frames_ = pending_frames,
+            .commit_upgrade_ = commit_upgrade,
+            .session_ = session,
+        };
+    });
 }
 
 }  // namespace ruvia::detail
