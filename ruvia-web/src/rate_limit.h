@@ -191,11 +191,12 @@ public:
     // middleware instance), distinct for every declaration on the route.
     [[nodiscard]] std::optional<rate_limit_rejection> allow_route(std::uintptr_t route_scope, const void* rule_declaration, std::string_view remote_address, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept;
 
-    [[nodiscard]] rate_limit_decision decide_default(std::string_view key, std::chrono::steady_clock::time_point now) noexcept;
-    [[nodiscard]] rate_limit_decision decide_rule(rate_limit_scope scope, std::string_view key, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept;
+    // Server admission needs only rejections; standalone callers also report
+    // the remaining request budget after a successful admission.
+    [[nodiscard]] rate_limit_decision decide_default(std::string_view key, std::chrono::steady_clock::time_point now, bool include_remaining = true) noexcept;
+    [[nodiscard]] rate_limit_decision decide_rule(rate_limit_scope scope, std::string_view key, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now, bool include_remaining = true) noexcept;
 
 private:
-    [[nodiscard]] std::optional<rate_limit_rejection> allow(rate_limit_scope scope, std::string_view key, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept;
     std::optional<rate_limit_rule> default_rule_per_worker_;
     std::vector<rate_limit_slot> slots_;
     rate_limit_hash_key hash_key_{};

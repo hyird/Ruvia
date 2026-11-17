@@ -217,7 +217,7 @@ void roll_window(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono
 // count becomes the previous one. Retry-After is the first millisecond at
 // which the admission test passes again; the reset is when the estimate
 // reaches zero.
-[[nodiscard]] rate_limit_rejection refusal(const rate_limit_rule& rule, std::uint64_t previous, std::uint64_t current, std::uint64_t window_ms, std::uint64_t remaining_ms) noexcept {
+[[nodiscard]] rate_limit_decision refusal(const rate_limit_rule& rule, std::uint64_t previous, std::uint64_t current, std::uint64_t window_ms, std::uint64_t remaining_ms) noexcept {
     const auto limit = static_cast<std::uint64_t>(rule.max_requests_);
     std::uint64_t retry_after_ms = 0;
     if (current >= limit) {
@@ -233,45 +233,12 @@ void roll_window(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono
     }
     // Windows are below 2^63 ms, so this sum and the retry sum above stay exact.
     const auto reset_after_ms = current == 0 ? remaining_ms : saturating_add(remaining_ms, window_ms);
-    return rate_limit_rejection(retry_after_ms, reset_after_ms, rule.max_requests_);
+    return {.allowed_ = false, .limit_ = rule.max_requests_, .retry_after_ms_ = retry_after_ms, .reset_after_ms_ = reset_after_ms};
 }
 
-// Admits while previous * remaining / window + current < max_requests_, where
-// remaining is the part of the current window still ahead, i.e. the share of
-// the previous window that the trailing window still covers. Both sides are
-// scaled by the window so the comparison is exact.
-[[nodiscard]] std::optional<rate_limit_rejection> consume(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept {
-    const auto window_ms = window_length_ms(rule);
-    roll_window(slot, rule, now);
-    const auto remaining_ms = window_ms - elapsed_ms(slot.window_start_, now);
-    const auto limit = static_cast<std::uint64_t>(rule.max_requests_);
-    const auto previous = static_cast<std::uint64_t>(slot.previous_count_);
-    const auto current = static_cast<std::uint64_t>(slot.current_count_);
-    if (current < limit && multiply_wide(previous, remaining_ms) < multiply_wide(limit - current, window_ms)) {
-        ++slot.current_count_;
-        return std::nullopt;
-    }
-    return refusal(rule, previous, current, window_ms, remaining_ms);
-}
-
-[[nodiscard]] std::optional<rate_limit_rejection> consume_new_key(rate_limit_slot& slot, rate_limit_scope scope, std::string_view key, std::uint64_t hash, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept {
-    slot.scope_ = scope;
-    slot.key_hash_ = hash;
-    slot.window_start_ = now;
-    const auto window_ms = window_length_ms(rule);
-    slot.stale_after_ms_ = saturating_add(window_ms, window_ms);
-    slot.current_count_ = 0;
-    slot.previous_count_ = 0;
-    slot.key_size_ = static_cast<std::uint8_t>(key.size());
-    std::ranges::copy(key, slot.key_.begin());
-    return consume(slot, rule, now);
-}
-
-[[nodiscard]] std::optional<rate_limit_rejection> overflow_decision(const rate_limit_rule& rule) noexcept {
-    return rule.overflow_policy_ == rate_limit_overflow_policy::allow ? std::nullopt : std::optional(rate_limit_rejection(1, 1, rule.max_requests_));
-}
-
-[[nodiscard]] rate_limit_decision consume_decision(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept {
+// Compare the weighted estimate against the limit in the scaled domain so
+// both admission and the optional remaining budget use the same window.
+[[nodiscard]] rate_limit_decision consume_decision(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now, bool include_remaining) noexcept {
     const auto window_ms = window_length_ms(rule);
     roll_window(slot, rule, now);
     const auto remaining_ms = window_ms - elapsed_ms(slot.window_start_, now);
@@ -281,36 +248,30 @@ void roll_window(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono
     const auto prev_weighted = multiply_wide(previous, remaining_ms);
     if (current < limit && prev_weighted < multiply_wide(limit - current, window_ms)) {
         ++slot.current_count_;
-        const auto next_current = current + 1U;
-        const auto room_after_scaled = multiply_wide(limit - next_current, window_ms);
         std::size_t remaining_requests = 0;
-        if (prev_weighted <= room_after_scaled) {
-            const std::uint64_t borrow = room_after_scaled.low_ < prev_weighted.low_ ? 1U : 0U;
-            const wide_unsigned diff{
-                .high_ = room_after_scaled.high_ - prev_weighted.high_ - borrow,
-                .low_ = room_after_scaled.low_ - prev_weighted.low_,
-            };
-            remaining_requests = static_cast<std::size_t>(divide_wide(diff, window_ms));
+        if (include_remaining) {
+            const auto room_after_scaled = multiply_wide(limit - slot.current_count_, window_ms);
+            if (prev_weighted <= room_after_scaled) {
+                const std::uint64_t borrow = room_after_scaled.low_ < prev_weighted.low_ ? 1U : 0U;
+                const wide_unsigned diff{
+                    .high_ = room_after_scaled.high_ - prev_weighted.high_ - borrow,
+                    .low_ = room_after_scaled.low_ - prev_weighted.low_,
+                };
+                remaining_requests = static_cast<std::size_t>(divide_wide(diff, window_ms));
+            }
         }
         return rate_limit_decision{
             .allowed_ = true,
             .limit_ = rule.max_requests_,
             .remaining_ = remaining_requests,
             .retry_after_ms_ = 0,
-            .reset_after_ms_ = saturating_add(remaining_ms, window_ms),
+            .reset_after_ms_ = include_remaining ? saturating_add(remaining_ms, window_ms) : 0U,
         };
     }
-    const auto rejected = refusal(rule, previous, current, window_ms, remaining_ms);
-    return rate_limit_decision{
-        .allowed_ = false,
-        .limit_ = rejected.max_requests(),
-        .remaining_ = 0,
-        .retry_after_ms_ = rejected.retry_after_ms(),
-        .reset_after_ms_ = rejected.reset_after_ms(),
-    };
+    return refusal(rule, previous, current, window_ms, remaining_ms);
 }
 
-[[nodiscard]] rate_limit_decision consume_new_key_decision(rate_limit_slot& slot, rate_limit_scope scope, std::string_view key, std::uint64_t hash, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept {
+[[nodiscard]] rate_limit_decision consume_new_key_decision(rate_limit_slot& slot, rate_limit_scope scope, std::string_view key, std::uint64_t hash, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now, bool include_remaining) noexcept {
     slot.scope_ = scope;
     slot.key_hash_ = hash;
     slot.window_start_ = now;
@@ -320,7 +281,7 @@ void roll_window(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono
     slot.previous_count_ = 0;
     slot.key_size_ = static_cast<std::uint8_t>(key.size());
     std::ranges::copy(key, slot.key_.begin());
-    return consume_decision(slot, rule, now);
+    return consume_decision(slot, rule, now, include_remaining);
 }
 
 [[nodiscard]] rate_limit_decision overflow_rate_limit_decision(const rate_limit_rule& rule) noexcept {
@@ -340,6 +301,13 @@ void roll_window(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono
         .retry_after_ms_ = 1,
         .reset_after_ms_ = 1,
     };
+}
+
+[[nodiscard]] std::optional<rate_limit_rejection> rejection_for(const rate_limit_decision& decision) noexcept {
+    if (decision.allowed()) {
+        return std::nullopt;
+    }
+    return rate_limit_rejection(decision.retry_after_ms(), decision.reset_after_ms(), decision.limit());
 }
 }  // namespace
 
@@ -377,55 +345,21 @@ void rate_limiter::adopt_route_storage(rate_limiter& prepared) noexcept {
 }
 
 std::optional<rate_limit_rejection> rate_limiter::allow_default(std::string_view remote_address, std::chrono::steady_clock::time_point now) noexcept {
-    return default_rule_per_worker_.has_value() ? allow(default_scope, remote_address, *default_rule_per_worker_, now) : std::nullopt;
+    return rejection_for(decide_default(remote_address, now, false));
 }
 
 std::optional<rate_limit_rejection> rate_limiter::allow_route(std::uintptr_t route_scope, const void* rule_declaration, std::string_view remote_address, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept {
-    return allow({.route_ = route_scope == 0 ? fallback_route_scope : route_scope, .rule_ = reinterpret_cast<std::uintptr_t>(rule_declaration)}, remote_address, rule, now);
+    return rejection_for(decide_rule({.route_ = route_scope == 0 ? fallback_route_scope : route_scope, .rule_ = reinterpret_cast<std::uintptr_t>(rule_declaration)}, remote_address, rule, now, false));
 }
 
-std::optional<rate_limit_rejection> rate_limiter::allow(rate_limit_scope scope, std::string_view key, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept {
-    if (slots_.empty() || key.size() > rate_limit_max_key_bytes) {
-        return overflow_decision(rule);
-    }
-
-    const auto hash = key_hash(hash_key_, scope, key);
-    const auto mask = slots_.size() - 1;
-    const auto start = static_cast<std::size_t>(hash) & mask;
-    rate_limit_slot* reclaimable = nullptr;
-
-    // Slots never return to empty, so a key is installed and later found
-    // within the same bounded probe window from its home slot. A saturated
-    // probe window costs a fixed probe count instead of a scan of the whole
-    // table, like a pingora-limits estimator's fixed per-operation cost.
-    const auto probe_window = std::min(slots_.size(), rate_limit_probe_window);
-    for (std::size_t probe_value = 0; probe_value < probe_window; ++probe_value) {
-        auto& slot = slots_[(start + probe_value) & mask];
-        if (slot.key_hash_ == empty_hash) {
-            return consume_new_key(reclaimable == nullptr ? slot : *reclaimable, scope, key, hash, rule, now);
-        }
-        if (key_equals(slot, scope, key, hash)) {
-            return consume(slot, rule, now);
-        }
-        if (reclaimable == nullptr && stale(slot, now)) {
-            reclaimable = &slot;
-        }
-    }
-
-    if (reclaimable != nullptr) {
-        return consume_new_key(*reclaimable, scope, key, hash, rule, now);
-    }
-    return overflow_decision(rule);
-}
-
-rate_limit_decision rate_limiter::decide_default(std::string_view key, std::chrono::steady_clock::time_point now) noexcept {
+rate_limit_decision rate_limiter::decide_default(std::string_view key, std::chrono::steady_clock::time_point now, bool include_remaining) noexcept {
     if (!default_rule_per_worker_.has_value()) {
         return rate_limit_decision{};
     }
-    return decide_rule(default_scope, key, *default_rule_per_worker_, now);
+    return decide_rule(default_scope, key, *default_rule_per_worker_, now, include_remaining);
 }
 
-rate_limit_decision rate_limiter::decide_rule(rate_limit_scope scope, std::string_view key, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept {
+rate_limit_decision rate_limiter::decide_rule(rate_limit_scope scope, std::string_view key, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now, bool include_remaining) noexcept {
     if (slots_.empty() || key.size() > rate_limit_max_key_bytes) {
         return overflow_rate_limit_decision(rule);
     }
@@ -433,21 +367,24 @@ rate_limit_decision rate_limiter::decide_rule(rate_limit_scope scope, std::strin
     const auto mask = slots_.size() - 1;
     const auto start = static_cast<std::size_t>(hash) & mask;
     rate_limit_slot* reclaimable = nullptr;
+
+    // Slots never return to empty, so a key is installed and later found
+    // within the same bounded probe window from its home slot.
     const auto probe_window = std::min(slots_.size(), rate_limit_probe_window);
     for (std::size_t probe_value = 0; probe_value < probe_window; ++probe_value) {
         auto& slot = slots_[(start + probe_value) & mask];
         if (slot.key_hash_ == empty_hash) {
-            return consume_new_key_decision(reclaimable == nullptr ? slot : *reclaimable, scope, key, hash, rule, now);
+            return consume_new_key_decision(reclaimable == nullptr ? slot : *reclaimable, scope, key, hash, rule, now, include_remaining);
         }
         if (key_equals(slot, scope, key, hash)) {
-            return consume_decision(slot, rule, now);
+            return consume_decision(slot, rule, now, include_remaining);
         }
         if (reclaimable == nullptr && stale(slot, now)) {
             reclaimable = &slot;
         }
     }
     if (reclaimable != nullptr) {
-        return consume_new_key_decision(*reclaimable, scope, key, hash, rule, now);
+        return consume_new_key_decision(*reclaimable, scope, key, hash, rule, now, include_remaining);
     }
     return overflow_rate_limit_decision(rule);
 }

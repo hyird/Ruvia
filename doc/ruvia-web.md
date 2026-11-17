@@ -2313,7 +2313,7 @@ public:
 - **算法**：每个键的窗口从首个请求开始、首尾相接。请求在 `previous × 当前窗口未经过比例 + current < max_requests_` 时放行并计入 `current`；间隔两个及以上窗口时 `previous` 归零；被拒绝的请求不计数。上一窗口计数线性淡出，不能在边界两侧各用一份完整配额。
 - **拒绝**：`429`（code `too_many_requests`）经应用错误处理器应答，并附 `Retry-After`（估计值重新放行的最早整秒）与 `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset`（估计值降到零的时刻）。
 - **容量**：每 worker 预分配 `capacity_per_worker_` 个键槽；键从其哈希位置探测一段有界槽位，该段全被其他键的存活条目占用时按规则的 `overflow_policy_` 处理（即使表的其他部分空闲）；条目在其键连续两个窗口无请求后失效。
-- **独立使用**：`sliding_window_rate_limiter` 与 `format_rate_limit_address_key`、`apply_rate_limit_headers` 可用于 `request_stream`、`server_connection` 或自定义维度。
+- **独立使用**：`sliding_window_rate_limiter` 与宿主级、路由级限流共用同一套滑动窗口判定，可搭配 `format_rate_limit_address_key`、`apply_rate_limit_headers` 用于 `request_stream`、`server_connection` 或自定义维度。
 
 ```cpp
 RUVIA_GET("/ready", ready, ruvia::rate_limit<10, 1000>);
