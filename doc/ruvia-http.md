@@ -6489,7 +6489,7 @@ class http1_chunk_header final {
 public:
     explicit http1_chunk_header(std::size_t chunk_size) noexcept;
 
-    [[nodiscard]] std::string_view view() const& noexcept;
+    [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view view() const&& = delete;
 };
 ```

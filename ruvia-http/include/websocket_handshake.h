@@ -135,7 +135,7 @@ public:
             number(*compression.client_max_window_bits_);
         }
     }
-    [[nodiscard]] constexpr std::string_view view() const& noexcept {
+    [[nodiscard]] constexpr std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND {
         return {bytes_.data(), size_};
     }
     std::string_view view() const&& = delete;

@@ -39,7 +39,7 @@ public:
         offset_ = static_cast<std::size_t>(cursor_value - storage_.data());
     }
 
-    [[nodiscard]] std::string_view view() const& noexcept {
+    [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::string_view(storage_.data() + offset_, storage_.size() - offset_);
     }
     [[nodiscard]] std::string_view view() const&& = delete;
