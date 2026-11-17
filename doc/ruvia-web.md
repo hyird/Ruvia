@@ -3394,7 +3394,7 @@ ruvia::app().client({
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `max_concurrent_streams_` | `std::size_t` | `100` | 每连接并发流 |
-| `max_alt_svc_entries_` | `std::size_t` | `16` | 跨路由 Alt-Svc 缓存条目，最久未用先淘汰；重新通告时移动旧记录并保留失败退避 |
+| `max_alt_svc_entries_` | `std::size_t` | `16` | 跨路由 Alt-Svc 缓存条目，最久未用先淘汰；重新通告时移动旧记录并保留失败退避。过期与退避截止时间均使用单调时钟，超出时钟范围时饱和到最大时间点 |
 | `enable_early_data_` | `bool` | `false` | 启用 0-RTT；只对无正文、非上传、非隧道的 `GET` / `HEAD` / `OPTIONS` / `TRACE` 提前发送，被拒或 `425` 时握手后最多重发一次 |
 | `max_datagram_bytes_` | `std::size_t` | `1350` | 数据报大小上限 |
 | `max_stream_output_bytes_` | `std::size_t` | `256 * 1024` | 每流待确认输出上限 |

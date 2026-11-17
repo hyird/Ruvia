@@ -1527,13 +1527,11 @@ void http_client_pool::observe_alt_svc(const http_client_route& route, const htt
             if (!valid || age == 0) {
                 return true;
             }
-            const auto now = std::chrono::steady_clock::now();
-            const auto maximum = std::chrono::duration_cast<std::chrono::seconds>((std::chrono::steady_clock::time_point::max)() - now).count();
-            const auto seconds = (std::min)(age, static_cast<std::uint64_t>(maximum));
+            const auto expires = deadline_after(std::chrono::duration<std::uint64_t, std::chrono::seconds::period>(age));
             if (alternative_services_.size() == config_.http3_.max_alt_svc_entries_) {
                 alternative_services_.erase(std::ranges::min_element(alternative_services_, {}, &alternative_service::used_));
             }
-            alternative_service entry{.route_host_ = std::string(route.dial_host_), .route_port_ = route.dial_port_, .server_name_ = std::string(route.server_name_), .host_ = std::string(host), .port_ = port, .expires_ = now + std::chrono::seconds(seconds), .broken_until_ = {}, .used_ = ++alternative_clock_};
+            alternative_service entry{.route_host_ = std::string(route.dial_host_), .route_port_ = route.dial_port_, .server_name_ = std::string(route.server_name_), .host_ = std::string(host), .port_ = port, .expires_ = expires, .used_ = ++alternative_clock_};
             for (const auto& failed : previous) {
                 if (failed.port_ == port && http_ascii_equals_ignore_case(failed.host_, host)) {
                     entry.broken_until_ = failed.broken_until_;
@@ -1661,7 +1659,7 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
         // alternative is not tried again for a while.
         for (auto& service : alternative_services_) {
             if (service.port_ == port && http_ascii_equals_ignore_case(service.host_, host) && service.route_port_ == route.dial_port_ && http_ascii_equals_ignore_case(service.route_host_, route.dial_host_) && http_ascii_equals_ignore_case(service.server_name_, route.server_name_)) {
-                service.broken_until_ = std::chrono::steady_clock::now() + alternative_service_retry_delay;
+                service.broken_until_ = deadline_after(alternative_service_retry_delay);
             }
         }
     }

@@ -434,8 +434,9 @@ private:
         std::string host_;
         std::uint16_t port_;
         std::chrono::steady_clock::time_point expires_;
-        // A failed alternative is not tried again before then.
-        std::chrono::steady_clock::time_point broken_until_;
+        // A failed alternative is not tried again before then. The minimum
+        // means no backoff, even when the monotonic clock is before its epoch.
+        std::chrono::steady_clock::time_point broken_until_{(std::chrono::steady_clock::time_point::min)()};
         std::uint64_t used_;
     };
     [[nodiscard]] alternative_service* find_alternative_service(const http_client_route& route, std::chrono::steady_clock::time_point now) noexcept;
