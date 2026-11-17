@@ -17,6 +17,27 @@
 namespace ruvia {
 namespace {
 
+void validate_sse_line_value(std::string_view value, bool is_id) {
+    for (std::size_t index = 0; index < value.size();) {
+        const auto byte = static_cast<unsigned char>(value[index]);
+        if (byte == '\r' || byte == '\n') {
+            throw std::invalid_argument("SSE event and id must not contain CR or LF");
+        }
+        if (is_id && byte == '\0') {
+            throw std::invalid_argument("SSE id must not contain a NUL character");
+        }
+        if (byte < 0x80) {
+            ++index;
+            continue;
+        }
+        const auto sequence = scan_utf8_sequence(value, index);
+        if (!sequence.well_formed_) {
+            throw std::invalid_argument("SSE fields must be valid UTF-8");
+        }
+        index += sequence.length_;
+    }
+}
+
 // Validate UTF-8 while finding line boundaries, then copy each validated line
 // as a block. In an event stream CRLF counts as a single line ending.
 void append_sse_data_lines(std::string_view data, std::string& frame) {
@@ -349,18 +370,12 @@ void sse_parser::fail() noexcept {
 }
 
 std::string format_sse_message(const sse_message& message) {
-    if (message.event_.view().find_first_of("\r\n") != std::string_view::npos || (message.id_.has_value() && message.id_->view().find_first_of("\r\n") != std::string_view::npos)) {
-        throw std::invalid_argument("SSE event and id must not contain CR or LF");
-    }
-    if (message.id_.has_value() && (message.id_->view().find('\0') != std::string_view::npos)) {
-        throw std::invalid_argument("SSE id must not contain a NUL character");
+    validate_sse_line_value(message.event_.view(), false);
+    if (message.id_.has_value()) {
+        validate_sse_line_value(message.id_->view(), true);
     }
     if (message.retry_.has_value() && message.retry_->count() < 0) {
         throw std::invalid_argument("SSE retry delay must not be negative");
-    }
-    // An event stream is UTF-8 (WHATWG HTML, "Parsing an event stream").
-    if (!is_valid_utf8(message.event_.view()) || (message.id_.has_value() && !is_valid_utf8(message.id_->view()))) {
-        throw std::invalid_argument("SSE fields must be valid UTF-8");
     }
 
     std::string frame;

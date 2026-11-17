@@ -3615,7 +3615,7 @@ struct sse_message final {
 
 `format_sse_message(message)` 生成一个完整的 UTF-8 事件块，按顺序输出：非空 `event_` 为 `event: <type>`；`id_` 存在时为 `id: <id>`（空 id 输出 `id:`）；`retry_` 存在时为 `retry: <毫秒>`；`data_` 存在时按 CR/LF 换行拆分为多行 `data: <line>`；最后一个空行结束。以下情形抛 `std::invalid_argument`：`event_` 或 `id_` 含 CR/LF、`id_` 含 NUL、`retry_` 为负、任一文本字段不是合法 UTF-8。结果超出字符串容量抛 `std::length_error`。
 
-- **数据行**：同一次扫描校验 UTF-8 并拆分 CR、LF、CRLF；末尾换行保留为空 `data` 行。
+- **单遍扫描**：`event` 和 `id` 在校验 UTF-8 时同时检查禁用字符；`data` 在校验 UTF-8 时拆分 CR、LF、CRLF，末尾换行保留为空 `data` 行。
 
 示例（Web 层写入同一结构，见 [`examples/streaming.cpp`](../examples/streaming.cpp)）：
 
