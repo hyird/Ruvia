@@ -81,6 +81,22 @@ TEST(RuviaHttpPublicApi, strict_byte_ranges_content_range_and_streaming_slicer) 
     EXPECT_EQ(sliced, expected);
 }
 
+TEST(RuviaHttpPublicApi, multipart_range_slicer_preserves_aliased_chunk_bytes) {
+    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=1-1,3-3", 4);
+    ruvia::http_byte_range_slicer slicer(ranges, 4, "text/plain", "parts");
+    std::string output = "a";
+    output.reserve(output.size() + static_cast<std::size_t>(slicer.content_length()));
+
+    // The chunk includes the terminator, which the first part header overwrites.
+    slicer.write(std::string_view(output.c_str(), output.size() + 1), output);
+    slicer.write("bc", output);
+
+    using namespace std::string_view_literals;
+    constexpr auto expected = "a--parts\r\nContent-Type: text/plain\r\nContent-Range: bytes 1-1/4\r\n\r\n\0\r\n--parts\r\nContent-Type: text/plain\r\nContent-Range: bytes 3-3/4\r\n\r\nc\r\n--parts--\r\n"sv;
+    EXPECT_TRUE(slicer.complete());
+    EXPECT_EQ(output, expected);
+}
+
 TEST(RuviaHttpPublicApi, byte_range_limit_counts_retained_ranges_after_coalescing) {
     constexpr ruvia::http_byte_range_options options{.max_ranges_ = 2};
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=20-24, 0-4, 5-19, 30-34", 100, options);

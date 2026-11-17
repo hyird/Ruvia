@@ -5326,6 +5326,8 @@ public:
 | `finish(output)` | 未完成时抛出 `std::logic_error`；完成时不追加任何字节 |
 | `reset(start_offset)` | 回到第一个区间的起点，`current_offset()` 设为 `start_offset`，`complete()` 复位 |
 
+- **输入别名**：`chunk` 可借用 `output` 的存储。多段输出先保全借用的字节，再追加分段首部和边界。
+
 #### 9.3.4 `class http_multipart_byte_range_plan`
 
 ```cpp

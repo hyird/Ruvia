@@ -14,6 +14,7 @@
 
 #include "decimal_text.h"
 #include "http_content_negotiation.h"
+#include "http_field_text.h"
 #include "http_header.h"
 #include "http_multipart.h"
 
@@ -409,10 +410,19 @@ void http_byte_range_slicer::write(std::uint64_t chunk_offset, std::string_view 
         throw std::invalid_argument("HTTP byte-range slicer chunk skipped over required range bytes");
     }
     const std::uint64_t chunk_end = chunk_offset + chunk.size();
-    current_offset_ = chunk_end;
-    if (chunk.empty()) {
+    if (chunk_end <= needed_offset) {
+        current_offset_ = chunk_end;
         return;
     }
+
+    // Multipart framing can overwrite the terminator or invalidate the source
+    // before its next slice. A single append already handles its own overlap.
+    std::string chunk_copy;
+    if (multipart() && detail::http_text_aliases_string(chunk, output)) {
+        chunk_copy.assign(chunk);
+        chunk = chunk_copy;
+    }
+    current_offset_ = chunk_end;
 
     while (range_index_ < ranges_.size()) {
         const auto range = ranges_[range_index_];
