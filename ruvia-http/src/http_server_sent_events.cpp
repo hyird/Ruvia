@@ -95,7 +95,7 @@ constexpr std::string_view sse_default_event_type = "message";
 sse_parser::sse_parser(sse_parser_options options) :
     event_limit_(options.event_limit_) {}
 
-sse_parse_result sse_parser::parse(std::string_view input) & {
+sse_parse_result sse_parser::parse(std::string_view input) & try {
     if (state_ != decoder_state::active) {
         throw std::logic_error("SSE parser is not active");
     }
@@ -187,6 +187,12 @@ sse_parse_result sse_parser::parse(std::string_view input) & {
         }
     }
     return sse_parse_result(position, decode_need_input{});
+} catch (...) {
+    // A failed call cannot report which bytes the parser already consumed.
+    if (state_ == decoder_state::active) {
+        fail();
+    }
+    throw;
 }
 
 void sse_parser::finish() noexcept {

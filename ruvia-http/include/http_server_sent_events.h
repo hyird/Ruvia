@@ -103,6 +103,8 @@ public:
     // Consumes input until the next event is complete, the stream fails, or
     // the input ends. Call it again with the unconsumed suffix. A parser that
     // is not active throws std::logic_error.
+    // If processing throws, the parser becomes failed and discards the
+    // incomplete event before propagating the exception.
     [[nodiscard]] sse_parse_result parse(std::string_view input) & RUVIA_LIFETIMEBOUND;
     sse_parse_result parse(std::string_view input) && = delete;
     // End of the stream: an active parser discards any incomplete event and

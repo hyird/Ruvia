@@ -364,6 +364,33 @@ TEST(Ruvia, sse_parser_transfers_large_ids_and_discards_unpublished_updates) {
     EXPECT_EQ(live_allocations.load(), empty);
 }
 
+TEST(Ruvia, sse_parser_discards_unpublished_event_on_allocation_failure) {
+    const auto pending_id = "id: " + std::string(128 * 1024, 'x') + '\n';
+    const auto data = "data: " + std::string(128 * 1024, 'y') + "\n\n";
+    ruvia::sse_parser parser;
+    ASSERT_TRUE(parser.parse("id: previous\n\n").holds<ruvia::decode_need_input>());
+    const auto baseline = live_allocations.load();
+    ASSERT_TRUE(parser.parse(pending_id).holds<ruvia::decode_need_input>());
+
+    ASSERT_THROW({
+        allocation_scope scope(0);
+        (void)parser.parse(data);
+    },
+        std::bad_alloc);
+    const auto after_failure = live_allocations.load();
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::failed);
+    EXPECT_EQ(parser.last_event_id(), "previous");
+    EXPECT_EQ(after_failure, baseline);
+    EXPECT_THROW((void)parser.parse("\n"), std::logic_error);
+
+    parser.reset();
+    const auto result = parser.parse("data: ok\n\n");
+    const auto* event = result.get_if<ruvia::sse_event>();
+    ASSERT_NE(event, nullptr);
+    EXPECT_EQ(event->data(), "ok");
+    EXPECT_TRUE(event->last_event_id().empty());
+}
+
 TEST(Ruvia, multipart_parser_releases_oversized_buffers_at_terminal_poll_and_reset) {
     const auto boundary = ruvia::parse_multipart_boundary("multipart/form-data; boundary=b");
     ruvia::multipart_parser parser({.boundary_ = std::get<ruvia::multipart_boundary>(boundary)});
