@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -347,7 +348,7 @@ void worker_dispatcher::when_shutdown_notifications_complete(move_only_function<
     auto node = std::make_unique<waiter_node_type>(std::move(callback_value));
     {
         std::lock_guard lock(mutex_);
-        if (shutdown_notification_active_) {
+        if (shutdown_notification_thread_ != std::thread::id{}) {
             shutdown_notification_waiters_.push_back(node.release());
             return;
         }
@@ -552,8 +553,13 @@ bool worker_dispatcher::begin_stopping_locked(bool abandon_drain) noexcept {
         return false;
     }
     accepting_ = false;
-    shutdown_notification_active_ = true;
+    shutdown_notification_thread_ = std::this_thread::get_id();
     return true;
+}
+
+bool worker_dispatcher::notifying_shutdown_on_current_thread() const noexcept {
+    const std::lock_guard lock(mutex_);
+    return shutdown_notification_thread_ == std::this_thread::get_id();
 }
 
 void worker_dispatcher::notify_stopping(bool batch_active) noexcept {
@@ -602,10 +608,10 @@ void worker_dispatcher::notify_stopping(bool batch_active) noexcept {
     waiter_node_type* waiters = nullptr;
     {
         std::lock_guard lock(mutex_);
-        if (!shutdown_notification_active_) {
+        if (shutdown_notification_thread_ != std::this_thread::get_id()) {
             std::terminate();
         }
-        shutdown_notification_active_ = false;
+        shutdown_notification_thread_ = {};
         waiters = shutdown_notification_waiters_.take_all();
     }
     notify_waiters(waiters);

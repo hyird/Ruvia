@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "failure_report.h"
+#include "worker_dispatcher.h"
 #include "worker_runtime.h"
 
 namespace ruvia {
@@ -165,16 +166,23 @@ bool worker_group::stop_requested() const noexcept {
 }
 
 std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
-    bool called_from_member;
+    const char* self_join_message = nullptr;
     {
         const std::lock_guard lock(mutex_);
-        called_from_member = std::ranges::any_of(members_, [](const worker_runtime* member) {
-            return member->worker().is_current();
-        });
+        for (const auto* member : members_) {
+            if (member->worker().is_current()) {
+                self_join_message = "cannot join a worker group from one of its members";
+                break;
+            }
+            if (detail::worker_dispatcher::of(member->worker())->notifying_shutdown_on_current_thread()) {
+                self_join_message = "cannot join a worker group while notifying one of its members to stop";
+                break;
+            }
+        }
     }
-    if (called_from_member) {
+    if (self_join_message != nullptr) {
         try {
-            throw std::logic_error("cannot join a worker group from one of its members");
+            throw std::logic_error(self_join_message);
         } catch (...) {
             return std::current_exception();
         }

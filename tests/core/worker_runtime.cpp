@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <exception>
 #include <future>
 #include <limits>
@@ -25,6 +26,7 @@
 #include "worker_signal.h"
 #include "worker_task_fixture.h"
 #include "worker_timer.h"
+#include "worker_wait.h"
 
 namespace worker_runtime_test {
 
@@ -552,6 +554,58 @@ TEST(Ruvia, worker_group_rejects_join_from_any_member_before_stopping) {
     EXPECT_EQ(group.join(), nullptr);
     EXPECT_EQ(first.state(), state::stopped);
     EXPECT_EQ(second.state(), state::stopped);
+}
+
+struct group_join_observer final {
+    group_join_observer(ruvia::worker_group& group, ruvia::worker_ref worker) :
+        group_(group),
+        worker_(std::move(worker)) {}
+
+    [[nodiscard]] const ruvia::worker_ref& worker() const noexcept {
+        return worker_;
+    }
+
+    void worker_stopping() noexcept {
+        failure_ = group_.join();
+    }
+
+    ruvia::detail::worker_shutdown_registration shutdown_registration_;
+    ruvia::worker_group& group_;
+    ruvia::worker_ref worker_;
+    std::exception_ptr failure_;
+};
+
+TEST(RuviaDeathTest, worker_group_rejects_join_from_stop_notification) {
+    const auto verify = [] {
+        // Bound a reentrant join that waits for its own stop dispatch.
+        std::thread([] {
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            std::_Exit(2);
+        }).detach();
+        for (const bool stop_group : {false, true}) {
+            ruvia::worker_runtime first;
+            ruvia::worker_runtime second;
+            ruvia::worker_group group;
+            group.add(first);
+            group.add(second);
+            const auto observer = ruvia::make_worker_wait_state<group_join_observer>(group, first.worker());
+            if (stop_group) {
+                group.request_stop();
+            } else {
+                first.request_stop();
+            }
+            if (observer->failure_) {
+                EXPECT_THROW(std::rethrow_exception(observer->failure_), std::logic_error);
+            } else {
+                ADD_FAILURE() << "stop notification must not join its worker group";
+            }
+            EXPECT_EQ(group.join(), nullptr);
+            EXPECT_EQ(first.state(), state::stopped);
+            EXPECT_EQ(second.state(), state::stopped);
+        }
+        std::_Exit(::testing::Test::HasFailure() ? EXIT_FAILURE : EXIT_SUCCESS);
+    };
+    ASSERT_EXIT(verify(), ::testing::ExitedWithCode(EXIT_SUCCESS), "");
 }
 
 TEST(Ruvia, worker_group_stop_before_start_launches_nothing) {

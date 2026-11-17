@@ -214,9 +214,10 @@ public:
     [[nodiscard]] bool serve();
     void request_stop() noexcept;
     [[nodiscard]] bool stop_requested() const noexcept;
-    // From a member's worker thread, returns a logic_error without requesting
-    // stop. Otherwise, requests stop, waits for member notifications and joins
-    // every member. Returns the failure its caller rethrows:
+    // From a member's worker thread or while delivering its stop notifications,
+    // returns a logic_error without requesting stop. Otherwise, requests stop,
+    // waits for member notifications and joins every member. Returns the failure
+    // its caller rethrows:
     // `primary` when given (a failure the caller already holds, such as one
     // start() or serve() threw), else the first member failure in registration
     // order. It is chosen before any report, so it is never reported here;

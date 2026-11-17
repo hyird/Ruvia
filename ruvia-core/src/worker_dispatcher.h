@@ -12,6 +12,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -114,8 +115,9 @@ public:
     // stop phases; false once the worker stops accepting.
     [[nodiscard]] bool register_shutdown(worker_shutdown_registration& registration, std::weak_ptr<void> owner, const worker_shutdown_operations_type& operations);
     // Runs after the first stopping batch has notified every hook, or now if
-    // no batch is active. The active bit is published with accepting=false.
+    // no batch is active. Its owner is published with accepting=false.
     void when_shutdown_notifications_complete(move_only_function<void()> callback);
+    [[nodiscard]] bool notifying_shutdown_on_current_thread() const noexcept;
     void when_idle(move_only_function<void()> callback);
     bool schedule_timer(worker_timer_registration& registration, std::chrono::steady_clock::time_point deadline, move_only_function<void(worker_timer_outcome)> completion);
     // From any thread. A notified cancellation of a still-live timer delivers
@@ -267,7 +269,7 @@ private:
     std::atomic_bool external_runner_{false};
     bool drain_scheduled_{false};
     bool abandon_drain_{false};
-    bool shutdown_notification_active_{false};
+    std::thread::id shutdown_notification_thread_{};
     waiter_list_type shutdown_notification_waiters_{};
     // Registered shutdown hooks in registration order. A separate mutex keeps
     // registration and unlinking off the admission lock.
