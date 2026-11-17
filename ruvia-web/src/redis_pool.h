@@ -189,7 +189,6 @@ public:
 
 private:
     void ensure_reader();
-    task<void> authenticate(const operation_deadline& connect_timeout, std::optional<timeout_duration> command_timeout);
     // One connection-setup command (AUTH, SELECT) and its reply.
     task<redis_value> exchange_control_command(std::span<const std::string_view> args, operation_deadline deadline, redis_request_content content);
 

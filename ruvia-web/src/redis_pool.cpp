@@ -51,8 +51,7 @@ void encode_and_release_redis_source(std::string& write_buffer, redis_owned_comm
     if (source.wire_.empty()) {
         throw std::invalid_argument("redis command must not be empty");
     }
-    write_buffer.assign(source.wire_);
-    release_redis_source_storage(source.wire_);
+    write_buffer = std::move(source.wire_);
 }
 
 void encode_and_release_redis_source(std::string& write_buffer, std::vector<redis_owned_command>& source, bool wrap_transaction) {
@@ -440,35 +439,30 @@ task<void> redis_connection::connect(const operation_deadline* operation_timeout
         }
         connected_ = true;
         ensure_reader();
-        co_await authenticate(deadline_value, command_timeout);
+        const auto control_deadline = deadline_value.constrained_by(command_timeout);
+        // An ACL user must authenticate by name even without a password (a
+        // nopass user accepts any); skipping AUTH would connect as "default".
+        if (!config_.username_.empty() || !config_.password_.empty()) {
+            const std::string_view password(config_.password_);
+            const std::array<std::string_view, 3> user_args{"AUTH", std::string_view(config_.username_), password};
+            const std::array<std::string_view, 2> password_args{"AUTH", password};
+            const auto auth_args = config_.username_.empty() ? std::span<const std::string_view>(password_args) : std::span<const std::string_view>(user_args);
+            const auto reply = co_await exchange_control_command(auth_args, control_deadline, redis_request_content::credential);
+            if (reply.kind() == redis_value::kind_type::error) {
+                throw redis_error(backend_error_code::connect_failed, reply.error());
+            }
+        }
+        if (config_.database_ != 0) {
+            std::array<char, max_decimal_size> database_digits;
+            const std::array<std::string_view, 2> args{"SELECT", format_decimal(database_digits, config_.database_)};
+            const auto reply = co_await exchange_control_command(args, control_deadline, redis_request_content::ordinary);
+            if (reply.kind() == redis_value::kind_type::error) {
+                throw redis_error(backend_error_code::connect_failed, reply.error());
+            }
+        }
     } catch (...) {
         close();
         throw;
-    }
-}
-
-task<void> redis_connection::authenticate(const operation_deadline& connect_timeout, std::optional<timeout_duration> command_timeout) {
-    const auto deadline_value = connect_timeout.constrained_by(command_timeout);
-    // An ACL user must authenticate by name even without a password (a
-    // nopass user accepts any); skipping AUTH would connect as "default".
-    if (!config_.username_.empty() || !config_.password_.empty()) {
-        const std::string_view password(config_.password_);
-        const std::array<std::string_view, 3> user_args{"AUTH", std::string_view(config_.username_), password};
-        const std::array<std::string_view, 2> password_args{"AUTH", password};
-        const auto auth_args = config_.username_.empty() ? std::span<const std::string_view>(password_args) : std::span<const std::string_view>(user_args);
-        const auto reply = co_await exchange_control_command(auth_args, deadline_value, redis_request_content::credential);
-        if (reply.kind() == redis_value::kind_type::error) {
-            throw redis_error(backend_error_code::connect_failed, reply.error());
-        }
-    }
-
-    if (config_.database_ != 0) {
-        std::array<char, max_decimal_size> database_digits;
-        const std::array<std::string_view, 2> args{"SELECT", format_decimal(database_digits, config_.database_)};
-        const auto reply = co_await exchange_control_command(args, deadline_value, redis_request_content::ordinary);
-        if (reply.kind() == redis_value::kind_type::error) {
-            throw redis_error(backend_error_code::connect_failed, reply.error());
-        }
     }
 }
 

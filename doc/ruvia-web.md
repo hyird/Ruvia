@@ -6826,7 +6826,8 @@ auto changed = co_await w.get_one<employee_summary>();
 - **两层连接池**：每个 worker 每个别名维护 `pool_size_per_worker_` 条常规连接（命令在共享连接上流水线化）与 `blocking_pool_size_per_worker_` 条按需建连的阻塞连接；阻塞命令只走阻塞池，不占用常规连接。
 - **唯一命令表**：类型化命令只声明于 `redis_command_set<surface_type>`；`redis_executor` 继承后逐条 `co_await` 并解码，`redis_pipeline` / `redis_transaction` 继承后入队并返回自身。
 - **执行器专有**：`command`（原始命令）、`blpop`、`brpop`、`xread_group`、`pipeline`、`transaction`、`subscription`、`repository`、`with_options`、`worker` 只在 `redis_executor` 上；阻塞读与订阅不进入批处理。
-- **参数同步复制**：每个命令入口在返回前把全部参数编码进操作或批处理自有存储；`std::string_view` / span 只需活过调用本身。
+- **参数所有权**：每个命令入口在返回前把全部参数编码进操作或批处理自有存储；`std::string_view` / span 只需活过调用本身。
+- **发送存储**：单条预编码命令（含订阅命令）直接移交连接写缓冲；写出完成后按水位回收。
 - **结果自有**：类型化结果使用标准字符串与容器，独立于句柄、客户端与回复缓冲；唯一例外是 `redis_pubsub_event` 的文本，借用订阅的当前回复。
 - **能力作用域**：`redis_executor`、`redis_batch`、`redis_subscription`、`redis_repository` 都是绑定 worker 与操作作用域（请求或独立客户端）的能力；作用域结束后再使用抛 `std::logic_error`。
 - **常量性**：执行器的全部池化命令、原始命令、阻塞命令与工厂均可经 `const` 句柄调用；batch 追加命令会修改自身，`const redis_pipeline` / `const redis_transaction` 不能追加。

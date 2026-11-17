@@ -100,10 +100,7 @@ task<void> redis_subscription_connection::send(redis_owned_command command) {
             co_await connection_.connect(&operation_timeout_value, owner_.config_.command_timeout_);
             ready_ = true;
         }
-        auto& write_buffer = connection_.write_buffer();
-        write_buffer.assign(command.wire_);
-        // The serialized request owns the bytes needed by the write.
-        std::string(command.wire_.get_allocator()).swap(command.wire_);
+        connection_.write_buffer() = std::move(command.wire_);
         // Stamped before the write: the reply may arrive before this
         // coroutine resumes and must still count as newer than the request.
         last_request_ = clock_type::now();
