@@ -5685,6 +5685,8 @@ public:
 | `request_path_only(target)` | 截去第一个 `?` 或 `#` 及之后的部分；视图借用 `target` |
 | `default_cookie_path(target)` | RFC 6265 §5.1.4 default-path：路径为空、不以 `/` 开头或只有一个 `/` 时为 `"/"`，否则为最后一个 `/` 之前的部分（不含该 `/`）；视图借用 `target` 或静态字面量 |
 
+`request_path_only()` 与 `default_cookie_path()` 在编译期拒绝临时拥有型字符串和字符初始化列表。
+
 接收 Cookie 的存储规则：
 
 - 路径取 `Set-Cookie` 的 `Path`，缺失或无效时取 `default_cookie_path(target)`。

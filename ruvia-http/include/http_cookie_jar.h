@@ -1,13 +1,16 @@
 #pragma once
 
 #include <chrono>
+#include <concepts>
 #include <cstddef>
+#include <initializer_list>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "borrowed_text.h"
 #include "http_header.h"
 #include "http_message.h"
 
@@ -76,8 +79,17 @@ public:
 
     [[nodiscard]] static bool cookie_domain_matches(std::string_view host, std::string_view domain) noexcept;
     [[nodiscard]] static bool cookie_path_matches(std::string_view request_path, std::string_view cookie_path) noexcept;
+    // The returned path may borrow target.
     [[nodiscard]] static std::string_view request_path_only(std::string_view target) noexcept;
     [[nodiscard]] static std::string_view default_cookie_path(std::string_view target) noexcept;
+    template <detail::http_temporary_owning_char_string target_type>
+    static std::string_view request_path_only(target_type&&) = delete;
+    template <detail::http_temporary_owning_char_string target_type>
+    static std::string_view default_cookie_path(target_type&&) = delete;
+    template <std::same_as<char> element_type>
+    static std::string_view request_path_only(std::initializer_list<element_type>) = delete;
+    template <std::same_as<char> element_type>
+    static std::string_view default_cookie_path(std::initializer_list<element_type>) = delete;
 
 private:
     struct stored_cookie final {

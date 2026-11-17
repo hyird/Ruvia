@@ -5,17 +5,36 @@
 #include <cstdint>
 #include <ctime>
 #include <exception>
+#include <initializer_list>
 #include <limits>
 #include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "http_cookie.h"
 #include "http_cookie_jar.h"
 #include "http_date.h"
 
 namespace {
+
+template <typename target_type>
+concept accepts_request_path_target = requires(target_type&& target) {
+    ruvia::http_cookie_jar::request_path_only(std::forward<target_type>(target));
+};
+
+template <typename target_type>
+concept accepts_default_cookie_path_target = requires(target_type&& target) {
+    ruvia::http_cookie_jar::default_cookie_path(std::forward<target_type>(target));
+};
+
+static_assert(accepts_request_path_target<const std::string&> && accepts_default_cookie_path_target<const std::string&>);
+static_assert(accepts_request_path_target<std::string_view> && accepts_default_cookie_path_target<std::string_view>);
+static_assert(accepts_request_path_target<const char (&)[4]> && accepts_default_cookie_path_target<const char (&)[4]>);
+static_assert(!accepts_request_path_target<std::string> && !accepts_default_cookie_path_target<std::string>);
+static_assert(!accepts_request_path_target<const std::string> && !accepts_default_cookie_path_target<const std::string>);
+static_assert(!accepts_request_path_target<std::initializer_list<char>> && !accepts_default_cookie_path_target<std::initializer_list<char>>);
 
 // True if a public cookie plan rejects the options.
 bool rejects(const ruvia::cookie_options& options) {
