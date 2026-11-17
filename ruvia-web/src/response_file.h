@@ -16,6 +16,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <variant>
 
 #include "blocking_pool.h"
 #include "borrowed_text.h"
@@ -744,7 +745,9 @@ private:
     };
 
     static void read_ahead(read_state& state, std::size_t bytes, bool completes_range);
-    [[nodiscard]] task<bool> fill(std::size_t bytes, bool completes_range);
+    // A ready cached read or failure needs no task; only a pool read suspends.
+    [[nodiscard]] std::variant<bool, task<bool>> fill(std::size_t bytes, bool completes_range);
+    [[nodiscard]] task<bool> fill_offloaded(std::size_t bytes, bool completes_range);
     [[nodiscard]] bool settle_read();
     void select_file(http_response_file_view file);
 

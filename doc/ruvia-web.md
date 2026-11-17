@@ -3906,7 +3906,7 @@ co_return c.text(body.text());
 
 | 声明 | 说明 |
 | --- | --- |
-| `task<std::vector<ip_address>> resolve_dns(const worker_ref& worker, std::string_view host, operation_options options = {})` | 绑定 worker 的非破坏性异步解析，返回排序去重的数值地址 |
+| `task<std::vector<ip_address>> resolve_dns(const worker_ref& worker, std::string_view host, operation_options options = {})` | 绑定 worker 的非破坏性异步解析；调用时拥有主机名，系统查询接管输入存储；返回排序去重的数值地址 |
 | `task<std::vector<ip_address>> resolve_dns(event_loop loop, std::string_view host, operation_options options = {})` | 同上，绑定 `event_loop` |
 
 <a id="api-tcp-client-h"></a>

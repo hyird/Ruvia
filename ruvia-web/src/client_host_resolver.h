@@ -1,15 +1,20 @@
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <variant>
 
+#include <asio/error.hpp>
 #include <asio/ip/tcp.hpp>
 
+#include "asio_ip_address.h"
 #include "http_authority.h"
 #include "operation_options.h"
 #include "startup_config.h"
@@ -109,12 +114,22 @@ public:
     client_host_resolver(client_host_resolver&& other) noexcept;
     client_host_resolver& operator=(client_host_resolver&& other) noexcept;
 
-    [[nodiscard]] client_resolve_operation resolve(std::string_view host, std::uint16_t port, const operation_deadline& timeout, stop_token stop = {});
+    template <typename host_type>
+        requires std::convertible_to<host_type&&, std::string_view>
+    [[nodiscard]] client_resolve_operation resolve(host_type&& host, std::uint16_t port, const operation_deadline& timeout, stop_token stop = {}) {
+        if (stop.stop_requested()) {
+            return client_resolve_result{.error_ = asio::error::operation_aborted};
+        }
+        if (const auto address = parse_ip_address(std::string_view(host))) {
+            return client_resolve_result{.literal_ = asio::ip::tcp::endpoint(*address, port)};
+        }
+        return resolve_query(std::string(std::forward<host_type>(host)), port, timeout, std::move(stop));
+    }
     void cancel() noexcept;
 
 private:
     struct query;
-    [[nodiscard]] task<client_resolve_result> resolve_query(query input, operation_deadline timeout, stop_token stop);
+    [[nodiscard]] task<client_resolve_result> resolve_query(std::string host, std::uint16_t port, operation_deadline timeout, stop_token stop);
     const worker_ref* worker_;
     std::optional<stop_source> stop_;
 };

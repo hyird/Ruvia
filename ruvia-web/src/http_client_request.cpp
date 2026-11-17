@@ -852,7 +852,7 @@ task<void> refresh_client_dns(std::shared_ptr<detail::http_client_pool> pool, op
         throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP DNS resolution timed out", std::nullopt, nullptr, false);
     }
     detail::client_host_resolver resolver(worker);
-    auto pending = resolver.resolve(host, validator_port, timeout, options.stop_token_);
+    auto pending = resolver.resolve(std::move(host), validator_port, timeout, options.stop_token_);
     detail::client_resolve_result result;
     if (auto* immediate = std::get_if<detail::client_resolve_result>(&pending)) {
         result = std::move(*immediate);

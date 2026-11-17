@@ -142,9 +142,9 @@ bool response_file_source::settle_read() {
     return !failure_;
 }
 
-task<bool> response_file_source::fill(std::size_t bytes, bool completes_range) {
+std::variant<bool, task<bool>> response_file_source::fill(std::size_t bytes, bool completes_range) {
     if (!settle_read()) {
-        co_return false;
+        return false;
     }
     state_.filled_ = 0;
 #if defined(__linux__)
@@ -157,10 +157,14 @@ task<bool> response_file_source::fill(std::size_t bytes, bool completes_range) {
             if (completes_range) {
                 state_.error_ = validate_native_file(state_.input_.get(), state_.identity_, state_.size_);
             }
-            co_return settle_read();
+            return settle_read();
         }
     }
 #endif
+    return fill_offloaded(bytes, completes_range);
+}
+
+task<bool> response_file_source::fill_offloaded(std::size_t bytes, bool completes_range) {
     auto result = co_await run_blocking(io_.worker_, [state = std::move(state_), bytes, completes_range]() mutable {
         read_ahead(state, bytes, completes_range);
         return std::move(state);
@@ -187,7 +191,9 @@ task<bool> response_file_source::open_first() {
     for (auto index = next_segment_; index < segment_count_; ++index) {
         if (const auto segment = response_.body_segment(index); segment.file_) {
             select_file(*segment.file_);
-            co_return co_await fill(0, segment.file_->length() == 0);
+            auto filled = fill(0, segment.file_->length() == 0);
+            const auto* ready = std::get_if<bool>(&filled);
+            co_return ready != nullptr ? *ready : co_await std::move(std::get<task<bool>>(filled));
         }
     }
     co_return true;
@@ -204,7 +210,9 @@ task<response_body_chunk> response_file_source::next(std::size_t max_bytes) {
     for (;;) {
         if (range_remaining_ != 0) {
             const auto bytes = static_cast<std::size_t>(std::min<std::uint64_t>(std::min(max_bytes, response_file_read_ahead_bytes), range_remaining_));
-            if (!(co_await fill(bytes, bytes == range_remaining_))) {
+            auto filled = fill(bytes, bytes == range_remaining_);
+            const auto* ready = std::get_if<bool>(&filled);
+            if (!(ready != nullptr ? *ready : co_await std::move(std::get<task<bool>>(filled)))) {
                 co_return response_body_chunk::failed();
             }
             range_remaining_ -= bytes;
@@ -219,8 +227,12 @@ task<response_body_chunk> response_file_source::next(std::size_t max_bytes) {
             range_remaining_ = segment.file_->length();
             // Empty files still complete a range: validate their snapshot
             // through the same owned I/O state before releasing the head.
-            if (range_remaining_ == 0 && !(co_await fill(0, true))) {
-                co_return response_body_chunk::failed();
+            if (range_remaining_ == 0) {
+                auto filled = fill(0, true);
+                const auto* ready = std::get_if<bool>(&filled);
+                if (!(ready != nullptr ? *ready : co_await std::move(std::get<task<bool>>(filled)))) {
+                    co_return response_body_chunk::failed();
+                }
             }
             continue;
         }

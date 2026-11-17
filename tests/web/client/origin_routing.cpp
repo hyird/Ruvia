@@ -1206,7 +1206,10 @@ TEST(Ruvia, http_client_non_destructive_dns_resolution_preserves_active_connecti
         EXPECT_FALSE(resolved_handle.empty());
         EXPECT_TRUE(std::ranges::is_sorted(resolved_handle));
 
-        const auto resolved_standalone = co_await ruvia::resolve_dns(worker, "localhost");
+        std::string host("localhost");
+        auto resolving = ruvia::resolve_dns(worker, host);
+        host.clear();
+        const auto resolved_standalone = co_await std::move(resolving);
         EXPECT_EQ(resolved_handle, resolved_standalone);
 
         const auto resolved_loop = co_await ruvia::resolve_dns(attachment.loop(), "127.0.0.1");
