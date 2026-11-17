@@ -311,7 +311,7 @@ ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
 
 #ifndef _WIN32
 ruvia::task<void> fail_distinct() {
-    throw std::logic_error("second child failed");
+    throw std::logic_error("second child failed\r\n\t\x1b[0m");
     co_return;
 }
 
@@ -393,7 +393,7 @@ bool verify_additional_child_failures_are_reported() {
     stderr_capture capture;
     ruvia::test::run_worker_tasks(attachment, join_distinct_failures(attachment.loop().worker(), first_rethrown));
     const auto text = capture.finish();
-    return first_rethrown && text.find("ruvia: additional task scope child failed: second child failed") != std::string_view::npos && text.find("additional task scope child failed: child failed") == std::string_view::npos;
+    return first_rethrown && text.find("ruvia: additional task scope child failed: second child failed\\x0d\\x0a\\x09\\x1b[0m\n") != std::string_view::npos && text.find("additional task scope child failed: child failed") == std::string_view::npos;
 }
 #endif
 

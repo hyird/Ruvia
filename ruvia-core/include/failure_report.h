@@ -35,6 +35,7 @@ namespace ruvia {
 //     ruvia: <context> failed: <what>
 //
 // `context` names the failing unit ("web connection", "event loop stop callback").
+// The context and exception text escape ASCII control bytes as \xhh.
 // Writing is best effort -- stderr may be closed, full, or redirected -- but
 // nothing beyond this point could report the failure either way.
 //

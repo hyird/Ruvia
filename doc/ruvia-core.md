@@ -683,7 +683,7 @@ flowchart LR
 | --- | --- |
 | `[[nodiscard]] std::string error_code_text(const std::error_code& error);` | UTF-8 描述；Windows 上 `std::system_category()` 与 `asio::system_category()` 经 `FormatMessageW` 转 UTF-8，无系统消息时为 `<category>:<value>`（`value` 为带符号十进制）；其他类别与 POSIX 使用 `message()` |
 | `[[nodiscard]] std::string system_error_text(const std::system_error& error);` | `what()` 以 `<what_arg>: <code().message()>` 结尾时替换为 `error_code_text(code())` 的文本；否则只返回 `error_code_text(code())` |
-| `void report_unhandled_failure(std::string_view context_value, std::exception_ptr exception, std::size_t occurrences = 1) noexcept;` | 向 stderr 写一行 `ruvia: <context> failed: <what>` |
+| `void report_unhandled_failure(std::string_view context_value, std::exception_ptr exception, std::size_t occurrences = 1) noexcept;` | 向 stderr 写一行 `ruvia: <context> failed: <what>`；上下文与异常文本中的 ASCII 控制字节转义为 `\xhh` |
 | `[[nodiscard]] bool equivalent_failures(const std::exception_ptr& left, const std::exception_ptr& right) noexcept;` | 同一异常对象，或两个动态类型相同且 `what()` 相同的 `std::exception` 为真；空指针仅与空指针等价 |
 
 - **上报用途**：分离任务或回调抛出、没有应用失败出口、也无调用方会重抛时使用；既不丢弃也不终止进程。

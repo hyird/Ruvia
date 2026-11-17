@@ -147,6 +147,26 @@ void write_text(std::string_view text) noexcept {
     std::fwrite(text.data(), 1, text.size(), stderr);
 }
 
+void write_diagnostic_field(std::string_view text) noexcept {
+    constexpr std::string_view hex = "0123456789abcdef";
+    std::size_t start = 0;
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        const auto byte = static_cast<unsigned char>(text[index]);
+        if (byte >= 0x20 && byte != 0x7f) {
+            continue;
+        }
+        if (start < index) {
+            write_text(text.substr(start, index - start));
+        }
+        const char escaped[] = {'\\', 'x', hex[byte >> 4], hex[byte & 0x0f]};
+        write_text({escaped, sizeof(escaped)});
+        start = index + 1;
+    }
+    if (start < text.size()) {
+        write_text(text.substr(start));
+    }
+}
+
 void write_line(std::string_view context_value, std::string_view what, std::size_t occurrences, std::size_t suppressed) noexcept {
     char occurrences_text[32] = "";
     if (occurrences > 1) {
@@ -160,9 +180,9 @@ void write_line(std::string_view context_value, std::string_view what, std::size
     // and may be longer than printf's int precision can express.
     const stream_lock lock;
     write_text("ruvia: ");
-    write_text(context_value);
+    write_diagnostic_field(context_value);
     write_text(" failed: ");
-    write_text(what);
+    write_diagnostic_field(what);
     write_text(occurrences_text);
     write_text(suppressed_text);
     write_text("\n");
