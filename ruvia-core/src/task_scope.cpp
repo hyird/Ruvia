@@ -166,7 +166,15 @@ void task_scope::resume_join_if_idle() noexcept {
     auto* joining = std::get_if<task_scope_joining_type>(&lifecycle_);
     if (joining != nullptr && joining->continuation_) {
         // Keep the join pending until await_resume(), even after queuing it.
-        worker_.defer_resume(std::exchange(joining->continuation_, {}));
+        const auto continuation = std::exchange(joining->continuation_, {});
+        const auto resume = [continuation] {
+            continuation.resume();
+        };
+        if (!worker_.defer_completion(resume)) {
+            // An external loop can retire its Worker before running an already
+            // queued child completion. Complete the join on that final turn.
+            continuation.resume();
+        }
     }
 }
 

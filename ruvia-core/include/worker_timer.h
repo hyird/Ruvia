@@ -266,8 +266,7 @@ private:
     const worker_ref* worker_;
     wait_bounds bounds_;
     std::coroutine_handle<> continuation_{};
-    // A sleep that never suspends reached its deadline.
-    wait_status status_{wait_status::timed_out};
+    timer_sleep_result result_{timer_sleep_result::elapsed};
     // Declared last so callback teardown completes before the timer
     // registration and the borrowed worker begin destruction.
     stop_registration stop_registration_;

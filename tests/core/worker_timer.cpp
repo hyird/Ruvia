@@ -341,14 +341,19 @@ ruvia::task<void> exercise_stoppable_sleep(const ruvia::worker_ref& worker_value
     // already parked on the timer queue, which is the case the whole overload
     // exists for.
     ruvia::stop_source inflight;
-    static_cast<void>(worker_value.post([&inflight] {
+    const auto cancel_turn_ended = std::make_shared<bool>(false);
+    static_cast<void>(worker_value.post([&worker_value, &inflight, cancel_turn_ended] {
         inflight.request_stop();
+        // The cancellation handler is already queued ahead of this marker.
+        EXPECT_TRUE(worker_value.defer_completion([cancel_turn_ended] {
+            *cancel_turn_ended = true;
+        }));
     }));
     const auto parked = std::chrono::steady_clock::now();
     if (co_await ruvia::sleep_for(worker_value, std::chrono::seconds(30), inflight.token()) != ruvia::timer_sleep_result::stop_requested) {
         co_return;
     }
-    if (std::chrono::steady_clock::now() - parked > std::chrono::seconds(5)) {
+    if (!*cancel_turn_ended || std::chrono::steady_clock::now() - parked > std::chrono::seconds(5)) {
         co_return;
     }
 

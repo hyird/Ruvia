@@ -146,7 +146,11 @@ bool sleep_operation::await_ready() {
         throw std::logic_error("sleep operation cannot be awaited");
     }
     bounds_.start(*worker_, "sleep must run on its bound worker");
-    return bounds_.stop_requested() || bounds_.deadline_passed();
+    if (bounds_.stop_requested()) {
+        result_ = timer_sleep_result::stop_requested;
+        return true;
+    }
+    return bounds_.deadline_passed();
 }
 
 // A stopped timer queue resolves immediately with the outcome stop_timers()
@@ -154,7 +158,7 @@ bool sleep_operation::await_ready() {
 bool sleep_operation::await_suspend(std::coroutine_handle<> continuation) {
     continuation_ = continuation;
     if (!bounds_.arm_deadline<sleep_operation, &sleep_operation::on_end>(*this)) {
-        status_ = wait_status::worker_stopping;
+        result_ = timer_sleep_result::stop_requested;
         return false;
     }
     if (bounds_.token().stoppable()) {
@@ -166,12 +170,13 @@ bool sleep_operation::await_suspend(std::coroutine_handle<> continuation) {
 }
 
 void sleep_operation::on_end(wait_status status) noexcept {
-    status_ = status;
-    continuation_.resume();
+    // Commit the outcome before posting; a later stop cannot change it.
+    result_ = status == wait_status::timed_out && !bounds_.stop_requested() ? timer_sleep_result::elapsed : timer_sleep_result::stop_requested;
+    worker_->defer_resume(std::exchange(continuation_, {}));
 }
 
 timer_sleep_result sleep_operation::await_resume() const noexcept {
-    return status_ == wait_status::timed_out && !bounds_.stop_requested() ? timer_sleep_result::elapsed : timer_sleep_result::stop_requested;
+    return result_;
 }
 
 // A non-positive duration is a target that has already passed.

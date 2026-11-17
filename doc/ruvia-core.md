@@ -195,7 +195,7 @@ flowchart LR
 
 ### 2.3 同线程延迟唤醒
 
-挂起的协程由领域事件唤醒时，恢复总是经绑定 Worker 的 `worker_ref::defer_resume()` 投递到**后续事件循环轮次**，即使事件发生在同一 Worker 线程上；触发方的调用栈先完整返回，再有等待者观察到结果，因而连续释放、关闭或通知不会形成递归链。
+同一 Worker 上的挂起等待通常经完成通道投递到**后续事件循环轮次**；触发方的调用栈先返回，连续释放、关闭或通知不会形成递归链。
 
 | 事件源 | 唤醒方式 |
 | --- | --- |
@@ -203,12 +203,12 @@ flowchart LR
 | `one_shot_completion::complete`、`one_shot_receiver::close` | 等待方经绑定 Worker 的 `defer_resume` 恢复 |
 | `pool_lease_scheduler::release` / `close` | 在调用返回前提交槽位或 `closed`，协程在后续轮次恢复 |
 | `worker_signal::notify` | 摘下全部等待者，逐个在后续轮次恢复 |
-| `task_scope` 子任务完成 | 在后续轮次结算失败、回收帧；最后一个子任务结算后，经 `defer_resume` 唤醒已挂起的 `join` |
+| `task_scope` 子任务完成 | 在后续轮次结算失败、回收帧；最后一个子任务结算后，另行投递已挂起的 `join`。若外部循环已解除挂载，则在当前的子任务结算轮次完成 `join` |
 | 停止令牌触发（等待已挂起） | 在请求线程持锁提交 `cancelled`，恢复经绑定 Worker 延迟执行 |
 | `worker_timer_registration::cancel_and_notify` | 在 Worker 自身线程调用时投递完成回调，不重入 |
 | `worker_ref::defer_completion` | 后续轮次执行，不内联 |
 
-- **直接恢复例外**：`co_await task` 以对称转移在当前线程启动子任务，子任务完成后直接恢复等待方，不经事件循环；定时器到期（`timed_out` / `worker_stopping`）在 Worker 的定时器回调轮次中直接恢复等待方。
+- **直接恢复例外**：`co_await task` 以对称转移启动子任务，子任务完成后直接恢复等待方；仍采用定时器回调直接交付结果的等待在该回调轮次恢复。
 - **无需挂起**：`await_ready` 已能裁决的结果（数据就绪、已关闭、已取消、已过期）直接完成，不挂起也不跳转轮次。
 - **顺序**：同一线程发出的 `defer_resume` 按请求顺序执行；不同线程之间无顺序。
 - **运行义务**：事件循环在执行前被销毁时，已投递的恢复被丢弃、协程永不恢复；Worker 必须运行到其准入的全部操作完成。
@@ -990,7 +990,7 @@ flowchart LR
 | `void operator&() const = delete;` | 不可取址 |
 | `[[nodiscard]] bool await_ready();` | 须在绑定 Worker（否则 `std::logic_error`）；已停止或已到期时不挂起 |
 | `[[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation);` | 布置定时器；队列已停止时不挂起 |
-| `[[nodiscard]] timer_sleep_result await_resume() const noexcept;` | 正常到期且令牌未停止为 `elapsed`，否则 `stop_requested` |
+| `[[nodiscard]] timer_sleep_result await_resume() const noexcept;` | 返回完成时确定的结果：正常到期且令牌未停止为 `elapsed`，否则为 `stop_requested`。已挂起的睡眠在后续 Worker 轮次恢复 |
 
 <a id="api-worker-cancellation-h"></a>
 ### 6.5 `worker_cancellation.h`
