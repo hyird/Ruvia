@@ -2716,6 +2716,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 - **两种角色一个类型**：服务端路由（`c.websocket()`）、`request_stream::accept_websocket()` 与客户端 `http_client_websocket_request::connect()`（见 [`"http_client.h"`](#api-http-client-h)）都交付 `websocket`；服务端会话借用请求寿命，客户端返回拥有型句柄。
 - **协议承载**：服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 扩展 CONNECT（RFC 8441）与 HTTP/3 扩展 CONNECT（RFC 9220），路由代码统一。
+- **握手写出**：HTTP/1.1 直接散写协议计划的稳定首部切片，不额外拼接完整首部；需要 `100 Continue` 时先于 `101` 写出。
 - **协议核心类型**：`websocket_message`、`websocket_opcode`、`websocket_termination`、`websocket_close_code` / `websocket_close_status`、`websocket_server_deflate_options`、`websocket_client_deflate_offer` 见 [`"websocket_connection.h"`](ruvia-http.md#api-websocket-connection-h)；`protocol_byte_limit` 见 [`"http_protocol.h"`](ruvia-http.md#api-http-protocol-h)。
 - **生命周期时限**：`websocket_lifecycle_options` 由服务端路由、`accept_websocket()` 与客户端 `lifecycle()` 共用；设置值必须为正，否则配置时抛 `std::invalid_argument`；超时中止传输（不发 Close），`termination()` 记为 `timeout`。
 - **worker 亲和**：会话只能在所属 worker 上使用。

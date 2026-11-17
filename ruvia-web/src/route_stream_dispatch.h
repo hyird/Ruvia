@@ -13,6 +13,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <asio/buffer.hpp>
 #include <asio/write.hpp>
@@ -383,10 +384,10 @@ task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_v
 // carried Expect: 100-continue, the HTTP-owned
 // http_request_expectations::continue_before_switching_protocols() decision
 // puts a 100 (Continue) head before it in the same write, even when no content
-// follows. Any other status is written alone. `head` is the complete encoded
-// final head; it must stay valid until the returned task completes.
-template <typename stream_type>
-[[nodiscard]] task<std::error_code> write_http1_upgrade_response_head(stream_type& stream, const http_request_expectations& expectations, http_status_code status, std::string_view head, connection_scanner::entry& scanner_entry) {
+// follows. Any other status is written alone. `head` borrows either encoded
+// bytes or an owned WebSocket handshake plan through task completion.
+template <typename stream_type, typename head_type>
+[[nodiscard]] task<std::error_code> write_http1_upgrade_response_head(stream_type& stream, const http_request_expectations& expectations, http_status_code status, head_type head, connection_scanner::entry& scanner_entry) {
     constexpr std::size_t continue_head_capacity = 64;
     std::array<char, continue_head_capacity> continue_bytes;
     std::string_view continue_head;
@@ -398,7 +399,34 @@ template <typename stream_type>
         }
         continue_head = prepared_head->head();
     }
-    const std::array<asio::const_buffer, 2> buffers{asio::buffer(continue_head), asio::buffer(head)};
+    constexpr bool contiguous_head = std::is_same_v<head_type, std::string_view>;
+    // Keep ordinary handshakes inline; overflow stores descriptors, not bytes.
+    std::array<asio::const_buffer, contiguous_head ? 2 : 64> inline_buffers;
+    std::conditional_t<contiguous_head, std::monostate, std::vector<asio::const_buffer>> overflow;
+    std::span<const asio::const_buffer> buffers;
+    if constexpr (contiguous_head) {
+        inline_buffers = {asio::buffer(continue_head), asio::buffer(head)};
+        buffers = inline_buffers;
+    } else {
+        std::size_t used = 0;
+        const auto append = [&](std::string_view part) {
+            if (part.empty()) {
+                return;
+            }
+            if (overflow.empty() && used < inline_buffers.size()) {
+                inline_buffers[used++] = asio::buffer(part);
+                return;
+            }
+            if (overflow.empty()) {
+                overflow.reserve(inline_buffers.size() * 2);
+                overflow.insert(overflow.end(), inline_buffers.begin(), inline_buffers.end());
+            }
+            overflow.push_back(asio::buffer(part));
+        };
+        append(continue_head);
+        head->for_each_response_part(append);
+        buffers = overflow.empty() ? std::span<const asio::const_buffer>(inline_buffers.data(), used) : std::span<const asio::const_buffer>(overflow);
+    }
     const connection_scanner::entry::write_scope write_stall_clock(scanner_entry);
     const auto written = co_await ruvia::async_asio<std::size_t>([&stream, &buffers](auto handler) {
         asio::async_write(stream, buffers, std::move(handler));
@@ -410,19 +438,6 @@ template <typename stream_type>
 // protocol plan copies the views before this temporary pointer table is freed.
 [[nodiscard]] inline inline_http_header_views<> websocket_response_headers(context& context_value) {
     return inline_http_header_views<>(context_access::handshake_headers(context_value));
-}
-
-// Flush the exact HTTP-owned 101 handshake prepared by the route. Negotiation is
-// not recomputed and no compression bool is returned through a side channel.
-// The shared HTTP/1 upgrade-head writer applies the request `expectations`
-// (100 Continue before 101, RFC 9110 section 7.8).
-template <typename stream_type>
-task<std::error_code> write_websocket_handshake(stream_type& stream, const http1_websocket_handshake_plan& handshake, const http_request_expectations& expectations, connection_scanner::entry& scanner_entry) {
-    http_response_head_buffer head;
-    handshake.for_each_response_part([&](std::string_view part) {
-        head.append(part);
-    });
-    co_return co_await write_http1_upgrade_response_head(stream, expectations, http_status::switching_protocols, head.view(), scanner_entry);
 }
 
 // The shared shape of every upgrade-capable route (CONNECT / CONNECT-UDP

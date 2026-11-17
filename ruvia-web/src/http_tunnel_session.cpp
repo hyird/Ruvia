@@ -161,22 +161,19 @@ task<void> tls_tunnel_output::run_writer() {
     }
 }
 task<std::error_code> tls_tunnel_output::flush() {
-    if (!worker_.is_current() || !started_) {
-        std::terminate();
-    }
-    while (!error_ && size_ != 0) {
-        co_await flushed_.wait();
-    }
-    co_return error_;
+    return flush(http_stream_end::keep_open);
 }
 task<std::error_code> tls_tunnel_output::finish() {
+    return flush(http_stream_end::end);
+}
+task<std::error_code> tls_tunnel_output::flush(http_stream_end end) {
     if (!worker_.is_current() || !started_) {
         std::terminate();
     }
     if (error_) {
         co_return error_;
     }
-    if (!send_ended_) {
+    if (end == http_stream_end::end && !send_ended_) {
         ERR_clear_error();
         const auto result_value = SSL_shutdown(&ssl_);
         if (result_value < 0) {
@@ -186,7 +183,10 @@ task<std::error_code> tls_tunnel_output::finish() {
         }
         send_ended_ = true;
     }
-    co_return co_await flush();
+    while (!error_ && size_ != 0) {
+        co_await flushed_.wait();
+    }
+    co_return error_;
 }
 task<void> tls_tunnel_output::join() {
     stopping_ = true;

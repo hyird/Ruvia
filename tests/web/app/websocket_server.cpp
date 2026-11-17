@@ -26,6 +26,7 @@
 #include "blocking_pool.h"
 #include "event_loop.h"
 #include "http_client.h"
+#include "http_header.h"
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "request_stream.h"
@@ -242,6 +243,11 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
         co_await request.stream().end();
         co_return;
     }
+    if (path == "/wire") {
+        for (unsigned index = 0; index < 20; ++index) {
+            request.policy().header(std::string("X-Scatter-").append(std::to_string(index)), "owned-handshake-field");
+        }
+    }
     ruvia::websocket_route_config config{.subprotocols_ = {"standalone.v1"}, .require_subprotocol_ = true, .lifecycle_ = {.close_handshake_timeout_ = 40ms}, .deflate_ = {.context_takeover_ = true}};
     if (path == "/heartbeat") {
         config.lifecycle_.heartbeat_ = {.ping_interval_ = 20ms, .pong_timeout_ = 40ms};
@@ -437,6 +443,11 @@ public:
             EXPECT_EQ(tunnel->protocol_version(), destination.version_);
             EXPECT_EQ(tunnel->header("Sec-WebSocket-Protocol"), "standalone.v1");
             EXPECT_TRUE(tunnel->header("Sec-WebSocket-Extensions").has_value());
+            if (path == "/wire") {
+                for (unsigned index = 0; index < 20; ++index) {
+                    EXPECT_EQ(tunnel->header(std::string("X-Scatter-").append(std::to_string(index))), "owned-handshake-field");
+                }
+            }
             if (prebuffer) {
                 co_await write(masked_frame(1, "prebuffered"));
             }
@@ -469,6 +480,25 @@ public:
         EXPECT_NE(response.find("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="), std::string::npos);
         EXPECT_NE(response.find("standalone.v1"), std::string::npos);
         EXPECT_NE(response.find("permessage-deflate"), std::string::npos);
+        if (path == "/wire") {
+            std::vector<ruvia::http_header_view> fields;
+            fields.reserve(32);
+            std::string_view remaining(response);
+            remaining.remove_prefix(remaining.find("\r\n") + 2);
+            for (auto end = remaining.find("\r\n"); end != std::string_view::npos && end != 0; end = remaining.find("\r\n")) {
+                const auto line = remaining.substr(0, end);
+                const auto colon = line.find(':');
+                if (colon != std::string_view::npos) {
+                    fields.emplace_back(line.substr(0, colon), ruvia::http_trim_ows(line.substr(colon + 1)));
+                }
+                remaining.remove_prefix(end + 2);
+            }
+            for (unsigned index = 0; index < 20; ++index) {
+                const auto field = ruvia::find_unique_http_header(fields, std::string("X-Scatter-").append(std::to_string(index)));
+                EXPECT_EQ(field.status_, ruvia::unique_lookup_status::found);
+                EXPECT_EQ(field.value_, "owned-handshake-field");
+            }
+        }
         input_.erase(0, read.result());
     }
 

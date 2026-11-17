@@ -70,6 +70,7 @@ private:
     static int write_bio(BIO* bio, const char* bytes, std::size_t size, std::size_t* written) noexcept;
     static long control_bio(BIO*, int command, long, void*) noexcept;
     [[nodiscard]] task<void> run_writer();
+    [[nodiscard]] task<std::error_code> flush(http_stream_end end);
     void fail(std::error_code error) noexcept;
 
     SSL& ssl_;

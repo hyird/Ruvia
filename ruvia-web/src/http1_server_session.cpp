@@ -2396,7 +2396,7 @@ struct http1_tunnel_upgrade_commit final {
         }
         const auto handshake = prepare_http1_websocket_handshake(dispatch_.parsed_.request(), {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()});
         context_access::commit_upgrade(context_value);
-        if (const auto error = co_await write_websocket_handshake(dispatch_.stream_, handshake, dispatch_.parsed_.body_plan().expectations(), dispatch_.scanner_entry_)) {
+        if (const auto error = co_await write_http1_upgrade_response_head(dispatch_.stream_, dispatch_.parsed_.body_plan().expectations(), http_status::switching_protocols, &handshake, dispatch_.scanner_entry_)) {
             throw inbound_transport_error(error, "WebSocket handshake write");
         }
         tail_.record_access(dispatch_.options_.access_log_, http_status::switching_protocols);
@@ -2490,7 +2490,7 @@ struct http1_websocket_upgrade_commit final {
     [[nodiscard]] task<websocket_upgrade_commit<stream_type>> operator()(context& context_value, std::span<const http_header_view> response_headers_value) const {
         const auto handshake = prepare_http1_websocket_handshake(dispatch_.parsed_.request(), {.supported_subprotocols_ = websocket_endpoint_.subprotocols(), .response_headers_ = response_headers_value, .deflate_ = websocket_endpoint_.deflate()});
         context_access::commit_upgrade(context_value);
-        if (const auto ec = co_await write_websocket_handshake(dispatch_.stream_, handshake, dispatch_.parsed_.body_plan().expectations(), dispatch_.scanner_entry_); ec) {
+        if (const auto ec = co_await write_http1_upgrade_response_head(dispatch_.stream_, dispatch_.parsed_.body_plan().expectations(), http_status::switching_protocols, &handshake, dispatch_.scanner_entry_); ec) {
             throw inbound_transport_error(ec, "WebSocket handshake write");
         }
         tail_.record_access(dispatch_.options_.access_log_, http_status::switching_protocols);
