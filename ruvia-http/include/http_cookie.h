@@ -147,10 +147,19 @@ struct cookie_options final {
 template <typename visitor_type>
 inline void http_visit_cookie_pairs(std::string_view value, visitor_type&& visitor) {
     while (!value.empty()) {
+        const auto separator = value.find_first_of("=;");
+        if (separator == std::string_view::npos) {
+            return;
+        }
+        if (value[separator] == ';') {
+            value.remove_prefix(separator + 1);
+            continue;
+        }
+        const auto name = http_trim_ows(value.substr(0, separator));
+        value.remove_prefix(separator + 1);
         const auto semicolon = value.find(';');
-        const auto part = http_trim_ows(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
-        const auto equals = part.find('=');
-        if (equals != std::string_view::npos && !visitor(http_trim_ows(part.substr(0, equals)), http_trim_ows(part.substr(equals + 1)))) {
+        const auto cookie_value = http_trim_ows(value.substr(0, semicolon));
+        if (!visitor(name, cookie_value)) {
             return;
         }
         if (semicolon == std::string_view::npos) {

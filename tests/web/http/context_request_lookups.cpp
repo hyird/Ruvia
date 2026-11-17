@@ -129,14 +129,14 @@ TEST(Ruvia, context_request_cookie_fields_include_repeated_cookie_headers) {
 }
 
 TEST(Ruvia, context_request_cookie_fields_preserve_literal_syntax_and_case_sensitive_names) {
-    auto request = make_request("/", {http_header_view{"Cookie", "x=first; ignored; = unnamed; q=\"a;b\""}, http_header_view{"X-Other", "unrelated=value"}, http_header_view{"cOoKiE", "X=upper; x = last ; empty=;"}});
+    auto request = make_request("/", {http_header_view{"Cookie", "x=first; ignored; = unnamed; q=\"a;b\""}, http_header_view{"X-Other", "unrelated=value"}, http_header_view{"cOoKiE", "X=upper; x = last ; empty=; token = a=b=c ;"}});
     const auto response = ruvia::test::with_context(request, [](ruvia::context& context) -> ruvia::task<void> {
         EXPECT_EQ(context.req().cookie("x").value_or("missing"), "first");
         EXPECT_EQ(context.req().cookie("X").value_or("missing"), "upper");
         const auto& fields = context.req().cookie_fields();
-        const http_header_view expected[] = {{"x", "first"}, {"", "unnamed"}, {"q", "\"a"}, {"X", "upper"}, {"x", "last"}, {"empty", ""}};
-        EXPECT_EQ(fields.size(), std::size_t{6});
-        if (fields.size() == 6) {
+        const http_header_view expected[] = {{"x", "first"}, {"", "unnamed"}, {"q", "\"a"}, {"X", "upper"}, {"x", "last"}, {"empty", ""}, {"token", "a=b=c"}};
+        EXPECT_EQ(fields.size(), std::size(expected));
+        if (fields.size() == std::size(expected)) {
             for (std::size_t i = 0; i != fields.size(); ++i) {
                 EXPECT_EQ(fields[i].name(), expected[i].name());
                 EXPECT_EQ(fields[i].value(), expected[i].value());
@@ -148,6 +148,7 @@ TEST(Ruvia, context_request_cookie_fields_preserve_literal_syntax_and_case_sensi
         EXPECT_EQ(fields.get("").value_or("missing"), "unnamed");
         EXPECT_EQ(context.req().cookie("q").value_or("missing"), "\"a");
         EXPECT_EQ(context.req().cookie("empty").value_or("missing"), "");
+        EXPECT_EQ(context.req().cookie("token").value_or("missing"), "a=b=c");
         context.respond(context.text(ruvia::static_text("ok")));
         co_return;
     });

@@ -5499,7 +5499,7 @@ inline void http_visit_cookie_pairs(std::string_view value, visitor_type&& visit
 | `cookie_name_prefix(name)` | 线路名称以 `__Host-` 或 `__Secure-` 开头时（与用户代理一样按 ASCII 大小写不敏感匹配，RFC 6265bis §4.1.3）返回对应前缀，否则 `std::nullopt` |
 | `cookie_prefix_requirements_met(prefix, secure, path, domain)` | RFC 6265bis §4.1.3：`secure` 前缀要求 `secure`；`host` 前缀还要求 `path == "/"` 且 `domain` 为空。`path` 为 `Path` 属性值，缺失时传空 |
 | `http_cookie_prefix_text(prefix)` | 返回静态字面量 `"__Secure-"` 或 `"__Host-"`；未定义枚举值返回空 |
-| `http_visit_cookie_pairs(value, visitor)` | 遍历 `Cookie` 字段中以 `;` 分隔的字面 `name=value` 对。引号在 `Cookie` 字段中无特殊含义；不含 `=` 的段被跳过；名称与值去除首尾 OWS；`visitor(name, value)` 返回 `false` 时停止。视图借用 `value` |
+| `http_visit_cookie_pairs(value, visitor)` | 单遍识别 `;` 分段和段内第一个 `=`；引号无特殊含义，不含 `=` 的段跳过。名称与值去除首尾 OWS；`visitor(name, value)` 返回 `false` 时停止。视图借用 `value` |
 
 #### 9.4.4 `struct cookie_options`
 
