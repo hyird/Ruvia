@@ -449,8 +449,8 @@ redis_subscription redis_executor::subscription() const {
 redis_executor redis_executor::bind_caller_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
     registration_.require_active();
     redis_executor bound(*runtime_, scope, io_metrics);
-    bound.operation_options_ = operation_options_;
     bound.request_stop_ = stop_token_value;
+    bound.operation_options_ = std::move(operation_options_);
     return bound;
 }
 

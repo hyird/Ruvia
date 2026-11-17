@@ -2894,7 +2894,7 @@ ruvia::task<void> echo(ruvia::context& c) {
 - **承载**：普通 CONNECT（RFC 9110 §9.3.6、RFC 9114 §4.4）、扩展 CONNECT（RFC 8441、RFC 9220）、HTTP/1.1 Upgrade 与 CONNECT-UDP（RFC 9298）。路由注册（`connect` / `connect_protocol`）见 [`"router.h"`](#api-router-h)。
 - **适配器**：`capsules()` 返回 RFC 9297 可靠 Capsule 流；`datagrams()` 交换原始 HTTP Datagram 负载（保留协议自己的 Context ID）；`udp()` 交换 CONNECT-UDP 的 UDP 包（自动加/去 Context ID 0、静默丢弃未知 Context ID）。适配后隧道的 `read()` / `write()` 抛 `std::logic_error`，不得交错使用。`http_capsule_options`、`http_datagram_mode` 见 [`"http_capsule.h"`](ruvia-http.md#api-http-capsule-h)。
 - **协商**：协议负责协商；未协商时三者抛 `std::logic_error` 且隧道保持可用。服务端路由声明 `http_tunnel_route_config::datagrams_` 即协商三者；客户端每个已接受隧道都可 `capsules()`，`datagrams()` 与 `udp()` 需要已接受的 CONNECT-UDP 隧道。Capsule Protocol 负载上限同时作用于原生数据报与可靠 DATAGRAM Capsule。
-- **预算**：服务端隧道收到的块计入连接级与 worker 级入站缓冲预算（`server_config::max_inbound_buffer_bytes_per_connection_` / `_per_worker_`），超出时读取抛 `std::bad_alloc`；客户端隧道每次写入受 `http_client_tunnel_config::max_chunk_bytes_` 约束（`std::length_error`），传输失败、中断与已关闭隧道上的操作报告为 `http_client_error`。
+- **预算**：服务端隧道的入站队列与保留读缓冲分别计入连接级与 worker 级入站缓冲预算（`server_config::max_inbound_buffer_bytes_per_connection_` / `_per_worker_`），超出时读取抛 `std::bad_alloc`；客户端隧道每次写入受 `http_client_tunnel_config::max_chunk_bytes_` 约束（`std::length_error`），传输失败、中断与已关闭隧道上的操作报告为 `http_client_error`。
 
 #### 9.4.2 使用指引
 
@@ -2995,6 +2995,9 @@ RFC 9297 可靠 Capsule Protocol。只能经 `http_tunnel::capsules()` 创建。
 | `task<void> finish(operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
 | `void abort() & noexcept` | 中止流并唤醒挂起 I/O |
 | `void abort() && = delete` | 禁止对临时对象调用：该操作只对仍被持有的对象有意义 |
+
+- **写入存储**：整帧直接移交传输；客户端超限帧由同一拥有型任务分片，每片独立持有发送存储。
+- **分片期限**：全部片段共用同一绝对操作截止期，不按片刷新超时。
 
 #### 9.4.7 `class http_datagram final`
 

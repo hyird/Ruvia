@@ -933,7 +933,7 @@ private:
     }
 
     template <typename buffer_type>
-    [[nodiscard]] bool consume_tunnel_chunk(buffer_type& buffer) {
+    [[nodiscard]] bool consume_tunnel_chunk(buffer_type& buffer, inbound_buffer_reservation* reservation) {
         const auto chunk = body_queue_.pop();
         // pop() returns the previous chunk's receive-window credit; flush
         // the WINDOW_UPDATE even if this reader suspends below.
@@ -943,7 +943,11 @@ private:
         if (chunk.empty()) {
             return false;
         }
-        buffer.append(std::string_view(chunk.data(), chunk.size()));
+        if (reservation != nullptr) {
+            inbound_append(buffer, *reservation, std::string_view(chunk.data(), chunk.size()));
+        } else {
+            buffer.append(std::string_view(chunk.data(), chunk.size()));
+        }
         (void)body_queue_.release_active();
         if (connection_.wants_write()) {
             wake_writer();

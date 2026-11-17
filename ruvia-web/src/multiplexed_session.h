@@ -1040,12 +1040,13 @@ public:
     // A cancellation emitted on `slot` wakes the wait; `check` runs before
     // every wait and may throw to abandon it. Input that has not been
     // consumed stays queued for the next read_more().
+    // Charge the retained read buffer before releasing the queued input.
     template <typename buffer_type, typename check_type>
-    [[nodiscard]] task<bool> read_more(buffer_type& buffer, check_type check, asio::cancellation_slot slot) {
+    [[nodiscard]] task<bool> read_more(buffer_type& buffer, check_type check, asio::cancellation_slot slot, inbound_buffer_reservation* reservation = nullptr) {
         const wake_assignment assignment(signal_, slot);
         for (;;) {
             derived().require_live();
-            if (derived().consume_tunnel_chunk(buffer)) {
+            if (derived().consume_tunnel_chunk(buffer, reservation)) {
                 co_return true;
             }
             if (derived().receive_ended()) {

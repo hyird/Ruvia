@@ -8,6 +8,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <new>
 #include <optional>
 #include <semaphore>
 #include <set>
@@ -19,6 +20,7 @@
 #include <thread>
 #include <utility>
 #include <variant>
+#include <vector>
 #if !defined(_WIN32)
 #include <sys/socket.h>
 #endif
@@ -48,9 +50,11 @@
 #include "http_request_head_view.h"
 #include "http_response.h"
 #include "http_server_fixture.h"
+#include "request_stream.h"
 #include "stop_token.h"
 #include "streaming.h"
 #include "task_scope.h"
+#include "worker_signal.h"
 // End to end over loopback UDP: a real application with an HTTPS listener and
 // an HTTP/3 service on the same port number, four workers, and an ngtcp2 +
 // nghttp3 client (http3_test_client.h).
@@ -1077,9 +1081,197 @@ ruvia::test::http3_raw_request_client connect_raw(std::uint16_t port, const ruvi
     return ruvia::test::http3_raw_request_client({asio::ip::address_v4::loopback(), port}, identity.ca_file_, "localhost", client_timeout);
 }
 
+namespace retained_tunnel_budget {
+constexpr std::size_t payload_bytes = 6 * 1024;
+constexpr std::size_t inbound_limit = 32 * 1024;
+constexpr std::size_t stream_count = 8;
+
+struct observation final {
+    explicit observation(const ruvia::worker_ref& worker) :
+        read_(worker),
+        release_(worker) {}
+
+    ruvia::worker_signal read_;
+    ruvia::worker_signal release_;
+    std::array<std::optional<std::string_view>, stream_count> held_{};
+    std::size_t entered_{};
+    std::size_t exited_{};
+    bool stopping_{};
+};
+
+ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
+    if (!request.tunnel_requested()) {
+        if (request.request().path() == "/read") {
+            observed.read_.notify();
+            request.respond(request.text("ready"));
+        } else {
+            std::size_t held = 0;
+            for (std::size_t index = 0; index < observed.held_.size(); ++index) {
+                if (const auto view = observed.held_[index]) {
+                    EXPECT_EQ(view->size(), payload_bytes);
+                    EXPECT_TRUE(std::ranges::all_of(*view, [index](char byte) {
+                        return byte == static_cast<char>('a' + index);
+                    }));
+                    ++held;
+                }
+            }
+            observed.stopping_ = true;
+            observed.read_.notify();
+            observed.release_.notify();
+            request.respond(request.text(std::to_string(held)));
+        }
+        co_return;
+    }
+
+    const auto index = observed.entered_++;
+    struct retirement final {
+        observation& observed_;
+        std::size_t index_;
+        ~retirement() {
+            if (index_ < observed_.held_.size()) {
+                observed_.held_[index_].reset();
+            }
+            ++observed_.exited_;
+        }
+    } retired{observed, index};
+    auto* tunnel = co_await request.accept_tunnel();
+    if (observed.stopping_) {
+        if (const auto bytes = co_await tunnel->read_text()) {
+            co_await tunnel->write(*bytes);
+        }
+        co_await tunnel->finish();
+        co_return;
+    }
+
+    // The client first waits for QUIC acknowledgements of the complete
+    // payload, then opens this gate with a separate request. Thus the first
+    // read takes one queued chunk larger than the small-buffer retention
+    // threshold, independent of UDP packet boundaries or scheduling.
+    co_await observed.read_.wait();
+    if (observed.stopping_) {
+        tunnel->abort();
+        co_return;
+    }
+    try {
+        const auto bytes = co_await tunnel->read_text();
+        if (!bytes || index >= observed.held_.size()) {
+            throw std::runtime_error("missing retained HTTP/3 tunnel payload");
+        }
+        observed.held_[index] = *bytes;
+        EXPECT_EQ(bytes->size(), payload_bytes);
+        co_await tunnel->write("held");
+        // No second read: the acknowledged view must stay valid and charged
+        // while later CONNECT streams consume this connection's budget.
+        co_await observed.release_.wait();
+        EXPECT_EQ(bytes->size(), payload_bytes);
+        EXPECT_TRUE(std::ranges::all_of(*bytes, [index](char byte) {
+            return byte == static_cast<char>('a' + index);
+        }));
+        co_await tunnel->finish();
+    } catch (const std::bad_alloc&) {
+        request.reset();
+    }
+}
+
+void exercise(std::uint16_t port, const ruvia::test::tls_identity& identity) {
+    auto client = connect(port, identity);
+    std::vector<std::int64_t> held;
+    bool limited = false;
+    std::size_t delivered = 0;
+    for (std::size_t index = 0; index < stream_count; ++index) {
+        const auto stream = client.start_tunnel({.method_ = "CONNECT", .authority_ = "budget.test:443"});
+        EXPECT_EQ(client.wait_for_response_head(stream).status_, 200);
+        const std::string payload(payload_bytes, static_cast<char>('a' + index));
+        client.send_stream_data(stream, byte_view(payload), true);
+        if (!client.wait_until([&] {
+            return client.request_closed(stream) || client.unacknowledged_data_bytes(stream) == 0;
+        }, client_timeout)) {
+            throw std::runtime_error("retained HTTP/3 payload was not acknowledged");
+        }
+        EXPECT_EQ(client.request("GET", "/read").body_, "ready");
+        const auto acknowledgement = client.read_body_chunk(stream, client_timeout);
+        if (!acknowledgement) {
+            const auto failed = client.finish_response(stream);
+            EXPECT_TRUE(failed.reset_error_.has_value());
+            limited = true;
+            break;
+        }
+        EXPECT_EQ(*acknowledgement, "held");
+        held.push_back(stream);
+        delivered += payload.size();
+    }
+    EXPECT_GE(held.size(), 2U);
+    EXPECT_TRUE(limited) << "all " << delivered << " bytes remained readable with a " << inbound_limit << "-byte inbound budget";
+    EXPECT_LE(delivered, inbound_limit);
+
+    // This control response verifies every already-delivered view before
+    // explicitly releasing the handlers, even when the budget assertion fails.
+    EXPECT_EQ(client.request("GET", "/release").body_, std::to_string(held.size()));
+    for (const auto stream : held) {
+        EXPECT_FALSE(client.finish_response(stream).reset_error_.has_value());
+    }
+    const auto recovery = client.start_tunnel({.method_ = "CONNECT", .authority_ = "recover.test:443"});
+    EXPECT_EQ(client.wait_for_response_head(recovery).status_, 200);
+    const std::string small(128, 'r');
+    client.send_stream_data(recovery, byte_view(small), true);
+    const auto recovered = client.finish_response(recovery);
+    EXPECT_EQ(recovered.body_, small);
+    EXPECT_FALSE(recovered.reset_error_.has_value());
+    client.close();
+}
+
+void run() {
+    asio::io_context io;
+    ruvia::blocking_pool preparation({.thread_count_ = 1});
+    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &preparation});
+    auto loop = attachment.loop();
+    shared_port_reservation reservation(io);
+    const ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
+    observation observed(loop.worker());
+    const auto run = [&]() -> ruvia::task<void> {
+        ruvia::http_server server(loop,
+            {.request_stream_ = [&](ruvia::request_stream& request) {
+            return serve(request, observed);
+        }},
+            {.max_inbound_buffer_bytes_per_worker_ = inbound_limit, .max_inbound_buffer_bytes_per_connection_ = inbound_limit});
+        server.listen({.address_ = "127.0.0.1", .https_ = reservation.port(), .http3_ = reservation.port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::request_stream});
+        std::exception_ptr failure;
+        try {
+            co_await server.start();
+            auto result = co_await ruvia::run_blocking(loop.worker(), [&] {
+                exercise(reservation.port(), identity);
+            });
+            result.value();
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        // Also wake gated/holding handlers on client exceptions, before
+        // joining the server and finally stopping its worker.
+        observed.stopping_ = true;
+        observed.read_.notify();
+        observed.release_.notify();
+        co_await server.shutdown();
+        EXPECT_EQ(observed.entered_, observed.exited_);
+        EXPECT_EQ(server.stats().active_connections_, 0U);
+        attachment.request_stop();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    auto root = loop.start(run());
+    attachment.run();
+    preparation.join();
+    std::move(root).get();
+}
+}  // namespace retained_tunnel_budget
+
 }  // namespace http3_serving_test
 
 using namespace http3_serving_test;
+
+TEST(Ruvia, independent_http3_connect_retained_read_views_obey_inbound_budget) {
+    retained_tunnel_budget::run();
+}
 
 TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
     ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");

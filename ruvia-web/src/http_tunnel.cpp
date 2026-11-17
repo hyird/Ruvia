@@ -183,19 +183,9 @@ public:
     [[nodiscard]] task<bool> send_datagram(std::string_view bytes, const operation_steps& steps) {
         return tunnel_->write_datagram_(tunnel_->target_, bytes, next_step(steps, "capsule write"));
     }
-    [[nodiscard]] task<void> send_bytes(std::string&& bytes_value, const operation_steps& steps) {
-        // A client tunnel bounds each write: a larger frame goes out in order.
-        const auto limit = memory_pin_ ? memory_pin_->state_->tunnel_->config_.max_chunk_bytes_ : bytes_value.size();
-        if (bytes_value.size() <= limit) {
-            co_await tunnel_->write_(tunnel_->target_, std::move(bytes_value), next_step(steps, "capsule write"));
-            co_return;
-        }
-        std::string_view remaining = bytes_value;
-        while (!remaining.empty()) {
-            const auto chunk = remaining.substr(0, limit);
-            co_await tunnel_->write_(tunnel_->target_, std::string(chunk), next_step(steps, "capsule write"));
-            remaining.remove_prefix(chunk.size());
-        }
+    [[nodiscard]] std::size_t write_limit(std::size_t bytes) const noexcept {
+        // A client tunnel bounds each write; the server can send the whole frame.
+        return memory_pin_ ? memory_pin_->state_->tunnel_->config_.max_chunk_bytes_ : bytes;
     }
     [[nodiscard]] task<void> finish_output(operation_options operation) {
         return tunnel_->finish_(tunnel_->target_, std::move(operation));
@@ -459,7 +449,17 @@ task<void> http_capsule_stream::write_frame(std::string_view prefix, outbound_by
                 }
                 input.bytes_.insert(0, header.data(), std::get<0>(encoded));
             }
-            co_await state_value.send_bytes(std::move(input.bytes_), steps);
+            const auto limit = state_value.write_limit(input.bytes_.size());
+            if (input.bytes_.size() <= limit) {
+                co_await state_value.tunnel_->write_(state_value.tunnel_->target_, std::move(input.bytes_), state_value.next_step(steps, "capsule write"));
+            } else {
+                std::string_view remaining = input.bytes_;
+                while (!remaining.empty()) {
+                    const auto chunk = remaining.substr(0, limit);
+                    co_await state_value.tunnel_->write_(state_value.tunnel_->target_, std::string(chunk), state_value.next_step(steps, "capsule write"));
+                    remaining.remove_prefix(chunk.size());
+                }
+            }
         } catch (...) {
             state_value.abort();
             throw;

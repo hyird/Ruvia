@@ -202,8 +202,8 @@ task<void> db_executor::notify(std::string_view channel, std::string_view payloa
 db_executor db_executor::bind_caller_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
     registration_.require_active();
     db_executor bound(client_, scope, io_metrics, cache_);
-    bound.options_ = options_;
     bound.request_stop_ = stop_token_value;
+    bound.options_ = std::move(options_);
     return bound;
 }
 

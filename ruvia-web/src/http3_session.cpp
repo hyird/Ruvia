@@ -309,13 +309,17 @@ private:
     }
 
     template <typename buffer_type>
-    [[nodiscard]] bool consume_tunnel_chunk(buffer_type& buffer) {
+    [[nodiscard]] bool consume_tunnel_chunk(buffer_type& buffer, inbound_buffer_reservation* reservation) {
         auto& queue = stream_.body_queue();
         const auto chunk = queue.pop();
         if (chunk.empty()) {
             return false;
         }
-        buffer.append(chunk);
+        if (reservation != nullptr) {
+            inbound_append(buffer, *reservation, chunk);
+        } else {
+            buffer.append(chunk);
+        }
         if (queue.release_active()) {
             session_.wake_writer();
         }

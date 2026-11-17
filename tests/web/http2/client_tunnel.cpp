@@ -4,17 +4,25 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
 
 #include <asio.hpp>
 
 #include "app.h"
+#include "channel.h"
 #include "content_decoding_fixture.h"
 #include "context.h"
 #include "controller.h"
@@ -22,9 +30,12 @@
 #include "http2_connection.h"
 #include "http_client.h"
 #include "http_response.h"
+#include "http_server.h"
 #include "http_server_fixture.h"
+#include "request_stream.h"
 #include "streaming.h"
 #include "task_scope.h"
+#include "worker_signal.h"
 #include "worker_task_fixture.h"
 namespace {
 struct tunnel_observation {
@@ -695,4 +706,217 @@ TEST(Ruvia, http2_client_stale_tunnel_malformed_abort_does_not_reset_reconnected
     EXPECT_TRUE(udp1_threw);
     EXPECT_EQ(second_conn_rst_stream_id, std::uint32_t{0});
     EXPECT_EQ(second_conn_rst_code, std::uint32_t{0});
+}
+
+namespace {
+struct held_tunnel_read final {
+    std::size_t bytes_{};
+    bool limited_{};
+};
+
+void exercise_http2_held_tunnel_budget(bool worker_budget) {
+    asio::io_context io;
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::tcp_port_reservation port(io);
+    const auto run = [&]() -> ruvia::task<void> {
+        const auto& worker = attachment.loop().worker();
+        auto [read_sender, reads] = ruvia::make_channel<held_tunnel_read>(worker, {.capacity_ = 7});
+        auto [exit_sender, exits] = ruvia::make_channel<unsigned>(worker, {.capacity_ = 7});
+        ruvia::worker_signal permit_read(worker), release_views(worker);
+        bool releasing = false;
+        bool stopping = false;
+        unsigned entered = 0;
+        unsigned retired = 0;
+        unsigned intact = 0;
+        std::uint64_t connection_id = 0;
+        std::exception_ptr handler_failure;
+        constexpr std::size_t payload_bytes = 8192;
+        // Two retained reads fit even while the next queue grows. Six held
+        // reads cannot fit, irrespective of queue capacity or socket splits.
+        // Each consumed queue is above the small-storage retention threshold.
+        constexpr std::size_t budget = 40000;
+        ruvia::http_server server(attachment.loop(),
+            {.request_stream_ = [&](ruvia::request_stream& request) -> ruvia::task<void> {
+            if (!request.tunnel_requested()) {
+                EXPECT_EQ(request.conn().connection_id(), connection_id);
+                request.respond(request.text("barrier"));
+                co_return;
+            }
+            ++entered;
+            if (connection_id == 0) {
+                connection_id = request.conn().connection_id();
+            }
+            EXPECT_EQ(request.conn().connection_id(), connection_id);
+            try {
+                auto* tunnel = co_await request.accept_tunnel();
+                co_await permit_read.wait();
+                if (!stopping) {
+                    std::optional<std::span<const std::byte>> view;
+                    bool limited = false;
+                    try {
+                        view = co_await tunnel->read({.timeout_ = std::chrono::seconds(5)});
+                    } catch (const std::bad_alloc&) {
+                        limited = true;
+                    } catch (const std::system_error& error) {
+                        // A queue allocation can hit the same budget before
+                        // this read: after 2xx that failure resets the stream.
+                        if (error.code() != std::make_error_code(std::errc::connection_reset) && error.code() != std::make_error_code(std::errc::operation_canceled)) {
+                            throw;
+                        }
+                        limited = true;
+                    }
+                    EXPECT_TRUE(read_sender.send({view ? view->size() : 0, limited}).accepted());
+                    if (limited) {
+                        request.reset();
+                    } else if (view) {
+                        co_await tunnel->write("held", {.timeout_ = std::chrono::seconds(5)});
+                        if (!releasing) {
+                            co_await release_views.wait();
+                        }
+                        const auto text = std::string_view(reinterpret_cast<const char*>(view->data()), view->size());
+                        EXPECT_TRUE(std::all_of(text.begin(), text.end(), [](char byte) {
+                            return byte == 'v';
+                        }));
+                        ++intact;
+                        co_await tunnel->finish({.timeout_ = std::chrono::seconds(5)});
+                    }
+                }
+            } catch (...) {
+                handler_failure = std::current_exception();
+                request.reset();
+            }
+            ++retired;
+            EXPECT_TRUE(exit_sender.send(retired).accepted());
+        }},
+            {.connection_scan_interval_ = std::chrono::milliseconds(5),
+                .max_inbound_buffer_bytes_per_worker_ = worker_budget ? budget : 1024 * 1024,
+                .max_inbound_buffer_bytes_per_connection_ = worker_budget ? 1024 * 1024 : budget});
+        server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
+        const std::string client_url = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
+        ruvia::http_client client(attachment.loop(),
+            {.base_url_ = client_url,
+                .connection_limits_ = {.max_open_ = 1},
+                .request_timeout_ = std::chrono::seconds(5),
+                .versions_ = ruvia::http_client_versions{.http1_ = false}});
+        std::vector<ruvia::http_client_tunnel> tunnels;
+        tunnels.reserve(7);
+        std::exception_ptr failure;
+        try {
+            co_await server.start();
+            const auto origin = client.client();
+            const auto queue_and_read = [&](std::size_t bytes) -> ruvia::task<held_tunnel_read> {
+                auto opened = co_await origin.connect("held-budget.test:443").connect();
+                if (!opened.tunnel()) {
+                    throw std::runtime_error("held-view CONNECT rejected");
+                }
+                EXPECT_TRUE(opened.tunnel()->protocol_version() == ruvia::http_protocol_version::http2);
+                tunnels.emplace_back(std::move(*opened.tunnel()));
+                co_await tunnels.back().stream().write(std::string(bytes, 'v'), {.timeout_ = std::chrono::seconds(5)});
+                // A later request on this same HTTP/2 connection proves the
+                // complete DATA was processed before the handler starts its
+                // read. This removes socket fragmentation from the test.
+                auto barrier = co_await origin.get("/held-budget-barrier").send();
+                const auto barrier_body = co_await barrier.bytes();
+                EXPECT_EQ(barrier_body.text(), std::string_view("barrier"));
+                permit_read.notify();
+                const auto read = co_await reads.receive({.timeout_ = std::chrono::seconds(5)});
+                if (!read.has_value()) {
+                    throw std::runtime_error("held-view read did not report its result");
+                }
+                co_return read.value();
+            };
+            const auto acknowledge = [&](ruvia::http_client_tunnel& tunnel) -> ruvia::task<void> {
+                const auto bytes = co_await tunnel.stream().read_text({.timeout_ = std::chrono::seconds(5)});
+                EXPECT_TRUE(bytes && *bytes == "held");
+            };
+            unsigned held = 0;
+            bool limited = false;
+            for (unsigned index = 0; index != 6; ++index) {
+                const auto read = co_await queue_and_read(payload_bytes);
+                if (index < 2) {
+                    EXPECT_FALSE(read.limited_);
+                }
+                if (read.limited_) {
+                    EXPECT_EQ(read.bytes_, 0U);
+                    limited = true;
+                    break;
+                }
+                EXPECT_EQ(read.bytes_, payload_bytes);
+                co_await acknowledge(tunnels.back());
+                ++held;
+            }
+            EXPECT_TRUE(limited) << "six handler-held HTTP/2 read views escaped the inbound budget";
+            if (limited) {
+                bool reset = false;
+                try {
+                    const auto bytes = co_await tunnels.back().stream().read({.timeout_ = std::chrono::seconds(5)});
+                    EXPECT_FALSE(bytes);
+                } catch (const ruvia::http_client_error& error) {
+                    reset = error.code() != std::make_error_code(std::errc::timed_out);
+                }
+                EXPECT_TRUE(reset);
+            }
+            for (auto& tunnel : tunnels) {
+                try {
+                    co_await tunnel.stream().finish({.timeout_ = std::chrono::seconds(5)});
+                } catch (const ruvia::http_client_error&) {
+                    // The budget-limited stream has already been reset.
+                }
+            }
+            releasing = true;
+            release_views.notify();
+            for (std::size_t index = 0; index != tunnels.size(); ++index) {
+                const auto exited = co_await exits.receive({.timeout_ = std::chrono::seconds(5)});
+                if (!exited.has_value()) {
+                    throw std::runtime_error("held-view handler did not retire");
+                }
+            }
+            EXPECT_EQ(intact, held);
+            for (unsigned index = 0; index != held; ++index) {
+                EXPECT_FALSE(co_await tunnels[index].stream().read({.timeout_ = std::chrono::seconds(5)}));
+            }
+            // Released storage must permit another read on the same connection.
+            const auto recovered = co_await queue_and_read(64);
+            EXPECT_FALSE(recovered.limited_);
+            EXPECT_EQ(recovered.bytes_, 64U);
+            co_await acknowledge(tunnels.back());
+            co_await tunnels.back().stream().finish({.timeout_ = std::chrono::seconds(5)});
+            EXPECT_FALSE(co_await tunnels.back().stream().read({.timeout_ = std::chrono::seconds(5)}));
+            const auto exited = co_await exits.receive({.timeout_ = std::chrono::seconds(5)});
+            EXPECT_TRUE(exited.has_value());
+            EXPECT_EQ(intact, held + 1);
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        stopping = true;
+        releasing = true;
+        permit_read.notify();
+        release_views.notify();
+        for (auto& tunnel : tunnels) {
+            tunnel.stream().abort();
+        }
+        co_await client.shutdown();
+        co_await server.shutdown();
+        EXPECT_EQ(entered, retired);
+        EXPECT_EQ(server.stats().active_connections_, 0U);
+        attachment.request_stop();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+        if (handler_failure) {
+            std::rethrow_exception(handler_failure);
+        }
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    std::move(root).get();
+}
+}  // namespace
+
+TEST(Ruvia, http2_tunnel_held_read_views_count_against_connection_inbound_budget) {
+    exercise_http2_held_tunnel_budget(false);
+}
+
+TEST(Ruvia, http2_tunnel_held_read_views_count_against_worker_inbound_budget) {
+    exercise_http2_held_tunnel_budget(true);
 }
