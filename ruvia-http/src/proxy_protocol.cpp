@@ -8,6 +8,9 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <vector>
+
+#include "http_io_buffer.h"
 
 namespace ruvia {
 namespace {
@@ -136,6 +139,7 @@ proxy_protocol_parse_result proxy_protocol_parser::parse(std::span<const std::by
         // Fail closed: the caller cannot know how much of an unbufferable
         // input was taken.
         state_ = decoder_state::failed;
+        clear_scratch();
         throw;
     }
 }
@@ -147,11 +151,23 @@ const proxy_protocol_header& proxy_protocol_parser::header() const& {
     return header_;
 }
 
+void proxy_protocol_parser::clear_scratch() noexcept {
+    if (tlvs_.capacity() > http_retained_string_bytes / sizeof(proxy_protocol_tlv)) {
+        std::vector<proxy_protocol_tlv>{}.swap(tlvs_);
+    } else {
+        tlvs_.clear();
+    }
+    if (buffer_.capacity() > http_retained_string_bytes) {
+        std::vector<std::byte>{}.swap(buffer_);
+    } else {
+        buffer_.clear();
+    }
+}
+
 void proxy_protocol_parser::reset() noexcept {
-    buffer_.clear();
-    tlvs_.clear();
     header_ = proxy_protocol_header();
-    v2_header_size_ = 0;
+    clear_scratch();
+    v2_remaining_ = 0;
     v2_family_ = 0;
     phase_ = parse_phase::signature;
     state_ = decoder_state::active;
@@ -181,9 +197,13 @@ proxy_protocol_parse_result proxy_protocol_parser::parse_bytes(std::span<const s
         }
     }
     if (state_ == decoder_state::failed) {
+        clear_scratch();
         return proxy_protocol_parse_result(0, proxy_protocol_parse_failure(failure_));
     }
     if (state_ == decoder_state::finished) {
+        if (header_.tlvs_.empty()) {
+            clear_scratch();
+        }
         return proxy_protocol_parse_result(position, decode_complete{});
     }
     return proxy_protocol_parse_result(position, decode_need_input{});
@@ -310,7 +330,7 @@ std::size_t proxy_protocol_parser::consume_v2_fixed(std::span<const std::byte> i
         reject(proxy_protocol_parse_error::v2_short_address_block);
         return position + 1;
     }
-    v2_header_size_ = v2_fixed_bytes + length;
+    v2_remaining_ = length;
     phase_ = parse_phase::v2_block;
     if (length == 0) {
         finish_v2();
@@ -318,13 +338,15 @@ std::size_t proxy_protocol_parser::consume_v2_fixed(std::span<const std::byte> i
     return position + 1;
 }
 
-// Spec §2.2: the receiver must not parse an address before the whole block
-// has arrived.
+// Spec §2.2: wait for the whole block even when it does not need buffering.
 std::size_t proxy_protocol_parser::consume_v2_block(std::span<const std::byte> input, std::size_t position) {
-    const auto taken = std::min(input.size() - position, v2_header_size_ - buffer_.size());
-    const auto chunk = input.subspan(position, taken);
-    buffer_.insert(buffer_.end(), chunk.begin(), chunk.end());
-    if (buffer_.size() == v2_header_size_) {
+    const auto taken = std::min(input.size() - position, v2_remaining_);
+    if (v2_has_known_proxy_family()) {
+        const auto chunk = input.subspan(position, taken);
+        buffer_.insert(buffer_.end(), chunk.begin(), chunk.end());
+    }
+    v2_remaining_ -= taken;
+    if (v2_remaining_ == 0) {
         finish_v2();
     }
     return position + taken;
@@ -371,10 +393,14 @@ void proxy_protocol_parser::finish_v1() {
     state_ = decoder_state::finished;
 }
 
+bool proxy_protocol_parser::v2_has_known_proxy_family() const noexcept {
+    return header_.command_ == proxy_protocol_command::proxy && v2_family_ != af_unspec;
+}
+
 void proxy_protocol_parser::finish_v2() {
     // Spec §2.2: LOCAL discards the block, family included. With AF_UNSPEC the
     // address length is unknown, so no TLV boundary can be located.
-    if (header_.command_ == proxy_protocol_command::local || v2_family_ == af_unspec) {
+    if (!v2_has_known_proxy_family()) {
         state_ = decoder_state::finished;
         return;
     }

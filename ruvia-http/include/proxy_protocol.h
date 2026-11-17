@@ -137,8 +137,7 @@ using proxy_protocol_parse_result = decode_step<decode_need_input, decode_comple
 // Invalid or over-limit input fails closed: parse() returns the failure and
 // the parser becomes failed, as it does when buffering the header throws.
 // A finished parser holds a complete header, available through header().
-// Only reset() leaves the finished or failed state; it keeps buffer capacity,
-// bounded by the v2 header limit.
+// Only reset() leaves the finished or failed state; it retains small buffers.
 class proxy_protocol_parser final {
 public:
     // Throws std::invalid_argument when max_v2_header_bytes_ is below 52.
@@ -179,17 +178,17 @@ private:
     [[nodiscard]] std::size_t consume_v2_block(std::span<const std::byte> input, std::size_t position);
     void finish_v1();
     void finish_v2();
+    [[nodiscard]] bool v2_has_known_proxy_family() const noexcept;
+    void clear_scratch() noexcept;
     // Marks the parser failed with `error`; the consume loop then stops.
     void reject(proxy_protocol_parse_error error) noexcept;
 
-    // Every header byte received so far. A vector, not a string: moving it
-    // keeps its storage, so the header's views survive a parser move.
+    // Wire bytes backing the TLV views. Moving the vector preserves storage.
     std::vector<std::byte> buffer_;
     std::vector<proxy_protocol_tlv> tlvs_;
     proxy_protocol_header header_{};
     std::size_t max_v2_header_bytes_;
-    // The v2 header size (16 + length), known once the fixed part is complete.
-    std::size_t v2_header_size_{0};
+    std::size_t v2_remaining_{0};
     std::uint8_t v2_family_{0};
     parse_phase phase_{parse_phase::signature};
     decoder_state state_{decoder_state::active};

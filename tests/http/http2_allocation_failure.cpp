@@ -11,6 +11,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -24,6 +25,7 @@
 #include "http_range.h"
 #include "http_response.h"
 #include "http_server_sent_events.h"
+#include "proxy_protocol.h"
 
 // Replacement operators belong only to this isolated test executable.
 // The thread-local arm confines each fault to one public operation.
@@ -448,4 +450,54 @@ TEST(Ruvia, chunked_decoder_retries_trailers_from_the_same_input_after_allocatio
     ASSERT_EQ(complete->trailers().size(), 1U);
     EXPECT_EQ(complete->trailers().front().name(), "x-trace");
     EXPECT_EQ(complete->trailers().front().value(), "retained");
+}
+
+TEST(Ruvia, proxy_parser_reclaims_large_scratch_after_its_views_expire) {
+    using namespace std::string_view_literals;
+    constexpr auto tlv = "\xE0\x00\x10ghijklmnopqrstuv"sv;
+    constexpr auto tlv_count = 512U;
+    constexpr auto block_size = 12U + tlv_count * tlv.size();
+    auto wire = std::string("\r\n\r\n\0\r\nQUIT\n\x21\x11", 14);
+    wire.push_back(static_cast<char>(block_size >> 8));
+    wire.push_back(static_cast<char>(block_size & 0xffU));
+    wire.append(12, '\0');
+    for (std::size_t i = 0; i < tlv_count; ++i) {
+        wire.append(tlv);
+    }
+    const auto bytes = std::as_bytes(std::span<const char>(wire.data(), wire.size()));
+    auto local = wire;
+    local[12] = '\x20';
+    local[13] = '\0';
+
+    ruvia::proxy_protocol_parser parser({.max_v2_header_bytes_ = wire.size()});
+    const auto empty = live_allocations.load();
+    ASSERT_TRUE(parser.parse(bytes).holds<ruvia::decode_complete>());
+    const auto tlvs = parser.header().tlvs();
+    ASSERT_EQ(tlvs.size(), tlv_count);
+    EXPECT_EQ(tlvs.back().value_.size(), 16U);
+    EXPECT_EQ(tlvs.back().value_.back(), std::byte{'v'});
+    parser.reset();
+    EXPECT_EQ(live_allocations.load(), empty);
+
+    const auto local_bytes = std::as_bytes(std::span<const char>(local.data(), local.size()));
+    constexpr std::size_t fixed_header_size = 16;
+    ASSERT_TRUE(parser.parse(local_bytes.first(fixed_header_size)).holds<ruvia::decode_need_input>());
+    const auto local_result = [&] {
+        allocation_scope scope(0);
+        return parser.parse(local_bytes.subspan(fixed_header_size));
+    }();
+    ASSERT_TRUE(local_result.holds<ruvia::decode_complete>());
+    EXPECT_EQ(local_result.consumed_bytes(), local.size() - fixed_header_size);
+    EXPECT_TRUE(parser.header().tlvs().empty());
+
+    parser.reset();
+    ASSERT_TRUE(parser.parse(bytes.first(bytes.size() - 1)).holds<ruvia::decode_need_input>());
+    EXPECT_THROW(
+        {
+            allocation_scope scope(0);
+            (void)parser.parse(bytes.last(1));
+        },
+        std::bad_alloc);
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::failed);
+    EXPECT_EQ(live_allocations.load(), empty);
 }

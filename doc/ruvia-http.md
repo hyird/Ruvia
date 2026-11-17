@@ -4305,7 +4305,9 @@ public:
 | `parse(input) &` | 以任意切分的块喂入字节；每字节只扫描一次，只缓冲头字节。首字节必须开始 v1 或 v2 签名，不对其他输入透传。非法或超限输入返回失败并使解析器进入 `decoder_state::failed`；缓冲分配抛异常时同样进入 failed 后传播异常。解析器非 `active` 时调用抛 `std::logic_error`。右值重载删除，避免在临时解析器上解析后视图悬垂。 |
 | `state()` | `active` / `finished` / `failed`（见 [`"decode_step.h"`](#api-decode-step-h)）。 |
 | `header()` | 仅 `finished` 时可用，否则抛 `std::logic_error`。视图在 `reset()` 或析构前有效；右值重载删除。 |
-| `reset()` | 唯一离开 finished / failed 的途径；保留缓冲容量（受 v2 头上限约束）。 |
+| `reset()` | 唯一离开 finished / failed 的途径。 |
+
+- **缓冲回收**：头部完成且无 TLV、解析失败或重置时，归还超过 4 KiB 的暂存缓冲。有 TLV 的头部保留视图借用的存储。`LOCAL` 或 `AF_UNSPEC` 的 v2 数据块直接跳过，不拷贝。
 
 ```cpp
 ruvia::proxy_protocol_parser parser;
