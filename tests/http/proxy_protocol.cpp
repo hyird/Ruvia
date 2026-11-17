@@ -528,4 +528,30 @@ TEST(Ruvia, proxy_protocol_moved_parser_keeps_header_views) {
     EXPECT_EQ(moved.state(), decoder_state::finished);
     expect_v2_inet_with_tlvs(moved.header());
     EXPECT_EQ(moved.header().tlvs().data(), tlvs.data());
+    EXPECT_THROW((void)parser.header(), std::logic_error);
+    EXPECT_EQ(parser.state(), decoder_state::failed);
+    parser.reset();
+    expect_v2_inet_with_tlvs(moved.header());
+    expect_v1_tcp4(parse_whole(parser, v1_tcp4));
+}
+
+TEST(Ruvia, proxy_protocol_move_transfers_partial_header_and_requires_source_reset) {
+    proxy_protocol_parser parser;
+    const auto input = v2_inet_with_tlvs();
+    const auto bytes = wire(input);
+    constexpr std::size_t split = 20;
+    const auto partial = parser.parse(bytes.first(split));
+    ASSERT_TRUE(partial.holds<decode_need_input>());
+
+    proxy_protocol_parser moved(std::move(parser));
+    const auto complete = moved.parse(bytes.subspan(split));
+    ASSERT_TRUE(complete.holds<decode_complete>());
+    expect_v2_inet_with_tlvs(moved.header());
+
+    ASSERT_EQ(parser.state(), decoder_state::failed);
+    EXPECT_THROW((void)parser.parse(wire(v1_tcp4)), std::logic_error);
+    parser.reset();
+    const auto restarted = parser.parse(wire(v1_tcp4));
+    ASSERT_TRUE(restarted.holds<decode_complete>());
+    expect_v1_tcp4(parser.header());
 }

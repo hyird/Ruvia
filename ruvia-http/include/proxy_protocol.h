@@ -144,8 +144,9 @@ public:
     explicit proxy_protocol_parser(proxy_protocol_parser_options options = {});
     proxy_protocol_parser(const proxy_protocol_parser&) = delete;
     proxy_protocol_parser& operator=(const proxy_protocol_parser&) = delete;
-    // The moved-to parser takes over the buffers that header() views borrow.
-    proxy_protocol_parser(proxy_protocol_parser&&) noexcept = default;
+    // Transfers parse progress and the buffers backing any TLV views.
+    // The source enters failed and must be reset() before reuse.
+    proxy_protocol_parser(proxy_protocol_parser&& other) noexcept;
     proxy_protocol_parser& operator=(proxy_protocol_parser&&) = delete;
     ~proxy_protocol_parser() = default;
 

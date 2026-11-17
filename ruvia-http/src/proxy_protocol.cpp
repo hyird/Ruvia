@@ -8,6 +8,7 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "http_io_buffer.h"
@@ -128,6 +129,17 @@ proxy_protocol_parser::proxy_protocol_parser(proxy_protocol_parser_options optio
         throw std::invalid_argument("PROXY protocol v2 header limit cannot hold an AF_INET6 address block");
     }
 }
+
+proxy_protocol_parser::proxy_protocol_parser(proxy_protocol_parser&& other) noexcept :
+    buffer_(std::move(other.buffer_)),
+    tlvs_(std::move(other.tlvs_)),
+    header_(std::exchange(other.header_, proxy_protocol_header{})),
+    max_v2_header_bytes_(other.max_v2_header_bytes_),
+    v2_remaining_(other.v2_remaining_),
+    v2_family_(other.v2_family_),
+    phase_(other.phase_),
+    state_(std::exchange(other.state_, decoder_state::failed)),
+    failure_(other.failure_) {}
 
 proxy_protocol_parse_result proxy_protocol_parser::parse(std::span<const std::byte> input) & {
     if (state_ != decoder_state::active) {

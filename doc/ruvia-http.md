@@ -4293,7 +4293,7 @@ public:
     explicit proxy_protocol_parser(proxy_protocol_parser_options options = {});
     proxy_protocol_parser(const proxy_protocol_parser&) = delete;
     proxy_protocol_parser& operator=(const proxy_protocol_parser&) = delete;
-    proxy_protocol_parser(proxy_protocol_parser&&) noexcept = default;
+    proxy_protocol_parser(proxy_protocol_parser&& other) noexcept;
     proxy_protocol_parser& operator=(proxy_protocol_parser&&) = delete;
     ~proxy_protocol_parser() = default;
 
@@ -4312,7 +4312,7 @@ public:
 | 成员 | 语义 |
 | --- | --- |
 | 构造 | `max_v2_header_bytes_ < 52` 抛 `std::invalid_argument`。 |
-| 拷贝 / 移动赋值 | 删除。移动构造 `noexcept`：新对象接管 `header()` 视图所借用的缓冲，视图在移动后仍指向有效存储。 |
+| 拷贝 / 移动赋值 | 删除。移动构造 `noexcept`：新对象接管解析进度及 TLV 视图借用的缓冲，已有 TLV 视图继续有效。源对象进入 `failed`，复用前须 `reset()`。 |
 | `parse(input) &` | 以任意切分的块喂入字节；每字节只扫描一次，只缓冲头字节。首字节必须开始 v1 或 v2 签名，不对其他输入透传。非法或超限输入返回失败并使解析器进入 `decoder_state::failed`；缓冲分配抛异常时同样进入 failed 后传播异常。解析器非 `active` 时调用抛 `std::logic_error`。右值重载删除，避免在临时解析器上解析后视图悬垂。 |
 | `state()` | `active` / `finished` / `failed`（见 [`"decode_step.h"`](#api-decode-step-h)）。 |
 | `header()` | 仅 `finished` 时可用，否则抛 `std::logic_error`。视图在 `reset()` 或析构前有效；右值重载删除。 |
