@@ -234,6 +234,34 @@ struct blocking_pool::impl_type final {
         node_type* next_{nullptr};
     };
 
+    // A callable may reenter join() while the current stack still owns an
+    // admission slot. Nested posts to other pools must not hide that slot.
+    class reserved_post_scope final {
+    public:
+        explicit reserved_post_scope(const impl_type& pool) noexcept :
+            pool_(&pool),
+            previous_(std::exchange(current_, this)) {}
+        reserved_post_scope(const reserved_post_scope&) = delete;
+        reserved_post_scope& operator=(const reserved_post_scope&) = delete;
+        ~reserved_post_scope() {
+            current_ = previous_;
+        }
+
+        [[nodiscard]] static bool contains(const impl_type& pool) noexcept {
+            for (auto* scope = current_; scope != nullptr; scope = scope->previous_) {
+                if (scope->pool_ == &pool) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+    private:
+        static inline thread_local const reserved_post_scope* current_ = nullptr;
+        const impl_type* pool_;
+        const reserved_post_scope* previous_;
+    };
+
     explicit impl_type(const blocking_pool_options& options) :
         thread_count_(resolve_thread_count(options.thread_count_)),
         queue_capacity_(resolve_queue_capacity(options.queue_capacity_, thread_count_)),
@@ -376,6 +404,9 @@ struct blocking_pool::impl_type final {
         if (is_current_thread()) {
             throw std::logic_error("cannot join a blocking pool from one of its threads");
         }
+        if (reserved_post_scope::contains(*this)) {
+            throw std::logic_error("cannot join a blocking pool while posting to it");
+        }
         request_stop();
         std::vector<std::thread> joining_threads;
         {
@@ -513,7 +544,10 @@ post_outcome<> blocking_pool::post(move_only_function<void()> task_value) {
     if (refused) {
         return detail::delivery_access::reject<post_outcome<>>(*refused, std::move(task_value));
     }
-    node->task_ = std::move(task_value);
+    {
+        const impl_type::reserved_post_scope reservation(owner);
+        node->task_ = std::move(task_value);
+    }
     bool stopped = false;
     {
         std::lock_guard lock(owner.mutex_);
@@ -531,7 +565,10 @@ post_outcome<> blocking_pool::post(move_only_function<void()> task_value) {
     if (stopped) {
         // Stopping never recycles nodes, so the reserved node stays exclusive
         // until its callable has been handed back.
-        auto rejected = detail::delivery_access::reject<post_outcome<>>(post_status::stopping, std::move(node->task_));
+        auto rejected = [&] {
+            const impl_type::reserved_post_scope reservation(owner);
+            return detail::delivery_access::reject<post_outcome<>>(post_status::stopping, std::move(node->task_));
+        }();
         bool notify = false;
         {
             std::lock_guard lock(owner.mutex_);

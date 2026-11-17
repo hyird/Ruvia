@@ -1386,7 +1386,7 @@ flowchart LR
 | `[[nodiscard]] blocking_pool_stats stats() const noexcept;` | 统计快照 |
 | `[[nodiscard]] post_outcome<> post(move_only_function<void()> task);` | 任意线程；空可调用对象抛 `std::invalid_argument` |
 | `void request_stop() noexcept;` | 幂等、任意线程：停止接收，在锁外销毁未启动任务，唤醒线程；不中断运行中的调用 |
-| `void join();` | 停止并等待线程离开循环、在途投递与队列任务析构完成；从池线程调用在改变状态前抛 `std::logic_error`；非池排空线程重入 `join()` 时不等待自身析构 |
+| `void join();` | 停止并等待线程离开循环、在途投递与队列任务析构完成；从池线程或持有该池投递槽位的线程调用，在改变池状态前抛 `std::logic_error`；非池排空线程重入时不等待自身析构 |
 
 - **投递准入**：先取槽位再把可调用对象移入队列；`queue_full` 或 `stopping`（含移动期间停止）时经 `rejected()` / `take_rejected()` 原样退回，由调用方决定在何处销毁；准入计数包含移动尚未完成的投递。
 - **重入**：可调用对象的移动与析构可调用 `stats()`、`post()` 或 `request_stop()`。

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <concepts>
 #include <cstdint>
+#include <cstdlib>
 #include <future>
 #include <limits>
 #include <memory>
@@ -168,7 +169,9 @@ struct reentrant_discarded_task final {
 
 enum class move_action { query,
     post,
-    stop };
+    stop,
+    join,
+    stop_then_join };
 
 struct reentrant_move_state final {
     blocking_pool* pool_{};
@@ -179,6 +182,7 @@ struct reentrant_move_state final {
     std::atomic<int> ran_{};
     std::binary_semaphore ran_signal_{0};
     post_status nested_status_{post_status::accepted};
+    bool join_rejected_{false};
 };
 
 struct reentrant_moving_task final {
@@ -195,8 +199,15 @@ struct reentrant_moving_task final {
         if (move == 3) {
             if (state_->action_ == move_action::post) {
                 state_->nested_status_ = state_->pool_->post([] {}).status();
-            } else if (state_->action_ == move_action::stop) {
+            } else if (state_->action_ == move_action::stop || state_->action_ == move_action::stop_then_join) {
                 state_->pool_->request_stop();
+            }
+        }
+        if ((move == 3 && state_->action_ == move_action::join) || (move == 4 && state_->action_ == move_action::stop_then_join)) {
+            try {
+                state_->pool_->join();
+            } catch (const std::logic_error&) {
+                state_->join_rejected_ = true;
             }
         }
     }
@@ -941,6 +952,38 @@ TEST(Ruvia, blocking_pool_stop_discards_queued_work_without_running_it) {
 
 TEST(Ruvia, blocking_pool_callable_moves_and_destruction_allow_reentry) {
     EXPECT_TRUE(test_callable_moves_and_destruction_can_query_pool());
+}
+
+TEST(RuviaDeathTest, blocking_pool_join_rejects_reentry_during_reserved_post) {
+    ASSERT_EXIT(
+        {
+            // Isolate a self-wait regression so it cannot stall the other tests.
+            std::thread([] {
+                std::this_thread::sleep_for(std::chrono::seconds(10));
+                std::_Exit(2);
+            }).detach();
+
+            for (const auto action : {move_action::join, move_action::stop_then_join}) {
+                reentrant_move_state state;
+                blocking_pool pool({.thread_count_ = 1, .queue_capacity_ = 1});
+                state.pool_ = &pool;
+                state.action_ = action;
+                ruvia::move_only_function<void()> task_value{reentrant_moving_task(state)};
+                const auto result = pool.post(std::move(task_value));
+                EXPECT_TRUE(state.join_rejected_);
+                if (action == move_action::join) {
+                    EXPECT_TRUE(result.accepted());
+                    EXPECT_TRUE(state.ran_signal_.try_acquire_for(std::chrono::seconds(5)));
+                } else {
+                    EXPECT_EQ(result.status(), post_status::stopping);
+                    EXPECT_NE(result.rejected(), nullptr);
+                }
+                pool.join();
+                EXPECT_EQ(state.ran_.load(), action == move_action::join ? 1 : 0);
+            }
+            std::_Exit(::testing::Test::HasFailure() ? EXIT_FAILURE : EXIT_SUCCESS);
+        },
+        ::testing::ExitedWithCode(EXIT_SUCCESS), "");
 }
 
 TEST(Ruvia, blocking_pool_callable_move_can_stop_before_publication) {

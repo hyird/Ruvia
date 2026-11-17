@@ -110,9 +110,9 @@ public:
     // cannot be -- but nothing waits for their queued successors. Idempotent
     // and safe from any thread.
     void request_stop() noexcept;
-    // Stops the pool and waits for its threads to leave their loops. Joining
-    // from one of this pool's own threads would deadlock and throws logic_error
-    // before changing the pool's state.
+    // Stops the pool and waits for its threads to leave their loops. Throws
+    // logic_error before changing the pool's state if the caller runs on one
+    // of its threads or owns an unfinished post reservation for this pool.
     // The destructor deliberately does not join already-running callables.
     void join();
 
