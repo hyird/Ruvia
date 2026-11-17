@@ -966,6 +966,13 @@ TEST(Ruvia, OperationDeadlineUsesOneAbsoluteDeadline) {
     EXPECT_TRUE(operation_deadline_uses_one_absolute_deadline());
 }
 
+TEST(Ruvia, operation_deadline_at_clock_minimum_has_no_time_remaining) {
+    using clock_type = ruvia::operation_deadline::clock_type;
+    const ruvia::operation_deadline deadline((clock_type::time_point::min)());
+    EXPECT_TRUE(deadline.expired());
+    EXPECT_EQ(deadline.remaining(), std::chrono::milliseconds::zero());
+}
+
 TEST(Ruvia, operation_timeout_is_valid_by_construction) {
     using clock_type = ruvia::operation_timeout::clock_type;
     static_assert(std::is_convertible_v<std::chrono::seconds, ruvia::operation_timeout>);

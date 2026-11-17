@@ -196,7 +196,15 @@ public:
         if (!deadline_.has_value()) {
             return std::nullopt;
         }
-        return ceil_milliseconds(*deadline_ - clock_type::now());
+        const auto now = clock_type::now();
+        if (*deadline_ <= now) {
+            return std::chrono::milliseconds::zero();
+        }
+        // An ordered tick difference fits the unsigned rep even across the epoch.
+        using unsigned_rep = std::make_unsigned_t<clock_type::rep>;
+        using unsigned_duration = std::chrono::duration<unsigned_rep, clock_type::period>;
+        const auto ticks = static_cast<unsigned_rep>(deadline_->time_since_epoch().count()) - static_cast<unsigned_rep>(now.time_since_epoch().count());
+        return ceil_milliseconds(unsigned_duration(ticks));
     }
 
     [[nodiscard]] bool expired() const noexcept {

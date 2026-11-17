@@ -892,7 +892,7 @@ flowchart LR
 | `explicit operation_deadline(const std::optional<operation_timeout>& timeout) noexcept;` | 按当前时刻解析；空保持无上限 |
 | `explicit operation_deadline(clock_type::time_point deadline) noexcept;` | 指定截止期 |
 | `[[nodiscard]] std::optional<clock_type::time_point> deadline() const noexcept;` | 截止期 |
-| `[[nodiscard]] std::optional<std::chrono::milliseconds> remaining() const noexcept;` | 剩余时间：过期为零，正余量向上取整到整毫秒；无上限为 `std::nullopt` |
+| `[[nodiscard]] std::optional<std::chrono::milliseconds> remaining() const noexcept;` | 过期为零；正余量向上取整到整毫秒，超出范围时饱和；无上限为 `std::nullopt` |
 | `[[nodiscard]] bool expired() const noexcept;` | `now >= deadline` |
 | `[[nodiscard]] operation_deadline constrained_by(const std::optional<operation_timeout>& timeout) const noexcept;` | 本截止期与 `timeout`（按当前时刻解析）中较早者 |
 | `[[nodiscard]] std::optional<operation_timeout> timeout() const noexcept;` | 同一截止期的绝对 `operation_timeout`，交给嵌套操作；无上限为空 |
