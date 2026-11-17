@@ -7,6 +7,7 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "callback_ref.h"
@@ -197,18 +198,25 @@ task<http_response> detail::route_table::run_unmatched_chain(context& context_va
     return respond_through_chain(middleware_chain{.table_ = this, .frames_ = std::span<const route_middleware>(middleware_frames_).subspan(plan_->unmatched_middleware_offset_, plan_->unmatched_middleware_count_), .scopes_ = {}, .terminal_ = {}, .failure_ = &route_table::contain_failure}, context_value, terminal);
 }
 
-task<void> detail::route_table::contain_failure(const route_table& table, context& context_value, std::exception_ptr exception) {
+template <typename result_type>
+task<result_type> detail::route_table::complete_failure(const route_table& table, context& context_value, std::exception_ptr exception) {
     if (detail::context_access::output_committed(context_value)) {
         detail::context_access::set_error(context_value, std::move(exception));
-        co_return;
+    } else {
+        auto response = co_await table.respond_exception(context_value, exception);
+        detail::context_access::set_response(context_value, std::move(response));
     }
-    auto response = co_await table.respond_exception(context_value, exception);
-    detail::context_access::set_response(context_value, std::move(response));
+    if constexpr (!std::is_void_v<result_type>) {
+        co_return detail::context_access::release_response(context_value);
+    }
+}
+
+task<void> detail::route_table::contain_failure(const route_table& table, context& context_value, std::exception_ptr exception) {
+    return complete_failure<void>(table, context_value, std::move(exception));
 }
 
 task<http_response> detail::route_table::finalize_failure(context& context_value, std::exception_ptr exception) const {
-    co_await contain_failure(*this, context_value, std::move(exception));
-    co_return detail::context_access::release_response(context_value);
+    return complete_failure<http_response>(*this, context_value, std::move(exception));
 }
 
 }  // namespace ruvia

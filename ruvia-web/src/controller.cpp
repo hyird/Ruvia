@@ -153,7 +153,7 @@ void detail::controller_route_builder::register_tunnel_route(std::string_view pr
 
 void detail::controller_route_builder::register_websocket_route(http_known_method method, std::string_view path, route_stream_handler handler, std::span<const controller_middleware_descriptor> middlewares, websocket_route_config websocket_config) const {
     const scoped_controller_path joined(prefix_, path);
-    router_.register_endpoint(method, {}, joined.view_, route_endpoint::websocket(callback_access::invoke(handler), std::move(websocket_config)), callback_access::target(handler), middlewares_, middlewares);
+    router_.register_endpoint(method, {}, joined.view_, route_endpoint::websocket(callback_access::invoke(handler), websocket_config), callback_access::target(handler), middlewares_, middlewares);
 }
 detail::controller_route_builder detail::controller_route_builder::create_scope(std::string_view prefix, std::span<const controller_middleware_descriptor> middlewares) const {
     auto merged = merge_middleware_descriptors(middlewares_, middlewares);

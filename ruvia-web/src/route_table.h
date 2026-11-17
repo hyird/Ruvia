@@ -192,10 +192,10 @@ public:
 private:
     friend class route_endpoint;
 
-    websocket_route_endpoint(route_stream_handler::invoke_type invoke, const websocket_route_config& options) :
+    websocket_route_endpoint(route_stream_handler::invoke_type invoke, const websocket_route_config& options, const websocket_lifecycle_options& lifecycle) :
         invoke_(invoke),
         require_subprotocol_(options.require_subprotocol_),
-        lifecycle_(options.lifecycle_),
+        lifecycle_(lifecycle),
         deflate_(options.deflate_),
         max_message_bytes_(options.max_message_bytes_) {
         if (!options.subprotocols_.empty()) {
@@ -243,8 +243,8 @@ public:
         return route_endpoint(response_stream_route_endpoint(invoke, request_body_mode_value));
     }
 
-    [[nodiscard]] static route_endpoint websocket(route_stream_handler::invoke_type invoke, websocket_route_config options) {
-        options.lifecycle_ = normalize_websocket_lifecycle_options(options.lifecycle_);
+    [[nodiscard]] static route_endpoint websocket(route_stream_handler::invoke_type invoke, const websocket_route_config& options) {
+        const auto lifecycle = normalize_websocket_lifecycle_options(options.lifecycle_);
         validate_websocket_zlib_options(options.deflate_.deflater_);
         ruvia::websocket_subprotocol_set subprotocols;
         for (const auto& subprotocol : options.subprotocols_) {
@@ -255,7 +255,7 @@ public:
         if (options.require_subprotocol_ && options.subprotocols_.empty()) {
             throw std::invalid_argument("a websocket route requiring a subprotocol must list subprotocols");
         }
-        return route_endpoint(websocket_route_endpoint(invoke, options));
+        return route_endpoint(websocket_route_endpoint(invoke, options, lifecycle));
     }
 
     [[nodiscard]] static http_tunnel_route_config validate_tunnel_config(bool upgrade_protocol, bool udp, http_tunnel_route_config config) {
@@ -914,6 +914,8 @@ private:
     // when nothing declared itself for unmatched requests.
     [[nodiscard]] task<http_response> run_unmatched_chain(context& context, route_handler terminal) const;
     [[nodiscard]] static task<void> contain_failure(const route_table& table, context& context, std::exception_ptr exception);
+    template <typename result_type>
+    [[nodiscard]] static task<result_type> complete_failure(const route_table& table, context& context, std::exception_ptr exception);
     [[nodiscard]] task<http_response> respond_not_found(const http_request& request, const context_services& services) const;
     [[nodiscard]] task<http_response> respond_exception(context& context, std::exception_ptr exception) const;
     [[nodiscard]] task<http_response> respond_exception(context& context, std::exception_ptr exception, http_error_handler_ref error_handler) const;

@@ -51,6 +51,7 @@ struct request_body_state final {
 namespace detail {
 struct request_stream_access;
 class router_state;
+class operation_lane_lease;
 class websocket_route_endpoint;
 // Commits a tunnel request's success head and returns the established tunnel.
 using request_stream_tunnel_accept = callback_ref<task<http_tunnel*>(http_status_code, http_tunnel_route_config)>;
@@ -176,6 +177,7 @@ private:
     [[nodiscard]] task<websocket_accept_result> accept_websocket_impl(websocket_route_config config);
     // A router's WebSocket route reuses its frozen endpoint.
     [[nodiscard]] task<websocket_accept_result> accept_websocket_endpoint(const detail::websocket_route_endpoint& endpoint);
+    [[nodiscard]] detail::operation_lane_lease claim_websocket_accept();
     void require_unselected_response() const;
 
     context& context_;

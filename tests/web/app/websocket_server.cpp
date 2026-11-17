@@ -255,7 +255,9 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
     {
         auto discarded = request.accept_websocket(config);
     }
-    const auto accepted = co_await request.accept_websocket(std::move(config));
+    auto accepting = request.accept_websocket(config);
+    config.subprotocols_.clear();
+    const auto accepted = co_await std::move(accepting);
     auto* websocket = accepted.session();
     if (websocket == nullptr) {
         ++observed.refused_;

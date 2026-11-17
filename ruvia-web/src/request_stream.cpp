@@ -4,8 +4,10 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "context.h"
 #include "context_access.h"
@@ -200,17 +202,24 @@ task<websocket_accept_result> request_stream::accept_websocket(websocket_route_c
 
 task<websocket_accept_result> request_stream::accept_websocket_impl(websocket_route_config config) {
     // Validated before any state check so an invalid configuration selects nothing.
-    const auto endpoint = detail::route_endpoint::websocket(nullptr, std::move(config));
-    co_return co_await accept_websocket_endpoint(*endpoint.websocket());
+    const auto endpoint = detail::route_endpoint::websocket(nullptr, config);
+    std::vector<std::string>().swap(config.subprotocols_);
+    auto lease = claim_websocket_accept();
+    co_return co_await (*accept_websocket_)(*endpoint.websocket());
 }
 
 task<websocket_accept_result> request_stream::accept_websocket_endpoint(const detail::websocket_route_endpoint& endpoint) {
+    auto lease = claim_websocket_accept();
+    co_return co_await (*accept_websocket_)(endpoint);
+}
+
+detail::operation_lane_lease request_stream::claim_websocket_accept() {
     auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_), "response stream output operation is already in progress");
     if (accept_websocket_ == nullptr) {
         throw std::logic_error("accept_websocket() requires an Upgrade or extended CONNECT request");
     }
     require_unselected_response();
-    co_return co_await (*accept_websocket_)(endpoint);
+    return lease;
 }
 
 void request_stream::require_unselected_response() const {

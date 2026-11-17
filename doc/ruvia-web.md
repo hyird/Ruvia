@@ -2560,7 +2560,7 @@ ruvia::task<void> proxy(ruvia::request_stream& stream) {
 | `bool tunnel_requested() const noexcept` | CONNECT 或扩展 CONNECT（RFC 9110 §9.3.6、RFC 8441、RFC 9220），或无正文且提供 `Upgrade` 的 HTTP/1.1 请求（RFC 9110 §7.8）时为 `true` |
 | `task<http_tunnel*> accept_tunnel(http_status_code status = http_status::ok, http_tunnel_route_config config = {}) &` | 提交成功头（含 `policy()`）并返回其后的字节流：CONNECT 须为 2xx，HTTP/1.1 Upgrade 须为 `101`，`101` 选用响应 `Upgrade` 字段命名的协议或客户端提供的第一个协议，否则抛 `std::invalid_argument`；非隧道请求或已提交响应/隧道时抛 `std::logic_error`。隧道有效至回调返回，之后服务器结束发送方向并按 `config.peer_transport_fin_timeout_` 排空对端；`config.idle_timeout_` 在无字节往来时中止；`config.datagrams_` 为升级协议显式启用 Capsule / HTTP Datagram，普通 CONNECT 拒绝，CONNECT-UDP 自动启用 |
 | `task<http_tunnel*> accept_tunnel(http_status_code = http_status::ok, http_tunnel_route_config = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
-| `task<websocket_accept_result> accept_websocket(websocket_route_config config = {}) &` | 对 HTTP/1.1 Upgrade 或扩展 CONNECT 执行服务器的常规握手与会话驱动；冷任务等待前无副作用。握手拒绝时结果的 `session()` 为 `nullptr`，并选定回调返回后发送的错误响应；已选择响应/接受时抛 `std::logic_error`；会话借用至回调结束 |
+| `task<websocket_accept_result> accept_websocket(websocket_route_config config = {}) &` | 调用时拥有配置（含子协议）；校验、握手与会话驱动在冷任务启动时执行。握手拒绝时结果的 `session()` 为 `nullptr`，并选定回调返回后发送的错误响应；已选择响应/接受时抛 `std::logic_error`；会话借用至回调结束 |
 | `task<websocket_accept_result> accept_websocket(websocket_route_config = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
 
 #### 9.1.5 `request_stream_callback`
