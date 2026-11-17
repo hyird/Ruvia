@@ -5323,6 +5323,8 @@ public:
 
 流式字节范围切片器：接收按顺序到来的表示数据块（或从指定表示偏移开始的部分数据块），把属于所选区间的字节连同 multipart 分帧追加到调用方缓冲区。构造时复制区间、媒体类型与边界，此后不借用输入。
 
+`write()` 的输入块可以借用输出缓冲区，所选字节包含字符串原末尾的 NUL 时也会原样追加。
+
 | 成员 | 语义 |
 | --- | --- |
 | 构造函数 | 抛出 `std::invalid_argument`：区间为空（含集合 `ignored()`）、表示长度为 `0`、区间长度为 `0` 或越界、区间不是严格升序且不交叠、单区间时非空 `media_type` 不是合法 `Content-Type` 值、多区间时 `media_type` 或 `boundary` 不合法；多区间总长溢出 `uint64` 时抛出 `std::length_error`。`coalesce` 策略产生的集合可能不是升序，需改用 `strict_ascending_disjoint` 或下文的 multipart 计划 |

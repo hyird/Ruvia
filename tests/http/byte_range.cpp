@@ -97,6 +97,25 @@ TEST(RuviaHttpPublicApi, multipart_range_slicer_preserves_aliased_chunk_bytes) {
     EXPECT_EQ(output, expected);
 }
 
+TEST(RuviaHttpPublicApi, single_range_slicer_preserves_aliased_terminator) {
+    for (const bool reserve_spare : {false, true}) {
+        SCOPED_TRACE(reserve_spare);
+        std::string output = "prefix: payload";
+        if (reserve_spare) {
+            output.reserve(2 * output.size() + 1);
+        } else {
+            output.resize(output.capacity(), '#');
+        }
+        const std::string_view chunk(output.data(), output.size() + 1);
+        const auto ranges = ruvia::resolve_http_byte_range_set("bytes=8-", chunk.size());
+        ruvia::http_byte_range_slicer slicer(ranges, chunk.size());
+        const auto expected = output + std::string(chunk.substr(8));
+        slicer.write(chunk, output);
+        EXPECT_EQ(output, expected);
+        EXPECT_TRUE(slicer.complete());
+    }
+}
+
 TEST(RuviaHttpPublicApi, byte_range_limit_counts_retained_ranges_after_coalescing) {
     constexpr ruvia::http_byte_range_options options{.max_ranges_ = 2};
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=20-24, 0-4, 5-19, 30-34", 100, options);

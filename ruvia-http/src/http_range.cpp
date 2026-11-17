@@ -416,7 +416,7 @@ void http_byte_range_slicer::write(std::uint64_t chunk_offset, std::string_view 
     }
 
     // Multipart framing can overwrite the terminator or invalidate the source
-    // before its next slice. A single append already handles its own overlap.
+    // before its next slice. The single-range append handles overlap directly.
     std::string chunk_copy;
     if (multipart() && detail::http_text_aliases_string(chunk, output)) {
         chunk_copy.assign(chunk);
@@ -437,7 +437,7 @@ void http_byte_range_slicer::write(std::uint64_t chunk_offset, std::string_view 
             }
             const auto slice_start = static_cast<std::size_t>(next_needed - chunk_offset);
             const auto copy_bytes = static_cast<std::size_t>((std::min<std::uint64_t>)(range.length_ - progress, chunk.size() - slice_start));
-            output.append(chunk.data() + slice_start, copy_bytes);
+            detail::append_http_text(output, chunk.substr(slice_start, copy_bytes));
             progress += copy_bytes;
             if (progress != range.length_) {
                 break;
