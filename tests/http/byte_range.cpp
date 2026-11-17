@@ -81,6 +81,20 @@ TEST(RuviaHttpPublicApi, strict_byte_ranges_content_range_and_streaming_slicer) 
     EXPECT_EQ(sliced, expected);
 }
 
+TEST(RuviaHttpPublicApi, byte_range_limit_counts_retained_ranges_after_coalescing) {
+    constexpr ruvia::http_byte_range_options options{.max_ranges_ = 2};
+    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=20-24, 0-4, 5-19, 30-34", 100, options);
+    ASSERT_FALSE(ranges.ignored());
+    ASSERT_EQ(ranges.size(), 2U);
+    EXPECT_EQ(ranges[0].offset(), 0U);
+    EXPECT_EQ(ranges[0].length(), 25U);
+    EXPECT_EQ(ranges[1].offset(), 30U);
+    EXPECT_EQ(ranges[1].length(), 5U);
+
+    EXPECT_TRUE(ruvia::resolve_http_byte_range_set("bytes=20-24, 0-4, 30-34", 100, options).ignored());
+    EXPECT_TRUE(ruvia::resolve_http_byte_range_set("bytes=0-4, 5-9, 10-14", 100, {.max_ranges_ = 2, .order_policy_ = ruvia::http_byte_range_order_policy::strict_ascending_disjoint}).ignored());
+}
+
 TEST(Ruvia, multipart_range_plan_owns_rfc_framing_and_reports_exact_length) {
     auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-2,7-9", 10);
     std::string media_type = "text/plain";

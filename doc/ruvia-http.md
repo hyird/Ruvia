@@ -5249,7 +5249,7 @@ public:
 
 `resolve_http_byte_range_set(field_value, length, options)` 的规则：
 
-- 结果为 `ignored()`：`max_ranges_ == 0`；去除 OWS 后不以 `bytes=`（大小写不敏感）开头；`bytes=` 之后为空；任一非空成员语法错误（缺少或多个 `-`、非数字、`first > last`）；空成员超过 32 个；仅含空成员；可满足区间数将超过 `max_ranges_`；`strict_ascending_disjoint` 下出现非升序或交叠。
+- 结果为 `ignored()`：`max_ranges_ == 0`；去除 OWS 后不以 `bytes=`（大小写不敏感）开头；`bytes=` 之后为空；任一非空成员语法错误（缺少或多个 `-`、非数字、`first > last`）；空成员超过 32 个；仅含空成员；需要新增区间但已达到 `max_ranges_`；`strict_ascending_disjoint` 下出现非升序或交叠。已达上限时仍允许合并。
 - 数值按饱和十进制解析。`first-last` 中 `last` 超出表示时截断到末字节；`first-` 取到末字节；`-suffix` 取末尾 `min(suffix, length)` 字节。`first >= length`、`-0` 或表示长度为 `0` 时该成员不可满足并被跳过。
 - 至少存在一个非空成员但没有可满足区间时结果为 `unsatisfiable()`。
 - **空表示**：长度为零仍完整校验语法；非法字段为 `ignored()`（完整响应），合法但不可满足为 `unsatisfiable()`（416），不需要假长度探测。

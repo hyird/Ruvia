@@ -142,9 +142,6 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, ht
             result.append_slot({offset, length});
             return true;
         }
-        if (result.count_ == options.max_ranges_) {
-            return false;
-        }
         auto start = offset;
         auto end = offset + length;
         auto target = result.count_;
@@ -163,6 +160,9 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, ht
             result.mutable_at(kept++) = current;
         }
         if (target == result.count_) {
+            if (result.count_ == options.max_ranges_) {
+                return false;
+            }
             result.append_slot({start, end - start});
         } else {
             result.resize_slots(kept);
