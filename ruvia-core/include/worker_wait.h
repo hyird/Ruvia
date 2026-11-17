@@ -169,9 +169,11 @@ public:
         bounds_.start(state_->worker(), affinity_message);
     }
 
-    [[nodiscard]] state_type& state() const noexcept {
+    // The awaiter may be the last owner of the domain state.
+    [[nodiscard]] state_type& state() const& noexcept {
         return *state_;
     }
+    state_type& state() const&& = delete;
 
     // Completes a started wait from await_ready, before it can suspend, with
     // an outcome the domain already holds.

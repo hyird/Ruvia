@@ -1323,7 +1323,7 @@ flowchart LR
 | `worker_single_wait_awaiter(const worker_single_wait_awaiter&) = delete;`、`worker_single_wait_awaiter& operator=(const worker_single_wait_awaiter&) = delete;`、`worker_single_wait_awaiter& operator=(worker_single_wait_awaiter&&) = delete;` | 不可复制或赋值 |
 | `worker_single_wait_awaiter(worker_single_wait_awaiter&& other) noexcept;` | 仅 `start()` 前可移动 |
 | `void start(const char* affinity_message);` | 每个领域 `await_ready` 的第一步；被移动后抛 `std::logic_error`；其余同 `wait_bounds::start` |
-| `[[nodiscard]] state_type& state() const noexcept;` | 领域状态 |
+| `[[nodiscard]] state_type& state() const& noexcept;` | 从左值等待物借用领域状态；右值重载已删除 |
 | `void complete_ready(wait_result<T>&& result_value);`、`void complete_ready(wait_status status);` | 在挂起前以领域已有结果完成 |
 | `[[nodiscard]] bool complete_or_publish(const char* occupied_message);` | 持锁调用：已取消或已过期时完成并返回 `true`；槽位已占用抛 `std::logic_error(occupied_message)`；否则发布为挂起等待者并返回 `false` |
 | `[[nodiscard]] bool suspend(std::coroutine_handle<> continuation);` | 先布置截止期再发布续体；定时器队列已停止时以 `worker_stopping` 完成；确实挂起后才注册停止回调 |

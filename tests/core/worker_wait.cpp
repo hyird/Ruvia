@@ -76,6 +76,17 @@ struct semaphore_state final {
 static_assert(worker_wait_state<semaphore_state, std::monostate>);
 static_assert(detail::worker_shutdown_observer<semaphore_state>);
 
+template <typename awaiter_type>
+concept borrows_wait_state = requires(awaiter_type&& awaiter) {
+    { std::forward<awaiter_type>(awaiter).state() } -> std::same_as<semaphore_state&>;
+};
+
+using semaphore_awaiter = worker_single_wait_awaiter<std::monostate, semaphore_state>;
+static_assert(borrows_wait_state<semaphore_awaiter&>);
+static_assert(borrows_wait_state<const semaphore_awaiter&>);
+static_assert(!borrows_wait_state<semaphore_awaiter>);
+static_assert(!borrows_wait_state<const semaphore_awaiter>);
+
 // The concept names the shutdown registration member, not just the observer.
 struct unregistered_state final {
     [[nodiscard]] const worker_ref& worker() const noexcept;
