@@ -86,15 +86,21 @@ void response_file_source::select_file(http_response_file_view file) {
     // Multipart byte ranges name the same file view: keep its validated
     // handle and only reposition.
     if (current_path_ != file.native_path_c_str() || state_.identity_ != file.identity() || state_.size_ != file.size()) {
+        const auto* const opened = file.opened_file();
+        if (opened == nullptr) {
+            state_.path_.assign(file.native_path_c_str());
+        } else {
+            http_native_path_string_type().swap(state_.path_);
+        }
         current_path_ = file.native_path_c_str();
-        state_.path_.assign(file.native_path_c_str());
         state_.size_ = file.size();
         state_.identity_ = file.identity();
         state_.validated_ = false;
         state_.input_.reset();
-        if (const auto* opened = file.opened_file()) {
+        if (opened != nullptr) {
             // An independent handle travels with the read state: a cancelled
-            // response may be destroyed before a late read finishes.
+            // response may be destroyed before a late read finishes. Only a
+            // response without an opened handle needs an owned fallback path.
             state_.input_ = duplicate_native_file(*opened, state_.error_);
         }
     }

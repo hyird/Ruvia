@@ -169,6 +169,49 @@ std::string make_remove_timescale_policy_sql(db_driver driver, std::string_view 
     sql += ')';
     return sql;
 }
+
+std::string make_create_function_sql(const db_function_definition& function, db_function_language language, std::string_view body) {
+    if (function.name_.empty() || body.empty() || body.find('\0') != std::string_view::npos) {
+        throw std::invalid_argument("function name and non-NUL body are required");
+    }
+    constexpr auto driver = db_driver::postgresql;
+    std::string sql;
+    sql.reserve((function.replace_ ? 27U : 16U) + function.name_.size() + function.parameters_.size() * 24U + 48U + body.size() + 16U);
+    sql += function.replace_ ? "CREATE OR REPLACE FUNCTION " : "CREATE FUNCTION ";
+    append_db_qualified_identifier(sql, function.name_, driver);
+    sql += '(';
+    for (std::size_t i = 0; i < function.parameters_.size(); ++i) {
+        if (i != 0) {
+            sql += ", ";
+        }
+        const auto& param = function.parameters_[i];
+        if (!param.name_.empty()) {
+            append_db_identifier(sql, param.name_, driver);
+            sql += ' ';
+        }
+        const auto& type = param.type_;
+        detail::append_db_type_name(sql, type.data_type_, type.custom_name_, type.length_, type.precision_, type.scale_, type.array_, driver);
+        if (!param.default_value_.empty()) {
+            sql += " DEFAULT ";
+            detail::append_db_expression(sql, param.default_value_, driver);
+        }
+    }
+    sql += ") RETURNS ";
+    if (function.returns_set_) {
+        sql += "SETOF ";
+    }
+    const auto& type = function.return_type_;
+    detail::append_db_type_name(sql, type.data_type_, type.custom_name_, type.length_, type.precision_, type.scale_, type.array_, driver);
+    sql += " LANGUAGE ";
+    sql += function_language_name(language);
+    sql += function_volatility_clause(function.volatility_);
+    if (function.strict_) {
+        sql += " STRICT";
+    }
+    sql += " AS ";
+    detail::append_db_dollar_body(sql, body);
+    return sql;
+}
 }  // namespace
 
 db_schema::db_schema(db_schema_options options) :
@@ -756,57 +799,17 @@ void db_schema::drop_trigger_function(std::string_view name, db_drop_behavior be
 }
 void db_schema::create_function(const db_function_definition& function) {
     require_postgresql();
-    if (function.name_.empty() || function.body_.empty() || function.body_.view().find('\0') != std::string_view::npos) {
-        throw std::invalid_argument("function name and non-NUL body are required");
-    }
-    std::string sql;
-    sql.reserve((function.replace_ ? 27U : 16U) + function.name_.size() + function.parameters_.size() * 24U + 48U + function.body_.size() + 16U);
-    sql += function.replace_ ? "CREATE OR REPLACE FUNCTION " : "CREATE FUNCTION ";
-    append_db_qualified_identifier(sql, function.name_, driver_);
-    sql += '(';
-    for (std::size_t i = 0; i < function.parameters_.size(); ++i) {
-        if (i != 0) {
-            sql += ", ";
-        }
-        const auto& param = function.parameters_[i];
-        if (!param.name_.empty()) {
-            append_db_identifier(sql, param.name_, driver_);
-            sql += ' ';
-        }
-        append_type(sql, param.type_);
-        if (!param.default_value_.empty()) {
-            sql += " DEFAULT ";
-            append_expression(sql, param.default_value_);
-        }
-    }
-    sql += ") RETURNS ";
-    if (function.returns_set_) {
-        sql += "SETOF ";
-    }
-    append_type(sql, function.return_type_);
-    sql += " LANGUAGE ";
-    sql += function_language_name(function.language_);
-    sql += function_volatility_clause(function.volatility_);
-    if (function.strict_) {
-        sql += " STRICT";
-    }
-    sql += " AS ";
-    detail::append_db_dollar_body(sql, function.body_);
-    append(std::move(sql));
+    append(make_create_function_sql(function, function.language_, function.body_));
 }
 void db_schema::create_function(const db_function_definition& function, const db_procedure& body) {
     const auto proc_body = body.body();
-    auto copy = function;
-    copy.language_ = db_function_language::plpgsql;
-    copy.body_ = proc_body;
-    create_function(copy);
+    require_postgresql();
+    append(make_create_function_sql(function, db_function_language::plpgsql, proc_body));
 }
 void db_schema::create_function(const db_function_definition& function, const db_query& sql_body) {
     const auto compiled = sql_body.compile(driver_, db_parameter_mode::literal);
-    auto copy = function;
-    copy.language_ = db_function_language::sql;
-    copy.body_ = compiled.sql();
-    create_function(copy);
+    require_postgresql();
+    append(make_create_function_sql(function, db_function_language::sql, compiled.sql()));
 }
 void db_schema::drop_function(std::string_view name, std::span<const db_type_definition> parameter_types, db_drop_behavior behavior, bool if_exists) {
     require_postgresql();

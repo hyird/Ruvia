@@ -225,6 +225,7 @@ struct db_stored_join final {
         source_(source_value.source_),
         on_(source_value.on_),
         using_columns_(source_value.using_columns_) {}
+    db_stored_join(db_stored_join&&) noexcept = default;
     db_join_type type_;
     db_query_source source_;
     std::size_t on_{no_db_node};
@@ -255,6 +256,7 @@ struct db_stored_cte final {
         recursive_(source_value.recursive_),
         materialization_(source_value.materialization_),
         columns_(source_value.columns_) {}
+    db_stored_cte(db_stored_cte&&) noexcept = default;
     std::string name_;
     std::size_t query_;
     bool recursive_{false};

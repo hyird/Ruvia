@@ -227,7 +227,7 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
         const auto result = co_await stream.run_blocking([] {
             blocking_entered.release();
             blocking_release.acquire();
-        });
+        }, {.stop_token_ = stream.stop_token()});
         if (result.status() == ruvia::blocking_status::cancelled) {
             blocking_cancelled.release();
         }

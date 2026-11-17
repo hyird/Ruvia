@@ -992,3 +992,34 @@ TEST(Ruvia, db_schema_and_procedure_functions_loops_dynamic_sql_and_table_locks)
     EXPECT_TRUE(sql.find("EXECUTE \"format\"(E'SELECT %L, %L', \"rec\".\"id\", \"op\");") != std::string_view::npos);
     EXPECT_TRUE(sql.find("DROP FUNCTION IF EXISTS \"is_article_ready\"(BIGINT) CASCADE") != std::string_view::npos);
 }
+
+TEST(Ruvia, db_schema_function_body_overrides_preserve_the_definition) {
+    ruvia::db_function_definition definition{
+        .name_ = "function_body_override",
+        .parameters_ = {{.name_ = "input", .type_ = {.data_type_ = db_data_type::text}, .default_value_ = db_expr::call("lower", {db_expr::value("DEFAULT")})}},
+        .return_type_ = {.data_type_ = db_data_type::text},
+        .language_ = ruvia::db_function_language::sql,
+        .volatility_ = ruvia::db_function_volatility::stable,
+        .body_ = "SELECT 'original body'",
+    };
+    db_procedure procedure;
+    procedure.return_value(db_expr::column("input"));
+    ruvia::db_query query;
+    query.select(db_expr::value("replacement body"));
+    db_schema procedural({.driver_ = db_driver::postgresql});
+    procedural.create_function(definition, procedure);
+    db_schema sql_body({.driver_ = db_driver::postgresql});
+    sql_body.create_function(definition, query);
+    db_schema original({.driver_ = db_driver::postgresql});
+    original.create_function(definition);
+
+    const auto procedural_migrations = procedural.compile("procedural");
+    const auto sql_migrations = sql_body.compile("sql");
+    const auto original_migrations = original.compile("original");
+    const std::string prefix = "CREATE FUNCTION \"function_body_override\"(\"input\" TEXT DEFAULT \"lower\"(E'DEFAULT')) RETURNS TEXT LANGUAGE ";
+    EXPECT_EQ(procedural_migrations[0].sql(), prefix + "plpgsql STABLE AS $ruvia$BEGIN\nRETURN \"input\";\nEND$ruvia$");
+    EXPECT_EQ(sql_migrations[0].sql(), prefix + "sql STABLE AS $ruvia$SELECT E'replacement body'$ruvia$");
+    EXPECT_EQ(original_migrations[0].sql(), prefix + "sql STABLE AS $ruvia$SELECT 'original body'$ruvia$");
+    EXPECT_EQ(definition.language_, ruvia::db_function_language::sql);
+    EXPECT_EQ(definition.body_.view(), "SELECT 'original body'");
+}

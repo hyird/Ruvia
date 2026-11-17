@@ -194,7 +194,7 @@ task<void> response_stream_writer::writeln(std::string_view chunk, operation_opt
 
 task<timer_sleep_result> response_stream_writer::sleep(timeout_duration duration, stop_token stop) & {
     require_active();
-    if (!stop.stoppable()) {
+    if (!stop.stoppable() || stop == stop_token_) {
         return operation_scope_.attach(sleep_(target_, duration, stop_token_));
     }
     return operation_scope_.attach(sleep_stopped_by_either(target_, sleep_, duration, stop_token_, std::move(stop)));

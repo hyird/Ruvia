@@ -175,6 +175,41 @@ TEST(Ruvia, db_query_nested_ctes_are_owned_and_use_one_parameter_sequence) {
     EXPECT_EQ(statement.params().size(), std::size_t{4});
 }
 
+TEST(Ruvia, db_query_appended_join_and_cte_metadata_remain_owned) {
+    db_query query;
+    query.select(db_expr::column("id")).from("base_rows");
+    std::string expected_ctes = "WITH ";
+    std::string expected_joins;
+    for (int i = 0; i < 6; ++i) {
+        std::string source_name = "long_query_source_" + std::to_string(i);
+        std::string column_name = "long_identity_column_" + std::to_string(i);
+        std::string alias = "long_join_source_alias_" + std::to_string(i);
+        db_query source;
+        source.select(db_expr::value(i));
+        const borrowed_text columns[]{column_name};
+        query.with(source_name, source, {.columns_ = columns});
+        query.join(db_join_type::inner, source_name, {}, alias, {column_name});
+        if (i != 0) {
+            expected_ctes += ", ";
+        }
+        expected_ctes += "\"" + source_name + "\" (\"" + column_name + "\") AS (SELECT $" + std::to_string(i + 1) + ")";
+        expected_joins += " INNER JOIN \"" + source_name + "\" AS \"" + alias + "\" USING (\"" + column_name + "\")";
+        source_name.assign("gone");
+        column_name.assign("gone");
+        alias.assign("gone");
+        source.select(db_expr::value(-1));
+    }
+    const auto expected = expected_ctes + " SELECT \"id\" FROM \"base_rows\"" + expected_joins;
+    auto snapshot = query.clone();
+    query.select(db_expr::value(-1));
+    const auto statement = snapshot.compile(db_driver::postgresql);
+    EXPECT_EQ(statement.sql(), expected);
+    ASSERT_EQ(statement.params().size(), std::size_t{6});
+    for (std::size_t i = 0; i < statement.params().size(); ++i) {
+        EXPECT_EQ(statement.params()[i].signed_value(), static_cast<std::int64_t>(i));
+    }
+}
+
 TEST(Ruvia, db_query_postgresql_casts_bound_values_only_where_nothing_types_them) {
     db_query query;
     const auto name = db_expr::column("name");

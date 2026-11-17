@@ -114,13 +114,13 @@ task<result_type> run_request_linked_operation(operation_options options, stop_t
 
 // Starts one operation of a request-bound handle: the handle's own options
 // with the request's cancellation linked, never replaced by a user token
-// (CancellationTokenSource.CreateLinkedTokenSource). When either side cannot
-// stop, `start` receives the other directly, without a frame or allocation;
-// otherwise a wrapper frame owns the link until the operation completes and
-// `start` runs only when the returned task starts, so it must own its inputs.
+// (CancellationTokenSource.CreateLinkedTokenSource). When the tokens are the
+// same or either side cannot stop, `start` receives one directly, without a
+// frame or allocation; otherwise a wrapper frame owns the link until the
+// operation completes and `start` must own its inputs until the task starts.
 template <typename start_type>
 [[nodiscard]] std::invoke_result_t<start_type&, const operation_options&> start_request_linked(const operation_options& options, const stop_token& request_stop, start_type start) {
-    if (!request_stop.stoppable()) {
+    if (!request_stop.stoppable() || options.stop_token_ == request_stop) {
         return start(options);
     }
     if (!options.stop_token_.stoppable()) {
@@ -144,7 +144,7 @@ template <typename start_type>
 // transaction) that outlives the call creating it; null when one token alone
 // cancels it, which request_bound_options() then already carries.
 [[nodiscard]] inline std::unique_ptr<const linked_operation_options> make_request_link(const operation_options& options, const stop_token& request_stop) {
-    if (!options.stop_token_.stoppable() || !request_stop.stoppable()) {
+    if (!options.stop_token_.stoppable() || !request_stop.stoppable() || options.stop_token_ == request_stop) {
         return nullptr;
     }
     return std::make_unique<const linked_operation_options>(options, request_stop);

@@ -129,8 +129,10 @@ public:
 
     template <typename callable_type>
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options = {}) const {
-        if (!options.stop_token_.has_state()) {
+        if (!options.stop_token_.stoppable()) {
             options.stop_token_ = *stop_token_;
+        }
+        if (!stop_token_->stoppable() || options.stop_token_ == *stop_token_) {
             return ruvia::run_blocking(*worker_, std::move(callable), std::move(options));
         }
         return run_blocking_combined(*worker_, *stop_token_, std::move(callable), std::move(options));

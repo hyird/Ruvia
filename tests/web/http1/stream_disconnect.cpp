@@ -91,7 +91,7 @@ class routes final {
         }
         // 超大无符号等待不得窄化成负值后立即完成；客户端断开仍须唤醒它。
         const auto huge = std::chrono::duration<std::uint64_t, std::milli>{(std::numeric_limits<std::uint64_t>::max)()};
-        const auto result = mode == "writer" ? co_await writer.sleep(huge) : co_await ruvia::sleep_for(c.worker(), 10s, token);
+        const auto result = mode == "writer" ? co_await writer.sleep(huge, original) : co_await ruvia::sleep_for(c.worker(), 10s, token);
         if (result == ruvia::timer_sleep_result::stop_requested) {
             cancelled.fetch_add(1);
         }

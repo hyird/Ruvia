@@ -211,7 +211,7 @@ flowchart LR
 - **异步入口拥有化**：返回冷 `task` 的出站写入、文件响应与客户端请求在返回前取得输入所有权；调用方缓冲区可在 `co_await` 前释放。
 - **源缓冲释放**：事务失败语句的 SQL/参数在回滚 I/O 前释放；缓存命令拥有参数后，写入/删除的源缓冲在 Redis I/O 前释放。
 - **协程契约**：`task<T>` 惰性、仅右值 `co_await`，已启动任务必须等待完成（[ruvia-core.md](ruvia-core.md#api-task-h)）；`operation_options` 的超时与停止令牌规则见 [ruvia-core.md](ruvia-core.md#api-operation-options-h)。
-- **请求取消**：`c.stop_token()` 观察 Worker 停止、子请求取消与流式响应的客户端离开；`db()`、`redis()`、`run_blocking()` 自动绑定它，显式令牌与之合并。取消是协作式的，不抢占 CPU 工作。
+- **请求取消**：`c.stop_token()` 观察 Worker 停止、子请求取消与流式响应的客户端离开；`db()`、`redis()`、`run_blocking()` 自动绑定它。相同显式令牌直接复用，不同可停止来源才建立链接；取消是协作式的，不抢占 CPU 工作。
 
 <a id="web-errors"></a>
 
@@ -1886,7 +1886,7 @@ auto sub = co_await c.dispatch({.method_ = "GET", .target_ = "/api/internal/prof
 | `const request_name_value_list& param_fields() const` | 全部路径参数 |
 | `std::optional<std::string_view> signed_cookie(signed_cookie_lookup_options options) const` | 按 `unique_cookie` 查找并验证 HMAC，返回原值；重复或验证失败为 `nullopt` |
 | `task<std::string_view> text(operation_options operation = {}) const` | 完整缓冲正文文本视图 |
-| `task<std::span<const std::byte>> bytes(operation_options operation = {}) const` | 完整缓冲正文字节视图 |
+| `task<std::span<const std::byte>> bytes(operation_options operation = {}) const` | 与 `text()` 共用读取与解码主链，直接返回同一缓冲存储的字节视图 |
 | `task<void> discard_body(operation_options operation = {}) const` | 丢弃剩余正文 |
 | `template <typename t_type> task<std::optional<t_type>> json_if(operation_options operation = {}) const` | `t_type` 须为 `RUVIA_MODEL`（[`model.h`](#api-model-h)）；Content-Type 不匹配为 `nullopt`，格式错误抛 400，规则违反抛携带 issues 的 `http_error` |
 | `template <typename t_type> task<std::optional<t_type>> form_if(operation_options operation = {}) const` | 同上，表单 |

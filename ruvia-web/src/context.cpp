@@ -1097,12 +1097,20 @@ inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
     return parsed_coding;
 }
 
-task<std::string_view> read_request_text(const context& context_value, operation_options operation) {
+template <typename view_type>
+task<view_type> read_request_body(const context& context_value, operation_options operation) {
+    const auto as_view = [](std::string_view text) -> view_type {
+        if constexpr (std::is_same_v<view_type, std::string_view>) {
+            return text;
+        } else {
+            return as_bytes(text);
+        }
+    };
     if (operation.stop_token_.stop_requested()) {
         detail::operation_interrupt::throw_cause(detail::operation_interrupt_cause::cancelled, "request body read");
     }
     if (const auto decoded = detail::context_access::decoded_body(context_value)) {
-        co_return *decoded;
+        co_return as_view(*decoded);
     }
 
     const auto& body_source = detail::context_access::request_body_source(context_value);
@@ -1116,7 +1124,7 @@ task<std::string_view> read_request_text(const context& context_value, operation
         raw = as_chars(request.body_bytes());
     }
     if (detail::context_access::body_identity(context_value)) {
-        co_return raw;
+        co_return as_view(raw);
     }
 
     // Transparently decode a request body whose Content-Encoding we understand,
@@ -1126,24 +1134,19 @@ task<std::string_view> read_request_text(const context& context_value, operation
     const auto codings = parsed_coding.codings();
     if (codings.empty()) {
         detail::context_access::mark_body_identity(context_value);
-        co_return raw;
+        co_return as_view(raw);
     }
     auto decode_result = co_await decode_request_content(services.worker(), context_value.stop_token(), codings, raw, {.max_decoded_bytes_ = services.max_decoded_request_body_bytes()});
     auto* decoded_content = std::get_if<std::string>(&decode_result);
     if (decoded_content == nullptr) {
         throw make_http_protocol_error(std::get<http_content_decode_error>(decode_result), http_coding_field::content_encoding);
     }
-    co_return detail::context_access::store_decoded_body(context_value, std::move(*decoded_content));
-}
-
-task<std::span<const std::byte>> read_request_bytes(const context& context_value, operation_options operation) {
-    const auto body = co_await read_request_text(context_value, std::move(operation));
-    co_return std::as_bytes(std::span(body));
+    co_return as_view(detail::context_access::store_decoded_body(context_value, std::move(*decoded_content)));
 }
 
 task<std::vector<multipart_part>> read_request_multipart(const context& context_value, operation_options operation) {
     const auto boundary = get_multipart_boundary(detail::context_access::request(context_value));
-    const auto request_body = co_await read_request_text(context_value, std::move(operation));
+    const auto request_body = co_await read_request_body<std::string_view>(context_value, std::move(operation));
     auto parsed = parse_multipart_body(request_body, {.boundary_ = boundary});
     if (const auto* error = std::get_if<multipart_parse_error>(&parsed)) {
         throw make_http_protocol_error(*error);
@@ -1434,11 +1437,11 @@ std::optional<std::string_view> context_request::negotiate(negotiable_field fiel
 }
 
 task<std::string_view> context_request::text(operation_options operation) const {
-    return context_->operation_scope_.attach(read_request_text(*context_, std::move(operation)));
+    return context_->operation_scope_.attach(read_request_body<std::string_view>(*context_, std::move(operation)));
 }
 
 task<std::span<const std::byte>> context_request::bytes(operation_options operation) const {
-    return context_->operation_scope_.attach(read_request_bytes(*context_, std::move(operation)));
+    return context_->operation_scope_.attach(read_request_body<std::span<const std::byte>>(*context_, std::move(operation)));
 }
 
 std::optional<std::string_view> context_request::signed_cookie(signed_cookie_lookup_options options) const {

@@ -361,7 +361,6 @@ void decode_http_client_response_body(http_client_response_state& state_value, b
         // Encoded bytes are never exposed, so the unread part of buffered_ and
         // pending_ together are the whole body. Decode in place when one holds it.
         const auto buffered_bytes = state_value.buffered_.size() - state_value.offset_;
-        std::string joined;
         std::string_view encoded;
         if (state_value.pending_.empty()) {
             encoded = std::string_view(state_value.buffered_).substr(state_value.offset_);
@@ -371,10 +370,12 @@ void decode_http_client_response_body(http_client_response_state& state_value, b
             if (state_value.pending_.size() > std::numeric_limits<std::size_t>::max() - buffered_bytes) {
                 throw http_client_error(make_error_code(http_client_errc::response_too_large), "HTTP response exceeds configured byte limit");
             }
-            joined.reserve(buffered_bytes + state_value.pending_.size());
-            joined.append(state_value.buffered_.data() + state_value.offset_, buffered_bytes);
-            joined.append(state_value.pending_);
-            encoded = joined;
+            // Encoded bytes have no outstanding consumer borrow, and the
+            // catch path discards them on failure: reuse their owned storage.
+            state_value.buffered_.erase(0, state_value.offset_);
+            state_value.offset_ = 0;
+            state_value.buffered_.append(state_value.pending_);
+            encoded = state_value.buffered_;
         }
 
         const auto decoded_limit = std::min(max_decoded_bytes, state_value.buffered_limit_);
