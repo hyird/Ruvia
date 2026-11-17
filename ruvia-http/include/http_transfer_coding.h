@@ -35,8 +35,8 @@ using http_transfer_coding_decode_result = decode_step<decode_need_input, decode
 // exact wire consumption even when a layer fails. A finished or failed
 // decoder repeats its terminal result without consuming input (the caller
 // decides what bytes after a finished coding mean); only reset() starts
-// another coded body. A codec that cannot run throws
-// http_content_codec_error; the decoder is then unusable.
+// another coded body. A codec fault throws and leaves the stack failed; any
+// subsequent decode() or finish_input() reports invalid_content until reset().
 class http_transfer_coding_stack_decoder final {
 public:
     http_transfer_coding_stack_decoder(std::span<const http_content_coding> codings, protocol_byte_limit decoded_limit, http_codec_memory* memory = nullptr);

@@ -116,7 +116,15 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(st
                 continue;
             }
             const auto output = index + 1 == impl_->stage_count_ ? output_buffer : std::span<char>(impl_->buffers_[index].bytes_);
-            const auto decoded = stage.decoder_.decode(layer_input, output);
+            const auto decoded = [&] {
+                try {
+                    return stage.decoder_.decode(layer_input, output);
+                } catch (...) {
+                    // A stage may have advanced without reporting wire progress.
+                    impl_->failure_ = http_content_decode_error::invalid_content;
+                    throw;
+                }
+            }();
             const auto consumed = decoded.consumed_bytes();
             stage.received_input_ = stage.received_input_ || consumed != 0;
             if (index == 0) {

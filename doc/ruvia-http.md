@@ -3416,7 +3416,7 @@ public:
 | `state()` | `active` / `finished` / `failed`。 |
 | `reset()` | 用构造时的 codings 与上限开始新的编码体，保留编解码器存储；编解码器无法重启时抛 `http_content_codec_error`，解码器随后不可用。 |
 
-数据错误以类型化失败值返回，因为增量驱动即使在某层失败时也必须保留精确的线上消费量。已完成或已失败的解码器重复其终态结果且不消费输入（编码结束后多余字节的含义由调用方裁决），只有 `reset()` 开始另一个编码体。编解码器无法运行时抛 `http_content_codec_error`，解码器随后不可用。解码器须保持在稳定地址直至销毁（不可移动）。
+数据错误以类型化失败值返回，并保留精确的线上消费量。编解码器异常（包括分配失败）原样抛出，解码器立即进入 `failed`，后续调用返回 `invalid_content`。已完成或已失败的解码器重复其终态结果且不消费输入（编码结束后多余字节的含义由调用方裁决），只有 `reset()` 开始另一个编码体。解码器须保持在稳定地址直至销毁（不可移动）。
 
 传输编码限制：`Transfer-Encoding` 只接受 `gzip`（含 `x-gzip`）与 `deflate`（RFC 9112 §7.2）；`br`、`zstd`、`identity` 及未知 coding 由 HTTP/1 解析报告为不支持（`501`），见 [`"http1_message_body.h"`](#api-http1-message-body-h)。
 

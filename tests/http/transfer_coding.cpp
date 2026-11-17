@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -28,6 +29,34 @@ TEST(RuviaHttpPublicApi, transfer_codec_stages_share_request_native_budget_and_u
     ruvia::http_codec_memory memory(stage_bytes);
     EXPECT_THROW((void)http_transfer_coding_stack_decoder((std::array{http_content_coding::gzip, http_content_coding::gzip}), protocol_byte_limit::limited(1024), &memory), std::bad_alloc);
     EXPECT_EQ(memory.live_bytes(), 0U);
+}
+
+TEST(RuviaHttpPublicApi, transfer_decoder_enters_failed_state_on_native_allocation_failure) {
+    constexpr std::array codings{http_content_coding::gzip};
+    const auto limit = protocol_byte_limit::limited(32 * 1024);
+    std::size_t initial_bytes = 0;
+    {
+        ruvia::http_codec_memory measuring;
+        http_transfer_coding_stack_decoder decoder(codings, limit, &measuring);
+        initial_bytes = measuring.live_bytes();
+    }
+    const auto wire = gzip_compress(std::string(16 * 1024, 'x'));
+    ruvia::http_codec_memory memory(initial_bytes);
+    http_transfer_coding_stack_decoder decoder(codings, limit, &memory);
+    std::array<char, 1> scratch{};
+
+    ASSERT_THROW((void)decoder.decode(wire, scratch), std::bad_alloc);
+    EXPECT_EQ(decoder.state(), ruvia::decoder_state::failed);
+    const auto replayed = decoder.decode(wire, {});
+    ASSERT_TRUE(replayed.holds<ruvia::http_transfer_coding_decode_failure>());
+    EXPECT_EQ(replayed.consumed_bytes(), 0U);
+    EXPECT_TRUE(decoder.finish_input().holds<ruvia::http_transfer_coding_decode_failure>());
+
+    decoder.reset();
+    std::string output;
+    EXPECT_FALSE(append_transfer_decoded(decoder, gzip_compress("ok"), output).failed_);
+    EXPECT_EQ(output, "ok");
+    EXPECT_TRUE(decoder.finish_input().holds<ruvia::decode_complete>());
 }
 
 // Decoding a transfer-coded (chunked, then coded) request body.
