@@ -2394,6 +2394,8 @@ if (const auto decision = limiter.decide(c.conn().client().address()); !decision
 | `rate_limit_decision decide(std::string_view key, const rate_limit_rule& rule, std::uintptr_t scope = 1, std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept` | 按给定规则决策；`scope` 区分同一键在不同规则声明下的独立计数 |
 | `rate_limit_decision decide(const ip_address& address, const rate_limit_rule& rule, std::uintptr_t scope = 1, std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept` | 同上，地址键 |
 
+- **时钟**：显式传入的 `now` 使用 `steady_clock`。窗口按完整的时刻差计算，跨时钟纪元也不会提前重置计数或延长拒绝时间。
+
 `template <std::size_t max_requests, std::int64_t window_ms, rate_limit_overflow_policy overflow_policy = rate_limit_overflow_policy::deny> class rate_limit final`：路由级限流中间件，配置全部在模板参数中，因而可默认构造、可写入路由/控制器类型列表，启动期定型、请求期零分配。
 
 | 声明 | 说明 |

@@ -172,8 +172,16 @@ struct wide_unsigned final {
     return static_cast<std::uint64_t>(rule.window_.count());
 }
 
+// Quantize only the elapsed time, not the window start.
 [[nodiscard]] std::uint64_t elapsed_ms(std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point now) noexcept {
-    return now <= start ? 0 : static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count());
+    if (now <= start) {
+        return 0;
+    }
+    // The distance between ordered time points can exceed the signed tick range.
+    using unsigned_ticks = std::chrono::duration<std::uint64_t, std::chrono::steady_clock::period>;
+    using unsigned_milliseconds = std::chrono::duration<std::uint64_t, std::milli>;
+    const auto ticks = static_cast<std::uint64_t>(now.time_since_epoch().count()) - static_cast<std::uint64_t>(start.time_since_epoch().count());
+    return std::chrono::duration_cast<unsigned_milliseconds>(unsigned_ticks{ticks}).count();
 }
 
 [[nodiscard]] bool key_equals(const rate_limit_slot& slot, rate_limit_scope scope, std::string_view key, std::uint64_t hash) noexcept {
@@ -196,7 +204,7 @@ void roll_window(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono
     if (elapsed - window_ms < window_ms) {
         slot.previous_count_ = slot.current_count_;
         // The elapsed check guarantees this advance fits before now.
-        slot.window_start_ += saturating_duration_cast(rule.window_);
+        slot.window_start_ = deadline_after(slot.window_start_, rule.window_);
     } else {
         slot.previous_count_ = 0;
         slot.window_start_ = now;
@@ -381,8 +389,6 @@ std::optional<rate_limit_rejection> rate_limiter::allow(rate_limit_scope scope, 
         return overflow_decision(rule);
     }
 
-    // Preserve the arrival's sub-millisecond phase; only elapsed time is quantized.
-    now = std::max(now, std::chrono::steady_clock::time_point{});
     const auto hash = key_hash(hash_key_, scope, key);
     const auto mask = slots_.size() - 1;
     const auto start = static_cast<std::size_t>(hash) & mask;
@@ -423,7 +429,6 @@ rate_limit_decision rate_limiter::decide_rule(rate_limit_scope scope, std::strin
     if (slots_.empty() || key.size() > rate_limit_max_key_bytes) {
         return overflow_rate_limit_decision(rule);
     }
-    now = std::max(now, std::chrono::steady_clock::time_point{});
     const auto hash = key_hash(hash_key_, scope, key);
     const auto mask = slots_.size() - 1;
     const auto start = static_cast<std::size_t>(hash) & mask;

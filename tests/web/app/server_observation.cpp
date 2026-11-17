@@ -442,3 +442,24 @@ TEST(Ruvia, standalone_sliding_window_rate_limiter_and_address_key_canonicalizat
     EXPECT_EQ(resp.header("X-RateLimit-Limit"), std::optional<std::string_view>("2"));
     EXPECT_EQ(resp.header("X-RateLimit-Remaining"), std::optional<std::string_view>("0"));
 }
+
+TEST(Ruvia, rate_limiter_preserves_elapsed_time_across_the_clock_range) {
+    using namespace std::chrono;
+    const auto start = (steady_clock::time_point::min)();
+    const auto end = (steady_clock::time_point::max)();
+    ruvia::sliding_window_rate_limiter short_limiter(1);
+    const ruvia::rate_limit_rule short_window{.max_requests_ = 1, .window_ = milliseconds{1}};
+    ASSERT_TRUE(short_limiter.decide("key", short_window, 1, start).allowed());
+    EXPECT_TRUE(short_limiter.decide("key", short_window, 1, end).allowed());
+
+    const auto whole_milliseconds = duration_cast<milliseconds>((steady_clock::duration::max)());
+    const auto boundary = start + whole_milliseconds + milliseconds{1};
+    const auto first_available = boundary + milliseconds{1};
+    const ruvia::rate_limit_rule wide_window{.max_requests_ = 1, .window_ = whole_milliseconds + milliseconds{1}};
+    ruvia::sliding_window_rate_limiter wide_limiter(1);
+    ASSERT_TRUE(wide_limiter.decide("key", wide_window, 1, start).allowed());
+    const auto rejected = wide_limiter.decide("key", wide_window, 1, first_available - steady_clock::duration{1});
+    EXPECT_FALSE(rejected.allowed());
+    EXPECT_EQ(rejected.retry_after_ms(), 1U);
+    EXPECT_TRUE(wide_limiter.decide("key", wide_window, 1, first_available).allowed());
+}
