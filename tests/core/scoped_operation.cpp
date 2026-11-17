@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <cstddef>
 #include <exception>
 #include <future>
 #include <limits>
@@ -10,6 +11,12 @@
 #include <type_traits>
 #include <utility>
 
+#include <asio/bind_allocator.hpp>
+#include <asio/bind_executor.hpp>
+#include <asio/deferred.hpp>
+#include <asio/io_context.hpp>
+
+#include "asio_bridge.h"
 #include "event_loop.h"
 #include "operation_scope.h"
 #include "task_scope.h"
@@ -49,6 +56,35 @@ public:
 private:
     std::size_t live_allocations_{0};
     std::size_t live_bytes_{0};
+};
+
+template <typename t_type>
+struct closing_allocator {
+    using value_type = t_type;
+
+    closing_allocator(detail::operation_scope& scope, payload_counter& counter) noexcept :
+        scope_(&scope),
+        counter_(&counter) {}
+
+    template <typename other_type>
+    closing_allocator(const closing_allocator<other_type>& other) noexcept :
+        scope_(other.scope_),
+        counter_(other.counter_) {}
+
+    t_type* allocate(std::size_t count) {
+        scope_->close();
+        auto* result = std::allocator<t_type>{}.allocate(count);
+        counter_->acquire(count * sizeof(t_type));
+        return result;
+    }
+
+    void deallocate(t_type* address, std::size_t count) noexcept {
+        std::allocator<t_type>{}.deallocate(address, count);
+        counter_->release(count * sizeof(t_type));
+    }
+
+    detail::operation_scope* scope_;
+    payload_counter* counter_;
 };
 
 class tracked_payload final {
@@ -879,6 +915,39 @@ TEST(Ruvia, scoped_operation_expired_by_scope_close_rejects_start) {
     }
     EXPECT_EQ(resource.live_allocations(), 0U);
     EXPECT_EQ(resource.live_bytes(), 0U);
+}
+
+TEST(Ruvia, asio_deferred_start_rejects_task_expired_before_initiation) {
+    asio::io_context io;
+    ruvia::detail::operation_scope scope;
+    auto operation = scope.attach([]() -> ruvia::task<void> {
+        ADD_FAILURE() << "expired task ran";
+        co_return;
+    }());
+    auto deferred = ruvia::async_start(std::move(operation), asio::deferred);
+    scope.close();
+
+    auto completion = asio::bind_executor(io.get_executor(), [](std::exception_ptr) {
+        ADD_FAILURE() << "rejected initiation delivered a completion";
+    });
+    EXPECT_THROW(std::move(deferred)(std::move(completion)), std::logic_error);
+    io.run();
+}
+
+TEST(Ruvia, asio_start_rolls_back_when_allocator_expires_task) {
+    asio::io_context io;
+    ruvia::detail::operation_scope scope;
+    ruvia::test::scoped_operation_tests::payload_counter allocations;
+    auto operation = scope.attach([]() -> ruvia::task<void> {
+        ADD_FAILURE() << "expired task ran";
+        co_return;
+    }());
+    auto completion = asio::bind_allocator(ruvia::test::scoped_operation_tests::closing_allocator<int>(scope, allocations), asio::bind_executor(io.get_executor(), [](std::exception_ptr) {
+        ADD_FAILURE() << "rejected initiation delivered a completion";
+    }));
+    EXPECT_THROW(ruvia::async_start(std::move(operation), std::move(completion)), std::logic_error);
+    EXPECT_EQ(allocations.live_allocations(), 0U);
+    io.run();
 }
 
 TEST(Ruvia, scoped_operation_created_after_scope_close_discards_cold_frame) {

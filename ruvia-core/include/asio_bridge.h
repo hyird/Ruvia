@@ -60,6 +60,15 @@ public:
         allocator_(std::move(allocator_value)) {}
 
     void start() {
+        // Allocator and handler setup may retire a scoped cold frame.
+        if (task_.registration_.scoped()) {
+            try {
+                task_.prepare_direct_start();
+            } catch (...) {
+                state_deleter_type{state_allocator_type(allocator_)}(this);
+                throw;
+            }
+        }
         task_.coroutine_.promise().control_.set_completion(this, &task_completion_state::complete);
         task_.start();
     }
@@ -141,9 +150,10 @@ namespace ruvia {
 template <typename t_type, typename completion_token_type>
     requires detail::asio_task_result<t_type>
 auto async_start(task<t_type>&& task_value, completion_token_type&& token) {
-    task_value.prepare_direct_start();
     using completion_signature_type = std::conditional_t<std::is_void_v<t_type>, void(std::exception_ptr), void(task_completion_result<t_type>&&)>;
     return asio::async_initiate<completion_token_type, completion_signature_type>([](auto&& handler, task<t_type> started_task) {
+        // A deferred token may initiate after the cold task's scope closes.
+        started_task.prepare_direct_start();
         using handler_type = std::decay_t<decltype(handler)>;
         auto* state_value = detail::task_completion_state<t_type, handler_type>::create(std::move(started_task), std::forward<decltype(handler)>(handler));
         state_value->start();

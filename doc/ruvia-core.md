@@ -391,7 +391,7 @@ flowchart LR
 | `template <typename T> [[nodiscard]] asio::awaitable<T> as_awaitable(task<T> task_value);` | 供 `co_spawn` 等 Asio 协程所有者使用；失败时从 awaitable 重抛；`void` 任务不增加包装帧 |
 
 - **类型约束**：三者都要求 `T` 为 `void` 或可 `noexcept` 移动构造。
-- **启动线程**：`async_start` 在发起时于调用线程内联启动任务；`deferred` 等延迟令牌在其被发起时启动。空任务在发起前抛 `std::logic_error`。
+- **启动线程**：`async_start` 在实际发起的线程内联启动任务；`deferred` 等延迟令牌构造时不启动。发起空任务或作用域已失效的任务时抛 `std::logic_error`，不调用完成处理器。
 - **交付**：完成总是经处理器关联执行器 `asio::post` 交付，即使任务同步完成；操作状态使用处理器关联分配器。
 - **回收顺序**：交付前先提取结果并回收协程帧与操作状态，再调用处理器；拥有型处理器可在析构中安全发布外部就绪。
 - **令牌**：回调、`use_awaitable`、`use_future`、`deferred` 与自定义令牌均可用；`event_loop::try_start` 基于 `async_start`。
