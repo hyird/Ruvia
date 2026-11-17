@@ -304,6 +304,7 @@ public:
     http_content_decoder_stream(http_content_coding coding, http_content_decode_options options);
     http_content_decoder_stream(const http_content_decoder_stream&) = delete;
     http_content_decoder_stream& operator=(const http_content_decoder_stream&) = delete;
+    // Callers supply nonempty output, disjoint from compressed input.
     [[nodiscard]] http_content_decode_result decode(std::string_view input, std::span<char> output);
     [[nodiscard]] http_content_decode_result finish_input() noexcept;
     [[nodiscard]] decoder_state state() const noexcept {
@@ -312,6 +313,8 @@ public:
     void reset();
 
 private:
+    friend class ::ruvia::http_content_decoder;
+
     void initialize();
     [[nodiscard]] http_content_decode_result decode_active(std::string_view input, std::span<char> output);
     [[nodiscard]] http_content_decode_result fail(std::size_t consumed, http_content_decode_error error) noexcept;

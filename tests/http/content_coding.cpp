@@ -107,6 +107,18 @@ TEST(RuviaHttpPublicApi, identity_content_decoder_borrows_input_without_touching
     EXPECT_EQ((std::string_view(scratch.data(), scratch.size())), "kep");
 }
 
+TEST(RuviaHttpPublicApi, content_decoder_keeps_buffer_errors_terminal) {
+    ruvia::http_content_decoder decoder(http_content_coding::gzip, {});
+    auto wire = gzip_compress("body");
+    EXPECT_THROW((void)decoder.decode(wire, {}), std::invalid_argument);
+    EXPECT_EQ(decoder.state(), ruvia::decoder_state::failed);
+
+    decoder.reset();
+    EXPECT_THROW((void)decoder.decode(wire, std::span<char>(wire)), std::invalid_argument);
+    EXPECT_EQ(decoder.state(), ruvia::decoder_state::failed);
+    EXPECT_TRUE(decoder.finish_input().holds<ruvia::http_content_decode_failure>());
+}
+
 TEST(RuviaHttpPublicApi, content_decoder_fragments_input_output_and_resets_every_coding) {
     const std::string plain = std::string(257, 's') + " streaming payload";
     for (const auto coding : {http_content_coding::identity, http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {

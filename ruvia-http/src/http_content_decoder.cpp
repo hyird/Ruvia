@@ -110,12 +110,6 @@ http_content_decode_result http_content_decoder_stream::decode_active(std::strin
     if (phase_ == decoder_state::finished) {
         return {0, decode_complete{}};
     }
-    if (output.empty()) {
-        throw std::invalid_argument("content decoding needs output space");
-    }
-    if (coding_ != http_content_coding::identity && detail::http_text_overlaps(input, std::string_view(output.data(), output.size()))) {
-        throw std::invalid_argument("compressed content input overlaps output");
-    }
     if (coding_ == http_content_coding::identity) {
         const auto count = (std::min)({input.size(), output.size(), options_.max_decoded_bytes_ - decoded_bytes_});
         if (count != 0) {
@@ -259,7 +253,18 @@ http_content_decoder::~http_content_decoder() {
 }
 
 http_content_decode_result http_content_decoder::decode(std::string_view input, std::span<char> output) {
-    return impl_->stream_.decode(input, output);
+    auto& stream = impl_->stream_;
+    if (stream.state() == decoder_state::active) {
+        const char* error = output.empty() ? "content decoding needs output space" : nullptr;
+        if (error == nullptr && stream.coding_ != http_content_coding::identity && detail::http_text_overlaps(input, std::string_view(output.data(), output.size()))) {
+            error = "compressed content input overlaps output";
+        }
+        if (error != nullptr) {
+            (void)stream.fail(0, http_content_decode_error::invalid_content);
+            throw std::invalid_argument(error);
+        }
+    }
+    return stream.decode(input, output);
 }
 
 http_content_decode_result http_content_decoder::finish_input() noexcept {

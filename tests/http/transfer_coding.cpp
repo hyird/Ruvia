@@ -103,20 +103,26 @@ TEST(Ruvia, transfer_coding_stack_decodes_reverse_order_with_tiny_scratch) {
 
 TEST(Ruvia, transfer_coding_stack_rejects_overlapping_buffers_without_consuming_input) {
     constexpr std::string_view plain = "stacked transfer coding payload";
-    const auto wire = zlib_deflate_compress(gzip_compress(plain));
+    const auto gzip_wire = gzip_compress(plain);
+    const auto stacked_wire = zlib_deflate_compress(gzip_wire);
     constexpr std::array codings{http_content_coding::gzip, http_content_coding::deflate};
-    ruvia::http_transfer_coding_stack_decoder stack(codings, protocol_byte_limit::limited(1024));
+    for (const std::size_t layers : {1U, 2U}) {
+        SCOPED_TRACE(layers);
+        const auto& wire = layers == 1 ? gzip_wire : stacked_wire;
+        ruvia::http_transfer_coding_stack_decoder stack(std::span(codings).first(layers), protocol_byte_limit::limited(1024));
 
-    auto aliased = wire;
-    EXPECT_THROW((void)stack.decode(aliased, std::span<char>(aliased).subspan(1)), std::invalid_argument);
-    EXPECT_EQ(aliased, wire);
+        auto aliased = wire;
+        EXPECT_THROW((void)stack.decode(aliased, std::span<char>(aliased).subspan(1)), std::invalid_argument);
+        EXPECT_EQ(aliased, wire);
+        ASSERT_EQ(stack.state(), ruvia::decoder_state::active);
 
-    std::array<char, 64> scratch{};
-    const auto retried = stack.decode(wire, scratch);
-    EXPECT_EQ(retried.consumed_bytes(), wire.size());
-    const auto* output = retried.get_if<ruvia::decode_output>();
-    ASSERT_NE(output, nullptr);
-    EXPECT_EQ(output->bytes(), plain);
+        std::array<char, 64> scratch{};
+        const auto retried = stack.decode(wire, scratch);
+        EXPECT_EQ(retried.consumed_bytes(), wire.size());
+        const auto* output = retried.get_if<ruvia::decode_output>();
+        ASSERT_NE(output, nullptr);
+        EXPECT_EQ(output->bytes(), plain);
+    }
 }
 
 TEST(Ruvia, transfer_coding_stack_rejects_truncated_inner_stream) {

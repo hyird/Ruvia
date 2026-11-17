@@ -87,9 +87,7 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(st
     if (output_buffer.empty()) {
         throw std::invalid_argument("transfer-coding decode needs output space");
     }
-    // A single layer checks its caller buffers itself. In a stack the native
-    // decoders only see disjoint, per-layer buffers, not the two caller views.
-    if (impl_->stage_count_ > 1 && detail::http_text_overlaps(input, std::string_view(output_buffer.data(), output_buffer.size()))) {
+    if (detail::http_text_overlaps(input, std::string_view(output_buffer.data(), output_buffer.size()))) {
         throw std::invalid_argument("transfer coding input overlaps output");
     }
 
