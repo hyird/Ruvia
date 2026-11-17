@@ -78,13 +78,55 @@ public:
     http2_data_output_budget(const http2_data_output_budget&) = delete;
     http2_data_output_budget& operator=(const http2_data_output_budget&) = delete;
 
-    [[nodiscard]] bool try_acquire(std::uint32_t stream_id) noexcept {
-        if (std::ranges::find(held_, stream_id) != held_.end()) {
+    // Only waiting admission is scoped here. A granted slot belongs to the
+    // session ledger until its queued and in-flight bytes have drained.
+    class admission_wait final {
+    public:
+        explicit admission_wait(http2_data_output_budget& budget) noexcept :
+            budget_(budget) {}
+        admission_wait(const admission_wait&) = delete;
+        admission_wait& operator=(const admission_wait&) = delete;
+        admission_wait(admission_wait&&) = delete;
+        admission_wait& operator=(admission_wait&&) = delete;
+        ~admission_wait() {
+            leave_wait();
+        }
+
+        [[nodiscard]] bool try_acquire(std::uint32_t stream_id) noexcept {
+            if (budget_.try_acquire(stream_id, waiting_)) {
+                leave_wait();
+                return true;
+            }
+            if (!std::exchange(waiting_, true)) {
+                ++budget_.waiting_streams_;
+            }
             return false;
         }
-        for (auto& held : held_) {
-            if (held == 0) {
-                held = stream_id;
+
+    private:
+        void leave_wait() noexcept {
+            if (std::exchange(waiting_, false)) {
+                --budget_.waiting_streams_;
+                // Only the last remaining waiter becomes newly eligible to
+                // reuse a held stream's otherwise idle slots.
+                if (budget_.waiting_streams_ == 1 && std::ranges::find(budget_.held_, 0) != budget_.held_.end()) {
+                    budget_.changed_.notify();
+                }
+            }
+        }
+
+        http2_data_output_budget& budget_;
+        bool waiting_{false};
+    };
+
+    [[nodiscard]] bool try_acquire(std::uint32_t stream_id, bool counted_waiter) noexcept {
+        if (waiting_streams_ > static_cast<std::size_t>(counted_waiter) && std::ranges::find(held_, stream_id) != held_.end()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < held_.size(); ++i) {
+            if (held_[i] == 0) {
+                held_[i] = stream_id;
+                admission_order_[admission_order_size_++] = static_cast<std::uint8_t>(i);
                 return true;
             }
         }
@@ -100,30 +142,41 @@ public:
         for (std::size_t i = 0; i < held_.size(); ++i) {
             if (held_[i] == stream_id) {
                 cancelled_[i] = true;
-                if (progress_[i].submitted_ == 0) {
+                if (progress_[i].queued_ == 0 && progress_[i].in_flight_ == 0) {
                     clear(i);
                 }
-                return;
             }
         }
     }
 
     void note_data_submitted(std::uint32_t stream_id, std::size_t bytes_value) noexcept {
-        for (std::size_t i = 0; i < held_.size(); ++i) {
-            if (held_[i] == stream_id) {
-                progress_[i].submitted_ += bytes_value;
+        if (bytes_value == 0) {
+            return;
+        }
+        for (auto position = admission_order_size_; position != 0; --position) {
+            const auto i = admission_order_[position - 1];
+            if (held_[i] == stream_id && progress_[i].queued_ == 0 && progress_[i].in_flight_ == 0) {
+                progress_[i].queued_ = bytes_value;
                 return;
             }
         }
+        std::terminate();
     }
 
     void note_data_output(std::uint32_t stream_id, std::size_t bytes_value) noexcept {
-        for (std::size_t i = 0; i < held_.size(); ++i) {
+        // DATA bytes retain their order within each stream, even when other
+        // streams' frames interleave or one batch contains several reservations.
+        for (std::size_t position = 0; position < admission_order_size_ && bytes_value != 0; ++position) {
+            const auto i = admission_order_[position];
             if (held_[i] == stream_id) {
-                progress_[i].emitted_ += bytes_value;
-                progress_[i].batch_output_ += bytes_value;
-                return;
+                const auto emitted = std::min(bytes_value, progress_[i].queued_);
+                progress_[i].queued_ -= emitted;
+                progress_[i].in_flight_ += emitted;
+                bytes_value -= emitted;
             }
+        }
+        if (bytes_value != 0) {
+            std::terminate();
         }
     }
 
@@ -141,10 +194,12 @@ public:
             }
             auto& progress = progress_[i];
             if (socket_write_completed) {
-                progress.written_ += progress.batch_output_;
-                progress.batch_output_ = 0;
+                progress.in_flight_ = 0;
             }
-            if ((cancelled_[i] && progress.written_ >= progress.emitted_ && connection.pending_data_output_bytes(stream_id) == 0) || (!cancelled_[i] && progress.written_ >= progress.submitted_ && connection.pending_data_output_bytes(stream_id) == 0)) {
+            if (cancelled_[i] && progress.queued_ != 0 && connection.pending_data_output_bytes(stream_id) == 0) {
+                progress.queued_ = 0;
+            }
+            if (progress.queued_ == 0 && progress.in_flight_ == 0) {
                 clear(i);
             }
         }
@@ -155,17 +210,28 @@ public:
     }
 
 private:
+    // Admission synchronously submits or releases its reservation before
+    // yielding. Each byte is then either queued in the core or held by the writer.
     struct credit_progress final {
-        std::size_t submitted_{};
-        std::size_t emitted_{};
-        std::size_t written_{};
-        std::size_t batch_output_{};
+        std::size_t queued_{};
+        std::size_t in_flight_{};
     };
 
     void clear(std::size_t i) noexcept {
         held_[i] = 0;
         progress_[i] = {};
         cancelled_[i] = false;
+        std::size_t position = 0;
+        while (position < admission_order_size_ && admission_order_[position] != i) {
+            ++position;
+        }
+        if (position == admission_order_size_) {
+            std::terminate();
+        }
+        for (; position + 1 < admission_order_size_; ++position) {
+            admission_order_[position] = admission_order_[position + 1];
+        }
+        --admission_order_size_;
         changed_.notify();
     }
 
@@ -173,6 +239,9 @@ private:
     std::array<std::uint32_t, http2_data_output_credit_slots> held_{};
     std::array<credit_progress, http2_data_output_credit_slots> progress_{};
     std::array<bool, http2_data_output_credit_slots> cancelled_{};
+    std::array<std::uint8_t, http2_data_output_credit_slots> admission_order_{};
+    std::size_t admission_order_size_{0};
+    std::size_t waiting_streams_{0};
 };
 
 // Web-side state of one HTTP/2 stream: the shared request stream state plus
@@ -2008,8 +2077,8 @@ task<http2_stream_data_write_status> write_http2_stream_data(ruvia::http2_connec
             }
         }
         if (!bytes.empty()) {
-            // A stream retains its sole credit until its current DATA drains.
-            while (!output_budget.try_acquire(stream_id)) {
+            http2_data_output_budget::admission_wait admission(output_budget);
+            while (!admission.try_acquire(stream_id)) {
                 co_await output_budget.wait();
                 if ((aborted != nullptr && *aborted) || signal->terminated() || connection.stream_aborted(stream_id)) {
                     co_return classify_aborted_write(signal, aborted);
@@ -2197,7 +2266,7 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
     auto body = response.body_bytes();
     if (!body.empty() && signal != nullptr && !signal->terminated() && !connection_.stream_aborted(stream_id)) {
         const auto window = connection_.send_window_state(stream_id);
-        if (window && window->available_ != 0 && output_budget_.try_acquire(stream_id)) {
+        if (window && window->available_ != 0 && output_budget_.try_acquire(stream_id, false)) {
             const auto submitted = submit_http2_stream_data(connection_, stream_id, write_signal_, output_budget_, body, http2_end_stream::end_stream);
             if (submitted.failure_) {
                 co_return fail_after_commit();

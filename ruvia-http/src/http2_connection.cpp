@@ -283,8 +283,8 @@ void http2_connection::create_session() {
     nghttp2_option_set_peer_max_concurrent_streams(option.get(), (std::numeric_limits<std::uint32_t>::max)());
     nghttp2_option_set_max_reserved_remote_streams(option.get(), static_cast<std::uint32_t>(http2_stream_table::max_push_streams));
     nghttp2_option_set_max_send_header_block_length(option.get(), max_http2_encoded_header_block_bytes);
-    // The encoder never inserts dynamic-table entries.
-    nghttp2_option_set_max_deflate_dynamic_table_size(option.get(), 0);
+    // Keep connection-local compression bounded even if the peer permits more.
+    nghttp2_option_set_max_deflate_dynamic_table_size(option.get(), 4096);
     nghttp2_option_set_max_settings(option.get(), http2_received_settings::max_frame_entries);
     nghttp2_option_set_max_continuations(option.get(), max_continuation_frames);
     nghttp2_option_set_max_outbound_ack(option.get(), max_undrained_control_frames);
@@ -370,40 +370,36 @@ void http2_connection::check_nghttp2(int result) {
 }
 
 void http2_connection::flush_session() {
-    for (;;) {
-        const std::uint8_t* data = nullptr;
-        const auto produced = nghttp2_session_mem_send2(session_.get(), &data);
-        if (produced < 0) {
-            // A failed mem_send2 leaves nghttp2's outbound state indeterminate,
-            // so nothing more is sent on this session.
-            const auto error = static_cast<int>(produced);
-            if (local_connection_state_.fatal_failure() == nullptr) {
-                local_connection_state_.fail(http2_error_code::internal_error);
+    try {
+        for (;;) {
+            const std::uint8_t* data = nullptr;
+            const auto produced = nghttp2_session_mem_send2(session_.get(), &data);
+            if (produced <= 0) {
+                if (auto failure = std::exchange(callback_failure_, nullptr)) {
+                    std::rethrow_exception(failure);
+                }
+                // HPACK allocation failure can queue GOAWAY without a negative
+                // mem_send2 result. Never report that submission as successful.
+                memory_.rethrow_if_failed();
+                if (produced == 0) {
+                    break;
+                }
+                if (produced == NGHTTP2_ERR_NOMEM) {
+                    memory_.rethrow_allocation_failure();
+                }
+                throw std::runtime_error(nghttp2_strerror(static_cast<int>(produced)));
             }
-            if (auto failure = std::exchange(callback_failure_, nullptr)) {
-                std::rethrow_exception(failure);
-            }
-            if (error == NGHTTP2_ERR_NOMEM) {
-                memory_.rethrow_allocation_failure();
-            }
-            throw std::runtime_error(nghttp2_strerror(error));
-        }
-        if (produced == 0) {
-            break;
-        }
-        // Every DATA frame bypasses this path through append_data_frame, so
-        // each chunk here is one control frame or the client connection preface.
-        const auto bytes = bytes_view(data, static_cast<std::size_t>(produced));
-        try {
+            // DATA bypasses this path through append_data_frame; every chunk
+            // here is one control frame or the client connection preface.
+            const auto bytes = bytes_view(data, static_cast<std::size_t>(produced));
             output_.append_segment(std::span<const std::string_view>(&bytes, 1), 0, false);
-        } catch (...) {
-            // nghttp2 already counts these bytes as sent; the wire can no longer
-            // be made consistent.
-            if (local_connection_state_.fatal_failure() == nullptr) {
-                local_connection_state_.fail(http2_error_code::internal_error);
-            }
-            throw;
         }
+    } catch (...) {
+        // Neither the native encoder state nor its queued bytes can roll back.
+        if (local_connection_state_.fatal_failure() == nullptr) {
+            local_connection_state_.fail(http2_error_code::internal_error);
+        }
+        throw;
     }
 }
 

@@ -108,6 +108,11 @@ if(RUVIA_BUILD_HTTP)
     ruvia_add_test(ruvia_http_unit_tests ruvia::http TIMEOUT 180 SOURCES
         ${_ruvia_http_unit_sources})
     target_link_libraries(ruvia_http_unit_tests PRIVATE ${RUVIA_HTTP_DEPENDENCIES})
+    if(RUVIA_ENABLE_HTTP2)
+        ruvia_add_test(ruvia_http2_allocation_failure_tests ruvia::http TIMEOUT 30 SOURCES
+            http/http2_allocation_failure.cpp)
+        target_link_libraries(ruvia_http2_allocation_failure_tests PRIVATE ${RUVIA_HTTP_DEPENDENCIES})
+    endif()
 endif()
 
 if(RUVIA_BUILD_WEB)

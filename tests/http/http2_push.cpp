@@ -1018,12 +1018,10 @@ TEST(Ruvia, http2_connection_advertisement_validates_stream_state_and_ignores_tu
 
     // 1. Server submit_alternative_service_advertisement rejects incomplete head, CONNECT, reserved push, and closed stream.
     (void)client.submit_request_head(ruvia::http_request_head_view{.authority_ = "example.test"});
-    (void)ruvia::test::drain_output(client);
-    std::string partial_block;
-    ruvia::hpack_encoder::encode_header(partial_block, ":method", "GET");
-    ruvia::hpack_encoder::encode_header(partial_block, ":scheme", "https");
-    ruvia::hpack_encoder::encode_header(partial_block, ":authority", "example.test");
-    ruvia::hpack_encoder::encode_header(partial_block, ":path", "/");
+    const auto request_wire = ruvia::test::drain_output(client);
+    const auto request_frame = ruvia::parse_http2_frame_header(std::span<const char>(request_wire));
+    ASSERT_TRUE(request_frame && request_frame->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers) && (request_frame->flags_ & 0x4U) != 0 && request_frame->length_ == request_wire.size() - ruvia::http2_frame_header_bytes);
+    const auto partial_block = std::string_view(request_wire).substr(ruvia::http2_frame_header_bytes);
     std::string partial_frame(ruvia::http2_frame_header_bytes, '\0');
     EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(partial_frame).first(9), static_cast<std::uint32_t>(partial_block.size()), ruvia::http2_frame_type::headers, 0x1, 1));
     partial_frame.append(partial_block);

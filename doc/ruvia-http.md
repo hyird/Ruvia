@@ -8327,7 +8327,10 @@ DATA 提交（双角色）：
 
 字段与消息语义：
 
-- 出站 HPACK 不使用动态表（容量固定为零）；凭据字段（`authorization`、`proxy-authorization`、`cookie`、`set-cookie`）以 never-indexed 发送，不跨连接共享压缩状态。入站字段块由 `nghttp2` 解码：字段被判定非法时以流错误复位该流，`nghttp2` 继续解码剩余字段块以保持动态表同步；HPACK 解码失败是 `COMPRESSION_ERROR` 连接错误。
+- **出站 HPACK**：复用连接唯一的 `nghttp2` 编码器，动态表容量取 `4096` 字节与对端 `SETTINGS_HEADER_TABLE_SIZE` 的较小值；对端扩大设置不会突破本端上限。
+- **压缩内存**：表容量按 RFC 7541 §4.1 的条目大小计算，不含库元数据；压缩状态不跨连接共享。
+- **凭据保护**：`authorization`、`proxy-authorization`、`cookie`、`set-cookie` 以 never-indexed 发送，不进入出站动态表。
+- **入站同步**：字段被判定非法时以流错误复位该流，`nghttp2` 继续解码剩余字段块以保持动态表同步；HPACK 解码失败是 `COMPRESSION_ERROR` 连接错误。
 - 接收字段文本增长时先为整个名/值对预留空间再复制；请求字段容量包含合成的 `Host` 与合并的 `Cookie`。无法放入公开请求视图的首部在发布前复位其流。
 - 1xx 信息头不结束接收半边，没有固定数量上限，每个字段节受解码上限约束；收到的 1xx 字段作为有序元数据保留，`Content-Length` 与 `Trailer` 不为临时或最终响应分帧；1xx 上的 END_STREAM 为畸形。
 - 收到的 `Trailer` 声明在请求与响应中都是不透明元数据，不授权被禁止的实际 Trailer 字段，也不选择消息分帧。

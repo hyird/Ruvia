@@ -215,6 +215,14 @@ ruvia::http_submit_status submit_buffered_response(ruvia::http2_connection& serv
     }
     return ruvia::http_submit_status::accepted;
 }
+
+std::string_view single_header_block(ruvia::borrowed_text wire) {
+    const auto frame = ruvia::parse_http2_frame_header(std::span<const char>(wire.data(), wire.size()));
+    if (!frame || frame->type_ != static_cast<std::uint8_t>(ruvia::http2_frame_type::headers) || (frame->flags_ & 0x2cU) != 0x4U || frame->length_ != wire.size() - ruvia::http2_frame_header_bytes) {
+        throw std::logic_error("test expected one complete HTTP/2 header block");
+    }
+    return wire.view().substr(ruvia::http2_frame_header_bytes);
+}
 }  // namespace
 
 TEST(Ruvia, http2_public_request_submission_exposes_one_exclusive_success_or_failure_contract) {
@@ -689,6 +697,135 @@ TEST(Ruvia, http2_public_server_streaming_response_commit_plan_and_finish_are_pu
         (void)server.finish_response(1, trailers);
     }));
     EXPECT_TRUE(server.release(std::move(*request_head)) == ruvia::http2_server_request_release_status::released);
+}
+
+TEST(Ruvia, http2_public_queued_request_reset_preserves_later_compressed_fields) {
+    ruvia::test::output_relay relay;
+    auto client = ruvia::http2_connection::client({});
+    auto server = ruvia::http2_connection::server({});
+    relay.transfer(client, server);
+    relay.transfer(server, client);
+    relay.transfer(client, server);
+    const std::array fields{ruvia::http_header_view{"x-repeated", "shared across request streams"}};
+    const ruvia::http_request_head_view request{.method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .target_ = "/repeated", .headers_ = fields};
+    const auto first = client.submit_request_head(request);
+    ASSERT_TRUE(std::holds_alternative<std::uint32_t>(first));
+    ASSERT_TRUE(client.submit_reset(std::get<std::uint32_t>(first), ruvia::http2_error_code::cancel) == ruvia::http_submit_status::accepted);
+    const auto second = client.submit_request_head(request);
+    ASSERT_TRUE(std::holds_alternative<std::uint32_t>(second));
+    relay.transfer(client, server);
+    bool received_second = false;
+    while (auto event = server.next_event()) {
+        if (auto* head = event->request_head()) {
+            if (head->stream_id() == std::get<std::uint32_t>(second)) {
+                const auto decoded = head->build_request();
+                EXPECT_EQ(decoded.header("x-repeated"), std::optional<std::string_view>{"shared across request streams"});
+                received_second = true;
+            }
+            (void)server.release(std::move(*head));
+        }
+    }
+    EXPECT_TRUE(received_second);
+    EXPECT_TRUE(!server.connection_error());
+}
+
+TEST(Ruvia, http2_public_outbound_table_changes_keep_bounded_decoder_state) {
+    ruvia::test::output_relay relay;
+    auto client = ruvia::http2_connection::client({});
+    auto server = ruvia::http2_connection::server({});
+    relay.transfer(client, server);
+    relay.transfer(server, client);
+    relay.transfer(client, server);
+    ruvia::hpack_decoder decoder;
+    unsigned generation = 0;
+    for (const std::uint32_t capacity : {4096U, 0U, 65536U, 0U, 4096U}) {
+        std::array<char, 6> setting{0, 1, 0, 0, 0, 0};
+        for (unsigned i = 0; i != 4; ++i) {
+            setting[i + 2] = static_cast<char>((capacity >> (24 - i * 8)) & 0xffU);
+        }
+        std::string settings;
+        append_frame(settings, ruvia::http2_frame_type::settings, 0, 0, std::string_view(setting.data(), setting.size()));
+        ASSERT_TRUE(server.feed(settings) == ruvia::http2_feed_result::accepted);
+        (void)ruvia::test::drain_output(server);
+        decoder.set_max_dynamic_table_size(std::min(capacity, std::uint32_t{4096}));
+        for (unsigned round = 0; round != 3; ++round) {
+            const auto submitted = client.submit_request_head(ruvia::http_request_head_view{.method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .target_ = "/table"});
+            ASSERT_TRUE(std::holds_alternative<std::uint32_t>(submitted));
+            relay.transfer(client, server);
+            auto event = server.next_event();
+            auto* head = event ? event->request_head() : nullptr;
+            ASSERT_NE(head, nullptr);
+            auto request_end = server.next_event();
+            ASSERT_TRUE(request_end && request_end->message_end() != nullptr);
+            const std::string value(2000, static_cast<char>('a' + generation++));
+            ruvia::http_response response;
+            response.header("x-first", value);
+            response.header("x-second", value);
+            response.header("Date", "Wed, 21 Oct 2015 07:28:00 GMT");
+            ASSERT_TRUE(submit_buffered_response(server, head->stream_id(), response) == ruvia::http_submit_status::accepted);
+            const auto output = ruvia::test::drain_output(server);
+            unsigned matched = 0;
+            const auto failure = decoder.decode(single_header_block(output), [&](std::string_view name, std::string_view decoded) {
+                if (name == "x-first" || name == "x-second") {
+                    EXPECT_EQ(decoded, value);
+                    ++matched;
+                }
+                return true;
+            });
+            EXPECT_TRUE(!failure);
+            EXPECT_EQ(matched, 2U);
+            EXPECT_TRUE(server.release(std::move(*head)) == ruvia::http2_server_request_release_status::released);
+        }
+    }
+    EXPECT_TRUE(!server.connection_error());
+}
+
+TEST(Ruvia, http2_public_connection_compression_keeps_credentials_never_indexed) {
+    ruvia::test::output_relay relay;
+    auto client = ruvia::http2_connection::client({});
+    auto server = ruvia::http2_connection::server({});
+    relay.transfer(client, server);
+    relay.transfer(server, client);
+    relay.transfer(client, server);
+    const std::array credentials{ruvia::http_header_view{"authorization", "Bearer test-only"}, ruvia::http_header_view{"proxy-authorization", "Basic dGVzdC1vbmx5"}, ruvia::http_header_view{"cookie", "test-only=value"}};
+    for (unsigned round = 0; round != 2; ++round) {
+        const auto submitted = client.submit_request_head(ruvia::http_request_head_view{.method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .target_ = "/private", .headers_ = credentials});
+        ASSERT_TRUE(std::holds_alternative<std::uint32_t>(submitted));
+        const auto request_wire = ruvia::test::drain_output(client);
+        const auto request_block = single_header_block(request_wire);
+        for (const auto& field : credentials) {
+            std::string never_indexed;
+            ruvia::hpack_encoder::encode_header(never_indexed, field.name(), field.value());
+            EXPECT_NE(request_block.find(never_indexed), std::string_view::npos);
+        }
+        ASSERT_TRUE(server.feed(request_wire) == ruvia::http2_feed_result::accepted);
+        auto request_event = server.next_event();
+        auto* head = request_event ? request_event->request_head() : nullptr;
+        ASSERT_NE(head, nullptr);
+        const auto decoded = head->build_request();
+        for (const auto& field : credentials) {
+            EXPECT_EQ(decoded.header(field.name()), std::optional<std::string_view>{field.value()});
+        }
+        auto request_end = server.next_event();
+        ASSERT_TRUE(request_end && request_end->message_end() != nullptr);
+        ruvia::http_response response;
+        response.header("Set-Cookie", "test-only=value; Path=/");
+        response.header("x-repeated", "shared response field");
+        response.header("Date", "Wed, 21 Oct 2015 07:28:00 GMT");
+        ASSERT_TRUE(submit_buffered_response(server, head->stream_id(), response) == ruvia::http_submit_status::accepted);
+        const auto response_wire = ruvia::test::drain_output(server);
+        std::string never_indexed;
+        ruvia::hpack_encoder::encode_header(never_indexed, "set-cookie", "test-only=value; Path=/");
+        EXPECT_NE(single_header_block(response_wire).find(never_indexed), std::string_view::npos);
+        ASSERT_TRUE(client.feed(response_wire) == ruvia::http2_feed_result::accepted);
+        auto response_event = client.next_event();
+        ASSERT_TRUE(response_event && response_event->response_head() != nullptr);
+        auto response_end = client.next_event();
+        ASSERT_TRUE(response_end && response_end->message_end() != nullptr);
+        EXPECT_TRUE(server.release(std::move(*head)) == ruvia::http2_server_request_release_status::released);
+    }
+    EXPECT_TRUE(!client.connection_error());
+    EXPECT_TRUE(!server.connection_error());
 }
 
 TEST(Ruvia, http2_public_retried_data_and_trailers_keep_hpack_state_across_window_reopen) {

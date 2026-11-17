@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -26,6 +27,7 @@
 #include "http2_hpack.h"
 #include "http_client.h"
 #include "http_request_head_view.h"
+#include "http_response.h"
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "task_scope.h"
@@ -40,6 +42,18 @@ constexpr std::size_t file_size = 65535;
 // Truncating one can: btrfs starts writeback when a file truncated to zero is
 // closed, and the next truncation waits for it, for seconds on a busy disk.
 constexpr std::uintmax_t mutated_file_size = 64 * 1024;
+
+// Distinct frame-sized runs and a short tail expose reordered or duplicated DATA.
+const std::string buffered_body = [] {
+    constexpr std::size_t chunk_size = 16 * 1024;
+    constexpr std::size_t total_size = 128 * 1024 + 37;
+    std::string bytes;
+    bytes.reserve(total_size);
+    for (std::size_t offset = 0; offset < total_size; offset += chunk_size) {
+        bytes.append(std::min(chunk_size, total_size - offset), static_cast<char>('a' + offset / chunk_size));
+    }
+    return bytes;
+}();
 
 std::filesystem::path& file_path() {
     static std::filesystem::path path;
@@ -62,6 +76,7 @@ class file_routes final {
     RUVIA_GET("/http2-file-flow-control", file);
     RUVIA_GET("/http2-file-mutated/:name", mutated_file);
     RUVIA_GET("/http2-file-ok", ok_text);
+    RUVIA_GET("/http2-buffered-credit", buffered);
     RUVIA_GET("/http2-indexed-empty", indexed_empty);
     RUVIA_GET("/http2-empty-mutated", mutated_empty);
     RUVIA_ROUTES_END
@@ -101,6 +116,10 @@ class file_routes final {
 
     ruvia::task<ruvia::http_response> ok_text(ruvia::context& context_value) {
         co_return context_value.text("alive");
+    }
+
+    ruvia::task<ruvia::http_response> buffered(ruvia::context& context_value) {
+        co_return context_value.text(buffered_body);
     }
 };
 
@@ -278,6 +297,76 @@ void check_file_end(bool exhaust_connection) {
     EXPECT_EQ(body, std::string(file_size, 'f'));
     EXPECT_TRUE(ended);
     EXPECT_TRUE(!expired);
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
+void check_concurrent_credit_waiters(std::string_view target, std::string_view expected) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    const auto worker = attachment.loop().worker();
+    ruvia::test::http_server_fixture server(io);
+    std::exception_ptr failure;
+    auto run = [&]() -> ruvia::task<void> {
+        const auto base_url = "http://127.0.0.1:" + std::to_string(server.endpoint().port());
+        ruvia::http_client_config config{.base_url_ = base_url, .request_timeout_ = std::chrono::seconds(5), .versions_ = ruvia::http_client_versions{.http1_ = false}};
+        config.connection_limits_.max_open_ = 1;
+        ruvia::http_client client(attachment.loop(), std::move(config));
+        ruvia::task_scope operations(worker);
+        std::array<bool, 32> received{};
+        const auto request = [&](std::size_t index) -> ruvia::task<void> {
+            auto response = co_await client.client().get(target).send();
+            EXPECT_TRUE(response.ok());
+            if (index % 3 == 0) {
+                co_return;
+            }
+            const auto body = co_await response.bytes();
+            EXPECT_EQ(body.text(), expected);
+            received[index] = true;
+        };
+        try {
+            {
+                auto abandoned = co_await client.client().get(target).send();
+                EXPECT_TRUE(abandoned.ok());
+            }
+            {
+                auto response = co_await client.client().get(target).send();
+                EXPECT_TRUE(response.ok());
+                const auto body = co_await response.bytes();
+                EXPECT_EQ(body.text(), expected);
+            }
+            for (std::size_t i = 0; i < received.size(); ++i) {
+                operations.spawn(request(i));
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        try {
+            co_await operations.join();
+        } catch (...) {
+            if (!failure) {
+                failure = std::current_exception();
+            }
+        }
+        try {
+            co_await client.shutdown();
+        } catch (...) {
+            if (!failure) {
+                failure = std::current_exception();
+            }
+        }
+        for (std::size_t i = 0; i < received.size(); ++i) {
+            if (i % 3 != 0) {
+                EXPECT_TRUE(received[i]);
+            }
+        }
+        attachment.request_stop();
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    std::move(root).get();
+    server.finish();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -637,64 +726,12 @@ TEST(Ruvia, http2_failed_file_writes_release_output_budget_slots) {
 
 TEST(Ruvia, http2_concurrent_file_credit_waiters_survive_stream_abandonment) {
     const http2_file_flow_control_test::test_file file;
-    auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
-    const auto worker = attachment.loop().worker();
-    ruvia::test::http_server_fixture server(io);
-    std::exception_ptr failure;
-    auto run = [&]() -> ruvia::task<void> {
-        const auto base_url = "http://127.0.0.1:" + std::to_string(server.endpoint().port());
-        ruvia::http_client_config config{.base_url_ = base_url, .request_timeout_ = std::chrono::seconds(5), .versions_ = ruvia::http_client_versions{.http1_ = false}};
-        config.connection_limits_.max_open_ = 1;
-        ruvia::http_client client(attachment.loop(), std::move(config));
-        ruvia::task_scope operations(worker);
-        std::array<bool, 32> received{};
-        const std::string expected(http2_file_flow_control_test::file_size, 'f');
-        const auto request = [&](std::size_t index) -> ruvia::task<void> {
-            auto response = co_await client.client().get("/http2-file-flow-control").send();
-            EXPECT_TRUE(response.ok());
-            if (index % 3 == 0) {
-                co_return;
-            }
-            const auto body = co_await response.bytes();
-            EXPECT_EQ(body.text(), expected);
-            received[index] = true;
-        };
-        try {
-            for (std::size_t i = 0; i < received.size(); ++i) {
-                operations.spawn(request(i));
-            }
-        } catch (...) {
-            failure = std::current_exception();
-        }
-        try {
-            co_await operations.join();
-        } catch (...) {
-            if (!failure) {
-                failure = std::current_exception();
-            }
-        }
-        try {
-            co_await client.shutdown();
-        } catch (...) {
-            if (!failure) {
-                failure = std::current_exception();
-            }
-        }
-        for (std::size_t i = 0; i < received.size(); ++i) {
-            if (i % 3 != 0) {
-                EXPECT_TRUE(received[i]);
-            }
-        }
-        attachment.request_stop();
-    };
-    auto root = attachment.loop().start(run());
-    attachment.run();
-    std::move(root).get();
-    server.finish();
-    if (failure) {
-        std::rethrow_exception(failure);
-    }
+    const std::string expected(http2_file_flow_control_test::file_size, 'f');
+    http2_file_flow_control_test::check_concurrent_credit_waiters("/http2-file-flow-control", expected);
+}
+
+TEST(Ruvia, http2_buffered_credit_waiters_survive_multislot_stream_abandonment) {
+    http2_file_flow_control_test::check_concurrent_credit_waiters("/http2-buffered-credit", http2_file_flow_control_test::buffered_body);
 }
 
 TEST(Ruvia, http2_empty_file_validation_precedes_end_stream_headers) {
