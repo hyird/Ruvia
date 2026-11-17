@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <span>
 #include <string>
@@ -74,6 +75,19 @@ TEST(Ruvia, io_buffer_append_accepts_its_own_bytes) {
     window.append(consumed.substr(0, 4));
     EXPECT_EQ(window.view(), "ghabcd");
     EXPECT_EQ(window.capacity(), std::size_t{8});
+}
+
+TEST(Ruvia, io_buffer_compacts_without_replacing_storage_for_readable_self_append) {
+    ruvia::http_io_buffer buffer;
+    buffer.reserve(8);
+    buffer.append("abcdefgh");
+    const auto storage = reinterpret_cast<std::uintptr_t>(buffer.data());
+    buffer.consume(5);
+
+    buffer.append(buffer.view().substr(1));
+
+    EXPECT_EQ(buffer.view(), "fghgh");
+    EXPECT_EQ(reinterpret_cast<std::uintptr_t>(buffer.data()), storage);
 }
 
 TEST(Ruvia, io_buffer_small_reads_preserve_the_sliding_window) {

@@ -91,6 +91,8 @@ public:
     // has written. Throws std::length_error past the storage.
     void commit(std::size_t bytes);
     // Appends a copy of `bytes`, which may alias this buffer.
+    // A slice of the readable window can be appended without allocating
+    // when the existing storage can be compacted to make room.
     void append(std::string_view bytes);
     // Drops the first min(bytes, size()) readable bytes without moving any.
     void consume(std::size_t bytes) noexcept;

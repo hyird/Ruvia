@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -74,8 +75,21 @@ void http_io_buffer::append(std::string_view bytes) {
         return;
     }
     const auto capacity = room_capacity(bytes.size());
-    if (capacity > capacity_ || detail::http_text_overlaps(bytes, std::string_view(storage_, capacity_))) {
+    if (capacity > capacity_) {
         // Publish the appended bytes together with the replacement storage.
+        reallocate(capacity, bytes);
+        return;
+    }
+
+    const auto source = reinterpret_cast<std::uintptr_t>(bytes.data());
+    const auto window = reinterpret_cast<std::uintptr_t>(data());
+    const auto live = size();
+    const auto offset = source - window;
+    if (source >= window && offset <= live && bytes.size() <= live - offset) {
+        // Compaction preserves the readable bytes at the same relative offset.
+        bytes = std::string_view(storage_ + offset, bytes.size());
+    } else if (detail::http_text_overlaps(bytes, std::string_view(storage_, capacity_))) {
+        // Compaction could overwrite an aliased source outside the window.
         reallocate(capacity, bytes);
         return;
     }

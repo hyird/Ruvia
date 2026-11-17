@@ -1088,7 +1088,7 @@ public:
 | `prepare(bytes)` | 返回恰好 `bytes` 个未初始化的可写字节，位于可读字节之后。已消费前缀覆盖存活字节且能腾出空间时先压缩，否则按几何级数增长以摊销小块读写。大小超出可寻址范围时抛 `std::length_error`；分配失败抛 `std::bad_alloc`，原窗口与已借用字节保留，可在恢复资源后重试。 |
 | `prepare_spare()` | 返回当前可写尾部而不增长；仅当尾部为空且已消费前缀覆盖存活字节时回收前缀。即使 `capacity() > size()` 也可能返回空 span：需要空间的读取方须先 `prepare(n)`，并按实际 span 长度读取。 |
 | `commit(bytes)` | 把可写空间的前 `bytes` 字节（调用方已写入）并入可读窗口；超过已准备空间时抛 `std::length_error` 且不改变状态。 |
-| `append(bytes)` | 追加 `bytes` 的副本；`bytes` 可以别名本缓冲。 |
+| `append(bytes)` | 追加 `bytes` 的副本；`bytes` 可以别名本缓冲。若源完全位于可读窗口内且压缩后空间足够，直接复用存储，不分配。 |
 | `consume(bytes)` | 丢弃前 `min(bytes, size())` 个可读字节，不移动数据。 |
 | `reserve(bytes)` | 存储增长到至少 `bytes`（增长时恰为 `bytes`）；超出可寻址范围抛 `std::length_error`。 |
 | `shrink_to(bytes)` | 释放超过 `max(size(), bytes)` 的存储。 |
