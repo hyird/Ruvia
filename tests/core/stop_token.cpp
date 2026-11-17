@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <exception>
 #include <future>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -773,7 +774,23 @@ TEST(Ruvia, byte_views_preserve_octets_including_embedded_nul) {
     EXPECT_TRUE(bytes_value[2] == std::byte{0xff});
     EXPECT_TRUE(ruvia::as_chars(bytes_value).data() == text.data());
     EXPECT_EQ(ruvia::as_chars(bytes_value).size(), text.size());
+    EXPECT_EQ(ruvia::as_chars({bytes_value.data(), bytes_value.data() + bytes_value.size()}), text);
 }
+
+namespace {
+
+template <typename source_type>
+concept accepts_char_view_source = requires(source_type&& source) { ruvia::as_chars(std::forward<source_type>(source)); };
+
+template <typename element_type>
+concept accepts_braced_char_view_source = requires(element_type element) { ruvia::as_chars({element}); };
+
+static_assert(!accepts_char_view_source<std::initializer_list<std::byte>&>);
+static_assert(!accepts_char_view_source<const std::initializer_list<std::byte>&>);
+static_assert(!accepts_char_view_source<std::initializer_list<std::byte>>);
+static_assert(!accepts_braced_char_view_source<std::byte>);
+
+}  // namespace
 
 TEST(Ruvia, empty_byte_views_round_trip) {
     EXPECT_TRUE(ruvia::as_bytes({}).empty());

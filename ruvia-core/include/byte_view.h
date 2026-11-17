@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <initializer_list>
 #include <ranges>
 #include <span>
 #include <string>
@@ -39,5 +40,10 @@ std::span<const std::byte> as_bytes(string_type&&) = delete;
 }
 template <detail::temporary_owning_byte_range range_type>
 std::string_view as_chars(range_type&&) = delete;
+
+// Reject list-backed storage without intercepting an empty span written as {}.
+template <typename element_type>
+    requires std::same_as<std::remove_cv_t<element_type>, std::byte>
+std::string_view as_chars(std::initializer_list<element_type>) = delete;
 
 }  // namespace ruvia

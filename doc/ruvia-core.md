@@ -1454,8 +1454,9 @@ flowchart LR
 | `template <typename string_type> std::span<const std::byte> as_bytes(string_type&&) = delete;` | 拒绝右值 `std::basic_string<char, ...>` 临时拥有型字符串 |
 | `[[nodiscard]] inline std::string_view as_chars(std::span<const std::byte> bytes_value) noexcept;` | 字节视图转字符视图 |
 | `template <typename range_type> std::string_view as_chars(range_type&&) = delete;` | 拒绝元素为 `std::byte` 的右值连续非借用范围（如 `std::vector<std::byte>&&`） |
+| `template <typename element_type> std::string_view as_chars(std::initializer_list<element_type>) = delete;` | 拒绝具名 `std::byte` 初始化列表和非空字节花括号列表；`as_chars({})` 仍表示空 span |
 
-- **借用**：返回视图借用原存储，调用方须保持底层存储存活到消费完成；已删除重载只拦截临时拥有型容器，不能拦截已悬垂的视图。
+- **借用**：返回视图借用原存储，调用方须保持底层存储存活到消费完成；已删除重载不能拦截已悬垂的视图。
 
 ---
 
