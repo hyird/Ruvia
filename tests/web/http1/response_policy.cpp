@@ -304,13 +304,17 @@ class response_policy_routes final {
 TEST(Ruvia, http1_response_stream_head_carries_the_application_cors_policy) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, cors_server());
-    const auto response = exchange(server.endpoint(), "GET /policy-stream HTTP/1.1\r\nHost: localhost\r\nOrigin: https://client.test\r\nConnection: close\r\n\r\n");
+    for (const bool valid : {true, false}) {
+        const auto origin = valid ? "https://client.test" : "https://client.test/path";
+        const auto response = ::exchange(server.endpoint(), std::string("GET /policy-stream HTTP/1.1\r\nHost: localhost\r\nOrigin: ") + origin + "\r\nConnection: close\r\n\r\n");
+        ASSERT_TRUE(response.has_value());
+        EXPECT_TRUE(response->starts_with("HTTP/1.1 200 "));
+        const auto head = lower_head(*response);
+        EXPECT_EQ(head.find("\r\naccess-control-allow-origin: *\r\n") != std::string::npos, valid);
+        EXPECT_NE(head.find("\r\nvary: origin\r\n"), std::string::npos);
+        EXPECT_NE(response->find("chunk"), std::string::npos);
+    }
     server.finish();
-    EXPECT_TRUE(response.has_value());
-    const auto output = (response ? std::string_view(*response) : std::string_view{});
-    EXPECT_TRUE(output.starts_with("HTTP/1.1 200 "));
-    EXPECT_TRUE(lower_head(output).find("\r\naccess-control-allow-origin: *") != std::string::npos);
-    EXPECT_TRUE(output.find("chunk") != std::string::npos);
 }
 TEST(Ruvia, http1_cors_reflection_preserves_many_requested_names_in_one_field) {
     auto& io = ruvia::test::new_test_io_context();

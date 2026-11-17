@@ -450,13 +450,12 @@ bool http_cors_policy::rewrite_response_headers(borrowed_text request_origin, ed
 
 bool http_cors_policy::apply_response_headers(const http_request& request, http_response& response) const {
     const bool options = request.known_method() == http_known_method::options;
+    // Even a wildcard policy withholds the grant for an invalid Origin.
+    response.add_vary_token("Origin");
     if (options) {
-        response.add_vary_token("Origin");
         response.add_vary_token("Access-Control-Request-Method");
         // The requested names affect acceptance even with a fixed allowlist.
         response.add_vary_token("Access-Control-Request-Headers");
-    } else if (!allow_any_origin_) {
-        response.add_vary_token("Origin");
     }
 
     const auto origin_field = find_unique_http_header(request, "Origin");
