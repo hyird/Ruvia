@@ -7036,7 +7036,7 @@ public:
     [[nodiscard]] constexpr std::string_view head() const& noexcept;
     [[nodiscard]] constexpr std::string_view head() const&& = delete;
 
-    [[nodiscard]] constexpr const http_request_content_plan& content() const& noexcept;
+    [[nodiscard]] constexpr const http_request_content_plan& content() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] constexpr const http_request_content_plan& content() const&& = delete;
 
     [[nodiscard]] constexpr bool continue_gated() const noexcept;

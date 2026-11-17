@@ -165,7 +165,7 @@ public:
     }
     [[nodiscard]] constexpr std::string_view head() const&& = delete;
 
-    [[nodiscard]] constexpr const http_request_content_plan& content() const& noexcept {
+    [[nodiscard]] constexpr const http_request_content_plan& content() const& noexcept RUVIA_LIFETIMEBOUND {
         return content_;
     }
     [[nodiscard]] constexpr const http_request_content_plan& content() const&& = delete;
