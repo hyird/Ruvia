@@ -5612,6 +5612,8 @@ std::optional<http_set_cookie_view> parse_set_cookie(value_type&&) = delete;
 
 面向出站客户端运行时、按 RFC 6265 §5.2 用户代理算法得到的借用型、零分配 `Set-Cookie` 视图。只能由 `parse_set_cookie()` 产生；所有视图借用传入的字段值，因此拒绝临时拥有型字符串的重载为 `= delete`。
 
+分段时同一遍识别 `;`、段内首个 `=` 并校验控制字节；后续 `=` 保留在值内。
+
 `parse_set_cookie(value)` 返回 `std::nullopt` 的情形：首个 `;` 之前的 cookie-pair 不含 `=`、名称为空、名称加值超过 4096 字节、或名称、值、任一属性名或属性值含 HTAB 以外的控制字节（`0x00-0x08`、`0x0A-0x1F`、`0x7F`）。名称与值去除首尾 OWS。属性名大小写不敏感；未知属性与值超过 1024 字节的属性被忽略。
 
 | 成员 | 语义 |

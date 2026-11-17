@@ -591,6 +591,17 @@ TEST(Ruvia, set_cookie_parser_accepts_user_agent_cookie_pair_grammar) {
     EXPECT_TRUE(spaced_value->value() == "bad value");
 }
 
+TEST(Ruvia, set_cookie_parser_preserves_equals_inside_values) {
+    constexpr std::string_view input = " \tsid = part=one \t;; Path = /v=a ; Secure;";
+    const auto parsed = ruvia::parse_set_cookie(input);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed->name(), "sid");
+    EXPECT_EQ(parsed->value(), "part=one");
+    EXPECT_EQ(parsed->path(), "/v=a");
+    EXPECT_TRUE(parsed->has(ruvia::http_set_cookie_attribute::secure));
+    EXPECT_FALSE(ruvia::parse_set_cookie("sid=value; Unknown=x\x7f").has_value());
+}
+
 TEST(Ruvia, set_cookie_parser_ignores_nameless_cookies) {
     // RFC 6265 section 5.2 steps 2 and 5.
     EXPECT_TRUE(!ruvia::parse_set_cookie("sid; Path=/").has_value());

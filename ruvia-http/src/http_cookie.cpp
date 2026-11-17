@@ -368,12 +368,32 @@ std::string_view http_cookie_prefix_text(cookie_prefix prefix) noexcept {
 
 namespace {
 
-std::pair<std::string_view, std::string_view> split_attribute(std::string_view value) noexcept {
-    const auto equals = value.find('=');
-    if (equals == std::string_view::npos) {
-        return {http_trim_ows(value), {}};
+struct set_cookie_member final {
+    std::string_view name_;
+    std::optional<std::string_view> value_;
+};
+
+std::optional<set_cookie_member> scan_set_cookie_member(std::string_view& remaining) noexcept {
+    auto equals = std::string_view::npos;
+    std::size_t end = 0;
+    for (; end < remaining.size(); ++end) {
+        const auto byte = static_cast<unsigned char>(remaining[end]);
+        if (byte == ';') {
+            break;
+        }
+        if (byte <= 0x08 || (byte >= 0x0a && byte <= 0x1f) || byte == 0x7f) {
+            return std::nullopt;
+        }
+        if (byte == '=' && equals == std::string_view::npos) {
+            equals = end;
+        }
     }
-    return {http_trim_ows(value.substr(0, equals)), http_trim_ows(value.substr(equals + 1))};
+    const auto member = remaining.substr(0, end);
+    remaining.remove_prefix(end + (end != remaining.size()));
+    return set_cookie_member{
+        .name_ = http_trim_ows(member.substr(0, equals)),
+        .value_ = equals == std::string_view::npos ? std::nullopt : std::optional(http_trim_ows(member.substr(equals + 1))),
+    };
 }
 
 std::optional<std::int64_t> parse_max_age_seconds(std::string_view value) noexcept {
@@ -394,16 +414,6 @@ std::optional<std::int64_t> parse_max_age_seconds(std::string_view value) noexce
         return std::nullopt;
     }
     return seconds > max_cookie_age_seconds ? max_cookie_age_seconds : seconds;
-}
-
-bool contains_rejected_received_cookie_control(std::string_view value) noexcept {
-    for (const char character : value) {
-        const auto byte = static_cast<unsigned char>(character);
-        if (byte <= 0x08 || (byte >= 0x0a && byte <= 0x1f) || byte == 0x7f) {
-            return true;
-        }
-    }
-    return false;
 }
 
 bool is_cookie_date_delimiter(unsigned char byte) noexcept {
@@ -525,28 +535,21 @@ std::optional<std::time_t> parse_cookie_date(std::string_view value) noexcept {
 }  // namespace
 
 std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noexcept {
-    const auto first_end = value.find(';');
-    const auto cookie_pair = value.substr(0, first_end);
     // RFC 6265 section 5.2 steps 2 and 5: a pair without '=' or with an empty
     // name makes the user agent ignore the whole set-cookie-string.
-    const auto equals = cookie_pair.find('=');
-    if (equals == std::string_view::npos) {
-        return std::nullopt;
-    }
-    const auto name = http_trim_ows(cookie_pair.substr(0, equals));
-    const auto cookie_value = http_trim_ows(cookie_pair.substr(equals + 1));
-    if (name.empty() || name.size() > detail::max_cookie_name_value_bytes || cookie_value.size() > detail::max_cookie_name_value_bytes - name.size() || contains_rejected_received_cookie_control(name) || contains_rejected_received_cookie_control(cookie_value)) {
+    const auto pair = scan_set_cookie_member(value);
+    if (!pair || !pair->value_ || pair->name_.empty() || pair->name_.size() > detail::max_cookie_name_value_bytes || pair->value_->size() > detail::max_cookie_name_value_bytes - pair->name_.size()) {
         return std::nullopt;
     }
 
-    http_set_cookie_view result(name, cookie_value);
-    std::size_t offset = first_end == std::string_view::npos ? value.size() : first_end + 1;
-    while (offset < value.size()) {
-        const auto end = value.find(';', offset);
-        const auto [attribute, argument] = split_attribute(value.substr(offset, end == std::string_view::npos ? value.size() - offset : end - offset));
-        if (contains_rejected_received_cookie_control(attribute) || contains_rejected_received_cookie_control(argument)) {
+    http_set_cookie_view result(pair->name_, *pair->value_);
+    while (!value.empty()) {
+        const auto member = scan_set_cookie_member(value);
+        if (!member) {
             return std::nullopt;
         }
+        const auto attribute = member->name_;
+        const auto argument = member->value_.value_or(std::string_view{});
         if (argument.size() <= detail::max_cookie_attribute_value_bytes) {
             switch (attribute.size()) {
                 case 4U:
@@ -603,10 +606,6 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
                     break;
             }
         }
-        if (end == std::string_view::npos) {
-            break;
-        }
-        offset = end + 1;
     }
     return result;
 }
