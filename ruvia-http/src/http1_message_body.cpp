@@ -135,7 +135,16 @@ http1_body_decode_result http1_body_decoder::run(std::string_view available, std
         return http1_body_decode_result(0, decode_complete{});
     }
     eof_ = eof_ || eof;
-    return step(available, scratch.first(std::min(scratch.size(), max_output_bytes)), max_output_bytes, eof_);
+    try {
+        return step(available, scratch.first(std::min(scratch.size(), max_output_bytes)), max_output_bytes, eof_);
+    } catch (...) {
+        // Transfer faults cannot report wire progress. A trailer allocation
+        // failure instead leaves the chunk decoder ready to retry.
+        if (transfer_ && transfer_->state() == decoder_state::failed) {
+            (void)fail(http1_body_decode_error::invalid_transfer_coding, 0);
+        }
+        throw;
+    }
 }
 
 http1_body_decode_result http1_body_decoder::step(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes, bool eof) {

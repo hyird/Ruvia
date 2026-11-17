@@ -6470,6 +6470,8 @@ public:
 
 终态：已完成或已失败的解码器不再消费输入，`decode()` 与 `finish_input()` 以 0 消费字节重放终态结果，绝不触碰后续消息的字节，直到 `reset()`。
 
+传输编解码器异常原样抛出，正文解码器进入 `failed`；即使随后调用 `discard_content()`，仍重放 `invalid_transfer_coding`，直到 `reset()`。
+
 ### 10.4 `"http1_chunked_body.h"`
 <a id="api-http1-chunked-body-h"></a>
 

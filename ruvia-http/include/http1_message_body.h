@@ -88,6 +88,8 @@ struct http1_body_decoder_options final {
 // A finished or failed decoder consumes no further input: decode() and
 // finish_input() repeat the terminal result, never touching bytes of a
 // following message, until reset().
+// A transfer codec exception propagates unchanged and leaves the body decoder
+// failed with invalid_transfer_coding, even if content is later discarded.
 class http1_body_decoder final {
 public:
     // Throws std::invalid_argument for transfer codings that are not transfer

@@ -22,6 +22,7 @@
 #include "http1_connection_plan.h"
 #include "http1_message_body.h"
 #include "http2_connection.h"
+#include "http_content_codec.h"
 #include "http_cookie_jar.h"
 #include "http_multipart.h"
 #include "http_range.h"
@@ -642,4 +643,36 @@ TEST(Ruvia, http1_body_decoder_preserves_completed_body_if_codec_recreation_fail
     const auto* failure = rejected.get_if<ruvia::http1_body_decode_failure>();
     ASSERT_NE(failure, nullptr);
     EXPECT_EQ(failure->error(), ruvia::http1_body_decode_error::invalid_transfer_coding);
+}
+
+TEST(Ruvia, http1_body_decoder_stays_failed_after_transfer_codec_allocation_error) {
+    ruvia::http_content_codings codings;
+    codings.push_back(ruvia::http_content_coding::gzip);
+    ruvia::http1_body_decoder decoder(ruvia::http1_message_framing::close_delimited(codings));
+    ruvia::http_content_encoder encoder(ruvia::http_content_coding::gzip);
+    std::string wire;
+    encoder.write("ordinary body", wire);
+    encoder.finish(wire);
+    ASSERT_FALSE(wire.empty());
+    std::array<char, 64> scratch{};
+
+    ASSERT_THROW({
+        allocation_scope scope(0);
+        (void)decoder.decode(wire, std::span(scratch).first(1));
+    },
+        std::bad_alloc);
+    ASSERT_EQ(decoder.state(), ruvia::decoder_state::failed);
+    decoder.discard_content();
+    const auto replayed = decoder.finish_input(wire, scratch);
+    const auto* failure = replayed.get_if<ruvia::http1_body_decode_failure>();
+    ASSERT_NE(failure, nullptr);
+    EXPECT_EQ(failure->error(), ruvia::http1_body_decode_error::invalid_transfer_coding);
+    EXPECT_EQ(replayed.consumed_bytes(), 0U);
+
+    decoder.reset();
+    const auto decoded = decoder.finish_input(wire, scratch);
+    const auto* output = decoded.get_if<ruvia::decode_output>();
+    ASSERT_NE(output, nullptr);
+    EXPECT_EQ(output->bytes(), "ordinary body");
+    EXPECT_TRUE(decoder.decode(std::string_view(wire).substr(decoded.consumed_bytes()), scratch).holds<ruvia::decode_complete>());
 }
