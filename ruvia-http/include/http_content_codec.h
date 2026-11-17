@@ -1,9 +1,11 @@
 #pragma once
 
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <initializer_list>
 #include <limits>
 #include <optional>
 #include <span>
@@ -81,6 +83,10 @@ public:
     http_content_decoder& operator=(http_content_decoder&&) = delete;
 
     [[nodiscard]] http_content_decode_result decode(std::string_view input, std::span<char> output);
+    template <detail::http_temporary_owning_char_string input_type>
+    http_content_decode_result decode(input_type&&, std::span<char>) = delete;
+    template <std::same_as<char> element_type>
+    http_content_decode_result decode(std::initializer_list<element_type>, std::span<char>) = delete;
     [[nodiscard]] http_content_decode_result finish_input() noexcept;
     [[nodiscard]] decoder_state state() const noexcept;
     void reset();

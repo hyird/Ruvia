@@ -3375,6 +3375,7 @@ public:
 | `state()` | `active` / `finished` / `failed`。终态下 `decode()` / `finish_input()` 消费 0 字节并重放终态结果。任何异常（含上述参数错误）都把解码器置为 `failed` 并保留原异常类型，之后返回失败结果。 |
 | `reset()` | 以构造时的 coding 与选项开始新表示：zlib、zstd 复用原生状态，Brotli 重建（可能分配）。无法重启抛 `http_content_codec_error` 或分配异常，解码器保持 `failed`。 |
 
+- **输入借用**：`decode()` 在编译期拒绝右值 `std::basic_string` 和字符初始化列表。传入左值字符串或显式视图时，调用方须保证 identity 输出仍在使用期间输入存储有效。
 - **排空顺序**：输出须在复用 `output` 前消费；交付更多输入或 EOF 前，先以 `decode({}, output)` 排空剩余输出。按 `consumed_bytes()` 丢弃输入前缀。
 
 ### 7.3 `"http_transfer_coding.h"`

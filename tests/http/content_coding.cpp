@@ -92,10 +92,21 @@ struct codec_allocation_probe final {
     }
 }
 
+template <typename input_type>
+concept content_decoder_accepts_input = requires(ruvia::http_content_decoder& decoder, input_type&& input, std::span<char> scratch) {
+    decoder.decode(std::forward<input_type>(input), scratch);
+};
+
+static_assert(!content_decoder_accepts_input<std::string>);
+static_assert(!content_decoder_accepts_input<const std::string>);
+static_assert(!content_decoder_accepts_input<const std::initializer_list<char>&>);
+static_assert(content_decoder_accepts_input<const std::string&>);
+static_assert(content_decoder_accepts_input<std::string_view>);
+
 }  // namespace
 
 TEST(RuviaHttpPublicApi, identity_content_decoder_borrows_input_without_touching_scratch) {
-    constexpr std::string_view input = "identity";
+    const std::string input = "identity";
     ruvia::http_content_decoder decoder(http_content_coding::identity, {.max_decoded_bytes_ = input.size()});
     std::array<char, 3> scratch{'k', 'e', 'p'};
     const auto step = decoder.decode(input, scratch);
