@@ -1112,7 +1112,7 @@ flowchart LR
 | 声明 | 契约 |
 | --- | --- |
 | `channel_send_operation(const channel_send_operation&) = delete;`、`channel_send_operation& operator=(const channel_send_operation&) = delete;`、`channel_send_operation& operator=(channel_send_operation&&) = delete;` | 不可复制或赋值 |
-| `channel_send_operation(channel_send_operation&& other) noexcept(std::is_nothrow_move_constructible_v<T>);` | 仅启动前可移动，已启动时 `std::terminate()` |
+| `channel_send_operation(channel_send_operation&& other) noexcept(std::is_nothrow_move_constructible_v<T>);` | 仅启动前可移动，已启动时 `std::terminate()`；负载移动抛出时，源操作保留通道和等待选项，负载状态由其移动构造决定 |
 | `void operator&() const = delete;` | 不可取址 |
 | `~channel_send_operation();` | 挂起帧被销毁时摘下等待节点 |
 | `[[nodiscard]] bool await_ready();` | 非空发送端须在某个 Worker 线程启动（否则 `std::logic_error`），不必是通道 Worker；重复或无值抛 `std::logic_error`；空发送端直接 `closed`；其余先检查通道关闭 / 停机，再检查已取消 / 已过期，最后才尝试预留空槽，无空槽则排入等待队列 |

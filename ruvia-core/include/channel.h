@@ -296,12 +296,13 @@ public:
     channel_send_operation(const channel_send_operation&) = delete;
     channel_send_operation& operator=(const channel_send_operation&) = delete;
     channel_send_operation(channel_send_operation&& other) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
-        state_(std::move(other.state_)),
         value_(std::move(other.value_)),
         bounds_(std::move(other.bounds_)) {
         if (other.started_) {
             std::terminate();
         }
+        // Keep the source bound to its channel if moving the payload throws.
+        state_ = std::move(other.state_);
     }
     channel_send_operation& operator=(channel_send_operation&&) = delete;
     void operator&() const = delete;

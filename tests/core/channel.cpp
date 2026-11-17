@@ -718,6 +718,24 @@ ruvia::task<void> verify_send_wait_admission(ruvia::worker_ref worker_value, boo
     success = values[0] == 1 && values[1] == 2 && values[2] == 3 && second == ruvia::channel_send_status::sent && third == ruvia::channel_send_status::sent;
 }
 
+ruvia::task<void> verify_send_wait_survives_payload_move_failure(ruvia::worker_ref worker_value) {
+    auto [sender, receiver] = ruvia::make_channel<throwing_move>(worker_value, {.capacity_ = 1});
+    auto operation = sender.send_wait(throwing_move(42));
+    throwing_move::throw_on_move_.store(true, std::memory_order_relaxed);
+    EXPECT_THROW(static_cast<void>(decltype(operation)(std::move(operation))), std::runtime_error);
+    throwing_move::throw_on_move_.store(false, std::memory_order_relaxed);
+
+    const auto sent = co_await std::move(operation);
+    EXPECT_EQ(sent.status(), ruvia::channel_send_status::sent);
+    if (sent.accepted()) {
+        const auto received = co_await receiver.receive({.timeout_ = std::chrono::seconds(1)});
+        EXPECT_TRUE(received.has_value());
+        if (received.has_value()) {
+            EXPECT_EQ(received.value().value(), 42);
+        }
+    }
+}
+
 ruvia::task<void> verify_send_wait_returns_undelivered_values(ruvia::worker_ref worker_value, bool& success) {
     using value_type = std::unique_ptr<int>;
     using ruvia::channel_send_status;
@@ -937,6 +955,12 @@ TEST(Ruvia, ChannelSendWaitWaitsForSpaceAndReturnsUndeliveredValues) {
     ruvia::test::run_worker_tasks(attachment, ruvia::test::channel_tests::verify_send_wait_admission(worker_value, admission), ruvia::test::channel_tests::verify_send_wait_returns_undelivered_values(worker_value, undelivered));
     EXPECT_TRUE(admission);
     EXPECT_TRUE(undelivered);
+}
+
+TEST(Ruvia, ChannelSendWaitKeepsChannelAfterFailedMove) {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 16});
+    ruvia::test::run_worker_tasks(attachment, ruvia::test::channel_tests::verify_send_wait_survives_payload_move_failure(attachment.loop().worker()));
 }
 
 TEST(Ruvia, ChannelSendWaitObservesWorkerStop) {
