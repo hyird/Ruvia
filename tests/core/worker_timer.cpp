@@ -906,6 +906,56 @@ TEST(Ruvia, TimerRegistrationSurvivesStopDuringCallbackMove) {
 TEST(Ruvia, TimerRegistrationRejectsReentrantAcquire) {
     EXPECT_TRUE(timer_registration_rejects_reentrant_acquire());
 }
+TEST(Ruvia, TimerReentrantCancellationPreservesLaterExpiration) {
+    struct cancel_on_move final {
+        explicit cancel_on_move(ruvia::worker_timer_registration*& target) noexcept :
+            target_(target) {}
+        cancel_on_move(cancel_on_move&& other) noexcept :
+            target_(other.target_) {
+            if (auto* target = std::exchange(target_, nullptr)) {
+                target->cancel();
+            }
+        }
+        void operator()(ruvia::worker_timer_outcome) const {
+            ADD_FAILURE() << "quiet cancellation invoked its completion";
+        }
+        ruvia::worker_timer_registration*& target_;
+    };
+
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context);
+    const auto loop = attachment.loop();
+    const auto& worker = loop.worker();
+    ruvia::worker_timer_registration first;
+    ruvia::worker_timer_registration second;
+    ruvia::worker_timer_registration third;
+    ruvia::worker_timer_registration survivor;
+    ruvia::worker_timer_registration* nested_cancel = nullptr;
+    std::optional<ruvia::worker_timer_outcome> outcome;
+    asio::post(io_context, [&] {
+        const auto due = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+        EXPECT_TRUE(first.schedule(worker, due, cancel_on_move(nested_cancel)));
+        EXPECT_TRUE(second.schedule(worker, due, [](ruvia::worker_timer_outcome) {
+            ADD_FAILURE() << "nested quiet cancellation invoked its completion";
+        }));
+        nested_cancel = &second;
+        first.cancel();
+        EXPECT_EQ(nested_cancel, nullptr);
+        EXPECT_FALSE(second.registered());
+
+        EXPECT_TRUE(third.schedule(worker, due, [](ruvia::worker_timer_outcome) {
+            ADD_FAILURE() << "quiet cancellation invoked its completion";
+        }));
+        EXPECT_TRUE(survivor.schedule(worker, due, [&](ruvia::worker_timer_outcome result) {
+            outcome = result;
+        }));
+        third.cancel();
+    });
+    io_context.poll();
+    EXPECT_EQ(outcome, ruvia::worker_timer_outcome::expired);
+    attachment.request_stop();
+    attachment.run();
+}
 TEST(Ruvia, TimerSelfReschedulingYieldsToOtherHandlers) {
     EXPECT_TRUE(self_rescheduling_due_timer_yields_to_other_handlers());
 }

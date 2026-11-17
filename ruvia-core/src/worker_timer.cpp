@@ -383,11 +383,13 @@ move_only_function<void(worker_timer_outcome)> worker_dispatcher::take_timer(std
         return {};
     }
     const bool active = has_timer(slot_index, generation);
-    const bool already_stale = timer_slots_[slot_index].cancel_requested_;
-    auto completion = release_timer_slot(slot_index);
+    // Account for the heap entry before moving the completion: its target
+    // may cancel another timer and prune both stale entries reentrantly.
+    const bool already_stale = std::exchange(timer_slots_[slot_index].cancel_requested_, true);
     if (!already_stale) {
         note_stale_timer();
     }
+    auto completion = release_timer_slot(slot_index);
     return active ? std::move(completion) : move_only_function<void(worker_timer_outcome)>{};
 }
 
