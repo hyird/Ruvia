@@ -33,11 +33,9 @@ namespace {
 
 [[nodiscard]] std::chrono::system_clock::time_point compute_cookie_expiration(std::chrono::system_clock::time_point now, std::int64_t max_age_seconds) noexcept {
     using clock_type = std::chrono::system_clock;
-    const auto available = std::chrono::duration_cast<std::chrono::seconds>(clock_type::time_point::max() - now);
-    if (std::chrono::seconds(max_age_seconds) >= available) {
-        return clock_type::time_point::max();
-    }
-    return now + std::chrono::duration_cast<clock_type::duration>(std::chrono::seconds(max_age_seconds));
+    const auto age = std::chrono::ceil<clock_type::duration>(std::chrono::seconds(max_age_seconds));
+    const auto maximum = (clock_type::time_point::max)();
+    return now > maximum - age ? maximum : now + age;
 }
 
 [[nodiscard]] bool satisfies_cookie_name_prefix(const http_set_cookie_view& cookie, bool secure) noexcept {
@@ -186,10 +184,13 @@ std::optional<http_cookie_jar::received_cookie> http_cookie_jar::accept_set_cook
             cookie.expires_ = compute_cookie_expiration(now, *max_age_seconds);
         }
     } else if (const auto expires_at = parsed->expires()) {
-        cookie.expired_ = *expires_at <= std::chrono::system_clock::to_time_t(now);
+        using namespace std::chrono;
+        const auto expiration = sys_seconds{seconds{*expires_at}};
+        cookie.expired_ = expiration <= floor<seconds>(now);
         if (!cookie.expired_) {
-            const auto expiration_limit = std::chrono::system_clock::to_time_t(compute_cookie_expiration(now, max_cookie_age_seconds));
-            cookie.expires_ = std::chrono::system_clock::from_time_t(std::min(*expires_at, expiration_limit));
+            const auto limit = compute_cookie_expiration(now, max_cookie_age_seconds);
+            // Compare in seconds before narrowing a potentially distant date to clock ticks.
+            cookie.expires_ = expiration > floor<seconds>(limit) ? limit : time_point_cast<system_clock::duration>(expiration);
         }
     }
     return cookie;

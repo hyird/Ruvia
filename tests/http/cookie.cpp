@@ -760,3 +760,42 @@ TEST(Ruvia, cookie_jar_deduplicates_and_expires_by_partitioned_four_tuple) {
     EXPECT_EQ(jar.size(), std::size_t{1});
     EXPECT_EQ(jar.cookie_header("/", true, now), "sid=unpart2");
 }
+
+TEST(Ruvia, cookie_jar_max_age_is_exact_before_the_epoch) {
+    using namespace std::chrono;
+    const auto now = system_clock::time_point{} - seconds{2};
+    ruvia::http_cookie_jar jar(ruvia::http_scheme::https, "example.test");
+    ASSERT_TRUE(jar.absorb_set_cookie("/", "sid=value; Max-Age=1", now));
+    EXPECT_EQ(jar.cookie_header("/", true, now), "sid=value");
+    EXPECT_TRUE(jar.cookie_header("/", true, now + seconds{1}).empty());
+}
+
+TEST(Ruvia, cookie_jar_max_age_saturates_only_when_the_deadline_does_not_fit) {
+    using namespace std::chrono;
+    const auto maximum = (system_clock::time_point::max)();
+    const auto tick = system_clock::duration{1};
+    const auto now = maximum - seconds{1} - tick;
+    ruvia::http_cookie_jar jar(ruvia::http_scheme::https, "example.test");
+    ASSERT_TRUE(jar.absorb_set_cookie("/", "sid=value; Max-Age=1", now));
+    EXPECT_TRUE(jar.cookie_header("/", true, maximum - tick).empty());
+
+    ASSERT_TRUE(jar.absorb_set_cookie("/", "sid=value; Max-Age=3", maximum - seconds{2}));
+    EXPECT_EQ(jar.cookie_header("/", true, maximum - tick), "sid=value");
+    EXPECT_TRUE(jar.cookie_header("/", true, maximum).empty());
+}
+
+TEST(Ruvia, cookie_jar_expires_preserves_subsecond_clock_boundaries) {
+    using namespace std::chrono;
+    const auto epoch = system_clock::time_point{};
+    const auto tick = system_clock::duration{1};
+    ruvia::http_cookie_jar jar(ruvia::http_scheme::https, "example.test");
+    ASSERT_TRUE(jar.absorb_set_cookie("/", "sid=value; Expires=Thu, 01 Jan 1970 00:00:00 GMT", epoch - tick));
+    EXPECT_EQ(jar.cookie_header("/", true, epoch - tick), "sid=value");
+    EXPECT_TRUE(jar.cookie_header("/", true, epoch).empty());
+
+    const auto now = epoch + tick;
+    const auto limit = now + seconds{ruvia::max_cookie_age_seconds};
+    ASSERT_TRUE(jar.absorb_set_cookie("/", "sid=value; Expires=Tue, 01 Jan 2030 00:00:00 GMT", now));
+    EXPECT_EQ(jar.cookie_header("/", true, limit - tick), "sid=value");
+    EXPECT_TRUE(jar.cookie_header("/", true, limit).empty());
+}
