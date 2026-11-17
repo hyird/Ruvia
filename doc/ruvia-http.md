@@ -3411,7 +3411,7 @@ public:
 | 成员 | 语义 |
 | --- | --- |
 | 构造 | 复制协议顺序的 `codings` 并逆序解码。`codings` 为空或多于 `max_content_codings`（8），或任一 coding 不满足 `is_http_transfer_coding()`（只允许 `gzip`、`deflate`），抛 `std::invalid_argument`。`decoded_limit` 由每一层独立执行（取 `read_ceiling()`）。`memory` 为所有层共享的 [`http_codec_memory`](#api-http-codec-memory-h) 请求预算，不另设单 codec 上限；`nullptr` 使用标准分配器且无共享预算；非空时须活过解码器。编解码器无法创建抛 `http_content_codec_error`，预算不足或分配失败抛 `std::bad_alloc`。 |
-| `decode(input, output)` | 消费输入并把解码字节写入 `output`；`output` 为空抛 `std::invalid_argument`。不保留 `input`，输出视图借用调用方暂存区，复用前须消费。请求更多输入前须先用 `decode({}, scratch)` 排空输出。 |
+| `decode(input, output)` | 消费输入并把解码字节写入 `output`；解码器处于 `active` 时，`output` 为空或与 `input` 重叠会在消费前抛 `std::invalid_argument`。不保留 `input`，输出视图借用调用方暂存区，复用前须消费。请求更多输入前须先用 `decode({}, scratch)` 排空输出。 |
 | `finish_input() noexcept` | 提交分帧 EOF；层间仍有待解码字节时返回 `decode_need_input`。线上从未收到字节时各层按空内容完成；线上已收到字节而某内层未收到任何字节时返回 `invalid_content`；未到结束边界的截断层同样返回 `invalid_content`。 |
 | `state()` | `active` / `finished` / `failed`。 |
 | `reset()` | 用构造时的 codings 与上限开始新的编码体，保留编解码器存储；编解码器无法重启时抛 `http_content_codec_error`，解码器随后不可用。 |

@@ -9,6 +9,7 @@
 
 #include "http_compression_codec.h"
 #include "http_content_codec.h"
+#include "http_field_text.h"
 
 namespace ruvia {
 
@@ -112,12 +113,8 @@ http_content_decode_result http_content_decoder_stream::decode_active(std::strin
     if (output.empty()) {
         throw std::invalid_argument("content decoding needs output space");
     }
-    if (coding_ != http_content_coding::identity && !input.empty()) {
-        const auto source = reinterpret_cast<std::uintptr_t>(input.data());
-        const auto target = reinterpret_cast<std::uintptr_t>(output.data());
-        if (source <= target ? target - source < input.size() : source - target < output.size()) {
-            throw std::invalid_argument("compressed content input overlaps output");
-        }
+    if (coding_ != http_content_coding::identity && detail::http_text_overlaps(input, std::string_view(output.data(), output.size()))) {
+        throw std::invalid_argument("compressed content input overlaps output");
     }
     if (coding_ == http_content_coding::identity) {
         const auto count = (std::min)({input.size(), output.size(), options_.max_decoded_bytes_ - decoded_bytes_});

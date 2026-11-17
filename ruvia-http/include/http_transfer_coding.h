@@ -24,7 +24,8 @@ using http_transfer_coding_decode_result = decode_step<decode_need_input, decode
 // The sole transfer-decoding entry point for one or more codings. Copies the
 // protocol-order sequence during construction and decodes it in reverse; every
 // coding must satisfy is_http_transfer_coding(), else std::invalid_argument.
-// Input is never retained; output views borrow the caller's scratch storage.
+// Input is never retained and must not overlap the caller's scratch storage.
+// Output views borrow that storage.
 // Consume each view before reusing it. Keep the decoder at a stable address
 // until destruction. Drain output with decode({}, scratch)
 // before requesting more input; finish_input() commits framing EOF only after

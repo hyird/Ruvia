@@ -72,6 +72,24 @@ TEST(Ruvia, transfer_coding_stack_decodes_reverse_order_with_tiny_scratch) {
     EXPECT_EQ(std::string_view(decoded), plain);
 }
 
+TEST(Ruvia, transfer_coding_stack_rejects_overlapping_buffers_without_consuming_input) {
+    constexpr std::string_view plain = "stacked transfer coding payload";
+    const auto wire = zlib_deflate_compress(gzip_compress(plain));
+    constexpr std::array codings{http_content_coding::gzip, http_content_coding::deflate};
+    ruvia::http_transfer_coding_stack_decoder stack(codings, protocol_byte_limit::limited(1024));
+
+    auto aliased = wire;
+    EXPECT_THROW((void)stack.decode(aliased, std::span<char>(aliased).subspan(1)), std::invalid_argument);
+    EXPECT_EQ(aliased, wire);
+
+    std::array<char, 64> scratch{};
+    const auto retried = stack.decode(wire, scratch);
+    EXPECT_EQ(retried.consumed_bytes(), wire.size());
+    const auto* output = retried.get_if<ruvia::decode_output>();
+    ASSERT_NE(output, nullptr);
+    EXPECT_EQ(output->bytes(), plain);
+}
+
 TEST(Ruvia, transfer_coding_stack_rejects_truncated_inner_stream) {
     constexpr std::string_view plain = "truncated stacked transfer coding";
     auto inner = gzip_compress(plain);
