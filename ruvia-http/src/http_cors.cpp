@@ -425,8 +425,20 @@ http_cors_preflight_result http_cors_policy::evaluate_preflight(const http_reque
 }
 
 bool http_cors_policy::rewrite_response_headers(borrowed_text request_origin, editable_http_headers response_headers) const {
-    const auto origin = request_origin.view();
+    auto origin = request_origin.view();
     const bool granted = !origin.empty() && allows_origin(origin);
+    // Removing or merging fields can invalidate an origin borrowed from the
+    // same block. Snapshot only when the policy will echo those bytes.
+    std::string retained_origin;
+    if (granted && !allow_any_origin_) {
+        for (const auto field : response_headers.fields()) {
+            if (detail::http_text_overlaps(origin, field.name()) || detail::http_text_overlaps(origin, field.value())) {
+                retained_origin.assign(origin);
+                origin = retained_origin;
+                break;
+            }
+        }
+    }
     // Vary and up to three Access-Control-* lines are written: an
     // http_response takes all of them or none.
     response_headers.transact([this, origin, granted](editable_http_headers candidate) {

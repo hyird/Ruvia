@@ -149,6 +149,20 @@ TEST(RuviaHttpPublicApi, cors_proxy_wildcard_varies_by_origin_presence) {
     }
 }
 
+TEST(RuviaHttpPublicApi, cors_proxy_rewrite_preserves_an_origin_borrowed_from_the_headers) {
+    constexpr std::string_view origin = "https://client.apps.example.com";
+    const ruvia::http_cors_policy policy(ruvia::http_cors_policy_options{.allowed_origins_ = {".example.com"}});
+    std::vector<ruvia::http_header> response_headers;
+    response_headers.emplace_back("Access-Control-Allow-Origin", origin);
+    response_headers.emplace_back("Access-Control-Allow-Methods", "GET");
+    response_headers.emplace_back("Vary", "Accept-Encoding");
+
+    ASSERT_TRUE(policy.rewrite_response_headers(response_headers.front().value(), response_headers));
+    EXPECT_EQ(ruvia::find_first_http_header(response_headers, "Access-Control-Allow-Origin"), origin);
+    EXPECT_EQ(ruvia::find_first_http_header(response_headers, "Vary"), "Accept-Encoding, Origin");
+    EXPECT_FALSE(ruvia::find_first_http_header(response_headers, "Access-Control-Allow-Methods"));
+}
+
 TEST(RuviaHttpPublicApi, cors_preflight_matches_the_exact_method_token) {
     const ruvia::http_cors_policy policy(ruvia::http_cors_policy_options{.allowed_methods_ = {"Report"}});
     for (const std::string_view method : {"Report", "REPORT", "report"}) {
