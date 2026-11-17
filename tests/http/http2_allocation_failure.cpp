@@ -21,6 +21,7 @@
 #include "http1_chunked_body.h"
 #include "http1_connection_plan.h"
 #include "http1_message_body.h"
+#include "http1_server_response.h"
 #include "http2_connection.h"
 #include "http_content_codec.h"
 #include "http_cookie_jar.h"
@@ -276,6 +277,25 @@ TEST(Ruvia, http2_outbound_hpack_allocation_failures_preserve_state_and_reclaim_
     EXPECT_NE(terminal, 0U);
     ::testing::Test::RecordProperty("allocation_failure_sites", std::to_string(baseline.allocations));
     ::testing::Test::RecordProperty("terminal_failure_sites", std::to_string(terminal));
+}
+
+TEST(Ruvia, http1_response_head_heap_self_append_reuses_reserved_storage) {
+    const std::string prefix = "X:" + std::string(ruvia::response_head_stack_bytes, 'a') + "\r\n";
+    for (const bool include_terminator : {false, true}) {
+        SCOPED_TRACE(include_terminator);
+        ruvia::http_response_head_buffer buffer;
+        buffer.append(prefix);
+        buffer.reserve_additional(prefix.size());
+        const auto committed = buffer.view();
+        const std::string_view suffix(committed.data() + 1, committed.size() - 1 + include_terminator);
+        const auto expected = prefix + std::string(suffix);
+
+        {
+            allocation_scope scope(0);
+            buffer.append(suffix);
+        }
+        EXPECT_EQ(buffer.view(), expected);
+    }
 }
 
 TEST(Ruvia, multipart_range_slicer_can_retry_after_an_allocation_failure) {

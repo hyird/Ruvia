@@ -6696,7 +6696,7 @@ public:
 | 复制构造 | 独立复制对端已提交的字节，无论其位于内联还是堆存储。 |
 | 移动构造 / 移动赋值 | 不分配；接管对端堆存储并复制其已提交状态。 |
 | `reset()` | 先发布空内联状态，再按 `response_head_retained_heap_bytes` 清理堆存储（超出则释放）。重新使内联 cursor 可用。 |
-| `append(std::string_view value)` | 追加文本；`value` 可与本缓冲区存储别名，包括 `stack_cursor()` 返回的已写区间。内联放不下时溢出到堆；超出 `std::string::max_size()` 抛 `std::length_error`，分配失败抛 `std::bad_alloc`。 |
+| `append(std::string_view value)` | 追加文本；`value` 可与本缓冲区存储别名，包括 `stack_cursor()` 返回的已写区间。剩余容量足够时，自追加不分配；内联放不下时溢出到堆。超出 `std::string::max_size()` 抛 `std::length_error`，分配失败抛 `std::bad_alloc`。 |
 | `append(char value)` | 追加一个字符。 |
 | `append_unsigned(value)` | 追加十进制数字。 |
 | `reserve_additional(size)` | 在当前长度之上预留 `size` 字节；能放进内联剩余空间时不溢出。需要溢出时先在堆上分配，失败则仍保持内联状态（已取得的内联 cursor 不失效）。 |
