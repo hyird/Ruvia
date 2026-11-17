@@ -17,22 +17,34 @@
 namespace ruvia {
 namespace {
 
-// Splits `data` at CR, LF or CRLF and passes each line to `visitor`; the
-// sizing pass and the encoder share this one line rule.
-template <typename visitor_type>
-void visit_sse_data_lines(std::string_view data, visitor_type&& visitor) {
-    while (true) {
-        const auto next_value = data.find_first_of("\r\n");
-        visitor(next_value == std::string_view::npos ? data : data.substr(0, next_value));
-        if (next_value == std::string_view::npos) {
-            return;
+// Validate UTF-8 while finding line boundaries, then copy each validated line
+// as a block. In an event stream CRLF counts as a single line ending.
+void append_sse_data_lines(std::string_view data, std::string& frame) {
+    std::size_t begin = 0;
+    for (std::size_t index = 0; index < data.size();) {
+        const auto byte = static_cast<unsigned char>(data[index]);
+        if (byte == '\r' || byte == '\n') {
+            frame.append("data: ");
+            frame.append(data.substr(begin, index - begin));
+            frame.push_back('\n');
+            ++index;
+            if (byte == '\r' && index < data.size() && data[index] == '\n') {
+                ++index;
+            }
+            begin = index;
+        } else if (byte < 0x80) {
+            ++index;
+        } else {
+            const auto sequence = scan_utf8_sequence(data, index);
+            if (!sequence.well_formed_) {
+                throw std::invalid_argument("SSE fields must be valid UTF-8");
+            }
+            index += sequence.length_;
         }
-        auto advance = next_value + 1U;
-        if (data[next_value] == '\r' && next_value + 1U < data.size() && data[next_value + 1U] == '\n') {
-            advance = next_value + 2U;
-        }
-        data.remove_prefix(advance);
     }
+    frame.append("data: ");
+    frame.append(data.substr(begin));
+    frame.push_back('\n');
 }
 
 constexpr std::string_view sse_utf8_bom = "\xEF\xBB\xBF";
@@ -338,7 +350,7 @@ std::string format_sse_message(const sse_message& message) {
         throw std::invalid_argument("SSE retry delay must not be negative");
     }
     // An event stream is UTF-8 (WHATWG HTML, "Parsing an event stream").
-    if (!is_valid_utf8(message.event_.view()) || (message.id_.has_value() && !is_valid_utf8(message.id_->view())) || (message.data_.has_value() && !is_valid_utf8(message.data_->view()))) {
+    if (!is_valid_utf8(message.event_.view()) || (message.id_.has_value() && !is_valid_utf8(message.id_->view()))) {
         throw std::invalid_argument("SSE fields must be valid UTF-8");
     }
 
@@ -372,11 +384,9 @@ std::string format_sse_message(const sse_message& message) {
         add_size(1U);
     }
     if (message.data_.has_value()) {
-        visit_sse_data_lines(message.data_->view(), [&add_size](std::string_view line) {
-            add_size(6U);
-            add_size(line.size());
-            add_size(1U);
-        });
+        // Each extra data line adds more framing bytes than its delimiter used.
+        add_size(message.data_->size());
+        add_size(7U);
     }
 
     frame.reserve(total_size);
@@ -399,11 +409,7 @@ std::string format_sse_message(const sse_message& message) {
         frame.push_back('\n');
     }
     if (message.data_.has_value()) {
-        visit_sse_data_lines(message.data_->view(), [&frame](std::string_view line) {
-            frame.append("data: ");
-            frame.append(line.data(), line.size());
-            frame.push_back('\n');
-        });
+        append_sse_data_lines(message.data_->view(), frame);
     }
     frame.push_back('\n');
     return frame;
