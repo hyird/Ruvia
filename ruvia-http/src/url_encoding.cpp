@@ -182,15 +182,17 @@ std::optional<std::string_view> decode_url_component(borrowed_text text, std::st
     if (first == input.size()) {
         return input;
     }
-    // Only a mode that cannot fail may overwrite existing storage contents.
-    const bool can_write_in_place = (mode == url_decode_mode::form || storage.empty()) && !detail::http_text_aliases_string(input, storage);
+    // A rejecting mode can reuse empty storage only if it need not grow.
+    const bool can_write_in_place = (mode == url_decode_mode::form || (storage.empty() && input.size() <= storage.capacity())) && !detail::http_text_aliases_string(input, storage);
     std::string staged;
     auto& target = can_write_in_place ? storage : staged;
     target.resize(input.size());
     input.copy(target.data(), first);
     const auto size = decode_url_bytes(input.substr(first), target.data() + first, mode);
     if (!size) {
-        target.clear();
+        if (can_write_in_place) {
+            storage.clear();
+        }
         return std::nullopt;
     }
     target.resize(first + *size);

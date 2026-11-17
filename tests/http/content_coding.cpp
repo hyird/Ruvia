@@ -1333,6 +1333,14 @@ TEST(Ruvia, url_decode_strict_form_rejects_malformed_escapes_without_changing_st
         EXPECT_FALSE(decode_url_component(input, storage, mode).has_value());
         EXPECT_EQ(storage, "preserve");
     }
+    std::string empty_storage;
+    empty_storage.reserve(64);
+    const auto capacity = empty_storage.capacity();
+    const auto malformed = std::string(capacity, 'a') + "+%zz";
+    EXPECT_FALSE(decode_url_component(malformed, empty_storage, mode).has_value());
+    EXPECT_TRUE(empty_storage.empty());
+    EXPECT_EQ(empty_storage.capacity(), capacity);
+
     std::string aliased("a+b%zz");
     EXPECT_FALSE(decode_url_component(aliased, aliased, mode).has_value());
     EXPECT_EQ(aliased, "a+b%zz");

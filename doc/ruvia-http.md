@@ -708,7 +708,7 @@ inline void http_append_percent_byte(std::string& output, unsigned char byte);
 | `percent_encode_url_component(text, storage)` | 单组件编码：仅保留 unreserved 字节，其余（含 `%`、`+`、分隔符、UTF-8 字节）转为大写 `%XX`；空格为 `%20`。无需转义时直接借用输入，否则原子替换 `storage`；支持输入别名。 |
 | `validate_url_encoding(value)` | 每个 `%` 是否都开始一个合法三元组。 |
 | `decode_url_bytes(input, output, mode)` | 唯一 URL 解码循环：按 `mode` 一遍把 `input` 解码到 `output` 并返回解码长度；`mode` 拒绝时返回 `std::nullopt`（`output` 可能已被部分写入）。前置条件：`output` 至少 `input.size()` 字节且与 `input` 不重叠。需要把多个解码值打包进同一缓冲的调用方直接使用它。 |
-| `decode_url_component(text, storage, mode)` | 按 `mode` 解码一个 URL 组件。无可解码内容时返回 `text` 本身且不分配；否则解码字节替换 `storage` 内容并返回其视图；`mode` 拒绝时返回 `std::nullopt` 且 `storage` 不变。 |
+| `decode_url_component(text, storage, mode)` | 按 `mode` 解码一个 URL 组件。无可解码内容时返回 `text` 本身且不分配；否则解码字节替换 `storage` 内容并返回其视图；`mode` 拒绝时返回 `std::nullopt`，保留 `storage` 的原内容和容量。 |
 
 `decode_url_component()` 与 `percent_encode_uri_reference()` 的借用规则：
 
