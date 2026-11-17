@@ -1,6 +1,6 @@
 # Ruvia 文档索引
 
-每个 CMake target 对应一份完整公开 API 手册。安装头是公开边界；`detail` 符号与 `src/` 内部头不属于用户契约。
+每个 CMake target 对应一份公开 API 手册。无论通过安装包还是 `add_subdirectory` 接入，下游都只应使用目标公开的头文件和非 `detail` 符号。
 
 ## 1. Target 手册
 

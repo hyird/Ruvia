@@ -17,11 +17,14 @@ add_library(ruvia-core STATIC ${ruvia_core_sources})
 
 ruvia_configure_library(ruvia-core core)
 
-# Build-only: internal headers in src/ (Asio glue asio_completion.h,
-# asio_ip_address.h; FNV-1a fnv1a.h) shared with ruvia-web and the tests.
-# Never installed or exported.
+# Only Asio adapters cross the Core boundary, and only in the build tree.
 add_library(ruvia_core_internal INTERFACE)
-target_include_directories(ruvia_core_internal INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(ruvia_core_internal INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/asio")
+
+target_include_directories(ruvia-core PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/asio"
+    "${PROJECT_SOURCE_DIR}/internal"
+)
 
 target_link_libraries(ruvia-core
     PUBLIC

@@ -115,13 +115,14 @@ endif()
 add_library(ruvia-web STATIC ${ruvia_web_sources})
 
 ruvia_configure_library(ruvia-web web)
+target_include_directories(ruvia-web PRIVATE "${PROJECT_SOURCE_DIR}/internal")
 
 target_link_libraries(ruvia-web
     PUBLIC
         ruvia::core
         ruvia::http
     PRIVATE
-        # Build-only core Asio glue (src/ headers); BUILD_INTERFACE keeps it
+        # Build-only core Asio glue; BUILD_INTERFACE keeps it
         # out of the installed export of this static library.
         "$<BUILD_INTERFACE:ruvia_core_internal>"
         # TLS (ALPN/SNI + the socket client/server drivers) and HMAC cookie
