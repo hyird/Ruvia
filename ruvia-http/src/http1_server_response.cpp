@@ -445,18 +445,7 @@ void http_response_head_buffer::append(std::string_view value) {
     if (value.size() > heap_.max_size() - heap_.size()) {
         throw std::length_error("HTTP response head is too large");
     }
-    const auto begin = reinterpret_cast<std::uintptr_t>(heap_.data());
-    const auto source = reinterpret_cast<std::uintptr_t>(value.data());
-    const auto offset = source - begin;
-    if (source >= begin && offset <= heap_.size() && value.size() - 1 == heap_.size() - offset) {
-        // The old terminator overlaps the destination. Reserve before changing
-        // the string, then copy the committed slice and append the NUL separately.
-        detail::reserve_geometric(heap_, heap_.size() + value.size());
-        heap_.append(heap_, static_cast<std::size_t>(offset), value.size() - 1);
-        heap_.push_back('\0');
-        return;
-    }
-    heap_.append(value);
+    detail::append_http_text(heap_, value);
 }
 
 void http_response_head_buffer::append(char value) {

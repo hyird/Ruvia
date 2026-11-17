@@ -1243,6 +1243,26 @@ TEST(Ruvia, http_content_encoder_identity_accepts_input_borrowed_from_output) {
     check_encoder_alias(ruvia::http_content_coding::identity);
 }
 
+TEST(Ruvia, http_content_encoder_identity_preserves_aliased_terminator) {
+    constexpr std::string_view prefix = "prefix: ";
+    for (const bool reserve_spare : {false, true}) {
+        SCOPED_TRACE(reserve_spare);
+        std::string output = std::string(prefix) + "payload";
+        if (reserve_spare) {
+            output.reserve(2 * output.size() + 1);
+        } else {
+            output.resize(output.capacity(), '#');
+        }
+        const std::string_view suffix(output.data() + prefix.size(), output.size() - prefix.size() + 1);
+        auto expected = output + output.substr(prefix.size());
+        expected.push_back('\0');
+        http_content_encoder encoder(http_content_coding::identity);
+        encoder.write(suffix, output);
+        encoder.finish(output);
+        EXPECT_EQ(output, expected);
+    }
+}
+
 TEST(Ruvia, http_content_encoder_gzip_accepts_input_borrowed_from_output) {
     check_encoder_alias(ruvia::http_content_coding::gzip);
 }

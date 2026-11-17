@@ -37,6 +37,27 @@ void reserve_geometric(container_type& container, std::size_t required) {
     container.reserve((std::max)(required, doubled));
 }
 
+// A borrowed suffix can include the old terminator, which overlaps the
+// append destination. Reserve first, then append the suffix and NUL separately.
+inline void append_http_text(std::string& output, std::string_view text) {
+    if (text.empty()) {
+        return;
+    }
+    const auto begin = reinterpret_cast<std::uintptr_t>(output.data());
+    const auto source = reinterpret_cast<std::uintptr_t>(text.data());
+    const auto offset = source - begin;
+    if (source >= begin && offset <= output.size() && text.size() - 1 == output.size() - offset) {
+        if (text.size() > output.max_size() - output.size()) {
+            throw std::length_error("HTTP text capacity overflow");
+        }
+        reserve_geometric(output, output.size() + text.size());
+        output.append(output, static_cast<std::size_t>(offset), text.size() - 1);
+        output.push_back('\0');
+        return;
+    }
+    output.append(text);
+}
+
 // Address intervals compare as unsigned integers: views into unrelated buffers
 // are unrelated pointers, and subtraction avoids forming an overflowing end.
 [[nodiscard]] inline bool http_text_overlaps(std::string_view left, std::string_view right) noexcept {

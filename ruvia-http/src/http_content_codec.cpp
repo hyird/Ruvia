@@ -169,9 +169,7 @@ void http_content_encoder::write(std::string_view input, std::string& output, bo
     }
     try {
         if (impl_ == nullptr) {
-            if (!input.empty()) {
-                output.append(input.data(), input.size());
-            }
+            detail::append_http_text(output, input);
         } else if (!input.empty() || flush) {
             // An unlimited cap cannot be exceeded.
             if (detail::http_text_aliases_string(input, output)) {

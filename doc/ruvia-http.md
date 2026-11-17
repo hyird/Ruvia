@@ -3290,7 +3290,7 @@ public:
 | --- | --- |
 | 构造 | 未知 coding 或 `compression_level_` 违反 [7.2.1](#api-http-content-codec-h) 选项表抛 `std::invalid_argument`；原生状态无法创建抛 `http_content_codec_error`，内存上限或分配失败抛 `std::bad_alloc`（回调异常保留原类型）。 |
 | `coding()` | 构造时的 coding。 |
-| `write(input, output, flush = false)` | 消费全部 `input` 并把编码字节追加到调用方拥有的 `output`，不保留任一视图。`input` 可以借用 `output`（压缩写入在追加可能使其失效前先做快照）。`flush == true` 时输出所有待发字节，用于 SSE 等低延迟流。空输入合法（包括重复 flush），不结束流。 |
+| `write(input, output, flush = false)` | 消费全部 `input` 并把编码字节追加到调用方拥有的 `output`，不保留任一视图。`input` 可以借用 `output`，包括末尾的 NUL；压缩写入在追加可能使其失效前先做快照。`flush == true` 时输出所有待发字节，用于 SSE 等低延迟流。空输入合法（包括重复 flush），不结束流。 |
 | `finish(output)` | 结束流并追加剩余字节；幂等。 |
 | `encode(input, options)` | 在 `max_encoded_bytes_` 精确输出上限内编码一个完整表示（上限语义见 [7.2.1](#api-http-content-codec-h)）。等同 `write()` + `finish()` 消费流，下一个表示前须 `reset()`。 |
 | `reset()` | 让任意阶段的编码器回到全新活动流。zlib 与 zstd 复用工作内存；Brotli 无原生重置，重建状态可能分配。重置失败（抛异常）使编码器保持 `failed`。 |
