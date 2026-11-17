@@ -119,6 +119,23 @@ TEST(Ruvia, http1_head_metadata_body_preserves_declared_or_unknown_representatio
     }
 }
 
+TEST(Ruvia, http1_response_head_copy_preserves_committed_bytes) {
+    for (const auto size : {std::size_t{8}, ruvia::response_head_stack_bytes + 1}) {
+        SCOPED_TRACE(size);
+        const std::string committed(size, 'a');
+        ruvia::http_response_head_buffer source;
+        source.append(committed);
+        auto copy = source;
+
+        source.reset();
+        source.append("replacement");
+        EXPECT_EQ(copy.view(), committed);
+        copy.append("!");
+        EXPECT_EQ(copy.view(), committed + "!");
+        EXPECT_EQ(source.view(), "replacement");
+    }
+}
+
 TEST(Ruvia, http1_response_head_append_accepts_overlapping_written_inline_ranges) {
     for (const auto back : {std::size_t{0}, std::size_t{1}, ruvia::response_head_stack_bytes / 8, ruvia::response_head_stack_bytes / 4}) {
         ruvia::http_response_head_buffer buffer;

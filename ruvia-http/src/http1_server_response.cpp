@@ -373,7 +373,9 @@ http1_response_head_plan prepare_http1_upgrade_response_head(http_response& resp
 }
 
 http_response_head_buffer::http_response_head_buffer(const http_response_head_buffer& other) :
-    heap_(other.heap_) {}
+    heap_(other.heap_) {
+    copy_committed_state(other);
+}
 
 http_response_head_buffer::http_response_head_buffer(http_response_head_buffer&& other) noexcept :
     heap_(std::move(other.heap_)) {
