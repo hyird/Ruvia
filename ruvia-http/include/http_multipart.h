@@ -267,7 +267,7 @@ public:
 
     [[nodiscard]] decoder_state state() const noexcept;
     // Starts a new body with the constructed boundary and limits, keeping
-    // buffer capacity.
+    // only small scratch buffers.
     void reset() noexcept;
 
 private:
@@ -287,7 +287,6 @@ private:
     enum class step_progress_type : std::uint8_t {
         need_input,
         continue_,
-        done,
     };
 
     using step_result_type = std::variant<step_progress_type, multipart_parse_error>;
@@ -296,6 +295,7 @@ private:
     void consume(std::size_t bytes) noexcept;
     void reset_scan_cursors() noexcept;
     void compact_pending();
+    void release_body_buffers() noexcept;
     [[nodiscard]] multipart_poll_result fail(multipart_parse_error error) noexcept;
     [[nodiscard]] step_result_type consume_boundary();
     [[nodiscard]] step_result_type consume_headers();

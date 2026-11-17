@@ -640,16 +640,20 @@ decoder_state multipart_parser::state() const noexcept {
     return decoder_state::failed;
 }
 
-void multipart_parser::reset() noexcept {
+void multipart_parser::release_body_buffers() noexcept {
     if (auto* owned = std::get_if<http_io_buffer>(&input_)) {
-        owned->clear();
+        owned->clear_retaining_small();
     }
     current_name_ = std::string_view{};
     current_filename_ = std::string_view{};
     current_content_type_ = std::string_view{};
-    current_headers_.clear();
-    state_ = progress_state_type::boundary;
+    http_clear_string_retaining_small(current_headers_);
     pending_erase_bytes_ = 0;
+}
+
+void multipart_parser::reset() noexcept {
+    release_body_buffers();
+    state_ = progress_state_type::boundary;
     remaining_parts_ = max_parts_;
     remaining_metadata_bytes_ = max_metadata_bytes_;
     reset_scan_cursors();
@@ -661,6 +665,7 @@ void multipart_parser::reset() noexcept {
 
 multipart_poll_result multipart_parser::fail(multipart_parse_error error) noexcept {
     state_ = error;
+    release_body_buffers();
     return multipart_poll_result(0, multipart_parse_failure(error));
 }
 
@@ -682,9 +687,6 @@ multipart_poll_result multipart_parser::poll() {
                         return fail(multipart_parse_error::incomplete_body);
                     }
                     return multipart_poll_result(0, decode_need_input{});
-                }
-                if (progress_value == step_progress_type::done) {
-                    return multipart_poll_result(0, decode_complete{});
                 }
                 break;
             }
@@ -710,6 +712,7 @@ multipart_poll_result multipart_parser::poll() {
                 return result_value;
             }
             case progress_state_type::done:
+                release_body_buffers();
                 return multipart_poll_result(0, decode_complete{});
         }
     }
@@ -749,12 +752,8 @@ multipart_parser::step_result_type multipart_parser::consume_boundary() {
         consume(delimiter.offset_ + delimiter.line_bytes_);
         reset_scan_cursors();
         first_boundary_ = false;
-        if (delimiter.kind_ == detail::http_multipart_delimiter_kind::part) {
-            state_ = progress_state_type::headers;
-            return step_progress_type::continue_;
-        }
-        state_ = progress_state_type::done;
-        return step_progress_type::done;
+        state_ = delimiter.kind_ == detail::http_multipart_delimiter_kind::part ? progress_state_type::headers : progress_state_type::done;
+        return step_progress_type::continue_;
     }
 
     if (buffer_view().starts_with("\r\n")) {
@@ -775,12 +774,8 @@ multipart_parser::step_result_type multipart_parser::consume_boundary() {
         }
         consume(delimiter.line_bytes_);
         reset_scan_cursors();
-        if (delimiter.kind_ == detail::http_multipart_delimiter_kind::part) {
-            state_ = progress_state_type::headers;
-            return step_progress_type::continue_;
-        }
-        state_ = progress_state_type::done;
-        return step_progress_type::done;
+        state_ = delimiter.kind_ == detail::http_multipart_delimiter_kind::part ? progress_state_type::headers : progress_state_type::done;
+        return step_progress_type::continue_;
     }
     return multipart_parse_error::invalid_delimiter;
 }

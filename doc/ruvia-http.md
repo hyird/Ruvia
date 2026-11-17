@@ -3574,7 +3574,9 @@ multipart_body_parse_result parse_multipart_body(body_type&&, multipart_parse_op
 | `finish_input() noexcept` | 标记外层 HTTP 正文结束，使恰好在 EOF 结束的收尾分隔符与跨块拆分的行可被区分。 |
 | `poll()` | 推进解析并返回下一个结果。失败是终态：之后的 `poll()` 重复同一错误。若拥有 part 元数据时抛出分配异常，该 part 保持待定且不消耗限额，资源恢复后可重试 `poll()`。 |
 | `state()` | `active` / `finished` / `failed`。 |
-| `reset() noexcept` | 以构造时的边界与限额开始新正文，保留缓冲容量。 |
+| `reset() noexcept` | 以构造时的边界与限额开始新正文。 |
+
+- **缓冲回收**：`poll()` 返回正文结束或失败时，以及 `reset()` 时，释放超过 4 KiB 的暂存缓冲。最后一个 part 的视图在返回时仍有效。
 
 `parse_multipart_body(body, options)` 无 I/O 地解析完整 `multipart/form-data` 正文，结果中 part 正文借用 `body`；来自折叠首部块的名称、文件名与 `Content-Type` 拥有存储，未改写的首部块继续借用 `body`。`= delete` 模板重载拒绝拥有字符的右值临时字符串（如临时 `std::string`），因为返回的 part 会借用它。
 

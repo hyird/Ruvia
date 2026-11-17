@@ -17,6 +17,7 @@
 #include <variant>
 
 #include "http2_connection.h"
+#include "http_multipart.h"
 #include "http_range.h"
 #include "http_response.h"
 #include "http_server_sent_events.h"
@@ -353,5 +354,46 @@ TEST(Ruvia, sse_parser_transfers_large_ids_and_discards_unpublished_updates) {
     const auto failed = parser.parse(oversized_data);
     EXPECT_TRUE(failed.holds<ruvia::sse_parse_failure>());
     EXPECT_EQ(parser.last_event_id(), "previous");
+    EXPECT_EQ(live_allocations.load(), empty);
+}
+
+TEST(Ruvia, multipart_parser_releases_oversized_buffers_at_terminal_poll_and_reset) {
+    const auto boundary = ruvia::parse_multipart_boundary("multipart/form-data; boundary=b");
+    ruvia::multipart_parser parser({.boundary_ = std::get<ruvia::multipart_boundary>(boundary)});
+    const std::string payload(128 * 1024, 'x');
+    const auto body = "--b\r\nContent-Disposition: form-data; name=field\r\n\r\n" + payload + "\r\n--b--\r\n";
+    const auto empty_body = "--b--\r\n" + payload;
+    const auto empty = live_allocations.load();
+
+    parser.feed(body);
+    const auto result = parser.poll();
+    const auto* part = result.get_if<ruvia::multipart_stream_part>();
+    ASSERT_NE(part, nullptr);
+    EXPECT_EQ(part->name(), "field");
+    EXPECT_EQ(part->body(), payload);
+    ASSERT_TRUE(parser.poll().holds<ruvia::decode_complete>());
+    const auto finished = live_allocations.load();
+    EXPECT_EQ(finished, empty);
+    EXPECT_TRUE(parser.poll().holds<ruvia::decode_complete>());
+
+    parser.reset();
+    parser.feed(payload);
+    const auto rejected = parser.poll();
+    const auto* failure = rejected.get_if<ruvia::multipart_parse_failure>();
+    ASSERT_NE(failure, nullptr);
+    EXPECT_EQ(failure->error(), ruvia::multipart_parse_error::preamble_too_large);
+    const auto failed = live_allocations.load();
+    EXPECT_EQ(failed, empty);
+    const auto repeated = parser.poll();
+    ASSERT_TRUE(repeated.holds<ruvia::multipart_parse_failure>());
+    EXPECT_EQ(repeated.get_if<ruvia::multipart_parse_failure>()->error(), failure->error());
+
+    parser.reset();
+    parser.feed(body);
+    parser.reset();
+    const auto reset = live_allocations.load();
+    EXPECT_EQ(reset, empty);
+    parser.feed(empty_body);
+    EXPECT_TRUE(parser.poll().holds<ruvia::decode_complete>());
     EXPECT_EQ(live_allocations.load(), empty);
 }
