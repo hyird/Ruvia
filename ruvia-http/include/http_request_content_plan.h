@@ -1,10 +1,13 @@
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <variant>
 
 #include "borrowed_text.h"
@@ -98,6 +101,9 @@ public:
     }
     template <detail::http_temporary_owning_range<std::byte> range_type>
     static http_request_content_plan bytes(range_type&&) = delete;
+    template <typename element_type>
+        requires std::same_as<std::remove_cv_t<element_type>, std::byte>
+    static http_request_content_plan bytes(std::initializer_list<element_type>) = delete;
     // A known zero keeps the send half open until the request is finished; it
     // cannot send content or wait for 100 Continue.
     [[nodiscard]] static constexpr http_request_content_plan streaming(std::optional<http_content_length> length = {}) noexcept {

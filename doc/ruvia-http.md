@@ -2344,6 +2344,8 @@ public:
     [[nodiscard]] static http_request_content_plan bytes(std::span<const std::byte> value) noexcept;
     template </* 临时拥有型 std::byte 范围 */ range_type>
     static http_request_content_plan bytes(range_type&&) = delete;
+    template </* std::byte */ element_type>
+    static http_request_content_plan bytes(std::initializer_list<element_type>) = delete;
     [[nodiscard]] static constexpr http_request_content_plan streaming(std::optional<http_content_length> length = {}) noexcept;
 
     [[nodiscard]] constexpr const http_without_content* without_content() const& noexcept RUVIA_LIFETIMEBOUND;
@@ -2365,7 +2367,7 @@ public:
 | `none()` | 无内容、不发送内容分帧；请求头结束请求流。 |
 | `known_length(length)` | 已知长度、内容在头之后由驱动提交；仅当长度为零时头才结束流。零表示无内容：不要求 OPTIONS `Content-Type`，不能使用 `Expect: 100-continue`；TRACE 省略零值 `Content-Length`。 |
 | `bytes(borrowed_text)` / `bytes(span<const std::byte>)` | 借用内容及其精确长度。`bytes("")` 与 `none()` 不同：它要求显式 `Content-Length: 0`。字节必须存活且不变直到发送完毕。 |
-| `bytes(range_type&&) = delete` | 拒绝临时拥有型字节容器（及 `initializer_list`）；`borrowed_text` 重载同样拒绝临时拥有型字符串。 |
+| `bytes(range_type&&) = delete` / `bytes(std::initializer_list<element_type>) = delete` | 拒绝临时拥有型字节容器和字节初始化列表（包括具名列表）；`borrowed_text` 重载拒绝临时拥有型字符串。 |
 | `streaming(length = {})` | 流式内容，可选预期长度（有值时写出 `Content-Length`，HTTP/1 无值时为 `chunked`）。已知零长度会保持发送半流打开直至请求完成，不能发送内容，也不能等待 `100 Continue`。 |
 | `without_content()` / `known_length_content()` / `streaming_content()` | 当前备选项匹配时返回指向计划内部的指针，否则为 `nullptr`；指针借用计划对象，右值重载删除。 |
 | `http_known_length_request_content::length()` | 声明长度。 |

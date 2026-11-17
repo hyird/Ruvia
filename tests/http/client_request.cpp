@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <new>
@@ -36,6 +37,11 @@ concept content_bytes_binds = requires(value_type&& value) { ruvia::http_request
 static_assert(content_bytes_binds<std::span<const std::byte>> && content_bytes_binds<const std::vector<std::byte>&>);
 static_assert(!content_bytes_binds<std::vector<std::byte>> && !content_bytes_binds<std::array<std::byte, 2>>);
 static_assert(!content_bytes_binds<std::string>);
+static_assert(!content_bytes_binds<std::initializer_list<std::byte>> && !content_bytes_binds<const std::initializer_list<std::byte>&>);
+
+template <typename element_type>
+concept content_bytes_binds_braced = requires(element_type byte) { ruvia::http_request_content_plan::bytes({byte}); };
+static_assert(!content_bytes_binds_braced<std::byte>);
 
 using ruvia::http1_client_request_buffer_too_small;
 using ruvia::http1_client_request_prepare_error;
