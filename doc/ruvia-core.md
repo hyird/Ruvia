@@ -473,7 +473,7 @@ flowchart LR
 | `template <typename T> [[nodiscard]] root_task<T> start(task<T> task_value) const;` | 严格启动 |
 | `template <typename fn_type> [[nodiscard]] event_loop_stop_registration on_stop(fn_type&& fn) const;` | `fn&` 可调用且返回 `task<void>`，`std::decay_t<fn_type>` 可移动构造 |
 
-- **启动准入**：`try_start` 先取有界准入槽位再移动任务；`queue_full` 或 `stopping`（含无效循环）时退回未消费的冷任务，只在分配失败时抛出。
+- **启动准入**：`try_start` 先取有界槽位，再分配完成状态并移动任务；`queue_full` 或 `stopping`（含无效循环）时不分配，原样退回冷任务。
 - **启动执行**：准入后根任务在循环线程的后续轮次经 `async_start` 启动；循环拥有已启动协程直到完成。
 - **严格启动**：`start` 拒绝时销毁冷任务并抛 `event_loop_start_rejected`。
 - **执行器寿命**：执行器借用物理 context，不延长其寿命；停机排空期间仍可供在途操作完成，调用方须在运行时退役前结束原生操作。

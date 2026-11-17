@@ -1164,7 +1164,7 @@ TEST(Ruvia, EventLoopTryStartReturnsRejectedTask) {
     EXPECT_THROW(static_cast<void>(full.value()), std::logic_error);
     auto returned = std::move(full).take_rejected();
     try {
-        static_cast<void>(loop.start(std::move(returned)));
+        static_cast<void>(loop.start(ruvia::test::asio_task_tests::answer()));
         ADD_FAILURE() << "a full queue must reject start()";
     } catch (const ruvia::event_loop_start_rejected& error) {
         EXPECT_EQ(error.status(), ruvia::post_status::queue_full);
@@ -1181,6 +1181,7 @@ TEST(Ruvia, EventLoopTryStartReturnsRejectedTask) {
     EXPECT_TRUE(root.ready());
     EXPECT_EQ(std::move(root).get(), 7);
     EXPECT_FALSE(root.ready());
+    EXPECT_EQ(std::move(loop.start(std::move(returned))).get(), 7);
 
     loops.request_stop();
     loops.join();

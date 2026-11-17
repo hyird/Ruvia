@@ -679,11 +679,16 @@ void event_loop::report_failure(std::exception_ptr failure) const noexcept {
     }
 }
 
-std::shared_ptr<void> event_loop::acquire_root_lease() const {
-    if (!state_) {
-        return {};
+detail::root_task_retirement::root_task_retirement(std::shared_ptr<event_loop_state> state) noexcept {
+    if (state && state->retirement_.try_begin_root()) {
+        state_ = std::move(state);
     }
-    return state_->retirement_.try_acquire(state_);
+}
+
+detail::root_task_retirement::~root_task_retirement() {
+    if (state_) {
+        state_->retirement_.finish();
+    }
 }
 
 bool event_loop::defer_cleanup_task(move_only_function<void()> task_value) const {

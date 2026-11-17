@@ -81,21 +81,13 @@ public:
         }
     }
 
-    [[nodiscard]] std::shared_ptr<void> try_acquire(const std::shared_ptr<event_loop_state>& owner) {
-        {
-            const std::lock_guard lock(mutex_);
-            if (finalized_ || root_admission_closed_ || sealed_) {
-                return {};
-            }
-            ++pending_;
+    [[nodiscard]] bool try_begin_root() noexcept {
+        const std::lock_guard lock(mutex_);
+        if (finalized_ || root_admission_closed_ || sealed_) {
+            return false;
         }
-        try {
-            auto token = std::make_shared<lease_token_type>(owner);
-            return std::shared_ptr<void>(std::move(token), this);
-        } catch (...) {
-            finish();
-            throw;
-        }
+        ++pending_;
+        return true;
     }
 
     void finish() noexcept {
@@ -172,13 +164,6 @@ private:
             finalize();
         }
     }
-
-    struct lease_token_type final {
-        explicit lease_token_type(std::shared_ptr<event_loop_state> owner_value) noexcept :
-            owner_(std::move(owner_value)) {}
-        ~lease_token_type();
-        std::shared_ptr<event_loop_state> owner_;
-    };
 
     mutable std::mutex mutex_;
     std::size_t pending_{0};
@@ -288,9 +273,5 @@ private:
     void schedule_finalize_when_idle() noexcept;
     void defer_finalize_stop(std::shared_ptr<event_loop_state> self) noexcept;
 };
-
-inline event_loop_retirement::lease_token_type::~lease_token_type() {
-    owner_->retirement_.finish();
-}
 
 }  // namespace ruvia::detail

@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -31,6 +32,21 @@ class event_loop;
 namespace detail {
 
 struct event_loop_state;
+
+// One pending root keeps the physical loop alive from admission to retirement.
+class root_task_retirement final {
+public:
+    explicit root_task_retirement(std::shared_ptr<event_loop_state> state) noexcept;
+    root_task_retirement(root_task_retirement&&) noexcept = default;
+    ~root_task_retirement();
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return state_ != nullptr;
+    }
+
+private:
+    std::shared_ptr<event_loop_state> state_;
+};
 
 // Routes an unobserved root-task failure through the loop's own failure sink,
 // borrowed from the live loop state instead of copied into every task. A
@@ -362,10 +378,10 @@ struct root_task_completion_handler final {
 
     executor_type executor_;
     std::shared_ptr<detail::root_task_state<t_type>> completion_;
-    std::shared_ptr<void> retirement_lease_;
+    root_task_retirement retirement_lease_;
     bool delivered_{false};
 
-    root_task_completion_handler(executor_type executor_value, std::shared_ptr<detail::root_task_state<t_type>> state_value, std::shared_ptr<void> lease_value) noexcept :
+    root_task_completion_handler(executor_type executor_value, std::shared_ptr<detail::root_task_state<t_type>> state_value, root_task_retirement lease_value) noexcept :
         executor_(std::move(executor_value)),
         completion_(std::move(state_value)),
         retirement_lease_(std::move(lease_value)) {}
@@ -473,20 +489,22 @@ public:
     // completion owner; abandoning that root_task never destroys a suspended
     // frame, and an abandoned failure is routed to the loop failure sink.
     // Rejected: a full admission queue (queue_full) or a stopping or retired
-    // loop (worker_stopping) returns the unconsumed cold task. Admission is
-    // reserved before the task moves, so a rejection never consumes it. Throws
-    // only for allocation failure.
+    // loop (stopping) returns the unconsumed cold task without allocating.
+    // Allocation for an admitted task may throw.
     template <typename t_type>
         requires detail::asio_task_result<t_type>
     [[nodiscard]] event_loop_start_result<t_type> try_start(task<t_type> task_value) const {
         using result_type = event_loop_start_result<t_type>;
-        auto retirement_lease = acquire_root_lease();
+        detail::root_task_retirement retirement_lease(state_);
         if (!retirement_lease) {
             return detail::delivery_access::reject<result_type>(post_status::stopping, std::move(task_value));
         }
-        auto completion = std::make_shared<detail::root_task_state<t_type>>(worker(), state_);
+        const auto bound_worker = worker();
+        const std::weak_ptr<detail::event_loop_state> loop = state_;
+        std::shared_ptr<detail::root_task_state<t_type>> completion;
         const auto bound_executor = executor();
-        const auto status = worker().post_factory([&]() -> move_only_function<void()> {
+        auto launch_root = [&]() -> move_only_function<void()> {
+            completion = std::make_shared<detail::root_task_state<t_type>>(bound_worker, loop);
             return [bound_executor, retirement_lease = std::move(retirement_lease), launch = detail::root_task_launch_guard<t_type>(std::move(task_value), completion)]() mutable {
                 try {
                     async_start(std::move(*launch.task_), detail::root_task_completion_handler<t_type>(bound_executor, launch.completion_, std::move(retirement_lease)));
@@ -497,7 +515,9 @@ public:
                     failed_completion->completion().complete_failure(std::current_exception());
                 }
             };
-        });
+        };
+        // post_factory calls this synchronously; borrow it to fit inline.
+        const auto status = bound_worker.post_factory(std::ref(launch_root));
         if (status != post_status::accepted) {
             return detail::delivery_access::reject<result_type>(status, std::move(task_value));
         }
@@ -532,7 +552,6 @@ public:
 private:
     explicit event_loop(std::shared_ptr<detail::event_loop_state> state_value) noexcept;
     [[nodiscard]] event_loop_stop_registration register_stop_callback(move_only_function<task<void>()> callback) const;
-    [[nodiscard]] std::shared_ptr<void> acquire_root_lease() const;
     [[nodiscard]] bool defer_cleanup_task(move_only_function<void()> task) const;
 
     std::shared_ptr<detail::event_loop_state> state_;
