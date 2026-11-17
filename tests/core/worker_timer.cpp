@@ -54,6 +54,16 @@ static_assert(can_start_wait_bounds<const ruvia::worker_ref&>);
 static_assert(!can_start_wait_bounds<ruvia::worker_ref&&>);
 static_assert(!can_start_wait_bounds<const ruvia::worker_ref&&>);
 
+template <typename bounds_type>
+concept can_borrow_wait_token = requires(bounds_type&& bounds) {
+    { std::forward<bounds_type>(bounds).token() } -> std::same_as<const ruvia::stop_token&>;
+};
+
+static_assert(can_borrow_wait_token<ruvia::wait_bounds&>);
+static_assert(can_borrow_wait_token<const ruvia::wait_bounds&>);
+static_assert(!can_borrow_wait_token<ruvia::wait_bounds&&>);
+static_assert(!can_borrow_wait_token<const ruvia::wait_bounds&&>);
+
 template <typename worker_type, typename... token_types>
 concept can_sleep_for = requires(worker_type&& worker, token_types&&... tokens) { ruvia::sleep_for(std::forward<worker_type>(worker), std::chrono::milliseconds(1), std::forward<token_types>(tokens)...); };
 

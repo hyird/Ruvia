@@ -146,9 +146,10 @@ public:
     void start(worker_ref&&, const char*) = delete;
     void start(const worker_ref&&, const char*) = delete;
 
-    [[nodiscard]] const stop_token& token() const noexcept {
+    [[nodiscard]] const stop_token& token() const& noexcept {
         return token_;
     }
+    const stop_token& token() const&& = delete;
     [[nodiscard]] bool stop_requested() const noexcept {
         return token_.stop_requested();
     }
