@@ -141,17 +141,17 @@ private:
 // object is not a permanent proof over a mutable response.
 class http_response_stream_head final {
 public:
-    [[nodiscard]] http_response& response() & noexcept {
+    [[nodiscard]] http_response& response() & noexcept RUVIA_LIFETIMEBOUND {
         return response_;
     }
     [[nodiscard]] http_response& response() && = delete;
 
-    [[nodiscard]] const http_response& response() const& noexcept {
+    [[nodiscard]] const http_response& response() const& noexcept RUVIA_LIFETIMEBOUND {
         return response_;
     }
     [[nodiscard]] const http_response& response() const&& = delete;
 
-    [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const& noexcept {
+    [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const& noexcept RUVIA_LIFETIMEBOUND {
         return commit_plan_;
     }
     [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const&& = delete;

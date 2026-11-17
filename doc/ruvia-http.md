@@ -3056,11 +3056,11 @@ public:
 ```cpp
 class http_response_stream_head final {
 public:
-    [[nodiscard]] http_response& response() & noexcept;
+    [[nodiscard]] http_response& response() & noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] http_response& response() && = delete;
-    [[nodiscard]] const http_response& response() const& noexcept;
+    [[nodiscard]] const http_response& response() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const http_response& response() const&& = delete;
-    [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const& noexcept;
+    [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const&& = delete;
 };
 
@@ -6841,16 +6841,16 @@ inline void http1_mark_connection_close(http_response& response, http1_connectio
 
 class prepared_http1_response_stream final {
 public:
-    [[nodiscard]] http_response& response() & noexcept;
+    [[nodiscard]] http_response& response() & noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] http_response& response() && = delete;
 
-    [[nodiscard]] const http_response& response() const& noexcept;
+    [[nodiscard]] const http_response& response() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const http_response& response() const&& = delete;
 
-    [[nodiscard]] const http1_response_head_plan& response_head_plan() const& noexcept;
+    [[nodiscard]] const http1_response_head_plan& response_head_plan() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const http1_response_head_plan& response_head_plan() const&& = delete;
 
-    [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const& noexcept;
+    [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const&& = delete;
 
     [[nodiscard]] http1_request_connection_plan connection_plan() const noexcept;
