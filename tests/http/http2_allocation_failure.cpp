@@ -19,6 +19,7 @@
 #include "http2_connection.h"
 #include "http_range.h"
 #include "http_response.h"
+#include "http_server_sent_events.h"
 
 // Replacement operators belong only to this isolated test executable.
 // The thread-local arm confines each fault to one public operation.
@@ -295,4 +296,24 @@ TEST(Ruvia, multipart_range_slicer_can_retry_after_an_allocation_failure) {
     slicer.write("bcdef", output);
     EXPECT_TRUE(slicer.complete());
     EXPECT_EQ(output, before + "b\r\n--parts\r\nContent-Type: text/plain\r\nContent-Range: bytes 4-5/6\r\n\r\nef\r\n--parts--\r\n");
+}
+
+TEST(Ruvia, sse_parser_releases_large_discarded_field_storage_before_the_next_event) {
+    auto ignored_id = std::string("id: ") + std::string(128 * 1024, 'x');
+    ignored_id.append("\0\n", 2);
+    const auto replaced_type = std::string("event: ") + std::string(128 * 1024, 'x') + "\nevent: small\n";
+
+    for (const std::string_view input : {std::string_view(ignored_id), std::string_view(replaced_type)}) {
+        ruvia::sse_parser parser;
+        const auto before = live_allocations.load();
+        const auto result = parser.parse(input);
+        const auto after = live_allocations.load();
+        EXPECT_EQ(after, before);
+        EXPECT_TRUE(result.holds<ruvia::decode_need_input>());
+        const auto dispatched = parser.parse("data: ok\n\n");
+        const auto* event = dispatched.get_if<ruvia::sse_event>();
+        ASSERT_NE(event, nullptr);
+        EXPECT_EQ(event->data(), "ok");
+        EXPECT_TRUE(event->last_event_id().empty());
+    }
 }

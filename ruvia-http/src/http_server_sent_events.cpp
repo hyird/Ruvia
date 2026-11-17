@@ -178,7 +178,6 @@ void sse_parser::finish() noexcept {
     reset_line();
     http_clear_string_retaining_small(data_);
     http_clear_string_retaining_small(event_type_);
-    http_clear_string_retaining_small(value_);
     state_ = decoder_state::finished;
 }
 
@@ -187,7 +186,6 @@ void sse_parser::reset() noexcept {
     reset_line();
     http_clear_string_retaining_small(data_);
     http_clear_string_retaining_small(event_type_);
-    http_clear_string_retaining_small(value_);
     http_clear_string_retaining_small(last_event_id_buffer_);
     http_clear_string_retaining_small(last_event_id_);
     reconnection_time_.reset();
@@ -300,7 +298,7 @@ void sse_parser::reset_line() noexcept {
     field_ = field_kind::ignored;
     name_size_ = 0;
     name_overflow_ = false;
-    value_.clear();
+    http_clear_string_retaining_small(value_);
     retry_value_ = 0;
     retry_digits_ = false;
     retry_valid_ = true;
@@ -317,7 +315,6 @@ void sse_parser::fail() noexcept {
     reset_line();
     http_clear_string_retaining_small(data_);
     http_clear_string_retaining_small(event_type_);
-    http_clear_string_retaining_small(value_);
     state_ = decoder_state::failed;
 }
 
