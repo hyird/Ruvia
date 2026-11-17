@@ -17,10 +17,11 @@
 #include <variant>
 
 #include "http2_connection.h"
+#include "http_range.h"
 #include "http_response.h"
 
 // Replacement operators belong only to this isolated test executable.
-// The thread-local arm confines each fault to one public submission.
+// The thread-local arm confines each fault to one public operation.
 namespace {
 std::atomic<std::size_t> live_allocations{};
 thread_local bool counting = false;
@@ -265,4 +266,33 @@ TEST(Ruvia, http2_outbound_hpack_allocation_failures_preserve_state_and_reclaim_
     EXPECT_NE(terminal, 0U);
     ::testing::Test::RecordProperty("allocation_failure_sites", std::to_string(baseline.allocations));
     ::testing::Test::RecordProperty("terminal_failure_sites", std::to_string(terminal));
+}
+
+TEST(Ruvia, multipart_range_slicer_can_retry_after_an_allocation_failure) {
+    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,4-5", 6);
+    ruvia::http_byte_range_slicer slicer(ranges, 6, "text/plain", "parts");
+    std::string output;
+    slicer.write("a", output);
+    ASSERT_EQ(output, "--parts\r\nContent-Type: text/plain\r\nContent-Range: bytes 0-1/6\r\n\r\na");
+    output.reserve(output.size() + 1);
+    // The first payload byte fits, but appending the following CRLF must grow.
+    output.resize(output.capacity() - 1, '_');
+    const auto before = output;
+    bool failed = false;
+    {
+        allocation_scope scope(0);
+        try {
+            slicer.write("bcdef", output);
+        } catch (const std::bad_alloc&) {
+            failed = true;
+        }
+    }
+    ASSERT_TRUE(failed);
+    EXPECT_EQ(output, before);
+    ASSERT_EQ(slicer.current_offset(), 1U);
+    EXPECT_FALSE(slicer.complete());
+
+    slicer.write("bcdef", output);
+    EXPECT_TRUE(slicer.complete());
+    EXPECT_EQ(output, before + "b\r\n--parts\r\nContent-Type: text/plain\r\nContent-Range: bytes 4-5/6\r\n\r\nef\r\n--parts--\r\n");
 }

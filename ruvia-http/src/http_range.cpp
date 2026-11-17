@@ -422,42 +422,46 @@ void http_byte_range_slicer::write(std::uint64_t chunk_offset, std::string_view 
         chunk_copy.assign(chunk);
         chunk = chunk_copy;
     }
-    current_offset_ = chunk_end;
-
-    while (range_index_ < ranges_.size()) {
-        const auto range = ranges_[range_index_];
-        const std::uint64_t next_needed = range.offset_ + range_progress_;
-        if (chunk_end <= next_needed) {
-            break;
-        }
-        if (range_progress_ == 0 && multipart()) {
-            emit_part_header(range_index_, output);
-        }
-        const std::size_t slice_start = static_cast<std::size_t>(next_needed - chunk_offset);
-        const std::uint64_t remaining_in_range = range.length_ - range_progress_;
-        const std::uint64_t available_in_chunk = chunk.size() - slice_start;
-        const auto copy_bytes = static_cast<std::size_t>((std::min)(remaining_in_range, available_in_chunk));
-        output.append(chunk.data() + slice_start, copy_bytes);
-        range_progress_ += copy_bytes;
-        if (range_progress_ == range.length_) {
+    const auto output_size = output.size();
+    auto index = range_index_;
+    auto progress = range_progress_;
+    try {
+        while (index < ranges_.size()) {
+            const auto range = ranges_[index];
+            const std::uint64_t next_needed = range.offset_ + progress;
+            if (chunk_end <= next_needed) {
+                break;
+            }
+            if (progress == 0 && multipart()) {
+                emit_part_header(index, output);
+            }
+            const auto slice_start = static_cast<std::size_t>(next_needed - chunk_offset);
+            const auto copy_bytes = static_cast<std::size_t>((std::min<std::uint64_t>)(range.length_ - progress, chunk.size() - slice_start));
+            output.append(chunk.data() + slice_start, copy_bytes);
+            progress += copy_bytes;
+            if (progress != range.length_) {
+                break;
+            }
             if (multipart()) {
                 output.append("\r\n");
             }
-            ++range_index_;
-            range_progress_ = 0;
-            if (range_index_ == ranges_.size()) {
-                if (multipart()) {
-                    output.append("--");
-                    output.append(boundary_);
-                    output.append("--\r\n");
-                }
-                complete_ = true;
-                break;
-            }
-        } else {
-            break;
+            ++index;
+            progress = 0;
         }
+        if (index == ranges_.size() && multipart()) {
+            output.append("--");
+            output.append(boundary_);
+            output.append("--\r\n");
+        }
+    } catch (...) {
+        // All writes append; shrinking restores the original bytes without allocation.
+        output.erase(output_size);
+        throw;
     }
+    current_offset_ = chunk_end;
+    range_index_ = index;
+    range_progress_ = progress;
+    complete_ = index == ranges_.size();
 }
 
 void http_byte_range_slicer::finish(std::string&) {
