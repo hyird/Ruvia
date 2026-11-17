@@ -7,10 +7,12 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
 #include "content_decoding_fixture.h"
+#include "decode_step.h"
 #include "http_cache.h"
 #include "http_content_codec.h"
 #include "http_content_coding.h"
@@ -91,6 +93,13 @@ struct codec_allocation_probe final {
         return std::nullopt;
     }
 }
+
+static_assert(std::is_constructible_v<ruvia::decode_output, std::string_view>);
+static_assert(std::is_constructible_v<ruvia::decode_output, const std::string&>);
+static_assert(std::is_constructible_v<ruvia::decode_output, const char (&)[4]>);
+static_assert(!std::is_constructible_v<ruvia::decode_output, std::string&&>);
+static_assert(!std::is_constructible_v<ruvia::decode_output, const std::string&&>);
+static_assert(!std::is_constructible_v<ruvia::decode_output, std::initializer_list<char>>);
 
 template <typename input_type>
 concept content_decoder_accepts_input = requires(ruvia::http_content_decoder& decoder, input_type&& input, std::span<char> scratch) {

@@ -956,7 +956,7 @@ public:
 | --- | --- |
 | `decode_need_input` | 本步已消费能用的字节，需要更多输入。 |
 | `decode_complete` | 处理器完成了消息，本步不携带其他负载。 |
-| `decode_output` | 解码出的字节；`bytes()` 借用产出它的解码器所指明的存储（其输入或调用方的 scratch），有效期以该解码器的契约为准。 |
+| `decode_output` | 解码出的字节；`bytes()` 借用产出它的解码器所指明的存储（其输入或调用方的 scratch），有效期以该解码器的契约为准。构造时拒绝临时拥有型字符串和字符初始化列表。 |
 | `decode_failure<error_type>` | 数据错误，携带报告它的族的错误枚举，由 `error()` 读取。 |
 
 #### 4.8.3 `template <typename... alternative_types> class decode_step`

@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -41,6 +42,11 @@ class decode_output final {
 public:
     explicit constexpr decode_output(std::string_view bytes) noexcept :
         bytes_(bytes) {}
+    template <detail::http_temporary_owning_char_string text_type>
+    decode_output(text_type&&) = delete;
+    template <typename element_type>
+        requires std::same_as<std::remove_cv_t<element_type>, char>
+    decode_output(std::initializer_list<element_type>) = delete;
 
     [[nodiscard]] constexpr std::string_view bytes() const noexcept {
         return bytes_;
