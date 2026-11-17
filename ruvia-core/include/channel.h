@@ -449,18 +449,10 @@ private:
     }
 
     void on_end(wait_status status) noexcept {
-        std::coroutine_handle<> continuation;
-        {
-            auto lock = state_->lock_state();
-            if (!state_->send_waiters_.remove(*this)) {
-                return;
-            }
-            if (!completion_.complete({send_status(status), nullptr})) {
-                return;
-            }
-            continuation = completion_.continuation();
+        auto lock = state_->lock_state();
+        if (state_->send_waiters_.remove(*this)) {
+            complete_locked({send_status(status), nullptr});
         }
-        continuation.resume();
     }
 
     // Unregistration waits for a running callback, so this operation and its

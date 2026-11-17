@@ -264,19 +264,12 @@ private:
     }
 
     void on_end(wait_status status) noexcept {
-        std::coroutine_handle<> continuation;
-        {
-            auto& owner_value = state();
-            auto state_lock = owner_value.lock_state();
-            if (!owner_value.wait_slot().detach(this)) {
-                return;
-            }
-            if (!complete_status(status)) {
-                return;
-            }
-            continuation = completion_.continuation();
+        auto& owner = state();
+        auto lock = owner.lock_state();
+        auto& slot = owner.wait_slot();
+        if (slot.holds(this)) {
+            slot.complete(status);
         }
-        continuation.resume();
     }
 
     // The callback borrows the awaiter's state_, which outlives the

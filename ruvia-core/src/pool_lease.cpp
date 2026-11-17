@@ -67,15 +67,6 @@ public:
             }
         }
 
-        void expire(pool_lease_acquire& waiter, wait_status status) noexcept {
-            if (!waiters_.remove(waiter)) {
-                return;
-            }
-            if (auto continuation = waiter.resolve(acquire_result_type::with_status(status))) {
-                continuation.resume();
-            }
-        }
-
         // Commit closure or shutdown for the entire current queue and resume
         // every waiter in a later worker turn, as release() does: closure runs
         // inside the owner's own teardown, which must finish before any waiter
@@ -267,7 +258,11 @@ std::coroutine_handle<> pool_lease_acquire::resolve(wait_result<std::size_t> res
 }
 
 void pool_lease_acquire::on_end(wait_status status) noexcept {
-    owner_->waiter_state_->queue_.expire(*this, status);
+    if (queued()) {
+        if (auto continuation = resolve(wait_result<std::size_t>::with_status(status))) {
+            owner_->worker_.defer_resume(continuation);
+        }
+    }
 }
 
 bool pool_lease_acquire::await_ready() {

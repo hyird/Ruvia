@@ -913,6 +913,59 @@ TEST(Ruvia, TimerSelfReschedulingPreservesOtherExpirations) {
     EXPECT_TRUE(self_rescheduling_due_timer_preserves_other_expirations());
 }
 
+namespace ruvia::test {
+
+task<void> verify_wait_timeouts_resume_after_timer_turn(const worker_ref& worker) {
+    auto [sender, receiver] = make_channel<int>(worker, {.capacity_ = 1});
+    pool_lease_scheduler pool(1, worker);
+    auto held = co_await pool.acquire();
+    if (!sender.send(1).accepted() || !held.has_value()) {
+        ADD_FAILURE() << "could not fill the channel and lease pool";
+        co_return;
+    }
+    auto [completion, one_shot] = make_one_shot<int>(worker);
+
+    bool marker_ran = false;
+    worker_timer_registration marker;
+    const auto deadline = deadline_after(std::chrono::milliseconds(100));
+    const operation_options options{.timeout_ = operation_timeout(deadline)};
+    // This timer is first at the shared deadline. Inline resumption would
+    // observe its posted marker before the marker had a chance to run.
+    EXPECT_TRUE(marker.schedule(worker, deadline, [&](worker_timer_outcome outcome) {
+        EXPECT_EQ(outcome, worker_timer_outcome::expired);
+        EXPECT_TRUE(worker.defer_completion([&marker_ran] {
+            marker_ran = true;
+        }));
+    }));
+    const auto send = [&]() -> task<void> {
+        const auto result = co_await sender.send_wait(2, options);
+        EXPECT_EQ(result.status(), channel_send_status::timed_out);
+        EXPECT_TRUE(marker_ran) << "channel send";
+    };
+    const auto acquire = [&]() -> task<void> {
+        const auto result = co_await pool.acquire(options);
+        EXPECT_EQ(result.status(), wait_status::timed_out);
+        EXPECT_TRUE(marker_ran) << "pool acquire";
+    };
+    task_scope scope(worker);
+    scope.spawn(send());
+    scope.spawn(acquire());
+    const auto result = co_await one_shot.wait(options);
+    EXPECT_EQ(result.status(), wait_status::timed_out);
+    EXPECT_TRUE(marker_ran) << "one-shot receive";
+    co_await scope.join();
+    pool.release(held.value());
+}
+
+}  // namespace ruvia::test
+
+TEST(Ruvia, WaitTimeoutsResumeAfterTimerTurn) {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
+    const auto worker = attachment.loop().worker();
+    ruvia::test::run_worker_tasks(attachment, ruvia::test::verify_wait_timeouts_resume_after_timer_turn(worker));
+}
+
 TEST(Ruvia, WorkerTimerLifecycle) {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
