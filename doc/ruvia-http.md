@@ -10297,7 +10297,7 @@ std::optional<http_udp_datagram_view> decode_http_udp_datagram(input_type&&) noe
 - `parse_http_capsule_protocol(value)`：按 RFC 9297 将 `Capsule-Protocol` 解析为 Structured Field Boolean Item（允许参数，前后只允许 SP）；返回 `true` / `false`，非 Boolean 或语法错误返回 `std::nullopt`。
 - `http_datagram_capsule_type`：DATAGRAM Capsule 类型值 `0`。
 - `http_udp_datagram_view`：`context_id_` 为 RFC 9298 Context ID，`payload_` 为其后的字节。
-- `decode_http_udp_datagram(input)`：从 HTTP Datagram 负载读出 Context ID 变长整数；变长整数不完整返回 `std::nullopt`。`payload_` 借用 `input`；临时拥有型容器重载删除。RFC 9298：Context ID 0 承载 UDP 负载，未知 Context ID 由调用方丢弃。
+- `decode_http_udp_datagram(input)`：从 HTTP Datagram 负载读出 Context ID 变长整数；变长整数不完整返回 `std::nullopt`。`payload_` 借用 `input`。RFC 9298：Context ID 0 承载 UDP 负载，未知 Context ID 由调用方丢弃。
 - `encode_http_udp_datagram_prefix(output, context_id = 0)`：把 Context ID 编码到 `output` 开头，返回写入字节数或错误。
 - `encode_http_capsule_header(output, type, length)`：写出 Capsule 头（类型与长度两个 QUIC 变长整数），返回写入字节数；任一值越界返回 `value_out_of_range`，空间不足返回 `output_too_small`，失败时不写入。
 
@@ -10432,11 +10432,13 @@ public:
 
 `http_datagram_session` 表示一个已接受的 HTTP Datagram 通道：在请求协商后构造（客户端可在响应前乐观发送），不拥有内存或传输；默认收发均打开。`prepare_datagram` / `receive_datagram` 是唯一收发入口，返回的负载借用调用方输入。
 
+**借用约束**：`decode_http_udp_datagram`、`prepare_datagram` 和 `receive_datagram` 拒绝临时拥有型字符容器及字符初始化列表；空 `{}` 仍表示空 span。
+
 | 成员 | 语义 |
 | --- | --- |
 | `close_send()` / `close_receive()` | 关闭发送 / 接收方向（不可重新打开） |
-| `prepare_datagram(mode, payload)` | 发送已关闭返回 `send_closed`；超限返回 `payload_too_large`；否则返回写计划。临时拥有型容器重载删除，避免计划借用已销毁的负载 |
-| `receive_datagram(mode, input)` | `input` 是完整 DATAGRAM Capsule 值（不含类型与长度）。返回 `input` 内的负载；空 `optional` 表示静默丢弃（接收已关闭，或 `connect_udp` 遇到未知 Context ID）。只有 `connect_udp` 报错：Context ID 畸形为 `malformed`，负载超过 65527 为 `payload_too_large`。临时拥有型容器重载删除 |
+| `prepare_datagram(mode, payload)` | 发送已关闭返回 `send_closed`；超限返回 `payload_too_large`；否则返回写计划 |
+| `receive_datagram(mode, input)` | `input` 是完整 DATAGRAM Capsule 值（不含类型与长度）。返回 `input` 内的负载；空 `optional` 表示静默丢弃（接收已关闭，或 `connect_udp` 遇到未知 Context ID）。只有 `connect_udp` 报错：Context ID 畸形为 `malformed`，负载超过 65527 为 `payload_too_large` |
 
 ```cpp
 ruvia::http_datagram_session session;

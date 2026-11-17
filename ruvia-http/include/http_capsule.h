@@ -4,6 +4,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <span>
@@ -33,6 +34,9 @@ struct http_udp_datagram_view final {
 [[nodiscard]] std::optional<http_udp_datagram_view> decode_http_udp_datagram(std::span<const char> input) noexcept;
 template <detail::http_temporary_owning_range<char> input_type>
 std::optional<http_udp_datagram_view> decode_http_udp_datagram(input_type&&) noexcept = delete;
+template <typename element_type>
+    requires std::same_as<std::remove_cv_t<element_type>, char>
+std::optional<http_udp_datagram_view> decode_http_udp_datagram(std::initializer_list<element_type>) noexcept = delete;
 [[nodiscard]] std::variant<std::size_t, http_capsule_codec_error> encode_http_udp_datagram_prefix(std::span<char> output, std::uint64_t context_id = 0) noexcept;
 
 struct http_capsule_event final {
@@ -180,6 +184,9 @@ public:
     [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode mode, std::span<const char> payload) const noexcept;
     template <detail::http_temporary_owning_range<char> payload_type>
     std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode, payload_type&&) const noexcept = delete;
+    template <typename element_type>
+        requires std::same_as<std::remove_cv_t<element_type>, char>
+    std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode, std::initializer_list<element_type>) const noexcept = delete;
     // Capsule input is the complete DATAGRAM capsule value, excluding type/length.
     // Returns the payload within `input`. Empty optional means silently dropped:
     // the receive side is closed, or `connect_udp` saw an unknown Context ID.
@@ -187,6 +194,9 @@ public:
     [[nodiscard]] std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode mode, std::span<const char> input) const noexcept;
     template <detail::http_temporary_owning_range<char> input_type>
     std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode, input_type&&) const noexcept = delete;
+    template <typename element_type>
+        requires std::same_as<std::remove_cv_t<element_type>, char>
+    std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode, std::initializer_list<element_type>) const noexcept = delete;
 
 private:
     [[nodiscard]] static std::variant<http_datagram_write_plan, http_datagram_error> plan_datagram_capsule(std::span<const char> payload, std::string_view context_prefix) noexcept;

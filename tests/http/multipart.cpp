@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -1326,6 +1327,28 @@ TEST(Ruvia, http_capsule_protocol_byte_parameters_accept_optional_padding_and_va
     const auto padded = ruvia::parse_http_capsule_protocol(" ?1  ");
     EXPECT_TRUE(padded.has_value() && *padded);
 }
+
+namespace {
+
+template <typename input_type>
+concept decodes_udp_datagram = requires(input_type&& input) { ruvia::decode_http_udp_datagram(std::forward<input_type>(input)); };
+
+template <typename input_type>
+concept prepares_datagram = requires(const ruvia::http_datagram_session& session, input_type&& input) {
+    session.prepare_datagram(ruvia::http_datagram_mode::raw, std::forward<input_type>(input));
+};
+
+template <typename input_type>
+concept receives_datagram = requires(const ruvia::http_datagram_session& session, input_type&& input) {
+    session.receive_datagram(ruvia::http_datagram_mode::raw, std::forward<input_type>(input));
+};
+
+using datagram_list_ref = const std::initializer_list<char>&;
+static_assert(!decodes_udp_datagram<datagram_list_ref>);
+static_assert(!prepares_datagram<datagram_list_ref>);
+static_assert(!receives_datagram<datagram_list_ref>);
+
+}  // namespace
 
 TEST(Ruvia, http_udp_datagram_context_prefix_roundtrips) {
     std::array<char, 8> prefix{};
