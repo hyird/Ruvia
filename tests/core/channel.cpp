@@ -725,7 +725,9 @@ ruvia::task<void> verify_send_wait_survives_payload_move_failure(ruvia::worker_r
     EXPECT_THROW(static_cast<void>(decltype(operation)(std::move(operation))), std::runtime_error);
     throwing_move::throw_on_move_.store(false, std::memory_order_relaxed);
 
-    const auto sent = co_await std::move(operation);
+    auto transferred = std::move(operation);
+    EXPECT_THROW(static_cast<void>(operation.await_ready()), std::logic_error);
+    const auto sent = co_await std::move(transferred);
     EXPECT_EQ(sent.status(), ruvia::channel_send_status::sent);
     if (sent.accepted()) {
         const auto received = co_await receiver.receive({.timeout_ = std::chrono::seconds(1)});

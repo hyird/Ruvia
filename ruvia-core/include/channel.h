@@ -292,17 +292,26 @@ void channel_state<t_type>::worker_stopping() noexcept {
 // after admission cancellation remains cooperative and does not undo delivery.
 template <typename t_type>
 class channel_send_operation final : public detail::waiter_link<channel_send_operation<t_type>> {
+    enum class phase : std::uint8_t {
+        cold,
+        started,
+        moved_from,
+    };
+
 public:
     channel_send_operation(const channel_send_operation&) = delete;
     channel_send_operation& operator=(const channel_send_operation&) = delete;
     channel_send_operation(channel_send_operation&& other) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
-        value_(std::move(other.value_)),
+        value_([&other]() -> t_type&& {
+            if (other.phase_ == phase::started) {
+                std::terminate();
+            }
+            return std::move(other.value_);
+        }()),
         bounds_(std::move(other.bounds_)) {
-        if (other.started_) {
-            std::terminate();
-        }
         // Keep the source bound to its channel if moving the payload throws.
         state_ = std::move(other.state_);
+        phase_ = std::exchange(other.phase_, phase::moved_from);
     }
     channel_send_operation& operator=(channel_send_operation&&) = delete;
     void operator&() const = delete;
@@ -316,10 +325,10 @@ public:
     }
 
     [[nodiscard]] bool await_ready() {
-        if (started_ || !value_.has_value()) {
+        if (phase_ != phase::cold) {
             throw std::logic_error("channel send cannot be awaited");
         }
-        started_ = true;
+        phase_ = phase::started;
         if (!state_) {
             complete_ready({channel_send_status::closed, nullptr});
             return true;
@@ -380,12 +389,12 @@ public:
         using result_type = channel_send_result<t_type>;
         const auto outcome = completion_.take_value();
         if (outcome.status_ != channel_send_status::sent) {
-            return detail::delivery_access::reject<result_type>(outcome.status_, std::move(*value_));
+            return detail::delivery_access::reject<result_type>(outcome.status_, std::move(value_));
         }
         auto& state = *state_;
         typename state_type::node_guard guard(state, outcome.slot_);
         try {
-            outcome.slot_->value_.emplace(std::move(*value_));
+            outcome.slot_->value_.emplace(std::move(value_));
         } catch (...) {
             auto lock = state.lock_state();
             state.release_reserved(outcome.slot_);
@@ -466,11 +475,11 @@ private:
     }
 
     std::shared_ptr<state_type> state_;
-    std::optional<t_type> value_;
+    t_type value_;
     // The awaiting worker, which may differ from the channel's.
     worker_ref worker_;
     wait_bounds bounds_;
-    bool started_{false};
+    phase phase_{phase::cold};
     detail::suspend_race_state<outcome_type> completion_;
     // Last so callback unregistration completes before anything it touches
     // begins destruction.
