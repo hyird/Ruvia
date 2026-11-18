@@ -142,7 +142,7 @@ public:
     http1_chunked_body_decoder& operator=(http1_chunked_body_decoder&&) noexcept;
 
     // At most max_body_bytes of chunk payload are published per call.
-    [[nodiscard]] http1_chunk_decode_result decode(std::string_view available, std::size_t max_body_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] http1_chunk_decode_result decode(std::string_view available RUVIA_LIFETIMEBOUND, std::size_t max_body_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
     http1_chunk_decode_result decode(std::string_view, std::size_t = 0) && = delete;
     template <detail::http_temporary_owning_char_string input_type>
     http1_chunk_decode_result decode(input_type&&, std::size_t = 0) & = delete;

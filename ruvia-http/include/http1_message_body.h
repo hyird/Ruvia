@@ -111,11 +111,11 @@ public:
     // incomplete_body failure rather than a request for more input.
     // If allocating trailers throws, retry with the same input. No wire bytes
     // are reported as consumed until a step returns a result.
-    [[nodiscard]] http1_body_decode_result decode(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] http1_body_decode_result decode(std::string_view available RUVIA_LIFETIMEBOUND, std::span<char> scratch RUVIA_LIFETIMEBOUND, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
     http1_body_decode_result decode(std::string_view, std::span<char>, std::size_t = 0) && = delete;
     // EOF is monotonic. Supply any remaining buffered bytes; later calls may
     // drain decoder output but can never request more network input.
-    [[nodiscard]] http1_body_decode_result finish_input(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] http1_body_decode_result finish_input(std::string_view available RUVIA_LIFETIMEBOUND, std::span<char> scratch RUVIA_LIFETIMEBOUND, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
     http1_body_decode_result finish_input(std::string_view, std::span<char>, std::size_t = 0) && = delete;
     template <detail::http_temporary_owning_char_string input_type>
     http1_body_decode_result decode(input_type&&, std::span<char>, std::size_t = 0) & = delete;

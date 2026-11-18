@@ -6458,9 +6458,9 @@ public:
     http1_body_decoder(http1_body_decoder&&) = delete;
     http1_body_decoder& operator=(http1_body_decoder&&) = delete;
 
-    [[nodiscard]] http1_body_decode_result decode(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] http1_body_decode_result decode(std::string_view available RUVIA_LIFETIMEBOUND, std::span<char> scratch RUVIA_LIFETIMEBOUND, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
     http1_body_decode_result decode(std::string_view, std::span<char>, std::size_t = 0) && = delete;
-    [[nodiscard]] http1_body_decode_result finish_input(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] http1_body_decode_result finish_input(std::string_view available RUVIA_LIFETIMEBOUND, std::span<char> scratch RUVIA_LIFETIMEBOUND, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
     http1_body_decode_result finish_input(std::string_view, std::span<char>, std::size_t = 0) && = delete;
     template </* 临时拥有型 std::basic_string<char, ...> 右值 */ input_type>
     http1_body_decode_result decode(input_type&&, std::span<char>, std::size_t = 0) & = delete;
@@ -6494,7 +6494,7 @@ public:
 | `state()` | `active` / `finished` / `failed`。 |
 | `reset()` | 以构造时的分帧与配置开始另一正文。重建已丢弃的传输解码器时若分配失败，原正文的状态和进度保持不变。已有编解码器无法重启时抛 `http_content_codec_error`，此后解码器不可用。 |
 
-`decode()` / `finish_input()` 的左值入口均带 `RUVIA_LIFETIMEBOUND`，结果不因此拥有正文或 Trailer。正文仍零拷贝借用 `available` / `scratch`；Trailer 借用解码器内部字段存储，必须在下一次 `decode()`、`finish_input()`、`reset()` 或解码器析构前消费。显式传入 `std::string_view` 不能延长输入 owner 寿命；必须同时满足输入 / scratch 与解码器各自的借用区间。
+`decode()` / `finish_input()` 的结果不拥有正文或 Trailer。正文零拷贝借用 `available` / `scratch`；Trailer 借用解码器内部字段存储，必须在下一次 `decode()`、`finish_input()`、`reset()` 或解码器析构前消费。入口对解码器和两个缓冲区均标注 `RUVIA_LIFETIMEBOUND`；显式传入视图不会延长底层存储的寿命。
 
 Trailer 分配失败时，用同一输入重试，不推进调用方的读取游标。解码器记住本步已处理但尚未报告的前缀，重试成功后将其计入 `consumed_bytes()`，不重复解码或扣减配额。
 
@@ -6606,7 +6606,7 @@ public:
     http1_chunked_body_decoder(http1_chunked_body_decoder&&) noexcept;
     http1_chunked_body_decoder& operator=(http1_chunked_body_decoder&&) noexcept;
 
-    [[nodiscard]] http1_chunk_decode_result decode(std::string_view available, std::size_t max_body_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] http1_chunk_decode_result decode(std::string_view available RUVIA_LIFETIMEBOUND, std::size_t max_body_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
     http1_chunk_decode_result decode(std::string_view, std::size_t = 0) && = delete;
     template </* 临时拥有型 std::basic_string<char, ...> 右值 */ input_type>
     http1_chunk_decode_result decode(input_type&&, std::size_t = 0) & = delete;
