@@ -366,7 +366,7 @@ using redis_orm_arguments_type = std::vector<std::string>;
 [[nodiscard]] const redis_script& redis_orm_write_script();
 [[nodiscard]] const redis_script& redis_orm_delete_script();
 
-// Both argument lists start with EVALSHA and the script digest.
+// Both argument lists start with the key count; the executor supplies the script prefix.
 [[nodiscard]] redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_prefix, std::string_view id, std::string_view mode, redis_write_options options, std::size_t extra_arguments);
 [[nodiscard]] redis_orm_arguments_type redis_orm_delete_arguments(std::string_view storage_prefix, std::string_view id);
 [[nodiscard]] redis_write_result redis_orm_exec_result(redis_value&& reply);

@@ -30,7 +30,7 @@ task<redis_value> execute_redis_script(redis_pool& pool, redis_script script, st
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     const operation_deadline deadline(options.timeout_);
     {
-        auto reply = co_await pool.execute_borrowed(redis_command_args_view{args}, options, deadline);
+        auto reply = co_await pool.execute_borrowed(redis_command_args_view{{"EVALSHA", script.sha1()}, args}, options, deadline);
         if (reply.kind() != redis_value::kind_type::error || (reply.error() != "NOSCRIPT" && !reply.error().starts_with("NOSCRIPT "))) {
             co_return reply;
         }
@@ -39,9 +39,7 @@ task<redis_value> execute_redis_script(redis_pool& pool, redis_script script, st
     }
     // The server's script cache was flushed or never loaded this script:
     // EVAL runs the body and caches it under the same digest for later calls.
-    args[0].assign("EVAL");
-    args[1].assign(script.body());
-    co_return co_await pool.execute_owned(std::move(args), std::move(options), std::nullopt, nullptr, deadline);
+    co_return co_await pool.execute_borrowed(redis_command_args_view{{"EVAL", script.body()}, args}, std::move(options), deadline);
 }
 
 // Classifies a raw pooled command before it is encoded. Connection-stateful
@@ -389,12 +387,10 @@ task<redis_value> redis_executor::script_owned(redis_script script, std::vector<
 task<redis_value> redis_executor::eval_cached(const redis_script& script, std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
     registration_.require_active();
     std::vector<std::string> command;
-    if (keys.size() > command.max_size() - 3 || args.size() > command.max_size() - 3 - keys.size()) {
+    if (keys.size() > command.max_size() - 1 || args.size() > command.max_size() - 1 - keys.size()) {
         throw std::length_error("Redis script argument count is not representable");
     }
-    command.reserve(3 + keys.size() + args.size());
-    command.emplace_back("EVALSHA");
-    command.emplace_back(script.sha1());
+    command.reserve(1 + keys.size() + args.size());
     std::array<char, max_decimal_size> key_count{};
     command.emplace_back(format_decimal(key_count, keys.size()));
     for (const auto key : keys) {

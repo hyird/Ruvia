@@ -40,6 +40,7 @@ void serialize_resp_command(std::string& output, std::string_view first, std::sp
 void append_resp_command(std::string& output, std::span<const std::string_view> args);
 void append_resp_command(std::string& output, std::span<const std::string> args);
 void append_resp_command(std::string& output, std::string_view first, std::span<const std::string_view> rest);
+void append_resp_command(std::string& output, std::span<const std::string_view> prefix, std::span<const std::string> rest);
 // Throws std::invalid_argument when args is empty, or std::length_error when
 // the complete RESP command size cannot be represented by std::size_t.
 [[nodiscard]] std::size_t resp_command_serialized_size(std::span<const std::string_view> args);

@@ -76,12 +76,6 @@ end
 return redis.call('DEL', KEYS[1])
 )lua";
 
-void append_redis_orm_script_call(redis_orm_arguments_type& args, const redis_script& script) {
-    args.emplace_back("EVALSHA");
-    args.emplace_back(script.sha1());
-    args.emplace_back("1");
-}
-
 }  // namespace
 
 const redis_script& redis_orm_write_script() {
@@ -99,8 +93,8 @@ redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_pref
         throw std::invalid_argument("entity TTL must be positive, at most 2^53-1 milliseconds, and cannot combine with persist");
     }
     redis_orm_arguments_type args;
-    args.reserve(7 + extra_arguments);
-    append_redis_orm_script_call(args, redis_orm_write_script());
+    args.reserve(5 + extra_arguments);
+    args.emplace_back("1");
     args.push_back(redis_entity_key(storage_prefix, id));
     args.emplace_back(mode);
     args.emplace_back(options.ttl_ ? "expire" : (options.persist_ ? "persist" : "keep"));
@@ -114,8 +108,8 @@ redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_pref
 
 redis_orm_arguments_type redis_orm_delete_arguments(std::string_view storage_prefix, std::string_view id) {
     redis_orm_arguments_type args;
-    args.reserve(4);
-    append_redis_orm_script_call(args, redis_orm_delete_script());
+    args.reserve(2);
+    args.emplace_back("1");
     args.push_back(redis_entity_key(storage_prefix, id));
     return args;
 }

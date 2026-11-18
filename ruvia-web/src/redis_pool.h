@@ -205,6 +205,7 @@ private:
 };
 
 struct redis_command_args_view final {
+    std::array<std::string_view, 2> prefix_;
     std::span<const std::string> args_;
 };
 
@@ -229,8 +230,8 @@ public:
     // `io_metrics` is the request's counter block, or null outside a request.
     task<redis_value> execute_owned(redis_owned_command command, operation_options options = {}, std::optional<timeout_duration> reply_timeout = std::nullopt, request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
     task<redis_value> execute_owned(std::vector<std::string> args, operation_options options = {}, std::optional<timeout_duration> reply_timeout = std::nullopt, request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
-    // The caller keeps `args` alive until the operation completes. `deadline`
-    // is copied, so repeated commands share the operation's absolute bound.
+    // The caller keeps the prefix and remaining arguments alive until completion.
+    // `deadline` is copied, so repeated commands share the operation's absolute bound.
     task<redis_value> execute_borrowed(redis_command_args_view args, operation_options options, operation_deadline deadline);
     task<std::vector<redis_value>> execute_pipeline(std::vector<redis_owned_command> commands, operation_options options, request_io_metrics* io_metrics, bool wrap_transaction = false);
 
@@ -457,9 +458,8 @@ private:
     stop_source preparation_stop_;
 };
 
-// Runs an EVALSHA argument list for `script`; a NOSCRIPT reply loads the body
-// through EVAL once within the same operation. `io_metrics` is the request's
-// counter block, or null outside a request.
+// `args` owns the arguments starting at <numkeys>. The command and script
+// prefix are borrowed during encoding. `io_metrics` is null outside a request.
 [[nodiscard]] task<redis_value> execute_redis_script(redis_pool& pool, redis_script script, std::vector<std::string> args, request_io_metrics* io_metrics, operation_options options);
 
 }  // namespace ruvia::detail

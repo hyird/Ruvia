@@ -86,7 +86,7 @@ void encode_and_release_redis_source(std::string& write_buffer, std::vector<std:
 }
 
 void encode_and_release_redis_source(std::string& write_buffer, redis_command_args_view source, bool) {
-    append_resp_command(write_buffer, source.args_);
+    append_resp_command(write_buffer, source.prefix_, source.args_);
 }
 
 }  // namespace

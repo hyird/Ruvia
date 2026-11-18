@@ -398,7 +398,7 @@ TEST(Ruvia, redis_repository_insert_owns_input_through_async_handoff) {
 }
 
 TEST(Ruvia, redis_cached_script_owns_source_keys_and_arguments_before_starting) {
-    const std::string source = "return {KEYS[1], ARGV[1]}";
+    const std::string source = "--" + std::string(32 * 1024, 's') + "\nreturn {KEYS[1], ARGV[1]}";
     const std::string key(160, 'k');
     const std::string argument("a\0b", 3);
     for (const bool cached : {true, false}) {
