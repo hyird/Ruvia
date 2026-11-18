@@ -3004,7 +3004,7 @@ public:
     [[nodiscard]] bool empty() const noexcept;
 };
 
-[[nodiscard]] http_response_trailer_section validate_http_response_trailers(std::span<const http_header_view> trailers);
+[[nodiscard]] http_response_trailer_section validate_http_response_trailers(std::span<const http_header_view> trailers RUVIA_LIFETIMEBOUND);
 template </* 未指定实现类型：拥有元素的临时范围 */ headers_type>
 http_response_trailer_section validate_http_response_trailers(headers_type&&) = delete;
 http_response_trailer_section validate_http_response_trailers(std::initializer_list<http_header_view>) = delete;

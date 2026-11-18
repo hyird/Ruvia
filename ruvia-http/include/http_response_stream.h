@@ -31,7 +31,7 @@ public:
     }
 
 private:
-    friend http_response_trailer_section validate_http_response_trailers(std::span<const http_header_view>);
+    friend http_response_trailer_section validate_http_response_trailers(std::span<const http_header_view> trailers RUVIA_LIFETIMEBOUND);
     explicit http_response_trailer_section(std::span<const http_header_view> fields_value) noexcept :
         fields_(fields_value) {}
 
@@ -40,7 +40,7 @@ private:
 
 // Validate a complete response trailer section and return a borrowed proof for
 // synchronous protocol submission. The input storage must outlive its use.
-[[nodiscard]] http_response_trailer_section validate_http_response_trailers(std::span<const http_header_view> trailers);
+[[nodiscard]] http_response_trailer_section validate_http_response_trailers(std::span<const http_header_view> trailers RUVIA_LIFETIMEBOUND);
 
 template <detail::http_temporary_owning_range<http_header_view> headers_type>
 http_response_trailer_section validate_http_response_trailers(headers_type&&) = delete;
