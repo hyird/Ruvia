@@ -2042,6 +2042,16 @@ TEST(Ruvia, validation_diagnostic_text_preserves_complete_utf8_within_limit) {
     EXPECT_EQ(validator.issues()[0].message(), std::string_view(message).substr(0, ruvia::max_validation_text_bytes - 1));
 }
 
+TEST(Ruvia, validation_diagnostics_stop_at_malformed_utf8) {
+    ruvia::validator validator;
+    validator.add("字段\xFFsuffix", "invalid\xED\xA0\x80", "message\xE2\x82");
+    ASSERT_EQ(validator.issues().size(), 1U);
+    const auto& issue = validator.issues()[0];
+    EXPECT_EQ(issue.field(), "字段");
+    EXPECT_EQ(issue.code(), "invalid");
+    EXPECT_EQ(issue.message(), "message");
+}
+
 namespace validator_ownership_test {
 
 void add_owned_issues(ruvia::validator& value) {

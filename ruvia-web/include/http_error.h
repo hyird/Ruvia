@@ -1,6 +1,5 @@
 #pragma once
 
-#include <algorithm>
 #include <cstddef>
 #include <exception>
 #include <span>
@@ -23,15 +22,6 @@ inline constexpr std::size_t max_validation_text_bytes = 1024;
 
 namespace detail {
 class json_parse_budget;
-
-[[nodiscard]] inline std::string_view bounded_validation_text(std::string_view value) noexcept {
-    auto count = std::min(value.size(), max_validation_text_bytes);
-    // Keep a UTF-8 prefix complete when the last code point crosses the bound.
-    while (count < value.size() && count > 0 && (static_cast<unsigned char>(value[count]) & 0xc0U) == 0x80U) {
-        --count;
-    }
-    return value.substr(0, count);
-}
 }  // namespace detail
 
 struct validation_issue_options final {
@@ -68,10 +58,7 @@ private:
 
     void swap(validation_issue& other) noexcept;
 
-    explicit validation_issue(validation_issue_options options) :
-        field_(detail::bounded_validation_text(options.field_.view())),
-        code_(detail::bounded_validation_text(options.code_.view())),
-        message_(detail::bounded_validation_text(options.message_.view())) {}
+    explicit validation_issue(validation_issue_options options);
 
     std::string field_;
     std::string code_;

@@ -2046,7 +2046,7 @@ app.on_error({.prefix_ = "/api", .handler_ = &api_error});
 
 | 符号 | 说明 |
 | --- | --- |
-| `inline constexpr std::size_t max_validation_text_bytes = 1024` | `validation_issue` 每个文本字段的最大字节数；超出按 UTF-8 完整码点截断 |
+| `inline constexpr std::size_t max_validation_text_bytes = 1024` | `validation_issue` 每个文本字段的最大字节数 |
 | `using borrowed_validation_issues = borrowed_span<validation_issue>` | 借用的 issues 范围；拒绝临时拥有型范围（[`borrowed_text.h`](ruvia-http.md#api-borrowed-text-h)） |
 | `std::string_view default_error_code(http_status_code status) noexcept` | 状态到机器码：400 `bad_request`、401 `unauthorized`、403 `forbidden`、404 `not_found`、405 `method_not_allowed`、409 `conflict`、412 `precondition_failed`、413 `content_too_large`、416 `range_not_satisfiable`、417 `expectation_failed`、422 `unprocessable_content`、429 `too_many_requests`、431 `request_header_fields_too_large`、500 `internal_error`、501 `not_implemented`、503 `service_unavailable`、505 `http_version_not_supported`；其余 5xx 为 `internal_error`，其余为 `bad_request` |
 | `std::string exception_text(const std::exception_ptr& exception)` | 任意异常的 UTF-8 描述（用于记录 `application::run` 重抛的失败）：`std::exception` 取 `what()`；Windows 上 system/Asio 类别 `std::system_error` 的 ANSI 系统消息替换为 UTF-8；非标准异常为固定描述 `"non-standard exception"`；空指针为空串 |
@@ -2061,7 +2061,7 @@ app.on_error({.prefix_ = "/api", .handler_ = &api_error});
 | `code_` | `borrowed_text` | `{}` | 机器码 |
 | `message_` | `borrowed_text` | `{}` | 可读消息 |
 
-`validation_issue`：一条校验诊断，独立拥有三段文本（各自截断至 `max_validation_text_bytes`）；只能由 [`validator`](#api-model-h) 构造。
+`validation_issue`：一条校验诊断，独立拥有三段文本；每段仅保留不超过 `max_validation_text_bytes` 的最长合法 UTF-8 前缀，遇到非法或不完整的码点即截断。公开构造入口为 [`validator`](#api-model-h)。
 
 | 声明 | 说明 |
 | --- | --- |

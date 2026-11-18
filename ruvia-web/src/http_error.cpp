@@ -17,6 +17,7 @@
 #include "http_status.h"
 #include "json_codec.h"
 #include "task.h"
+#include "utf8.h"
 
 namespace ruvia {
 
@@ -95,6 +96,11 @@ namespace {
 }
 
 }  // namespace
+
+validation_issue::validation_issue(validation_issue_options options) :
+    field_(utf8_prefix(options.field_, max_validation_text_bytes)),
+    code_(utf8_prefix(options.code_, max_validation_text_bytes)),
+    message_(utf8_prefix(options.message_, max_validation_text_bytes)) {}
 
 void validation_issue::swap(validation_issue& other) noexcept {
     field_.swap(other.field_);
