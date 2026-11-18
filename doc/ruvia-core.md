@@ -769,7 +769,7 @@ flowchart LR
 | `stop_registration(const stop_registration&) = delete;`、`stop_registration& operator=(const stop_registration&) = delete;` | 节点地址固定 |
 | `stop_registration(stop_registration&&) = delete;`、`stop_registration& operator=(stop_registration&&) = delete;` | 同上 |
 | `void reset() noexcept;` | 注销；回调正在其他线程运行时等待其返回，回调注销自身时不等待；与进行中的注册竞争时标记撤销 |
-| `[[nodiscard]] bool registered() const noexcept;` | 已链入且尚未触发或注销 |
+| `[[nodiscard]] bool registered() const noexcept;` | 回调仍在等待触发。回调被摘链待执行时即返回 `false`；这不表示正在执行的回调已经退出。 |
 
 **`class stop_token final`**：可复制的单一取消状态引用。
 

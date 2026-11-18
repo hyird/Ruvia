@@ -188,13 +188,24 @@ TEST(Ruvia, stop_token_registration_runs_once) {
     ruvia::stop_source source;
     std::atomic_int calls{0};
     ruvia::stop_registration registration;
-    source.token().register_callback(registration, [&calls] {
+    source.token().register_callback(registration, [&] {
+        EXPECT_FALSE(registration.registered());
         calls.fetch_add(1, std::memory_order_relaxed);
     });
     EXPECT_TRUE(registration.registered());
     source.request_stop();
+    EXPECT_FALSE(registration.registered());
     source.request_stop();
     EXPECT_EQ(calls.load(std::memory_order_relaxed), 1);
+
+    ruvia::stop_source next_source;
+    next_source.token().register_callback(registration, [&calls] {
+        calls.fetch_add(1, std::memory_order_relaxed);
+    });
+    EXPECT_TRUE(registration.registered());
+    next_source.request_stop();
+    EXPECT_FALSE(registration.registered());
+    EXPECT_EQ(calls.load(std::memory_order_relaxed), 2);
 }
 
 TEST(Ruvia, stop_token_registration_can_be_reset) {

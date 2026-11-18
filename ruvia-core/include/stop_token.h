@@ -30,6 +30,7 @@ enum class stop_registration_phase : unsigned char {
     idle,
     registering,
     registered,
+    claimed,
     reset_pending,
     resetting,
 };
@@ -115,7 +116,7 @@ private:
     void destroy() noexcept;
     // Returns false without linking if stop was requested, the source retired,
     // or registration was reset before linking.
-    [[nodiscard]] bool link(stop_callback_node& node, std::atomic<stop_registration_phase>& phase) noexcept;
+    [[nodiscard]] bool link(stop_callback_node& node) noexcept;
     void unlink(stop_callback_node& node) noexcept;
 
     std::atomic<std::uint8_t> flags_{source_flag};
@@ -152,8 +153,9 @@ inline stop_state_ref::~stop_state_ref() {
 // return before destroying the stored callback.
 class stop_callback_node final {
 public:
-    stop_callback_node(const stop_state_ref& state_value, move_only_function<void()>&& callback_value) noexcept :
+    stop_callback_node(const stop_state_ref& state_value, std::atomic<stop_registration_phase>& phase, move_only_function<void()>&& callback_value) noexcept :
         state_(state_value),
+        phase_(phase),
         callback_(std::move(callback_value)) {}
     ~stop_callback_node() {
         if (linked_) {
@@ -194,6 +196,7 @@ private:
     friend class stop_state;
 
     stop_state_ref state_;
+    std::atomic<stop_registration_phase>& phase_;
     move_only_function<void()> callback_;
     stop_callback_node* previous_{nullptr};
     stop_callback_node* next_{nullptr};
@@ -235,6 +238,7 @@ public:
         }
     }
 
+    // Reports whether the callback is still queued, not whether it is running.
     [[nodiscard]] bool registered() const noexcept {
         return phase_.load(std::memory_order_acquire) == registration_phase_type::registered;
     }
@@ -261,8 +265,8 @@ private:
         if (!phase_.compare_exchange_strong(expected, registration_phase_type::registering, std::memory_order_acq_rel, std::memory_order_acquire)) {
             std::terminate();
         }
-        callback_.emplace(state, std::move(callback_value));
-        if (state->link(*callback_, phase_)) {
+        callback_.emplace(state, phase_, std::move(callback_value));
+        if (state->link(*callback_)) {
             return;
         }
         auto callback = callback_->take();

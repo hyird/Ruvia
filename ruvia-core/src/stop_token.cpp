@@ -35,6 +35,10 @@ void stop_state::request_stop() noexcept {
         }
         node->next_ = nullptr;
         running_ = node;
+        // Publish the claim before moving or invoking user code. A concurrent
+        // reset that already owns teardown keeps its resetting phase.
+        auto expected = stop_registration_phase::registered;
+        (void)node->phase_.compare_exchange_strong(expected, stop_registration_phase::claimed, std::memory_order_acq_rel, std::memory_order_acquire);
         lock.unlock();
         // The callback may destroy the node, and an unlink waiting on another
         // thread frees it once running_ moves on: the node is not touched again.
@@ -48,7 +52,7 @@ void stop_state::request_stop() noexcept {
     }
 }
 
-bool stop_state::link(stop_callback_node& node, std::atomic<stop_registration_phase>& phase) noexcept {
+bool stop_state::link(stop_callback_node& node) noexcept {
     std::lock_guard lock(mutex_);
     // Constructing the callback can request stop or retire its source.
     if (flags_.load(std::memory_order_relaxed) != source_flag) {
@@ -56,7 +60,7 @@ bool stop_state::link(stop_callback_node& node, std::atomic<stop_registration_ph
     }
     node.linked_ = true;
     auto expected = stop_registration_phase::registering;
-    if (!phase.compare_exchange_strong(expected, stop_registration_phase::registered, std::memory_order_acq_rel, std::memory_order_acquire)) {
+    if (!node.phase_.compare_exchange_strong(expected, stop_registration_phase::registered, std::memory_order_acq_rel, std::memory_order_acquire)) {
         node.linked_ = false;
         if (expected != stop_registration_phase::reset_pending) {
             std::terminate();
