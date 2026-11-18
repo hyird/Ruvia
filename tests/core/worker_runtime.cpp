@@ -17,6 +17,10 @@
 #include <thread>
 #include <vector>
 
+#ifndef _WIN32
+#include <pthread.h>
+#endif
+
 #include <asio/steady_timer.hpp>
 
 #include "event_loop.h"
@@ -670,6 +674,43 @@ TEST(RuviaDeathTest, worker_group_rejects_join_from_stop_notification) {
     };
     ASSERT_EXIT(verify(), ::testing::ExitedWithCode(EXIT_SUCCESS), "");
 }
+
+#ifndef _WIN32
+TEST(RuviaDeathTest, worker_group_stops_many_members_on_a_bounded_stack) {
+    const auto verify = [] {
+        std::vector<std::unique_ptr<ruvia::worker_runtime>> members;
+        ruvia::worker_group group;
+        for (int index = 0; index != 512; ++index) {
+            members.push_back(std::make_unique<ruvia::worker_runtime>(ruvia::worker_runtime_options{.queue_capacity_ = 2}));
+            group.add(*members.back());
+        }
+
+        // Run stop on a bounded stack to catch dispatch nested once per member.
+        pthread_attr_t attributes;
+        if (::pthread_attr_init(&attributes) != 0) {
+            std::_Exit(EXIT_FAILURE);
+        }
+        pthread_t thread;
+        const auto stop_group = [](void* target) -> void* {
+            static_cast<ruvia::worker_group*>(target)->request_stop();
+            return nullptr;
+        };
+        if (::pthread_attr_setstacksize(&attributes, 64 * 1024) != 0 || ::pthread_create(&thread, &attributes, stop_group, &group) != 0) {
+            std::_Exit(EXIT_FAILURE);
+        }
+        ::pthread_attr_destroy(&attributes);
+        if (::pthread_join(thread, nullptr) != 0) {
+            std::_Exit(EXIT_FAILURE);
+        }
+        for (const auto& member : members) {
+            EXPECT_FALSE(member->worker().accepting());
+        }
+        EXPECT_EQ(group.join(), nullptr);
+        std::_Exit(::testing::Test::HasFailure() ? EXIT_FAILURE : EXIT_SUCCESS);
+    };
+    ASSERT_EXIT(verify(), ::testing::ExitedWithCode(EXIT_SUCCESS), "");
+}
+#endif
 
 TEST(Ruvia, worker_group_stop_before_start_launches_nothing) {
     ruvia::worker_runtime member;

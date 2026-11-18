@@ -664,7 +664,7 @@ flowchart LR
 | `void launch();` | 启动全部成员但不等待就绪；与 `start()` 互斥且只能一次；线程创建失败时停止并 join 组后重抛 |
 | `[[nodiscard]] bool start();` | 阶段一：启动并等待全部就绪；组先被停止时返回 `false`；重抛首个成员失败；成员在就绪前自行停止抛 `std::runtime_error` |
 | `[[nodiscard]] bool serve();` | 阶段二，须在 `start()` 成功后；结果规则同 `start()`；只能一次 |
-| `void request_stop() noexcept;` | 同时关闭全部成员准入 |
+| `void request_stop() noexcept;` | 返回前关闭全部成员的准入；组发出的停止不经成员回传递归派发 |
 | `[[nodiscard]] bool stop_requested() const noexcept;` | 组是否已请求停止 |
 | `[[nodiscard]] std::exception_ptr join(std::exception_ptr primary = nullptr) noexcept;` | 在组内 Worker 上、派发任一成员的停机通知时，或在当前 join 线程重入，均返回 `std::logic_error`，不请求停止；否则停止并 join 全部成员，返回 `primary`（若给定）或注册顺序中首个成员失败 |
 

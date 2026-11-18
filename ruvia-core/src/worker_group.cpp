@@ -129,9 +129,11 @@ void worker_group::member_failed(worker_runtime& member, std::exception_ptr fail
 void worker_group::member_stopping() noexcept {
     {
         const std::lock_guard lock(mutex_);
-        if (!stopping_) {
-            member_stopped_ = true;
+        // A member already reached by a group stop must not fan it out again.
+        if (stopping_) {
+            return;
         }
+        member_stopped_ = true;
     }
     request_stop();
 }
