@@ -463,6 +463,26 @@ struct blocking_pool::impl_type final {
         }
     }
 
+    template <typename prepare_type, typename settle_type>
+    auto post(prepare_type prepare, settle_type settle);
+
+    void release_reservation(node_type& node) noexcept {
+        bool notify = false;
+        {
+            std::lock_guard lock(mutex_);
+            --reserved_;
+            if (stopping_) {
+                notify = reserved_ == 0;
+            } else {
+                node.next_ = free_head_;
+                free_head_ = &node;
+            }
+        }
+        if (notify) {
+            condition_.notify_all();
+        }
+    }
+
     std::size_t thread_count_;
     std::size_t queue_capacity_;
     mutable std::mutex mutex_;
@@ -519,70 +539,88 @@ blocking_pool_stats blocking_pool::stats() const noexcept {
     };
 }
 
+template <typename prepare_type, typename settle_type>
+auto blocking_pool::impl_type::post(prepare_type prepare, settle_type settle) {
+    node_type* node = nullptr;
+    std::optional<post_status> refused;
+    {
+        std::lock_guard lock(mutex_);
+        if (stopping_) {
+            ++discarded_;
+            refused = post_status::stopping;
+        } else if (queued_ + reserved_ >= queue_capacity_) {
+            ++rejected_;
+            refused = post_status::queue_full;
+        } else {
+            node = free_head_;
+            free_head_ = node->next_;
+            ++reserved_;
+        }
+    }
+    if (refused) {
+        return settle(*refused, nullptr);
+    }
+    try {
+        const reserved_post_scope reservation(*this);
+        prepare(node->task_);
+    } catch (...) {
+        // Preparation can throw before it stores a callable in the node.
+        release_reservation(*node);
+        throw;
+    }
+    bool stopped = false;
+    {
+        std::lock_guard lock(mutex_);
+        stopped = stopping_;
+        if (stopped) {
+            ++discarded_;
+        } else {
+            --reserved_;
+            if (!queue_.try_push(node)) {
+                std::terminate();
+            }
+            ++queued_;
+        }
+    }
+    if (stopped) {
+        // Keep the reservation visible to join() until the rejected callable
+        // has been returned or destroyed, without holding the queue mutex.
+        auto rejected = [&] {
+            const reserved_post_scope reservation(*this);
+            return settle(post_status::stopping, &node->task_);
+        }();
+        release_reservation(*node);
+        return rejected;
+    }
+    condition_.notify_one();
+    return settle(post_status::accepted, nullptr);
+}
+
 post_outcome<> blocking_pool::post(move_only_function<void()> task_value) {
     if (!task_value) {
         throw std::invalid_argument("blocking pool requires a callable task");
     }
-    const auto owner_ptr = impl_;
-    auto& owner = *owner_ptr;
-    impl_type::node_type* node = nullptr;
-    std::optional<post_status> refused;
-    {
-        std::lock_guard lock(owner.mutex_);
-        if (owner.stopping_) {
-            ++owner.discarded_;
-            refused = post_status::stopping;
-        } else if (owner.queued_ + owner.reserved_ >= owner.queue_capacity_) {
-            ++owner.rejected_;
-            refused = post_status::queue_full;
-        } else {
-            node = owner.free_head_;
-            owner.free_head_ = node->next_;
-            ++owner.reserved_;
+    const auto owner = impl_;
+    return owner->post([&task_value](move_only_function<void()>& slot) noexcept {
+        slot = std::move(task_value);
+    }, [&task_value](post_status status, move_only_function<void()>* rejected) {
+        if (status == post_status::accepted) {
+            return detail::delivery_access::accept<post_outcome<>>();
         }
-    }
-    // The refused task moves back to the caller outside the lock: its move
-    // constructor may reenter the pool.
-    if (refused) {
-        return detail::delivery_access::reject<post_outcome<>>(*refused, std::move(task_value));
-    }
-    {
-        const impl_type::reserved_post_scope reservation(owner);
-        node->task_ = std::move(task_value);
-    }
-    bool stopped = false;
-    {
-        std::lock_guard lock(owner.mutex_);
-        stopped = owner.stopping_;
-        if (stopped) {
-            ++owner.discarded_;
-        } else {
-            --owner.reserved_;
-            if (!owner.queue_.try_push(node)) {
-                std::terminate();
-            }
-            ++owner.queued_;
+        return detail::delivery_access::reject<post_outcome<>>(status, std::move(rejected == nullptr ? task_value : *rejected));
+    });
+}
+
+post_status detail::blocking_pool_access::post_factory(blocking_pool& pool, move_only_function<move_only_function<void()>()> factory) {
+    const auto owner = pool.impl_;
+    return owner->post([&factory](move_only_function<void()>& slot) {
+        slot = factory();
+    }, [](post_status status, move_only_function<void()>* rejected) noexcept {
+        if (rejected != nullptr) {
+            *rejected = nullptr;
         }
-    }
-    if (stopped) {
-        // Stopping never recycles nodes, so the reserved node stays exclusive
-        // until its callable has been handed back.
-        auto rejected = [&] {
-            const impl_type::reserved_post_scope reservation(owner);
-            return detail::delivery_access::reject<post_outcome<>>(post_status::stopping, std::move(node->task_));
-        }();
-        bool notify = false;
-        {
-            std::lock_guard lock(owner.mutex_);
-            notify = (--owner.reserved_ == 0);
-        }
-        if (notify) {
-            owner.condition_.notify_all();
-        }
-        return rejected;
-    }
-    owner.condition_.notify_one();
-    return detail::delivery_access::accept<post_outcome<>>();
+        return status;
+    });
 }
 
 void blocking_pool::request_stop() noexcept {

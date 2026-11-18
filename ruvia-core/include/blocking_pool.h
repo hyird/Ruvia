@@ -48,6 +48,10 @@
 
 namespace ruvia {
 
+namespace detail {
+struct blocking_pool_access;
+}
+
 struct blocking_pool_options final {
     // 0 selects half of std::thread::hardware_concurrency(), clamped to 2..8.
     // Blocking work benefits from some oversubscription on small machines, but
@@ -117,6 +121,8 @@ public:
     void join();
 
 private:
+    friend struct detail::blocking_pool_access;
+
     struct impl_type;
     std::shared_ptr<impl_type> impl_;
 };
@@ -343,6 +349,10 @@ private:
 
 namespace detail {
 
+struct blocking_pool_access final {
+    [[nodiscard]] static post_status post_factory(blocking_pool& pool, move_only_function<move_only_function<void()>()> factory);
+};
+
 // A completed payload always holds a value or an error.
 template <typename t_type>
 [[nodiscard]] blocking_result<t_type> completed_blocking_result(blocking_payload<t_type>&& payload_value) {
@@ -421,23 +431,23 @@ template <typename fn_type>
         co_return outcome_type::with_status(blocking_status::worker_stopping);
     }
     auto& [completion, receiver] = *channel;
-    const auto posted = pool->post([guard = detail::blocking_completion_guard<result_type>(std::move(completion)), call = std::move(fn)]() mutable {
-        payload payload_value;
-        try {
-            if constexpr (std::is_void_v<result_type>) {
-                call();
-            } else {
-                payload_value.value_.emplace(call());
+    const auto posted = detail::blocking_pool_access::post_factory(*pool, [&] {
+        return move_only_function<void()>([guard = detail::blocking_completion_guard<result_type>(std::move(completion)), call = std::move(fn)]() mutable {
+            payload payload_value;
+            try {
+                if constexpr (std::is_void_v<result_type>) {
+                    call();
+                } else {
+                    payload_value.value_.emplace(call());
+                }
+            } catch (...) {
+                payload_value.error_ = std::current_exception();
             }
-        } catch (...) {
-            payload_value.error_ = std::current_exception();
-        }
-        guard.answer(std::move(payload_value));
+            guard.answer(std::move(payload_value));
+        });
     });
-    if (!posted.accepted()) {
-        // The returned closure is destroyed here; its guard answers the
-        // one-shot with pool_stopped, which nobody awaits any more.
-        co_return outcome_type::with_status(posted.status() == post_status::queue_full ? blocking_status::queue_full : blocking_status::pool_stopped);
+    if (posted != post_status::accepted) {
+        co_return outcome_type::with_status(posted == post_status::queue_full ? blocking_status::queue_full : blocking_status::pool_stopped);
     }
 
     try {

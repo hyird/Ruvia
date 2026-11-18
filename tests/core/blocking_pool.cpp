@@ -462,15 +462,40 @@ task<void> exercise_stopped_pool(blocking_pool& pool, worker_ref worker_value, t
 }
 
 task<void> exercise_queue_full(blocking_pool& pool, worker_ref worker_value, thread_gate& gate_value, bool& success) {
-    // One thread is occupied and the single queue slot is taken, so this one
-    // has nowhere to go.
+    struct reject_move final {
+        const bool& armed_;
+
+        explicit reject_move(const bool& armed) noexcept :
+            armed_(armed) {}
+        reject_move(reject_move&& other) :
+            armed_(other.armed_) {
+            if (armed_) {
+                throw std::logic_error("moving the offload callable failed");
+            }
+        }
+        int operator()() const noexcept {
+            return 1;
+        }
+    };
+    bool armed = false;
+    auto throwing = ruvia::run_blocking(worker_value, reject_move(armed));
+    auto full = ruvia::run_blocking(worker_value, reject_move(armed));
+    armed = true;
+
+    // A failed move into the admitted slot must leave room for a later post.
+    EXPECT_THROW(static_cast<void>(co_await std::move(throwing)), std::logic_error);
     const auto queued = pool.post([] {});
-    auto result_value = co_await ruvia::run_blocking(worker_value, [] {
-        return 1;
-    });
+    // The only thread is occupied and the single queue slot is now taken.
+    bool refused = false;
+    try {
+        auto result = co_await std::move(full);
+        refused = result.status() == blocking_status::queue_full;
+    } catch (const std::exception& error) {
+        ADD_FAILURE() << error.what();
+    }
     gate_value.release_.release();
     const auto stats = pool.stats();
-    success = queued == post_status::accepted && result_value.status() == blocking_status::queue_full && stats.rejected_ == 1 && stats.discarded_ == 0;
+    success = queued == post_status::accepted && refused && stats.rejected_ == 1 && stats.discarded_ == 0;
 }
 
 task<void> exercise_worker_stopping(ruvia::event_loop_attachment& attachment, worker_ref worker_value, thread_gate& gate_value, bool& success) {

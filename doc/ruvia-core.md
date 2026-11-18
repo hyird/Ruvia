@@ -1438,7 +1438,7 @@ flowchart LR
 - **约束**：`fn&` 无参可调用；结果为 `void` 或可移动构造（`static_assert`）。
 - **启动线程**：返回的任务必须在 `worker_value` 上 `co_await`，那是恢复协程与触碰结果的唯一线程；否则在投递 `fn` 前抛 `std::logic_error`。
 - **预判**：依次判定，命中即返回且不投递 `fn`：无池 → `unavailable`；令牌已停止 → `cancelled`；截止期已过 → `timed_out`；Worker 不再接收 → `worker_stopping`。
-- **投递**：池拒绝时 `queue_full` 映射为 `queue_full`，`stopping` 映射为 `pool_stopped`；被退回的闭包由协程销毁，其守卫以 `pool_stopped` 应答无人等待的单次交付。
+- **投递**：池先预留槽位，再把 `fn` 移入队列闭包。准入时队列已满或池已停止，不构造闭包，分别返回 `queue_full` 或 `pool_stopped`。预留后构造失败会释放槽位并传播异常；构造期间池停止则不发布闭包，返回 `pool_stopped`。
 - **上限只约束等待**：`timeout_` / `stop_token_` 只结束调用方的等待；阻塞调用无法中断，池线程一直占用到 `fn` 返回。相对上限自任务启动计时，绝对截止期可与调用方其他阶段共享。
 - **结果**：从不为拒绝抛出，状态说明发生了什么；`fn` 的异常保存在结果中；结果在接收 Worker 上移动失败时以 `with_error` 返回。用 `std::move(result).take_value()` 把拒绝转为异常并重抛 `fn` 自身的异常。
 - **池来源**：使用 `worker_ref::blocking_pool()`；事件循环的池选择见 [`event_loop_pool_options`](#api-event-loop-h)，底层运行时见 [`worker_runtime_options`](#api-worker-runtime-h)。
