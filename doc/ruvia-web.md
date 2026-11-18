@@ -1744,6 +1744,7 @@ auto sub = co_await c.dispatch({.method_ = "GET", .target_ = "/api/internal/prof
 | `http_status_code status() const noexcept` | 响应状态 |
 | `std::string_view body() const& noexcept` | 正文视图，借用本 `dispatch_response` |
 | `std::string_view body() const&& = delete` | 拒绝从临时 `dispatch_response` 借用正文视图（视图会在完整表达式结束时悬空） |
+| `std::string take_body_bytes() && noexcept` | 移交正文存储，不复制堆上字节；源正文为空，状态与首部不变。可将结果直接交给 `c.body()` 或 `c.text()`。 |
 | `std::span<const http_header> headers() const& noexcept` | 全部响应头，借用本对象 |
 | `std::span<const http_header> headers() const&& = delete` | 拒绝从临时对象借用头列表 |
 | `std::optional<std::string_view> header(std::string_view name) const& noexcept` | 按名称取头，借用本对象 |
@@ -8282,7 +8283,7 @@ auto res = app.request(
 | `test_app& trusted_proxies(std::nullptr_t)` | 清空可信代理 |
 | `dispatch_response request(const test_request& request)` | 经生产路由表分发一次请求并返回独立拥有的响应；请求级失败变为服务器会发送的同一错误响应；处理器在一个真实 worker 上执行，含每 worker 状态语义 |
 
-**返回值 `dispatch_response`**：拥有状态、响应头与正文，提供 `status()`、`body()`、`headers()`、`header(name)`；完整签名与契约见 [`"context.h"`](#api-context-h)。
+**返回值 `dispatch_response`**：拥有状态、响应头与正文；借用与转移契约见 [`"context.h"`](#api-context-h)。
 
 <a id="web-crypto"></a>
 <a id="api-crypto-h"></a>

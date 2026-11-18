@@ -206,6 +206,10 @@ public:
         return body_;
     }
     std::string_view body() const&& = delete;
+    // Transfers the owned bytes and leaves the body empty; metadata is unchanged.
+    [[nodiscard]] std::string take_body_bytes() && noexcept {
+        return std::exchange(body_, {});
+    }
     [[nodiscard]] std::span<const http_header> headers() const& noexcept RUVIA_LIFETIMEBOUND {
         return headers_;
     }

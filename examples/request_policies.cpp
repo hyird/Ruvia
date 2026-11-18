@@ -11,6 +11,7 @@
 #include <exception>
 #include <iostream>
 #include <string>
+#include <utility>
 
 #include "app.h"
 #include "context.h"
@@ -73,9 +74,7 @@ private:
             .target_ = "/policies/label",
             .headers_ = headers,
         });
-        // dispatch_response owns pooled bytes; text() copies them into this
-        // response before the child result is destroyed on the same worker.
-        co_return c.text(response.body(), {.status_ = response.status()});
+        co_return c.text(std::move(response).take_body_bytes(), {.status_ = response.status()});
     }
 
     ruvia::task<ruvia::http_response> csrf(ruvia::context& c) {

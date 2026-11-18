@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "app.h"
 #include "context.h"
@@ -301,9 +302,16 @@ private:
         });
         method.assign("PUT");
         target.assign("/mutated");
-        const auto child = co_await std::move(pending);
+        auto child = co_await std::move(pending);
         const std::array headers{ruvia::http_header_view{"X-Test-Relayed", "1"}};
-        co_return c.text(child.body(), {.status_ = child.status(), .headers_ = headers});
+        const auto address = reinterpret_cast<std::uintptr_t>(child.body().data());
+        const auto size = child.body().size();
+        auto response = c.text(std::move(child).take_body_bytes(), {.status_ = child.status(), .headers_ = headers});
+        EXPECT_TRUE(child.body().empty());
+        if (size >= 4096) {
+            EXPECT_EQ(reinterpret_cast<std::uintptr_t>(response.body_bytes().data()), address);
+        }
+        co_return response;
     }
 
     // A representation-specific answer whose metadata describes only its own body.
@@ -1306,6 +1314,9 @@ TEST(Ruvia, testing_facade_subrequest_answers_like_a_network_request) {
     EXPECT_TRUE(head.body().empty());
     const auto get = app.request(ruvia::test_request::get("/t/subrequest?target=/t/hello"));
     EXPECT_EQ(get.body(), std::string_view("hello"));
+    const auto large = app.request(ruvia::test_request::get("/t/subrequest?target=/t/large"));
+    EXPECT_EQ(large.status(), ruvia::http_status::ok);
+    EXPECT_EQ(large.body(), std::string(1024 * 1024, 'x'));
 
     // The same dispatch entry preserves route parameters and error handling
     // when reached through the public subrequest API.

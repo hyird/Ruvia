@@ -577,8 +577,8 @@ public:
         co_return context.text(std::string(context.conn().local().address().to_string()) + ":" + std::to_string(context.conn().local().port()) + ":" + std::to_string(state ? *state : 0));
     }
     ruvia::task<ruvia::http_response> virtual_request(ruvia::context& context) {
-        const auto response = co_await context.dispatch({.method_ = "GET", .target_ = "/lifecycle/info"});
-        co_return context.text(response.body());
+        auto response = co_await context.dispatch({.method_ = "GET", .target_ = "/lifecycle/info"});
+        co_return context.text(std::move(response).take_body_bytes());
     }
     ruvia::task<ruvia::http_response> abort(ruvia::context& context) {
         context.abort_connection();
