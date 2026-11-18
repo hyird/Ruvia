@@ -100,6 +100,19 @@ template <typename target_type, typename rep_type, typename period_type>
     } else {
         // Discard this alternative for integral conversions so MSVC /WX does
         // not reject an emitted unreachable fallback.
+        if constexpr (factor::num > 1) {
+            // If the numerator multiplication could overflow long double,
+            // even dividing by the largest ratio denominator cannot bring
+            // the result back into the integral tick range.
+            constexpr auto max_input = (std::numeric_limits<long double>::max)() / static_cast<long double>(factor::num);
+            const auto input = static_cast<long double>(value.count());
+            if (input >= max_input) {
+                return target_type::max();
+            }
+            if (input <= -max_input) {
+                return target_type::min();
+            }
+        }
         using wide_type = std::chrono::duration<long double, typename target_type::period>;
         const auto count = std::chrono::duration_cast<wide_type>(value).count();
         if (count != count) {
