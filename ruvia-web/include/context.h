@@ -433,13 +433,14 @@ public:
 
     // Buffered views borrow context storage; collect_body() returns an owning
     // copy of the same decoded bytes. Read the media type with header("Content-Type").
-    // `operation` bounds the wait for body bytes in each of these reads, and
-    // in json_if(), form_if() and multipart(): a timeout or stop ends only
-    // that call with std::system_error (timed_out or operation_canceled),
-    // keeps what arrived, and a later call resumes; a stop requested before
-    // the call starts throws operation_canceled. A non-positive timeout throws
-    // std::invalid_argument. Server body timeouts still apply. This view is a
-    // copyable handle: the operations borrow the context, not the view.
+    // `operation` bounds the read and content decoding (or the discard), even
+    // when bytes are already cached. json_if(), form_if() and multipart() use
+    // that same read bound before synchronous parsing. A timeout or stop ends
+    // only that call with std::system_error (timed_out or operation_canceled);
+    // received bytes remain available for retry. Non-positive relative timeouts
+    // throw std::invalid_argument.
+    // Server body timeouts still apply. This copyable handle's operations
+    // borrow the context, not the handle.
     [[nodiscard]] task<std::string_view> body_text(operation_options operation = {}) const;
     [[nodiscard]] task<std::span<const std::byte>> body_bytes(operation_options operation = {}) const;
     [[nodiscard]] task<std::string> collect_body(operation_options operation = {}) const;

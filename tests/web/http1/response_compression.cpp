@@ -175,8 +175,27 @@ class response_compression_routes final {
         co_return resp;
     }
     ruvia::task<ruvia::http_response> echo_decoded(ruvia::context& context_value) {
+        const ruvia::operation_options expired{.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::now())};
+        try {
+            (void)co_await context_value.req().body_text(expired);
+            ADD_FAILURE() << "expired initial read returned the request body";
+        } catch (const std::system_error& error) {
+            EXPECT_EQ(error.code(), std::errc::timed_out);
+        }
         const auto bytes = co_await context_value.req().body_bytes();
         const auto body = co_await context_value.req().body_text();
+        try {
+            (void)co_await context_value.req().collect_body(expired);
+            ADD_FAILURE() << "expired collection returned cached bytes";
+        } catch (const std::system_error& error) {
+            EXPECT_EQ(error.code(), std::errc::timed_out);
+        }
+        try {
+            co_await context_value.req().discard_body(expired);
+            ADD_FAILURE() << "expired discard succeeded";
+        } catch (const std::system_error& error) {
+            EXPECT_EQ(error.code(), std::errc::timed_out);
+        }
         const auto owned = co_await context_value.req().collect_body();
         EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), body);
         EXPECT_EQ(owned, body);

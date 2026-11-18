@@ -47,8 +47,10 @@
 #include "http_request_body_failure.h"
 #include "http_response.h"
 #include "inline_storage.h"
+#include "io_operation.h"
 #include "middleware.h"
 #include "model.h"
+#include "operation_options.h"
 #include "redis_orm.h"
 #include "response_coding_policy.h"
 #include "route_table.h"
@@ -1073,6 +1075,15 @@ inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
     return parsed_coding;
 }
 
+void require_request_body_read(const operation_deadline& deadline, const stop_token& stop) {
+    if (stop.stop_requested()) {
+        detail::operation_interrupt::throw_cause(detail::operation_interrupt_cause::cancelled, "request body read");
+    }
+    if (deadline.expired()) {
+        detail::operation_interrupt::throw_cause(detail::operation_interrupt_cause::timed_out, "request body read");
+    }
+}
+
 template <typename result_type>
 task<result_type> read_request_body(const context& context_value, operation_options operation) {
     const auto as_result = [](std::string_view text) -> result_type {
@@ -1082,9 +1093,8 @@ task<result_type> read_request_body(const context& context_value, operation_opti
             return result_type(text);
         }
     };
-    if (operation.stop_token_.stop_requested()) {
-        detail::operation_interrupt::throw_cause(detail::operation_interrupt_cause::cancelled, "request body read");
-    }
+    const operation_deadline deadline(operation.timeout_);
+    require_request_body_read(deadline, operation.stop_token_);
     if (const auto decoded = detail::context_access::decoded_body(context_value)) {
         co_return as_result(*decoded);
     }
@@ -1093,7 +1103,8 @@ task<result_type> read_request_body(const context& context_value, operation_opti
     const auto& request = detail::context_access::request(context_value);
     std::string_view raw;
     if (const auto* lazy = body_source.lazy()) {
-        raw = co_await lazy->loader().read_all(std::move(operation));
+        raw = co_await lazy->loader().read_all({.timeout_ = deadline.timeout(), .stop_token_ = operation.stop_token_});
+        require_request_body_read(deadline, operation.stop_token_);
     } else if (body_source.streaming() != nullptr) {
         throw std::logic_error("streaming request body cannot be buffered");
     } else {
@@ -1126,15 +1137,26 @@ task<result_type> read_request_body(const context& context_value, operation_opti
         std::array<http_content_coding, max_content_codings> owned_codings{};
         const auto coding_count = (std::min)(codings.size(), max_content_codings);
         std::copy_n(codings.data(), coding_count, owned_codings.data());
+        require_request_body_read(deadline, operation.stop_token_);
+        const linked_operation_options linked({.timeout_ = deadline.timeout(), .stop_token_ = operation.stop_token_}, context_value.stop_token());
         std::string owned_raw(raw);
         auto decoded = co_await run_blocking(services.worker(), [owned_codings, coding_count, owned_raw = std::move(owned_raw), limit = max_decoded_bytes]() {
             return decode_http_content(std::span<const http_content_coding>(owned_codings.data(), coding_count), owned_raw, {.max_decoded_bytes_ = limit});
-        }, {.stop_token_ = context_value.stop_token()});
+        }, linked.options());
+        if (decoded.status() == blocking_status::timed_out) {
+            detail::operation_interrupt::throw_cause(detail::operation_interrupt_cause::timed_out, "request body read");
+        }
+        if (decoded.status() == blocking_status::cancelled) {
+            detail::operation_interrupt::throw_cause(detail::operation_interrupt_cause::cancelled, "request body read");
+        }
+        require_request_body_read(deadline, linked.options().stop_token_);
         decode_result = std::move(decoded).take_value();
         // Another read may have published its views while decoding was offloaded.
         if (const auto cached = detail::context_access::decoded_body(context_value)) {
             co_return as_result(*cached);
         }
+    } else {
+        require_request_body_read(deadline, operation.stop_token_);
     }
     auto* decoded_content = std::get_if<std::string>(&decode_result);
     if (decoded_content == nullptr) {
@@ -1154,9 +1176,9 @@ task<std::vector<multipart_part>> read_request_multipart(const context& context_
 }
 
 task<void> discard_request_body(const context& context_value, operation_options operation) {
-    if (operation.stop_token_.stop_requested()) {
-        detail::operation_interrupt::throw_cause(detail::operation_interrupt_cause::cancelled, "request body read");
-    }
+    const operation_deadline deadline(operation.timeout_);
+    require_request_body_read(deadline, operation.stop_token_);
+    operation.timeout_ = deadline.timeout();
     const auto& body_source = detail::context_access::request_body_source(context_value);
     if (const auto* lazy = body_source.lazy()) {
         co_await lazy->loader().discard(std::move(operation));
