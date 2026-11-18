@@ -351,6 +351,33 @@ TEST(Ruvia, worker_runtime_rejects_self_join_without_losing_cleanup) {
     EXPECT_EQ(runtime.state(), state::stopped);
 }
 
+TEST(Ruvia, worker_runtime_rejects_waiting_for_its_own_pending_phase) {
+    using namespace std::chrono_literals;
+    for (const bool wait_for_serving : {false, true}) {
+        SCOPED_TRACE(wait_for_serving);
+        ruvia::worker_runtime runtime;
+        std::promise<bool> rejected;
+        auto outcome = rejected.get_future();
+        runtime.configure({.startup_ = [&] {
+            if (wait_for_serving) {
+                runtime.mark_ready();
+                EXPECT_TRUE(runtime.wait_until_ready());
+            }
+            try {
+                (void)(wait_for_serving ? runtime.wait_until_serving() : runtime.wait_until_ready());
+                rejected.set_value(false);
+            } catch (const std::logic_error&) {
+                rejected.set_value(true);
+            }
+        }});
+        ASSERT_TRUE(runtime.start());
+        // An external stop releases a regressed self-wait so join does not hang.
+        EXPECT_EQ(outcome.wait_for(2s), std::future_status::ready);
+        runtime.join();
+        EXPECT_TRUE(outcome.get());
+    }
+}
+
 TEST(Ruvia, worker_runtime_cold_shutdown_can_repeat_stop_and_rejects_self_join) {
     ruvia::worker_runtime runtime;
     int shutdowns = 0;

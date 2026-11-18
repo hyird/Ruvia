@@ -92,6 +92,8 @@ public:
     // it. wait_until_ready() returns false once stopped before readiness and
     // rethrows the first failure. request_serve() requires readiness and runs
     // serve_ on the owner; wait_until_serving() mirrors wait_until_ready().
+    // Neither wait may block the owner thread: a pending phase throws
+    // std::logic_error there instead of waiting for the owner to advance it.
     void mark_ready() noexcept;
     [[nodiscard]] bool wait_until_ready();
     void request_serve();

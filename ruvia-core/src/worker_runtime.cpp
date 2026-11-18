@@ -329,9 +329,16 @@ public:
         if (lifecycle_.state() == worker_runtime_state::ready) {
             throw std::logic_error("worker runtime has not been launched");
         }
-        phase_changed_.wait(lock, [&] {
+        const auto resolved = [&] {
             return phase != phase_type::pending || failure_.failed();
-        });
+        };
+        if (!resolved()) {
+            if (context_.worker().is_current()) {
+                lock.unlock();
+                throw std::logic_error("cannot wait for a pending worker runtime phase from its owner");
+            }
+            phase_changed_.wait(lock, resolved);
+        }
         if (const auto failure = failure_.observe()) {
             std::rethrow_exception(failure);
         }
