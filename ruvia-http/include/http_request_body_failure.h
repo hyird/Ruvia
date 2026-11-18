@@ -22,13 +22,13 @@ enum class http_request_body_failure : std::uint8_t {
 [[nodiscard]] inline http_protocol_error make_http_protocol_error(http_request_body_failure failure) noexcept {
     switch (failure) {
         case http_request_body_failure::too_large:
-            return http_protocol_error(http_status::content_too_large, "request_body_too_large", "request body is too large");
+            return http_protocol_error(http_status::content_too_large, static_text{"request_body_too_large"}, "request body is too large");
         case http_request_body_failure::incomplete:
-            return http_protocol_error(http_status::bad_request, "incomplete_request_body", "incomplete request body");
+            return http_protocol_error(http_status::bad_request, static_text{"incomplete_request_body"}, "incomplete request body");
         case http_request_body_failure::buffer_limit:
-            return http_protocol_error(http_status::service_unavailable, "inbound_buffer_limit", "inbound buffer capacity exhausted");
+            return http_protocol_error(http_status::service_unavailable, static_text{"inbound_buffer_limit"}, "inbound buffer capacity exhausted");
     }
-    return http_protocol_error(http_status::bad_request, "invalid_request_body", "invalid request body");
+    return http_protocol_error(http_status::bad_request, static_text{"invalid_request_body"}, "invalid request body");
 }
 
 // The request field that named the coding a decoder failed to remove. The same
@@ -49,12 +49,12 @@ enum class http_coding_field : std::uint8_t {
         if (error == http_content_decode_error::unsupported_coding) {
             return make_http_protocol_error(http_parse_error::unsupported_transfer_encoding);
         }
-        return http_protocol_error(http_status::bad_request, "invalid_transfer_coding_body", "invalid transfer-coding body");
+        return http_protocol_error(http_status::bad_request, static_text{"invalid_transfer_coding_body"}, "invalid transfer-coding body");
     }
     if (error == http_content_decode_error::unsupported_coding) {
-        return http_protocol_error(http_status::unsupported_media_type, "unsupported_content_coding", "request Content-Encoding is not supported");
+        return http_protocol_error(http_status::unsupported_media_type, static_text{"unsupported_content_coding"}, "request Content-Encoding is not supported");
     }
-    return http_protocol_error(http_status::bad_request, "invalid_content_coding", "failed to decode request body");
+    return http_protocol_error(http_status::bad_request, static_text{"invalid_content_coding"}, "failed to decode request body");
 }
 
 [[nodiscard]] inline std::optional<http_request_body_failure> http_request_body_size_failure(std::size_t size, protocol_byte_limit limit) noexcept {

@@ -431,7 +431,7 @@ public:
         auto& output = c.stream_text();
         if (co_await output.commit() == ruvia::stream_commit_result::body) {
             co_await output.write("finished");
-            co_await output.end();
+            co_await output.finish();
         }
     }
 
@@ -453,7 +453,7 @@ public:
             co_await output.write("first");
             co_await output.write("second");
             const std::array trailers{ruvia::http_header_view{"x-finished", "yes"}};
-            co_await output.end(trailers);
+            co_await output.finish(trailers);
         }
     }
 
@@ -490,7 +490,7 @@ public:
             const std::array empty{ruvia::http_header_view{"content-length", "0"}};
             auto& output = c.stream({.headers_ = empty});
             if (co_await output.commit() == ruvia::stream_commit_result::body) {
-                co_await output.end();
+                co_await output.finish();
             }
             try {
                 co_await std::move(forwarding);

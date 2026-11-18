@@ -1037,7 +1037,7 @@ ruvia::task<void> identify(ruvia::request_stream& stream) {
     body += stream.conn().via_trusted_proxy() ? ":trusted" : ":direct";
     if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
         co_await stream.stream().write(body);
-        co_await stream.stream().end();
+        co_await stream.stream().finish();
     }
 }
 

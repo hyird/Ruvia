@@ -1098,9 +1098,9 @@ public:
     // events_pending and consumes nothing; drain peek_event()/consume_event()
     // first. protocol_failure is terminal. DATA events borrow the accepted span
     // until the next consuming feed().
-    [[nodiscard]] http2_feed_result feed(std::string_view in);
+    [[nodiscard]] http2_feed_status feed(std::string_view in);
     template <http_temporary_owning_char_string input_type>
-    http2_feed_result feed(input_type&&) = delete;
+    http2_feed_status feed(input_type&&) = delete;
     // The owner materializes the front event before consuming it, so an exception
     // never consumes the only protocol notification for a stream.
     [[nodiscard]] http2_event* peek_event() & noexcept;

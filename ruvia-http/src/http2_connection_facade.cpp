@@ -281,7 +281,7 @@ const std::optional<http2_peer_settings>& http2_connection::peer_settings() cons
 std::uint64_t http2_connection::received_stream_progress() const noexcept {
     return impl_->connection_.received_stream_progress();
 }
-http2_feed_result http2_connection::feed(std::string_view input) {
+http2_feed_status http2_connection::feed(std::string_view input) {
     auto& connection = impl_->connection_;
     connection.retry_deferred_stream_leases();
     const auto result_value = connection.feed(input);
@@ -289,7 +289,7 @@ http2_feed_result http2_connection::feed(std::string_view input) {
     return result_value;
 }
 
-std::optional<http2_event> http2_connection::next_event() {
+std::optional<http2_event> http2_connection::next_event() & {
     auto& connection = impl_->connection_;
     connection.retry_deferred_stream_leases();
     auto* event = connection.peek_event();

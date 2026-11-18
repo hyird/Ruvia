@@ -1065,7 +1065,7 @@ inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
 [[nodiscard]] http_content_coding_field_result require_decodable_request_coding(const http_request& request, detail::unsupported_request_content_coding::read_type read) {
     auto parsed_coding = request_content_coding(request);
     if (const auto* invalid = parsed_coding.invalid()) {
-        throw http_protocol_error(invalid->status(), "invalid_content_encoding", "invalid request Content-Encoding");
+        throw http_protocol_error(invalid->status(), static_text{"invalid_content_encoding"}, "invalid request Content-Encoding");
     }
     if (parsed_coding.unsupported() != nullptr) {
         throw detail::unsupported_request_content_coding(read);

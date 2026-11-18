@@ -93,7 +93,7 @@ ruvia::task<void> serve_connection(ruvia::server_connection& connection) {
 ruvia::task<void> serve_request(ruvia::request_stream& request) {
     (void)co_await request.stream().commit();
     co_await request.stream().write(std::string_view("request-stream"));
-    co_await request.stream().end();
+    co_await request.stream().finish();
 }
 
 }  // namespace route_dispatch_isolation_test

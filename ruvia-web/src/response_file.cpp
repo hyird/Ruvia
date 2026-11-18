@@ -169,14 +169,14 @@ task<bool> response_file_source::fill_offloaded(std::size_t bytes, bool complete
         read_ahead(state, bytes, completes_range);
         return std::move(state);
     }, {.timeout_ = io_.timeout_, .stop_token_ = io_.stop_});
-    if (result.status() != blocking_status::completed) {
-        // The state (handle and buffer) stayed with the abandoned operation.
-        failure_.emplace(response_file_failure::read_not_completed(result.status()));
-        co_return false;
-    }
     if (result.failed()) {
         // A throwing read retired its owned state on the pool thread.
         failure_.emplace(response_file_failure::read_threw(result.error()));
+        co_return false;
+    }
+    if (!result.completed()) {
+        // The state (handle and buffer) stayed with the abandoned operation.
+        failure_.emplace(response_file_failure::read_not_completed(result.status()));
         co_return false;
     }
     state_ = std::move(result).take_value();

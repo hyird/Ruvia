@@ -271,7 +271,7 @@ TEST(Ruvia, connection_descriptions_report_the_event_endpoints) {
                 served.push_back(stream.conn());
             }
             if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
-                co_await stream.stream().end();
+                co_await stream.stream().finish();
             }
             handled.release();
         }, .connection_ = [&](ruvia::server_connection& connection) -> ruvia::task<void> {
@@ -374,7 +374,7 @@ TEST(Ruvia, quic_wildcard_connections_report_destination_and_reply_from_that_add
                 EXPECT_EQ(*std::static_pointer_cast<int>(stream.connection_state()), 7);
                 if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
                     co_await stream.stream().write(stream.conn().local().address().to_string());
-                    co_await stream.stream().end();
+                    co_await stream.stream().finish();
                 }
             }, .connection_admission_ = [&](const ruvia::connection_event& event) noexcept {
                 EXPECT_TRUE(event.quic());

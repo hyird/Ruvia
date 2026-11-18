@@ -541,7 +541,7 @@ TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_befor
                 EXPECT_EQ(client.client().stats().in_flight_requests_, std::size_t{1});
                 co_await exchange.body().write(timeout_release ? "bc" : "abc");
                 const ruvia::http_header_view trailers[] = {{"X-End", "retained"}};
-                co_await exchange.body().end(known_length ? std::span<const ruvia::http_header_view>{} : std::span<const ruvia::http_header_view>(trailers));
+                co_await exchange.body().finish(known_length ? std::span<const ruvia::http_header_view>{} : std::span<const ruvia::http_header_view>(trailers));
                 auto next = co_await client.client().get("/next").send();
                 const auto next_body = co_await next.bytes();
                 EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(next_body.bytes().data()), next_body.size()), "next");

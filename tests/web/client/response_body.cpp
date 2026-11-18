@@ -461,7 +461,7 @@ private:
             const auto bytes = std::string_view(input.data(), count);
             for (;;) {
                 const auto status = connection.feed(bytes);
-                if (status == ruvia::http2_feed_result::protocol_failure) {
+                if (status == ruvia::http2_feed_status::protocol_failure) {
                     throw std::runtime_error("invalid cookie test HTTP/2 input");
                 }
                 while (auto event = connection.next_event()) {
@@ -493,7 +493,7 @@ private:
                         }
                     }
                 }
-                if (status != ruvia::http2_feed_result::events_pending) {
+                if (status != ruvia::http2_feed_status::events_pending) {
                     break;
                 }
             }
@@ -2016,7 +2016,7 @@ TEST(Ruvia, http_client_upload_exchange_owns_chunks_and_trailers_and_drives_cont
             input.assign("xxx");
             std::string trailer_value{"retained"};
             const std::array<ruvia::http_header_view, 1> fields_value{{{"X-End", trailer_value}}};
-            auto ending = exchange_value.body().end(known ? std::span<const ruvia::http_header_view>{} : std::span<const ruvia::http_header_view>(fields_value));
+            auto ending = exchange_value.body().finish(known ? std::span<const ruvia::http_header_view>{} : std::span<const ruvia::http_header_view>(fields_value));
             trailer_value.assign("changed");
             auto receiving = exchange_value.response();
             auto receiving_overlap = exchange_value.response();
@@ -2049,7 +2049,7 @@ TEST(Ruvia, http_client_upload_exchange_owns_chunks_and_trailers_and_drives_cont
                 write_overlap_rejected = true;
             }
             try {
-                co_await exchange_value.body().end();
+                co_await exchange_value.body().finish();
             } catch (const std::logic_error&) {
                 end_overlap_rejected = true;
             }
@@ -2114,7 +2114,7 @@ TEST(Ruvia, http1_small_upload_completes_with_a_bounded_response_budget) {
                 co_await exchange.body().write("abc");
                 co_await exchange.body().write("def");
                 const std::array<ruvia::http_header_view, 1> trailers{{{"X-End", "retained"}}};
-                co_await exchange.body().end(known ? std::span<const ruvia::http_header_view>{} : std::span<const ruvia::http_header_view>(trailers));
+                co_await exchange.body().finish(known ? std::span<const ruvia::http_header_view>{} : std::span<const ruvia::http_header_view>(trailers));
                 EXPECT_TRUE(exchange.body().complete());
                 auto response = co_await exchange.response();
                 EXPECT_TRUE(response.status() == ruvia::http_status::ok);

@@ -453,11 +453,11 @@ namespace {
 http_protocol_error make_http_protocol_error(multipart_boundary_error error) noexcept {
     switch (error) {
         case multipart_boundary_error::not_form_data:
-            return http_protocol_error(http_status::unsupported_media_type, "unsupported_media_type", "request body must be multipart/form-data");
+            return http_protocol_error(http_status::unsupported_media_type, static_text{"unsupported_media_type"}, "request body must be multipart/form-data");
         case multipart_boundary_error::invalid_boundary:
             break;
     }
-    return http_protocol_error(http_status::bad_request, "multipart_invalid_boundary", "invalid multipart boundary");
+    return http_protocol_error(http_status::bad_request, static_text{"multipart_invalid_boundary"}, "invalid multipart boundary");
 }
 
 std::variant<multipart_boundary, multipart_boundary_error> parse_multipart_boundary(std::string_view content_type_value) {
@@ -531,27 +531,27 @@ std::string& emplace_owned_multipart_text(std::variant<std::string_view, std::st
 http_protocol_error make_http_protocol_error(multipart_parse_error error) noexcept {
     switch (error) {
         case multipart_parse_error::incomplete_body:
-            return http_protocol_error(http_status::bad_request, "multipart_incomplete_body", "incomplete multipart body");
+            return http_protocol_error(http_status::bad_request, static_text{"multipart_incomplete_body"}, "incomplete multipart body");
         case multipart_parse_error::invalid_delimiter:
-            return http_protocol_error(http_status::bad_request, "multipart_invalid_delimiter", "invalid multipart delimiter");
+            return http_protocol_error(http_status::bad_request, static_text{"multipart_invalid_delimiter"}, "invalid multipart delimiter");
         case multipart_parse_error::preamble_too_large:
-            return http_protocol_error(http_status::content_too_large, "multipart_preamble_too_large", "multipart preamble exceeds limit");
+            return http_protocol_error(http_status::content_too_large, static_text{"multipart_preamble_too_large"}, "multipart preamble exceeds limit");
         case multipart_parse_error::part_headers_too_large:
-            return http_protocol_error(http_status::content_too_large, "multipart_part_headers_too_large", "multipart part headers exceed limit");
+            return http_protocol_error(http_status::content_too_large, static_text{"multipart_part_headers_too_large"}, "multipart part headers exceed limit");
         case multipart_parse_error::invalid_part_headers:
-            return http_protocol_error(http_status::bad_request, "multipart_invalid_part_headers", "invalid multipart part headers");
+            return http_protocol_error(http_status::bad_request, static_text{"multipart_invalid_part_headers"}, "invalid multipart part headers");
         case multipart_parse_error::invalid_content_disposition:
-            return http_protocol_error(http_status::bad_request, "multipart_invalid_content_disposition", "invalid multipart content disposition");
+            return http_protocol_error(http_status::bad_request, static_text{"multipart_invalid_content_disposition"}, "invalid multipart content disposition");
         case multipart_parse_error::missing_field_name:
-            return http_protocol_error(http_status::bad_request, "multipart_missing_field_name", "invalid multipart field name");
+            return http_protocol_error(http_status::bad_request, static_text{"multipart_missing_field_name"}, "invalid multipart field name");
         case multipart_parse_error::delimiter_line_too_large:
-            return http_protocol_error(http_status::content_too_large, "multipart_delimiter_line_too_large", "multipart delimiter line exceeds limit");
+            return http_protocol_error(http_status::content_too_large, static_text{"multipart_delimiter_line_too_large"}, "multipart delimiter line exceeds limit");
         case multipart_parse_error::too_many_parts:
-            return http_protocol_error(http_status::content_too_large, "multipart_too_many_parts", "multipart part count exceeds limit");
+            return http_protocol_error(http_status::content_too_large, static_text{"multipart_too_many_parts"}, "multipart part count exceeds limit");
         case multipart_parse_error::metadata_too_large:
-            return http_protocol_error(http_status::content_too_large, "multipart_metadata_too_large", "multipart metadata exceeds limit");
+            return http_protocol_error(http_status::content_too_large, static_text{"multipart_metadata_too_large"}, "multipart metadata exceeds limit");
     }
-    return http_protocol_error(http_status::bad_request, "multipart_invalid_body", "invalid multipart body");
+    return http_protocol_error(http_status::bad_request, static_text{"multipart_invalid_body"}, "invalid multipart body");
 }
 
 multipart_parser::multipart_parser(multipart_parse_options options) :

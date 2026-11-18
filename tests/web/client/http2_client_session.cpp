@@ -156,7 +156,7 @@ private:
             }
             for (;;) {
                 const auto status = connection.feed(bytes);
-                if (status == ruvia::http2_feed_result::protocol_failure) {
+                if (status == ruvia::http2_feed_status::protocol_failure) {
                     throw std::runtime_error("invalid HTTP/2 liveness peer input");
                 }
                 while (auto event = connection.next_event()) {
@@ -180,7 +180,7 @@ private:
                             break;
                     }
                 }
-                if (status != ruvia::http2_feed_result::events_pending) {
+                if (status != ruvia::http2_feed_status::events_pending) {
                     break;
                 }
             }
@@ -307,7 +307,7 @@ private:
         const auto bytes = std::string_view(input_.data(), count);
         for (;;) {
             const auto status = connection_.feed(bytes);
-            if (status == ruvia::http2_feed_result::protocol_failure) {
+            if (status == ruvia::http2_feed_status::protocol_failure) {
                 throw std::runtime_error("invalid client HTTP/2 input");
             }
             while (auto event = connection_.next_event()) {
@@ -318,7 +318,7 @@ private:
                     requests_.push_back(std::move(*request));
                 }
             }
-            if (status != ruvia::http2_feed_result::events_pending) {
+            if (status != ruvia::http2_feed_status::events_pending) {
                 break;
             }
         }
@@ -401,7 +401,7 @@ TEST(Ruvia, http2_client_uses_available_stream_capacity_across_connections) {
             const auto bytes = std::string_view(input.data(), count);
             for (;;) {
                 const auto status = connections[index].feed(bytes);
-                if (status == ruvia::http2_feed_result::protocol_failure) {
+                if (status == ruvia::http2_feed_status::protocol_failure) {
                     throw std::runtime_error("invalid HTTP/2 capacity test input");
                 }
                 while (auto event = connections[index].next_event()) {
@@ -409,7 +409,7 @@ TEST(Ruvia, http2_client_uses_available_stream_capacity_across_connections) {
                         co_return std::move(*request);
                     }
                 }
-                if (status != ruvia::http2_feed_result::events_pending) {
+                if (status != ruvia::http2_feed_status::events_pending) {
                     break;
                 }
             }
@@ -544,7 +544,7 @@ TEST(Ruvia, http2_cold_start_cancelled_waiter_does_not_close_active_session) {
             const auto bytes = std::string_view(input.data(), count);
             for (;;) {
                 const auto status = connection.feed(bytes);
-                if (status == ruvia::http2_feed_result::protocol_failure) {
+                if (status == ruvia::http2_feed_status::protocol_failure) {
                     throw std::runtime_error("invalid HTTP/2 input");
                 }
                 while (auto event = connection.next_event()) {
@@ -562,7 +562,7 @@ TEST(Ruvia, http2_cold_start_cancelled_waiter_does_not_close_active_session) {
                     }
                     answered = true;
                 }
-                if (status != ruvia::http2_feed_result::events_pending) {
+                if (status != ruvia::http2_feed_status::events_pending) {
                     break;
                 }
             }

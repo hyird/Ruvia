@@ -493,7 +493,8 @@ public:
     http3_transport_result read_stream(std::int64_t, std::initializer_list<std::byte>, bool, std::uint64_t) = delete;
     // Transport actions tell local commands (execute them) from peer
     // notifications (already applied) by http3_transport_action_event::origin().
-    [[nodiscard]] std::optional<http3_event> next_event();
+    [[nodiscard]] std::optional<http3_event> next_event() &;
+    std::optional<http3_event> next_event() && = delete;
 
     // Borrows at most max_bytes of one HTTP/3 stream without advancing
     // nghttp3. The buffers remain valid through commit_output() and QUIC keeps

@@ -467,7 +467,7 @@ void http2_connection::publish_event(http2_event event) {
 
 // --- inbound -----------------------------------------------------------------
 
-http2_feed_result http2_connection::feed(std::string_view in) {
+http2_feed_status http2_connection::feed(std::string_view in) {
     // The facade begins the connection before it offers any input.
     if (!started_) {
         std::terminate();
@@ -475,10 +475,10 @@ http2_feed_result http2_connection::feed(std::string_view in) {
     // An unread event may carry a zero-copy view into the previous input, so
     // accepting another span here would invalidate its bytes.
     if (event_offset_ < events_.size()) {
-        return http2_feed_result::events_pending;
+        return http2_feed_status::events_pending;
     }
     if (local_connection_state_.fatal_failure() != nullptr) {
-        return http2_feed_result::protocol_failure;
+        return http2_feed_status::protocol_failure;
     }
     events_.clear();
     event_offset_ = 0;
@@ -496,7 +496,7 @@ http2_feed_result http2_connection::feed(std::string_view in) {
         }
     }
     flush_session();
-    return local_connection_state_.fatal_failure() != nullptr ? http2_feed_result::protocol_failure : http2_feed_result::accepted;
+    return local_connection_state_.fatal_failure() != nullptr ? http2_feed_status::protocol_failure : http2_feed_status::accepted;
 }
 
 nghttp2_ssize http2_connection::receive_observed(std::string_view input) {

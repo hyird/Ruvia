@@ -5,6 +5,7 @@
 #include <string_view>
 #include <type_traits>
 
+#include "borrowed_text.h"
 #include "ip_address.h"
 
 namespace ruvia {
@@ -57,10 +58,17 @@ class plain_connection_transport final {};
 // callback the connection serves.
 class tls_connection_transport final {
 public:
-    constexpr tls_connection_transport(std::optional<std::string_view> client_certificate_subject, std::string_view alpn, std::string_view server_name) noexcept :
-        client_certificate_subject_(client_certificate_subject),
-        alpn_(alpn),
-        server_name_(server_name) {}
+    constexpr tls_connection_transport(std::optional<borrowed_text> client_certificate_subject, borrowed_text alpn, borrowed_text server_name) noexcept :
+        client_certificate_subject_(client_certificate_subject ? std::optional{client_certificate_subject->view()} : std::nullopt),
+        alpn_(alpn.view()),
+        server_name_(server_name.view()) {}
+
+    template <typename string_type>
+        requires detail::http_temporary_owning_char_string<string_type>
+    tls_connection_transport(std::optional<string_type>&&, borrowed_text, borrowed_text) = delete;
+    template <typename string_type>
+        requires detail::http_temporary_owning_char_string<string_type>
+    tls_connection_transport(const std::optional<string_type>&&, borrowed_text, borrowed_text) = delete;
 
     // Verified client certificate subject DN. Absence means no certificate;
     // an engaged empty value is a certificate with an empty Subject (RFC 5280

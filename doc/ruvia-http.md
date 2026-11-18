@@ -155,7 +155,15 @@ if (step.holds<ruvia::decode_need_input>()) {
 
 ### 2.2 增量解析与消费字节
 
-所有增量解析器与解码器的单步结果都是 [`decode_step<...>`](#api-decode-step-h)：`consumed_bytes()` 是本次已消费的输入前缀，调用方丢弃该前缀、保留其余字节用于下一次调用；结果恰为本族备选项之一（共享的 `decode_need_input` / `decode_output` / `decode_complete` / `decode_failure<E>`，加本族负载），类别在构造时固定且不可赋值。有状态处理器暴露 `decoder_state state()`（`active` / `finished` / `failed`）与显式 `reset()`：终态结果供提取的解析器再次调用抛 `std::logic_error`，流式解码器重放终态结果且消费 0 字节；两类成员清单见 [4.8](#api-decode-step-h)。处于 `need_input` 的解析器保存扫描偏移，避免对同一前缀重复扫描。
+使用单步解析接口的解析器与解码器返回 [`decode_step<...>`](#api-decode-step-h)：`consumed_bytes()` 是本次已消费的输入前缀，调用方丢弃该前缀、保留其余字节用于下一次调用；结果恰为本族备选项之一（共享的 `decode_need_input` / `decode_output` / `decode_complete` / `decode_failure<E>`，加本族负载），类别在构造时固定且不可赋值。有状态处理器暴露 `decoder_state state()`（`active` / `finished` / `failed`）与显式 `reset()`：终态结果供提取的解析器再次调用抛 `std::logic_error`，流式解码器重放终态结果且消费 0 字节；两类成员清单见 [4.8](#api-decode-step-h)。处于 `need_input` 的解析器保存扫描偏移，避免对同一前缀重复扫描。
+
+连接驱动输入统一按下表解释。状态和信用的具体定义见对应协议章节。
+
+| 输入入口 | 交付与消费 | 何时可重试 | 输入寿命 |
+| --- | --- | --- | --- |
+| HTTP/2 `feed()` | `events_pending` 消费零字节，其余状态消费整个输入 | 取尽待处理事件后重试未消费的输入 | 保持至该次的全部事件取出且派生视图失效 |
+| HTTP/3 `read_stream()` | `events_pending` 不消费，`credit_bytes_` 只报告可立即归还的流控信用 | 取尽上次的事件再重试 | 借用模式下保持至该次事件取尽 |
+| WebSocket `feed()` | 打开时接纳并复制输入。等待对端 EOF 时接纳并丢弃。背压时不追加 | 解析已缓冲输入再重试 | 输入可在调用返回后释放，事件视图另借用连接缓冲区 |
 
 ### 2.3 错误模型
 
@@ -260,7 +268,7 @@ if (step.holds<ruvia::decode_need_input>()) {
 ### 4.1 `"borrowed_text.h"`
 <a id="api-borrowed-text-h"></a>
 
-零拷贝借用视图的公共基础：定义 `RUVIA_LIFETIMEBOUND` 宏、`borrowed_text`、`borrowed_span<T>` 与 `argument_list<T>`。凡是配置或消息值需要保存调用方文本/元素序列视图（Cookie 属性、SSE 字段、出站请求行、数据库查询选项等）的地方都使用这些类型，以便在编译期拒绝绑定到即将销毁的临时拥有型容器。源码：[`ruvia-http/include/borrowed_text.h`](../ruvia-http/include/borrowed_text.h)
+零拷贝借用视图的公共基础：定义 `RUVIA_LIFETIMEBOUND` 宏、`borrowed_text`、`borrowed_span<T>`、`argument_list<T>` 与 `static_text`。保存调用方文本或元素序列的 API 使用这些类型，在编译期拒绝借用即将销毁的临时拥有型容器。源码：[`ruvia-http/include/borrowed_text.h`](../ruvia-http/include/borrowed_text.h)
 
 #### 4.1.1 宏 `RUVIA_LIFETIMEBOUND`
 
@@ -423,6 +431,10 @@ public:
 ```
 
 按值接收、并在函数返回前同步消费完毕的只读参数列表。与 `borrowed_span` 不同，它接受花括号列表和临时容器：这些存储至少存活到整个调用表达式结束，足够同步消费者使用。为防止越出该区间，`argument_list` 既不可复制也不可移动（复制构造/复制赋值 `= delete`，因此也没有隐式移动），不能被返回、捕获或保存为成员。`span()` 返回元素视图，只在当前调用期间有效。
+
+#### 4.1.5 `class static_text`
+
+`static_text` 在编译期检查文本是否引用静态存储。默认构造为空。显式 `consteval` 构造接受静态存储的字符数组或 `std::string_view`，拒绝帧局部或运行期存储。数组构造仅移除末尾 NUL，保留内嵌 NUL。`view()` 返回对应的 `std::string_view`。
 
 ---
 
@@ -1175,7 +1187,7 @@ public:
 namespace ruvia {
 class http_protocol_error final : public std::exception {
 public:
-    http_protocol_error(http_status_code status, std::string_view code, std::string_view message) noexcept;
+    http_protocol_error(http_status_code status, static_text code, std::string_view message) noexcept;
     [[nodiscard]] http_status_code status() const noexcept;
     [[nodiscard]] std::string_view code() const noexcept;
     [[nodiscard]] const char* what() const noexcept override;
@@ -1187,7 +1199,7 @@ public:
 
 | 成员 | 语义 |
 | --- | --- |
-| 构造 | `status` 为应答状态；`code` 为稳定的 snake_case 机器码（如 `"missing_host"`、`"conflicting_content_length"`），只以视图保存，必须具有静态存储期；`message` 被复制到固定 128 字节的内部存储（最多 127 字节，超出截断，以 NUL 结尾）。不分配、不借用 `message`。 |
+| 构造 | `status` 为应答状态；`code` 为稳定的 snake_case 机器码（如 `"missing_host"`、`"conflicting_content_length"`），通过 [static_text](#api-borrowed-text-h) 在编译期要求静态存储期；`message` 被复制到固定 128 字节的内部存储（最多 127 字节，超出截断，以 NUL 结尾）。不分配、不借用 `message`。 |
 | `status()` / `code()` | 应答状态与机器码。 |
 | `what()` | 复制后的可读消息。 |
 
@@ -2285,7 +2297,7 @@ public:
 | 符号 | 语义 |
 | --- | --- |
 | `http_client_expectation_is_valid(has_continue, content)` | RFC 9110 §10.1.1 禁止客户端对无内容请求生成 `100-continue`：`!has_continue \|\| content == will_follow`。 |
-| `http_unsupported_expectation_error()` | 返回 `http_protocol_error(http_status::expectation_failed, "unsupported_expectation", "unsupported Expect header")`。 |
+| `http_unsupported_expectation_error()` | 返回 `http_protocol_error(http_status::expectation_failed, static_text{"unsupported_expectation"}, "unsupported Expect header")`。 |
 | `http_request_expectations` | 接收方对 `Expect` `#list` 的定长增量状态（平凡可拷贝，至多 1 字节）。重复字段行延续同一逻辑列表；空成员被忽略。唯一标准化成员是 `100-continue`（不区分大小写匹配）；其他非空成员一律记为“unsupported”这一语义事实，交由产品政策处理。 |
 | `parse_field(value)` | 并入一个字段行的值；列表切分感知引号。 |
 | `has_continue()` / `has_unsupported()` | 是否见过 `100-continue` / 其他成员。 |
@@ -7931,7 +7943,7 @@ struct http2_send_window_state final {
     std::uint32_t available_{0};
 };
 
-enum class http2_feed_result : std::uint8_t {
+enum class http2_feed_status : std::uint8_t {
     events_pending,
     accepted,
     protocol_failure,
@@ -7986,7 +7998,7 @@ enum class http2_server_request_release_status : std::uint8_t { released, closed
 - `http2_received_priority`：带 PRIORITY 标志的 HEADERS 帧中 RFC 9113 §5.3.2 的原始依赖、权重（1..256）与独占位，仅为元数据，不代表调度策略。在 `http2_frame_metadata::priority_` 中也用于独立 PRIORITY 帧。
 - `http2_peer_settings`：对端最近一个 SETTINGS 帧之后生效、约束本端提交的值（RFC 9113 §6.5.2）。`enable_connect_protocol_` 对应 RFC 8441 §3；`enable_push_` 只有客户端发送的值约束服务端；`no_rfc7540_priorities_` 对应 RFC 9218 §2.1；默认值为协议初始值。
 - `http2_send_window_state`：存活流的发送流控只读观察；`available_` 为连接窗口与流窗口的较小者，下限截断为 0。
-- `http2_feed_result`（`feed()` 对每段输入采取全有或全无的所有权）：
+- `http2_feed_status`（`feed()` 对每段输入采取全有或全无的所有权）：
 
 | 值 | 含义 |
 | --- | --- |
@@ -8241,10 +8253,11 @@ public:
     const std::optional<http2_peer_settings>& peer_settings() const&& = delete;
     [[nodiscard]] bool header_block_in_progress() const noexcept;
     [[nodiscard]] std::uint64_t received_stream_progress() const noexcept;
-    [[nodiscard]] http2_feed_result feed(std::string_view input);
+    [[nodiscard]] http2_feed_status feed(std::string_view input);
     template </* 未指定约束：拥有型 std::basic_string 的右值 */ typename input_type>
-    http2_feed_result feed(input_type&&) = delete;
-    [[nodiscard]] std::optional<http2_event> next_event();
+    http2_feed_status feed(input_type&&) = delete;
+    [[nodiscard]] std::optional<http2_event> next_event() &;
+    std::optional<http2_event> next_event() && = delete;
     [[nodiscard]] http2_output_batch_result take_output_batch(std::size_t max_bytes, std::string& output, http2_data_output_observer_type observer = nullptr, void* observer_context = nullptr);
     [[nodiscard]] bool wants_write() const noexcept;
 
@@ -8300,7 +8313,7 @@ public:
 
 输入、事件与输出：
 
-- `feed(input)`：见 `http2_feed_result`（11.4.1）。被接受的输入，其背后存储必须在该次调用产生的全部事件被取出、且所有派生自事件的字节视图失效之前保持存活且不变；再次 `feed()` 可能使这些视图失效。拥有型字符串右值（`std::string` 临时对象等）在编译期被删除重载拒绝，避免视图借用临时存储。
+- `feed(input)`：见 `http2_feed_status`（11.4.1）。被接受的输入，其背后存储必须在该次调用产生的全部事件被取出、且所有派生自事件的字节视图失效之前保持存活且不变；再次 `feed()` 可能使这些视图失效。拥有型字符串右值（`std::string` 临时对象等）在编译期被删除重载拒绝，避免视图借用临时存储。
 - `next_event()`：按顺序取出下一个事件，队列空时返回 `std::nullopt`。事件队列容量几何增长并保留复用。
 - `take_output_batch(max_bytes, output, observer, observer_context)`：向 `output` 追加整帧边界的输出（第一帧可超过 `max_bytes`；`max_bytes` 不受限时取出全部待写帧）；客户端前言视为一个不可分割段。完整未消费批次在 `output` 为空时交换存储，其余情况复制所选字节。复制失败时输出游标与观察器均不变；游标总停在帧边界，并在 DATA 观察之前提交。观察器可以在回调中提交或取出更多输出，那些帧与本批无关。
 - `wants_write()`：存在待写输出时为真。
@@ -8946,7 +8959,8 @@ public:
         requires(!std::same_as<std::remove_cvref_t<bytes_type>, borrowed_span<std::byte>>)
     http3_transport_result read_stream(std::int64_t, bytes_type&&, bool, std::uint64_t) = delete;
     http3_transport_result read_stream(std::int64_t, std::initializer_list<std::byte>, bool, std::uint64_t) = delete;
-    [[nodiscard]] std::optional<http3_event> next_event();
+    [[nodiscard]] std::optional<http3_event> next_event() &;
+    std::optional<http3_event> next_event() && = delete;
 
     [[nodiscard]] http3_transport_result peek_output(std::size_t max_bytes, http3_stream_output& output);
     [[nodiscard]] http3_transport_status commit_output(std::int64_t stream_id, std::size_t bytes) noexcept;
@@ -9431,7 +9445,8 @@ public:
     [[nodiscard]] bool closed() const noexcept;
     [[nodiscard]] ngtcp2_duration close_period() const noexcept;
 
-    [[nodiscard]] std::optional<http3_event> next_event();
+    [[nodiscard]] std::optional<http3_event> next_event() &;
+    std::optional<http3_event> next_event() && = delete;
     [[nodiscard]] http3_connection& http3() noexcept;
     [[nodiscard]] const http3_connection& http3() const noexcept;
     [[nodiscard]] std::optional<http3_error_code> application_error() const noexcept;

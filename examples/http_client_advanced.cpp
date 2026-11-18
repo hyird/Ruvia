@@ -80,7 +80,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(ruvia::event_loop loop, 
             co_await exchange_value.body().write("hello ");
             co_await exchange_value.body().write("world!");
             const std::array<ruvia::http_header_view, 1> trailers{{{"X-Upload-Complete", "yes"}}};
-            co_await exchange_value.body().end(trailers);
+            co_await exchange_value.body().finish(trailers);
             auto response = co_await exchange_value.response();
             while (const auto text = co_await response.stream().read_text()) {
                 // Each view expires at the next body operation. Do not retain

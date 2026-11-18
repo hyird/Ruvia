@@ -206,7 +206,7 @@ outbound_allocation_observation exercise_warmed_outbound_compression(std::size_t
         const auto transfer = [&](ruvia::http2_connection& from, ruvia::http2_connection& to) {
             auto& bytes = retained.emplace_back();
             (void)from.take_output_batch((std::numeric_limits<std::size_t>::max)(), bytes);
-            require(to.feed(bytes) == ruvia::http2_feed_result::accepted, "peer rejected encoded output");
+            require(to.feed(bytes) == ruvia::http2_feed_status::accepted, "peer rejected encoded output");
         };
         transfer(client, server);
         transfer(server, client);

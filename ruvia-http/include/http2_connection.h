@@ -132,7 +132,7 @@ struct http2_send_window_state final {
 // feed() has all-or-nothing ownership for each supplied span: events_pending
 // consumes nothing, every other result consumed the whole span. nghttp2 buffers
 // an incomplete trailing frame itself, so accepted also covers partial input.
-enum class http2_feed_result : std::uint8_t {
+enum class http2_feed_status : std::uint8_t {
     events_pending,
     accepted,
     protocol_failure,
@@ -570,10 +570,12 @@ public:
     // inactivity clocks only when it changes, so frames the non-progress budget
     // counts cannot keep an otherwise idle connection open.
     [[nodiscard]] std::uint64_t received_stream_progress() const noexcept;
-    [[nodiscard]] http2_feed_result feed(std::string_view input);
+    [[nodiscard]] http2_feed_status feed(std::string_view input);
     template <detail::http_temporary_owning_char_string input_type>
-    http2_feed_result feed(input_type&&) = delete;
-    [[nodiscard]] std::optional<http2_event> next_event();
+    http2_feed_status feed(input_type&&) = delete;
+    // Transfers the event and its lease or credit; DATA views still borrow feed() input.
+    [[nodiscard]] std::optional<http2_event> next_event() &;
+    std::optional<http2_event> next_event() && = delete;
     // Appends whole frame boundaries (the first frame may exceed max_bytes).
     // A complete unconsumed batch swaps storage when output is empty;
     // all other cases copy the selected bytes.

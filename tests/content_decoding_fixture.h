@@ -456,13 +456,13 @@ inline std::string drain_output(ruvia::http2_connection& connection) {
 // produces, so every drained string is retained for the relay's lifetime.
 class output_relay final {
 public:
-    [[nodiscard]] ruvia::http2_feed_result feed(ruvia::http2_connection& from, ruvia::http2_connection& to) {
+    [[nodiscard]] ruvia::http2_feed_status feed(ruvia::http2_connection& from, ruvia::http2_connection& to) {
         return to.feed(retained_.emplace_back(drain_output(from)));
     }
 
     void transfer(ruvia::http2_connection& from, ruvia::http2_connection& to) {
         const auto status = feed(from, to);
-        if (status != ruvia::http2_feed_result::accepted) {
+        if (status != ruvia::http2_feed_status::accepted) {
             throw std::runtime_error("HTTP/2 transfer failed, status " + std::to_string(static_cast<int>(status)));
         }
     }

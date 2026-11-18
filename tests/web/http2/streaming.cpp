@@ -104,7 +104,7 @@ class sleeping_stream_routes final {
         }
         observed.head_loop_aborted_ = writer.aborted();
         observed.head_loop_token_stopped_ = token.stop_requested();
-        co_await writer.end();
+        co_await writer.finish();
         observed.head_loop_finished_ = true;
     }
 
@@ -137,7 +137,7 @@ class sleeping_stream_routes final {
         }
         co_await out.write("body");
         const ruvia::http_header_view trailers[] = {{"X-Complete", "yes"}};
-        co_await out.end(trailers);
+        co_await out.finish(trailers);
     }
 
     ruvia::task<void> head_trailer_only(ruvia::context& context_value) {
@@ -147,7 +147,7 @@ class sleeping_stream_routes final {
         const auto token = context_value.stop_token();
         const ruvia::http_header_view trailers[] = {{"X-Complete", "yes"}};
         if (co_await out.commit() == ruvia::stream_commit_result::body) {
-            co_await out.end(trailers);
+            co_await out.finish(trailers);
         }
         try {
             static_cast<void>(co_await out.sleep(std::chrono::seconds(10)));
@@ -166,11 +166,11 @@ class sleeping_stream_routes final {
             co_return;
         }
         co_await out.write("payload");
-        co_await out.end();
+        co_await out.finish();
     }
 
     ruvia::task<void> stream_204(ruvia::context& context_value) {
-        co_await context_value.stream_text({.status_ = ruvia::http_status::no_content}).end();
+        co_await context_value.stream_text({.status_ = ruvia::http_status::no_content}).finish();
     }
 
     ruvia::task<ruvia::http_response> bounded_buffered(ruvia::context& context_value) {
@@ -784,13 +784,13 @@ TEST(Ruvia, http2_oversized_request_body_answers_413_without_100_continue) {
         }
         EXPECT_EQ(response_heads, 1U);
         const auto error = ruvia::json_object::parse(body).take_value();
-        const auto status = error.get<ruvia::uint32>("status").value();
-        const auto code = error.get<ruvia::string>("code").value();
+        const auto status = error.get<ruvia::uint32>("status").take_value();
+        const auto code = error.get<ruvia::string>("code").take_value();
         EXPECT_TRUE(status && static_cast<std::uint32_t>(*status) == 413);
         EXPECT_TRUE(code && code->view() == "request_body_too_large");
         // The rejection owns its message: a borrowed one would serialise a
         // dead stack slot here.
-        const auto detail = error.get<ruvia::string>("detail").value();
+        const auto detail = error.get<ruvia::string>("detail").take_value();
         EXPECT_TRUE(detail && detail->view() == "request body is too large");
     };
 
@@ -1011,7 +1011,7 @@ public:
             co_await context_value.stream().write(chunk);
         }
         ++owner_value.streamed_;
-        co_await context_value.stream().end();
+        co_await context_value.stream().finish();
     }
 };
 

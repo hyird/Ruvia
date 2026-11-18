@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -54,7 +55,7 @@ class router_state;
 class operation_lane_lease;
 class websocket_route_endpoint;
 // Commits a tunnel request's success head and returns the established tunnel.
-using request_stream_tunnel_accept = callback_ref<task<http_tunnel*>(http_status_code, http_tunnel_route_config)>;
+using request_stream_tunnel_accept = callback_ref<task<std::reference_wrapper<http_tunnel>>(http_status_code, http_tunnel_route_config)>;
 // Negotiates against a validated endpoint the caller keeps alive until the
 // returned task completes.
 using request_stream_websocket_accept = callback_ref<task<websocket_accept_result>(const websocket_route_endpoint&)>;
@@ -136,13 +137,13 @@ public:
     // config.datagrams_ explicitly enables Capsule/HTTP Datagram semantics
     // for an upgrade protocol; plain CONNECT rejects it. CONNECT-UDP enables
     // them automatically and uses the protocol's existing handshake checks.
-    [[nodiscard]] task<http_tunnel*> accept_tunnel(http_status_code status = http_status::ok, http_tunnel_route_config config = {}) &;
-    task<http_tunnel*> accept_tunnel(http_status_code = http_status::ok, http_tunnel_route_config = {}) && = delete;
+    [[nodiscard]] task<std::reference_wrapper<http_tunnel>> accept_tunnel(http_status_code status = http_status::ok, http_tunnel_route_config config = {}) &;
+    task<std::reference_wrapper<http_tunnel>> accept_tunnel(http_status_code = http_status::ok, http_tunnel_route_config = {}) && = delete;
 
     // Negotiates a WebSocket on an offered HTTP/1.1 Upgrade or extended
     // CONNECT through the server's normal handshake and session driver.
     // The cold task has no effects until awaited. On handshake rejection it
-    // returns nullptr and selects the error response the server sends after
+    // returns a rejection and selects the error response the server sends after
     // the callback returns. Any response/acceptance already selected throws
     // logic_error. The returned session is borrowed until the callback ends.
     [[nodiscard]] task<websocket_accept_result> accept_websocket(websocket_route_config config = {}) &;
@@ -173,7 +174,7 @@ private:
         return context_;
     }
 
-    [[nodiscard]] task<http_tunnel*> accept_tunnel_impl(http_status_code status, http_tunnel_route_config config);
+    [[nodiscard]] task<std::reference_wrapper<http_tunnel>> accept_tunnel_impl(http_status_code status, http_tunnel_route_config config);
     [[nodiscard]] task<websocket_accept_result> accept_websocket_impl(websocket_route_config config);
     // A router's WebSocket route reuses its frozen endpoint.
     [[nodiscard]] task<websocket_accept_result> accept_websocket_endpoint(const detail::websocket_route_endpoint& endpoint);

@@ -324,10 +324,10 @@ bool http2_client_session::feed(std::string_view bytes_value) {
     for (;;) {
         const auto status = connection_->feed(bytes_value);
         drain();
-        if (status == http2_feed_result::protocol_failure || connection_->connection_error()) {
+        if (status == http2_feed_status::protocol_failure || connection_->connection_error()) {
             return false;
         }
-        if (status != http2_feed_result::events_pending) {
+        if (status != http2_feed_status::events_pending) {
             return true;
         }
     }

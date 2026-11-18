@@ -101,7 +101,7 @@ template <typename open_type>
 // The callable's own exception is rethrown unchanged.
 template <typename value_type>
 [[nodiscard]] value_type take_file_open(context& context_value, blocking_result<value_type>&& result) {
-    if (result.status() != blocking_status::completed) {
+    if (!result.completed() && !result.failed()) {
         const auto failure = detail::response_file_failure::read_not_completed(result.status());
         detail::context_access::services(context_value).connection_failure().invoke(detail::context_access::services(context_value).remote_address(), failure.fault());
         std::rethrow_exception(failure.response_error());

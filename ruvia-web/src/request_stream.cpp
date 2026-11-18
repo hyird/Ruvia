@@ -175,11 +175,11 @@ bool request_stream::tunnel_requested() const noexcept {
     return accept_tunnel_ != nullptr;
 }
 
-task<http_tunnel*> request_stream::accept_tunnel(http_status_code status, http_tunnel_route_config config) & {
+task<std::reference_wrapper<http_tunnel>> request_stream::accept_tunnel(http_status_code status, http_tunnel_route_config config) & {
     return operation_scope_.attach(accept_tunnel_impl(status, config));
 }
 
-task<http_tunnel*> request_stream::accept_tunnel_impl(http_status_code status, http_tunnel_route_config config) {
+task<std::reference_wrapper<http_tunnel>> request_stream::accept_tunnel_impl(http_status_code status, http_tunnel_route_config config) {
     auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_), "response stream output operation is already in progress");
     if (accept_tunnel_ == nullptr) {
         throw std::logic_error("accept_tunnel() requires a CONNECT or HTTP/1.1 Upgrade request");

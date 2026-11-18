@@ -239,7 +239,7 @@ TEST(Ruvia, http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_req
                     throw std::system_error(read.error_code());
                 }
                 received_wire.append(input.data(), read.result());
-                if (peer.feed(std::string_view(input.data(), read.result())) == ruvia::http2_feed_result::protocol_failure) {
+                if (peer.feed(std::string_view(input.data(), read.result())) == ruvia::http2_feed_status::protocol_failure) {
                     throw std::runtime_error("CONNECT peer protocol failure");
                 }
             };
@@ -416,7 +416,7 @@ TEST(Ruvia, http2_connect_route_receives_data_sent_before_the_response) {
                 if (read.error_code()) {
                     throw std::system_error(read.error_code());
                 }
-                if (peer.feed(std::string_view(input.data(), read.result())) == ruvia::http2_feed_result::protocol_failure) {
+                if (peer.feed(std::string_view(input.data(), read.result())) == ruvia::http2_feed_status::protocol_failure) {
                     throw std::runtime_error("CONNECT peer protocol failure");
                 }
             };
@@ -533,7 +533,7 @@ TEST(Ruvia, http2_slow_body_and_tunnel_consumers_return_receive_window_without_p
                 if (read.error_code()) {
                     throw std::system_error(read.error_code());
                 }
-                if (peer.feed(std::string_view(input.data(), read.result())) == ruvia::http2_feed_result::protocol_failure) {
+                if (peer.feed(std::string_view(input.data(), read.result())) == ruvia::http2_feed_status::protocol_failure) {
                     throw std::runtime_error("slow consumer peer protocol failure");
                 }
             };
@@ -689,7 +689,7 @@ TEST(Ruvia, http2_websocket_request_half_closed_before_handshake_receives_error_
                 if (read.error_code()) {
                     throw std::system_error(read.error_code());
                 }
-                if (peer.feed(std::string_view(input.data(), read.result())) == ruvia::http2_feed_result::protocol_failure) {
+                if (peer.feed(std::string_view(input.data(), read.result())) == ruvia::http2_feed_status::protocol_failure) {
                     throw std::runtime_error("websocket peer protocol failure");
                 }
             };
@@ -885,7 +885,7 @@ TEST(Ruvia, http2_capsule_route_resets_truncated_capsule_with_protocol_error) {
                 if (read.error_code()) {
                     throw std::system_error(read.error_code());
                 }
-                if (peer.feed(std::string_view(input.data(), read.result())) == ruvia::http2_feed_result::protocol_failure) {
+                if (peer.feed(std::string_view(input.data(), read.result())) == ruvia::http2_feed_status::protocol_failure) {
                     throw std::runtime_error("capsule peer protocol failure");
                 }
             };

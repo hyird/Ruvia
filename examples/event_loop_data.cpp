@@ -65,8 +65,8 @@ struct loop_backends final {
         auto devices = db_.db().repository<device>();
         // A primary-key lookup reads the hash directly; no RediSearch index.
         auto cached = redis_.redis().repository<cached_device>();
-        auto device = co_await devices.find_one({.where_ = device::column<"id">() == 1});
-        auto cache = co_await cached.find_one({.where_ = cached_device::column<"id">() == "1"});
+        auto device = co_await devices.find_first({.where_ = device::column<"id">() == 1});
+        auto cache = co_await cached.find_first({.where_ = cached_device::column<"id">() == "1"});
         // Keep worker-affine operations here; mapped entities own their values
         // independently of the client pools.
         if (device && cache) {

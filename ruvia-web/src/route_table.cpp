@@ -1116,7 +1116,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_bound_stream(co
             // The stream terminal: a websocket or tunnel upgrade commits the
             // session the middleware chain opened before its handshake head,
             // then the handler runs. A response stream commits it explicitly
-            // with commit() (or end() for an empty response).
+            // with commit() (or finish() for an empty response).
             auto terminal = [&handler_invoked, &handler, &route](context& terminal_context) -> task<void> {
                 if (route.endpoint().response_stream() == nullptr && session_access::available(terminal_context)) {
                     co_await session_access::commit(terminal_context);
@@ -1192,7 +1192,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_bound_stream(co
         // longer needs the context.
         if (bound_writer != nullptr && (!output_committed || bound_writer->committed())) {
             try {
-                co_await bound_writer->end();
+                co_await bound_writer->finish();
             } catch (...) {
                 exception = std::current_exception();
             }

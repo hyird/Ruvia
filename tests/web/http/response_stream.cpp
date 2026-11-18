@@ -183,7 +183,7 @@ class stream_lane_routes final {
         payload.append(pending_stream_bytes, 'f');
         auto first = writer.write(payload);
         auto last = writer.writeln("second");
-        auto end = writer.end();
+        auto finish = writer.finish();
         payload.assign("changed");
         payload.shrink_to_fit();
         {
@@ -202,7 +202,7 @@ class stream_lane_routes final {
             observed.write_overlap_rejected_ = true;
         }
         try {
-            auto overlap = writer.end();
+            auto overlap = writer.finish();
             co_await std::move(overlap);
         } catch (const std::logic_error&) {
             observed.end_overlap_rejected_ = true;
@@ -210,7 +210,7 @@ class stream_lane_routes final {
         observed.overlap_checked_ = true;
         co_await writes.join();
         co_await std::move(last);
-        co_await std::move(end);
+        co_await std::move(finish);
         observed.completed_ = !writer.aborted() && !context_value.stop_token().stop_requested();
     }
 
@@ -284,7 +284,7 @@ class stream_lane_routes final {
         } else {
             co_await writer.write("xyz");
         }
-        co_await writer.end();
+        co_await writer.finish();
     }
 
     // The second header is invalid, so the first must not reach the staged head.
@@ -304,7 +304,7 @@ class stream_lane_routes final {
             co_return;
         }
         co_await writer.write("atomic");
-        co_await writer.end();
+        co_await writer.finish();
     }
 
     // stream_text() fills Content-Type and X-Content-Type-Options only when absent.
@@ -318,7 +318,7 @@ class stream_lane_routes final {
             co_return;
         }
         co_await writer.write("a,b\n");
-        co_await writer.end();
+        co_await writer.finish();
     }
 
     // stream_sse() owns Content-Type; Cache-Control is only a default.
@@ -336,7 +336,7 @@ class stream_lane_routes final {
             co_return;
         }
         co_await writer.write({.data_ = "tick"});
-        co_await writer.end();
+        co_await writer.finish();
     }
 
     ruvia::task<void> uaf_head_stream(ruvia::context& context_value) {

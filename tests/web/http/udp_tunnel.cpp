@@ -155,18 +155,18 @@ class udp_tunnel_routes final {
         auto original = c.tunnel().udp(config);
         try {
             try {
-                co_await original.send(std::string(13, 'x'));
+                co_await original.write(std::string(13, 'x'));
             } catch (const std::length_error&) {
                 observation.capsule_bound_rejected_ = true;
             }
             auto first_read = original.read();
             auto last_read = original.read();
-            auto first_write = original.send(std::string("ready"));
-            auto last_write = original.send("second-ready");
+            auto first_write = original.write(std::string("ready"));
+            auto last_write = original.write("second-ready");
             auto finish = original.finish();
             auto tunnel = std::move(original);
             {
-                auto discarded = tunnel.send("discarded");
+                auto discarded = tunnel.write("discarded");
                 static_cast<void>(discarded);
             }
             std::optional<ruvia::http_datagram> datagram;
@@ -187,7 +187,7 @@ class udp_tunnel_routes final {
             };
             writes.spawn(send());
             try {
-                auto overlap = tunnel.send("overlap");
+                auto overlap = tunnel.write("overlap");
                 co_await std::move(overlap);
             } catch (const std::logic_error&) {
                 observation.write_overlap_rejected_ = true;
@@ -197,7 +197,7 @@ class udp_tunnel_routes final {
             co_await reads.join();
             observation.eof_ = !(co_await std::move(last_read));
             if (datagram) {
-                co_await tunnel.send(datagram->bytes());
+                co_await tunnel.write(datagram->bytes());
             }
             co_await std::move(finish);
         } catch (...) {

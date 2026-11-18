@@ -43,7 +43,7 @@
 #include "worker_task_fixture.h"
 
 // Removing a query-result cache id must drop every result a repository builder
-// cached under that id, so the next get_one/get_exists/get_count reads the
+// cached under that id, so the next get_first/get_exists/get_count reads the
 // database again.
 
 namespace {
@@ -270,7 +270,7 @@ private:
 
 // Every read names the same cache id; each result shape stores its own entry.
 ruvia::task<std::string> read_one(const ruvia::db_executor& handle) {
-    const auto row = co_await handle.repository<record>().query_builder().cache({.id_ = cache_id, .duration_ = cache_lifetime}).get_one();
+    const auto row = co_await handle.repository<record>().query_builder().cache({.id_ = cache_id, .duration_ = cache_lifetime}).get_first();
     co_return row ? std::string(std::string_view(row->get<"v">())) : std::string("missing");
 }
 
@@ -294,7 +294,7 @@ ruvia::task<std::vector<std::string>> read_many(const ruvia::db_executor& handle
 ruvia::task<std::string> read_sql_cached(const ruvia::db_executor& handle, std::string_view parameter) {
     auto query = handle.repository<record>().query_builder();
     query.where(record::column<"v">() == parameter).cache({.duration_ = cache_lifetime});
-    const auto row = co_await query.get_one();
+    const auto row = co_await query.get_first();
     co_return row ? std::string(std::string_view(row->get<"v">())) : std::string("missing");
 }
 

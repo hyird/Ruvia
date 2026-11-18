@@ -467,7 +467,7 @@ private:
 // transport write failure does not discard a complete final response arriving
 // from the peer: response() remains consumable, while the failed upload is
 // reported independently and its connection is not reused.
-// A write()/end() timeout or stop request in its operation_options aborts the
+// A write()/finish() timeout or stop request in its operation_options aborts the
 // exchange with http_client_error (errc::timed_out / operation_canceled), since a partly sent
 // chunk cannot be withdrawn; an already-stopped token fails before queuing.
 class http_client_request_body_writer final {
@@ -477,11 +477,11 @@ public:
     // Owns `bytes` before returning; exact std::string rvalues move without copying.
     [[nodiscard]] task<void> write(outbound_bytes bytes, operation_options operation = {}) &;
     task<void> write(outbound_bytes, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> end(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
-    task<void> end(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
+    task<void> finish(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
     [[nodiscard]] bool complete() const noexcept;
-    // Whether write() and end() may still start: false once the content ended
-    // or end() started, after abandon(), and once the exchange stopped the
+    // Whether write() and finish() may still start: false once the content ended
+    // or finish() started, after abandon(), and once the exchange stopped the
     // upload itself (an early final response that completes the exchange, or a
     // failure). A false result never turns a later response into a failure.
     [[nodiscard]] bool writable() const noexcept;
@@ -489,7 +489,7 @@ public:
     // incomplete and response() remains consumable. HTTP/1 closes the
     // connection after the response; HTTP/2 and HTTP/3 end only the sending
     // direction (RFC 9113 section 8.1, RFC 9114 section 4.1). A running write()
-    // or end() completes with errc::operation_canceled; idempotent, no-op once complete().
+    // or finish() completes with errc::operation_canceled; idempotent, no-op once complete().
     void abandon() & noexcept;
     void abandon() && = delete;
 

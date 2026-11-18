@@ -655,7 +655,7 @@ TEST(Ruvia, http3_received_data_credits_of_different_streams_do_not_merge) {
     append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
     append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, body);
     auto server = ruvia::http2_connection::server({});
-    if (server.feed(wire) != ruvia::http2_feed_result::accepted) {
+    if (server.feed(wire) != ruvia::http2_feed_status::accepted) {
         throw std::logic_error("HTTP/2 test request was rejected");
     }
     while (auto event = server.next_event()) {

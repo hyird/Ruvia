@@ -13,6 +13,7 @@
 #include <string_view>
 #include <utility>
 
+#include "borrowed_text.h"
 #include "http_status.h"
 
 namespace ruvia {
@@ -90,7 +91,7 @@ private:
 // reporting never allocates or borrows.
 class http_protocol_error final : public std::exception {
 public:
-    http_protocol_error(http_status_code status, std::string_view code, std::string_view message) noexcept :
+    http_protocol_error(http_status_code status, static_text code, std::string_view message) noexcept :
         status_(status),
         code_(code) {
         const auto size = (std::min)(message.size(), message_.size() - 1);
@@ -105,7 +106,7 @@ public:
     }
 
     [[nodiscard]] std::string_view code() const noexcept {
-        return code_;
+        return code_.view();
     }
 
     [[nodiscard]] const char* what() const noexcept override {
@@ -114,7 +115,7 @@ public:
 
 private:
     http_status_code status_;
-    std::string_view code_;
+    static_text code_;
     std::array<char, 128> message_{};
 };
 

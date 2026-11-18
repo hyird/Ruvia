@@ -80,7 +80,7 @@ task<void> demonstrate(db_client& db) {
     co_await devices.update(device::column<"id">() == 1, {device::column<"revision">().increment(1)});
     co_await devices.update(device::column<"id">() == 1, {device::column<"revision">().decrement(1)});
     std::cout << "exists=" << co_await devices.exists({.where_ = device::column<"id">() == 1}) << '\n';
-    const auto one = co_await devices.find_one({.where_ = device::column<"id">() == 1});
+    const auto one = co_await devices.find_first({.where_ = device::column<"id">() == 1});
     if (one) {
         std::cout << "revision=" << one->get<"revision">() << '\n';
     }
@@ -106,7 +106,7 @@ task<void> demonstrate(db_client& db) {
             device::column<"revision">() += 1,
         })
         .returning({{"id"}, device::column<"name">().as("label"), device::column<"revision">().as("rank")});
-    const auto changed = co_await update_summary.get_one<device_summary>();
+    const auto changed = co_await update_summary.get_first<device_summary>();
     if (changed) {
         std::cout << "updated=" << changed->get<"label">() << '\n';
     }
@@ -124,7 +124,7 @@ task<void> demonstrate(db_client& db) {
     const db_find_options transaction_page{.where_ = device::column<"id">() == 1, .offset_ = 10, .limit_ = 1};
     auto [empty_page, transaction_total] = co_await transactional.find_and_count(transaction_page);
     std::cout << "empty page=" << empty_page.size() << ", transaction total=" << transaction_total << '\n';
-    const auto locked = co_await transactional.find_one({.where_ = device::column<"id">() == 1, .lock_ = db_lock_options{.mode_ = db_row_lock::update, .skip_locked_ = true}});
+    const auto locked = co_await transactional.find_first({.where_ = device::column<"id">() == 1, .lock_ = db_lock_options{.mode_ = db_row_lock::update, .skip_locked_ = true}});
     if (locked) {
         co_await transactional.remove(*locked);
     }

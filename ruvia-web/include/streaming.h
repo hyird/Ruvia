@@ -137,10 +137,10 @@ public:
     /// 正常结束正文并可附 Trailer；未提交时可用于提交一个空响应。
     /// Trailer 视图在调用返回前复制到 owner storage；HTTP/1.0 等无法承载的可选
     /// Trailer 会被省略，禁止 Trailer 的状态在未发送头之前拒绝非空部分。
-    /// 已正常完成后空 end() 幂等，非空 Trailer 抛 logic_error；生产正文仍必须
-    /// 先显式 commit() 并检查结果，不能用 end() 隐藏无正文阶段。
-    [[nodiscard]] task<void> end(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
-    task<void> end(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
+    /// 已正常完成后空 finish() 幂等，非空 Trailer 抛 logic_error；生产正文仍必须
+    /// 先显式 commit() 并检查结果，不能用 finish() 隐藏无正文阶段。
+    [[nodiscard]] task<void> finish(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
+    task<void> finish(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
 
 private:
     friend struct detail::streaming_access;
@@ -238,8 +238,8 @@ public:
         return writer().committed();
     }
 
-    [[nodiscard]] task<void> end(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
-    task<void> end(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
+    task<void> finish(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
 
 private:
     // request_exchange::stream_sse() is the only constructor of a first handle.

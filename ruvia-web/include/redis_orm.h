@@ -562,7 +562,7 @@ struct redis_map_first final {
             return std::nullopt;
         }
         if (result_value.first.size() != 1) {
-            throw redis_error(backend_error_code::protocol_error, "multiple entities in find_one reply");
+            throw redis_error(backend_error_code::protocol_error, "multiple entities in find_first reply");
         }
         return std::move(result_value.first[0]);
     }
@@ -1012,7 +1012,7 @@ public:
         return executor_.template command_mapped<entity_rows<entity_type>>(std::move(args), std::move(mapper));
     }
 
-    [[nodiscard]] task<std::optional<entity_type>> find_one(const redis_find_options& options = {}) const {
+    [[nodiscard]] task<std::optional<entity_type>> find_first(const redis_find_options& options = {}) const {
         const bool plain = !options.order_.has_value() && !options.offset_ && !options.limit_;
         if (plain) {
             detail::redis_scalar_scratch_type id_scratch;

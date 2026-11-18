@@ -119,7 +119,7 @@ std::vector<unsigned> http2_statuses(stream_type& stream, std::initializer_list<
         }
         asio::error_code error;
         const auto size = stream.read_some(asio::buffer(input), error);
-        if (error || peer.feed(std::string_view(input.data(), size)) == ruvia::http2_feed_result::protocol_failure) {
+        if (error || peer.feed(std::string_view(input.data(), size)) == ruvia::http2_feed_status::protocol_failure) {
             break;
         }
         while (auto event = peer.next_event()) {

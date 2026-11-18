@@ -30,6 +30,7 @@
 #include "http_response.h"
 #include "http_response_stream.h"
 #include "http_target_origin.h"
+#include "http_uri.h"
 
 namespace {
 
@@ -1915,4 +1916,10 @@ TEST(Ruvia, parse_http_date_imf_fixdate) {
     EXPECT_TRUE(t.has_value());
     EXPECT_EQ(static_cast<long long>(*t), 784111777LL);
     EXPECT_TRUE(!ruvia::parse_http_date("not a date").has_value());
+}
+
+TEST(Ruvia, protocol_error_preserves_static_code_and_copies_message) {
+    const ruvia::http_protocol_error failure(ruvia::http_status::bad_request, ruvia::static_text{"invalid_request"}, std::string("invalid request"));
+    EXPECT_EQ(failure.code(), "invalid_request");
+    EXPECT_STREQ(failure.what(), "invalid request");
 }

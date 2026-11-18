@@ -267,7 +267,7 @@ public:
             co_await writer.write("chunk-" + std::string(std::to_string(chunk)) + ";");
             (void)co_await writer.sleep(2ms);
         }
-        co_await writer.end();
+        co_await writer.finish();
     }
     ruvia::task<void> upload_trailer(ruvia::context& context) {
         const std::array<ruvia::http_header_view, 1> hint_fields{{{"link", "</app.css>; rel=preload"}}};
@@ -285,7 +285,7 @@ public:
         }
         co_await out.write("uploaded:" + std::string(std::to_string(bytes)) + ":" + std::string(checksum));
         const ruvia::http_header_view trailers[] = {{"x-response-trailer", "verified"}};
-        co_await out.end(trailers);
+        co_await out.finish(trailers);
     }
     ruvia::task<void> events(ruvia::context& context) {
         auto writer = context.stream_sse();
@@ -297,7 +297,7 @@ public:
             const std::string data(std::string("item-") + id);
             co_await writer.write({.data_ = data, .event_ = "tick", .id_ = id});
         }
-        co_await writer.end();
+        co_await writer.finish();
     }
     ruvia::task<ruvia::http_response> push_and_origin(ruvia::context& context) {
         const std::string origin("https://" + std::string(context.req().authority()));
@@ -390,7 +390,7 @@ public:
                 std::error_code error;
                 const auto count = socket.receive(asio::buffer(buffer), 0, error);
                 if (!error) {
-                    co_await tunnel.send(std::string_view(buffer.data(), count));
+                    co_await tunnel.write(std::string_view(buffer.data(), count));
                     break;
                 }
                 if (error != asio::error::would_block && error != asio::error::try_again) {
@@ -554,7 +554,7 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_ref client, ruvia::http_p
                 co_await exchange.body().write("part-1:");
                 co_await exchange.body().write("part-2");
                 const std::array<ruvia::http_header_view, 1> req_trailers{{{"x-upload-checksum", "crc-ok"}}};
-                co_await exchange.body().end(req_trailers);
+                co_await exchange.body().finish(req_trailers);
                 auto resp = co_await exchange.response();
                 EXPECT_TRUE(resp.ok());
                 EXPECT_TRUE(resp.informational_responses().size() >= std::size_t{1});
@@ -600,7 +600,7 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_ref client, ruvia::http_p
                 if (raw_tunnel != nullptr) {
                     auto udp = raw_tunnel->stream().udp();
                     const std::string dgram("udp-" + std::string(std::to_string(loop_idx)) + "-" + std::string(std::to_string(lane)));
-                    co_await udp.send(dgram);
+                    co_await udp.write(dgram);
                     auto echoed_dgram = co_await udp.read();
                     EXPECT_TRUE(echoed_dgram.has_value());
                     if (echoed_dgram) {
@@ -803,7 +803,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
                 co_await upload.body().write("last");
                 const std::array fields{ruvia::http_header_view("x-upload-checksum", "finish-race")};
                 stage = "upload-end";
-                co_await upload.body().end(fields);
+                co_await upload.body().finish(fields);
                 stage = "upload-response";
                 auto response = co_await upload.response();
                 stage = "upload-response-body";
@@ -1134,7 +1134,7 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
             ++observed_.exited_;
         }
     } retired{observed, index};
-    auto* tunnel = co_await request.accept_tunnel();
+    auto* tunnel = &(co_await request.accept_tunnel()).get();
     if (observed.stopping_) {
         if (const auto bytes = co_await tunnel->read_text()) {
             co_await tunnel->write(*bytes);

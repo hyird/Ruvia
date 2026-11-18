@@ -103,26 +103,26 @@ task<void> demonstrate(db_client& db, db_client& concurrent) {
     input.set<"total">(-1);
     co_await items.delete_by(line_item::column<"id">() == 1);
     co_await items.insert(input);
-    const auto inserted = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
+    const auto inserted = co_await items.find_first({.where_ = line_item::column<"id">() == 1});
     require(inserted && inserted->get<"total">() == 21, "computed INSERT value differs");
 
     line_item changes;
     changes.set<"quantity">(4);
     changes.set<"total">(-2);
     co_await items.update(line_item::column<"id">() == 1, changes);
-    const auto updated = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
+    const auto updated = co_await items.find_first({.where_ = line_item::column<"id">() == 1});
     require(updated && updated->get<"total">() == 28, "computed UPDATE value differs");
     input.set<"quantity">(5);
     co_await items.upsert(input);
-    const auto retained = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
+    const auto retained = co_await items.find_first({.where_ = line_item::column<"id">() == 1});
     require(retained && retained->get<"total">() == 35, "computed UPSERT value differs");
 
     auto snapshot = co_await session.begin_transaction({.isolation_ = db_transaction_isolation::repeatable_read, .access_mode_ = db_transaction_access_mode::read_only});
     auto snapshot_items = snapshot.repository<line_item>();
-    const auto before = co_await snapshot_items.find_one({.where_ = line_item::column<"id">() == 1});
+    const auto before = co_await snapshot_items.find_first({.where_ = line_item::column<"id">() == 1});
     changes.set<"quantity">(6);
     co_await concurrent.db().repository<line_item>().update(line_item::column<"id">() == 1, changes);
-    const auto after = co_await snapshot_items.find_one({.where_ = line_item::column<"id">() == 1});
+    const auto after = co_await snapshot_items.find_first({.where_ = line_item::column<"id">() == 1});
     require(before && after && before->get<"total">() == 35 && after->get<"total">() == 35, "repeatable-read snapshot changed after another connection committed");
 
     bool rejected = false;
@@ -137,7 +137,7 @@ task<void> demonstrate(db_client& db, db_client& concurrent) {
     auto writable = co_await session.begin_transaction();
     co_await writable.repository<line_item>().update(line_item::column<"id">() == 1, changes);
     co_await writable.commit();
-    const auto current = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
+    const auto current = co_await items.find_first({.where_ = line_item::column<"id">() == 1});
     require(current && current->get<"total">() == 42, "default transaction failed to write");
     require(retained->get<"total">() == 35, "later operation changed retained entity data");
     co_await verify_operation_options(db);

@@ -122,9 +122,10 @@ private:
 };
 
 enum class blocking_status : std::uint8_t {
-    // The callable ran to completion. It may still have thrown: that is a
-    // result, not a rejection.
+    // Execution and result delivery both succeeded.
     completed,
+    // Execution or result delivery raised an exception.
+    failed,
     // The pool's queue was full. The callable never ran.
     queue_full,
     // The pool was stopped before a thread picked the task up. Never ran.
@@ -246,12 +247,12 @@ public:
 
     // True when execution and result delivery both completed without error.
     [[nodiscard]] bool completed() const noexcept {
-        return payload_.status_ == blocking_status::completed && payload_.error_ == nullptr;
+        return status() == blocking_status::completed;
     }
 
     // Execution or result delivery failed; value() rethrows the exception.
     [[nodiscard]] bool failed() const noexcept {
-        return payload_.error_ != nullptr;
+        return status() == blocking_status::failed;
     }
 
     [[nodiscard]] const std::exception_ptr& error() const& noexcept {
@@ -305,14 +306,14 @@ public:
         if (error == nullptr) {
             throw std::invalid_argument("blocking error result requires an exception");
         }
-        blocking_result result_value(blocking_status::completed);
+        blocking_result result_value(blocking_status::failed);
         result_value.payload_.error_ = std::move(error);
         return result_value;
     }
 
-    // The operation produced no result of its own; every status but completed.
+    // The operation produced no result of its own; rejection statuses only.
     [[nodiscard]] static blocking_result with_status(blocking_status status) {
-        if (status == blocking_status::completed) {
+        if (status == blocking_status::completed || status == blocking_status::failed) {
             throw std::invalid_argument("blocking status result requires a rejection status");
         }
         return blocking_result(status);

@@ -105,7 +105,7 @@ ruvia::task<void> answer(ruvia::request_stream& stream) {
     }
     if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
         co_await stream.stream().write(body);
-        co_await stream.stream().end();
+        co_await stream.stream().finish();
     }
 }
 

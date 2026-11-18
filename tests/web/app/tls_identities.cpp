@@ -851,7 +851,7 @@ TEST(Ruvia, certificate_library_is_shared_by_independent_single_and_multiworker_
     const auto answer = [](ruvia::request_stream& stream) -> ruvia::task<void> {
         if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
             co_await stream.stream().write("hello");
-            co_await stream.stream().end();
+            co_await stream.stream().finish();
         }
     };
     const auto selector = std::make_shared<const ruvia::tls_certificate_selector>([](const ruvia::tls_certificate_selection& input) -> std::optional<ruvia::tls_certificate_id> {
@@ -996,7 +996,7 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_member_host_contr
     const auto answer = [](ruvia::request_stream& stream) -> ruvia::task<void> {
         if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
             co_await stream.stream().write("hello");
-            co_await stream.stream().end();
+            co_await stream.stream().finish();
         }
     };
     std::exception_ptr single_failure, group_failure;
@@ -1074,7 +1074,7 @@ TEST(Ruvia, public_certificate_preparation_leaves_caller_worker_responsive_and_p
     const auto answer = [](ruvia::request_stream& stream) -> ruvia::task<void> {
         if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
             co_await stream.stream().write("hello");
-            co_await stream.stream().end();
+            co_await stream.stream().finish();
         }
     };
     ruvia::http_server single(caller, {.request_stream_ = answer});

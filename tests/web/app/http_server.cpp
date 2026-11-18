@@ -66,7 +66,7 @@ ruvia::task<void> answer(ruvia::request_stream& stream) {
     }
     if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
         co_await stream.stream().write(body.empty() ? std::string_view("independent") : std::string_view(body));
-        co_await stream.stream().end();
+        co_await stream.stream().finish();
     }
 }
 
@@ -867,7 +867,7 @@ TEST(Ruvia, independent_request_stream_response_forms_are_mutually_exclusive_and
         bool refused = false;
         try {
             if (target == "/end") {
-                co_await stream.stream().end();
+                co_await stream.stream().finish();
             } else if (target == "/commit") {
                 (void)co_await stream.stream().commit();
             } else if (target == "/tunnel") {
@@ -915,7 +915,7 @@ TEST(Ruvia, independent_request_stream_retires_unstarted_file_and_accept_tasks_w
     write_file(path, "cold");
     ruvia::static_root root(directory.path(), {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all}});
     std::array<std::optional<ruvia::task<ruvia::http_response>>, 2> files;
-    std::optional<ruvia::task<ruvia::http_tunnel*>> tunnel;
+    std::optional<ruvia::task<std::reference_wrapper<ruvia::http_tunnel>>> tunnel;
     std::optional<ruvia::task<ruvia::websocket_accept_result>> websocket;
     with_server([&](ruvia::request_stream& stream) -> ruvia::task<void> {
         files[0].emplace(stream.file({.path_ = path}));

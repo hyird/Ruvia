@@ -448,15 +448,15 @@ namespace ruvia {
 http_protocol_error make_http_protocol_error(websocket_handshake_error error) noexcept {
     switch (error) {
         case websocket_handshake_error::invalid_request:
-            return http_protocol_error(http_status::bad_request, "invalid_websocket_handshake", "invalid WebSocket handshake");
+            return http_protocol_error(http_status::bad_request, static_text{"invalid_websocket_handshake"}, "invalid WebSocket handshake");
         case websocket_handshake_error::unsupported_version:
             // RFC 6455 section 4.4 requires Sec-websocket-Version and uses 400
             // in its example. 426 would instead require HTTP Upgrade fields.
-            return http_protocol_error(http_status::bad_request, "unsupported_websocket_version", "unsupported WebSocket version");
+            return http_protocol_error(http_status::bad_request, static_text{"unsupported_websocket_version"}, "unsupported WebSocket version");
         case websocket_handshake_error::unsupported_subprotocol:
-            return http_protocol_error(http_status::bad_request, "unsupported_websocket_subprotocol", "no supported WebSocket subprotocol offered");
+            return http_protocol_error(http_status::bad_request, static_text{"unsupported_websocket_subprotocol"}, "no supported WebSocket subprotocol offered");
     }
-    return http_protocol_error(http_status::bad_request, "invalid_websocket_handshake", "invalid WebSocket handshake");
+    return http_protocol_error(http_status::bad_request, static_text{"invalid_websocket_handshake"}, "invalid WebSocket handshake");
 }
 
 void apply_websocket_handshake_error_headers(websocket_handshake_error error, http_response& response) {

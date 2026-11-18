@@ -2680,24 +2680,24 @@ namespace ruvia {
 // engaged only when status() is found and the member converts to (and, for a
 // model type, validates as) t_type; found with an empty value means the member
 // exists but is not a t_type. The value may borrow the queried token's bytes and
-// must not outlive that token. An rvalue lookup yields its value by move, so no
-// reference into a temporary lookup is handed out.
+// must not outlive that token. Use take_value() on an rvalue lookup to extract the converted value.
 template <typename t_type>
 class json_field_lookup final {
 public:
+    json_field_lookup(const json_field_lookup&) = default;
+    json_field_lookup(json_field_lookup&&) = default;
+    json_field_lookup& operator=(const json_field_lookup&) = delete;
+    json_field_lookup& operator=(json_field_lookup&&) = delete;
+
     [[nodiscard]] unique_lookup_status status() const noexcept {
         return status_;
-    }
-
-    [[nodiscard]] std::optional<t_type>& value() & noexcept RUVIA_LIFETIMEBOUND {
-        return value_;
     }
 
     [[nodiscard]] const std::optional<t_type>& value() const& noexcept RUVIA_LIFETIMEBOUND {
         return value_;
     }
 
-    [[nodiscard]] std::optional<t_type> value() && noexcept(std::is_nothrow_move_constructible_v<t_type>) {
+    [[nodiscard]] std::optional<t_type> take_value() && noexcept(std::is_nothrow_move_constructible_v<t_type>) {
         return std::move(value_);
     }
 

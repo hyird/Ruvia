@@ -71,7 +71,7 @@ private:
         co_return c.json(response, {.status_ = ruvia::http_status::created});
     }
     ruvia::task<ruvia::http_response> find(ruvia::context& c) {
-        auto user_value = co_await c.redis().repository<cached_user>(cached_user_mapping()).find_one({.where_ = cached_user::column<"id">() == c.req().param("id").value_or("")});
+        auto user_value = co_await c.redis().repository<cached_user>(cached_user_mapping()).find_first({.where_ = cached_user::column<"id">() == c.req().param("id").value_or("")});
         if (!user_value) {
             co_return c.error({.status_ = ruvia::http_status::not_found, .message_ = "user not found"});
         }

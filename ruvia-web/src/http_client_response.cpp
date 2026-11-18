@@ -1084,7 +1084,7 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
                 if (output.forwarded_) {
                     const auto trailers = state_value.trailers_.empty() ? std::vector<http_header_view>{} : prepare_forwarded_response_trailers(state_value);
                     try {
-                        co_await output.writer_.end(trailers, state_value.downstream_step(steps));
+                        co_await output.writer_.finish(trailers, state_value.downstream_step(steps));
                     } catch (...) {
                         state_value.rethrow_downstream_failure(steps);
                     }

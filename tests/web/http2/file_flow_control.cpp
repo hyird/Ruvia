@@ -1319,7 +1319,7 @@ void exercise(response_mode mode) {
             } else if (mode == response_mode::connection_lost_upload || mode == response_mode::goaway_upload) {
                 auto exchange = co_await client.client().post("/upload").upload({.content_length_ = 7});
                 co_await exchange.body().write("payload");
-                co_await exchange.body().end();
+                co_await exchange.body().finish();
                 auto response = co_await exchange.response();
                 const auto bytes = co_await response.bytes();
                 const auto body = bytes.bytes();
@@ -1366,7 +1366,7 @@ void exercise(response_mode mode) {
                 EXPECT_TRUE(bytes.bytes().empty());
                 EXPECT_TRUE(response.stream().complete());
                 co_await exchange.body().write(payload);
-                co_await exchange.body().end();
+                co_await exchange.body().finish();
                 EXPECT_TRUE(exchange.body().complete());
             } else {
                 const bool expect = mode == response_mode::continued || mode == response_mode::rejected;
@@ -1403,7 +1403,7 @@ void exercise(response_mode mode) {
                     EXPECT_TRUE(response.stream().complete());
                 } else if (mode == response_mode::ordinary || mode == response_mode::continued) {
                     co_await exchange.body().write("payload");
-                    co_await exchange.body().end();
+                    co_await exchange.body().finish();
                     EXPECT_TRUE(exchange.body().complete());
                 } else if (mode != response_mode::abandoned) {
                     bool cancelled = false;

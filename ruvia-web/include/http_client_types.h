@@ -106,6 +106,8 @@ enum class http_client_response_framing : std::uint8_t { none,
     tunnel,
     protocol_upgrade };
 
+class http_client_request;
+
 struct http_client_connection_info final {
     // 物理连接身份，不是槽位。重新拨号产生新 id，旧 id 不能关闭新连接。
     std::uint64_t id_{};
@@ -119,7 +121,8 @@ struct http_client_connection_info final {
 // Per-hop redirect observation passed to on_redirect / redirect_policy before
 // following a redirect response. Views are valid for the duration of the callback.
 class http_client_redirect_hop final {
-public:
+    friend class http_client_request;
+
     http_client_redirect_hop(std::size_t hop_index, http_origin_view source_origin, std::string_view source_target, std::string_view source_url, const http_client_connection_info& connection_info, http_status_code status, std::string_view location, http_origin_view target_origin, std::string_view target, std::string_view target_url, bool cross_origin) noexcept :
         hop_index_(hop_index),
         source_origin_(source_origin),
@@ -133,6 +136,7 @@ public:
         target_url_(target_url),
         cross_origin_(cross_origin) {}
 
+public:
     [[nodiscard]] constexpr std::size_t hop_index() const noexcept {
         return hop_index_;
     }

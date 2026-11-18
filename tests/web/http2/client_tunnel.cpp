@@ -425,7 +425,7 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
             const auto bytes_value = std::string_view(input.data(), count);
             for (;;) {
                 const auto fed = connection.feed(bytes_value);
-                EXPECT_TRUE(fed != ruvia::http2_feed_result::protocol_failure);
+                EXPECT_TRUE(fed != ruvia::http2_feed_status::protocol_failure);
                 while (auto event = connection.next_event()) {
                     if (auto* head = event->request_head()) {
                         ruvia::http_response accepted;
@@ -450,7 +450,7 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
                         (void)data->take_credit();
                     }
                 }
-                if (fed != ruvia::http2_feed_result::events_pending) {
+                if (fed != ruvia::http2_feed_status::events_pending) {
                     break;
                 }
             }
@@ -551,7 +551,7 @@ TEST(Ruvia, http2_client_half_closed_tunnel_rejects_truncated_capsule_on_end_str
                         (void)data->take_credit();
                     }
                 }
-                if (fed != ruvia::http2_feed_result::events_pending) {
+                if (fed != ruvia::http2_feed_status::events_pending) {
                     break;
                 }
             }
@@ -748,7 +748,7 @@ void exercise_http2_held_tunnel_budget(bool worker_budget) {
             }
             EXPECT_EQ(request.conn().connection_id(), connection_id);
             try {
-                auto* tunnel = co_await request.accept_tunnel();
+                auto* tunnel = &(co_await request.accept_tunnel()).get();
                 co_await permit_read.wait();
                 if (!stopping) {
                     std::optional<std::span<const std::byte>> view;

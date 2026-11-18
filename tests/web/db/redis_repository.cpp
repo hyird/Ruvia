@@ -576,7 +576,7 @@ TEST(Ruvia, redis_repository_search_consumes_expired_documents_without_truncatio
             // though the expired entity is omitted from the decoded rows.
             const auto rows = co_await repository.find();
             EXPECT_TRUE(rows.empty());
-            const auto first = co_await repository.find_one({});
+            const auto first = co_await repository.find_first({});
             EXPECT_TRUE(!first.has_value());
             const auto [counted_rows, count] = co_await repository.find_and_count();
             EXPECT_TRUE(counted_rows.empty());
@@ -706,11 +706,11 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
             (void)repository.insert(make_user(), {.ttl_ = std::chrono::milliseconds(10), .persist_ = true});
         }));
         EXPECT_TRUE(throws_invalid_argument([&] {
-            (void)repository.find_one({.where_ = test_redis_user::column<"id">() == ""});
+            (void)repository.find_first({.where_ = test_redis_user::column<"id">() == ""});
         }));
         for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::numeric_limits<std::int64_t>::min() + 5, std::int64_t{-1}}) {
             EXPECT_TRUE(throws_invalid_argument([&] {
-                (void)repository.find_one({.limit_ = invalid});
+                (void)repository.find_first({.limit_ = invalid});
             }));
             EXPECT_TRUE(throws_invalid_argument([&] {
                 (void)repository.count({.offset_ = invalid});
@@ -718,7 +718,7 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
         }
         for (const auto invalid : {static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1, (std::numeric_limits<std::uint64_t>::max)()}) {
             EXPECT_TRUE(throws_invalid_argument([&] {
-                (void)repository.find_one({.limit_ = invalid});
+                (void)repository.find_first({.limit_ = invalid});
             }));
             EXPECT_TRUE(throws_invalid_argument([&] {
                 (void)repository.count({.offset_ = invalid});
@@ -757,10 +757,10 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
         test_redis_unsigned_pk_user unsigned_changes;
         unsigned_changes.set<"name">("Alice");
         EXPECT_TRUE(throws_invalid_argument([&] {
-            (void)unsigned_repo.find_one({.where_ = test_redis_unsigned_pk_user::column<"id">() == -1});
+            (void)unsigned_repo.find_first({.where_ = test_redis_unsigned_pk_user::column<"id">() == -1});
         }));
         EXPECT_TRUE(throws_invalid_argument([&] {
-            (void)unsigned_repo.find_one({.where_ = test_redis_unsigned_pk_user::column<"id">() == -1.0});
+            (void)unsigned_repo.find_first({.where_ = test_redis_unsigned_pk_user::column<"id">() == -1.0});
         }));
         EXPECT_TRUE(throws_invalid_argument([&] {
             (void)unsigned_repo.update(test_redis_unsigned_pk_user::column<"id">() == -1, unsigned_changes);
@@ -771,7 +771,7 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
         test_redis_signed_pk_user signed_changes;
         signed_changes.set<"name">("Bob");
         EXPECT_TRUE(throws_invalid_argument([&] {
-            (void)signed_repo.find_one({.where_ = test_redis_signed_pk_user::column<"id">() == std::numeric_limits<std::uint64_t>::max()});
+            (void)signed_repo.find_first({.where_ = test_redis_signed_pk_user::column<"id">() == std::numeric_limits<std::uint64_t>::max()});
         }));
         EXPECT_TRUE(throws_invalid_argument([&] {
             (void)signed_repo.update(test_redis_signed_pk_user::column<"id">() == std::numeric_limits<std::uint64_t>::max(), signed_changes);
@@ -1427,7 +1427,7 @@ ruvia::task<void> check_commands(ruvia::redis_client& client) {
     auto retained = co_await redis.get("retained");
     EXPECT_TRUE(retained.has_value());
     auto users = redis.repository<client_user>();
-    auto user_value = co_await users.find_one({.where_ = client_user::column<"id">() == "1"});
+    auto user_value = co_await users.find_first({.where_ = client_user::column<"id">() == "1"});
     EXPECT_TRUE(user_value.has_value());
     std::string mutable_ping(128, 'm');
     auto cold_ping = redis.ping(mutable_ping);

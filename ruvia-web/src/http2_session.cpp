@@ -624,7 +624,7 @@ public:
     http2_sans_io_session_engine& operator=(http2_sans_io_session_engine&&) = delete;
 
     void drain_events();
-    [[nodiscard]] http2_feed_result feed_and_drain(std::string_view bytes);
+    [[nodiscard]] http2_feed_status feed_and_drain(std::string_view bytes);
 
     [[nodiscard]] bool wants_write() const noexcept;
     void take_output(std::string& output);
@@ -653,7 +653,7 @@ public:
     // preface or an unfinished header block still owes (bounded by the
     // initial-read clocks), renews the inactivity clock: PING, SETTINGS,
     // WINDOW_UPDATE or PRIORITY traffic alone cannot hold an idle connection.
-    [[nodiscard]] http2_feed_result feed_read(std::string_view bytes);
+    [[nodiscard]] http2_feed_status feed_read(std::string_view bytes);
     // The connection's scanner entry: the reader times its phases, the
     // writer runs the entry's write stall clock around each socket write.
     [[nodiscard]] connection_scanner::entry& scanner_entry() const noexcept {
@@ -1229,7 +1229,7 @@ void http2_sans_io_session_engine::remove_stream_runtime(std::uint32_t stream_id
     }
 }
 
-http2_feed_result http2_sans_io_session_engine::feed_read(std::string_view bytes_value) {
+http2_feed_status http2_sans_io_session_engine::feed_read(std::string_view bytes_value) {
     const bool initial = !connection_.peer_settings().has_value() || connection_.header_block_in_progress();
     const auto progress = connection_.received_stream_progress();
     const auto result_value = feed_and_drain(bytes_value);
@@ -1809,18 +1809,18 @@ void http2_sans_io_session_engine::drain_events() {
     });
 }
 
-http2_feed_result http2_sans_io_session_engine::feed_and_drain(std::string_view bytes_value) {
+http2_feed_status http2_sans_io_session_engine::feed_and_drain(std::string_view bytes_value) {
     // Once per read, outside the retry loop below, which feeds the same bytes again.
     if (const auto observer = session_.options().http2_input_) {
         observer(server_observation_access::http2_input(base_services_.get_conn_info().connection_id(), std::as_bytes(std::span(bytes_value.data(), bytes_value.size()))));
     }
     for (;;) {
         const auto result_value = connection_.feed(bytes_value);
-        if (result_value == http2_feed_result::protocol_failure) {
+        if (result_value == http2_feed_status::protocol_failure) {
             base_services_.set_connection_close_reason(connection_close_reason::protocol_error);
         }
         drain_events();
-        if (result_value != http2_feed_result::events_pending) {
+        if (result_value != http2_feed_status::events_pending) {
             return result_value;
         }
     }
@@ -1919,8 +1919,8 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
                 }
                 const auto result_value = engine.feed_read(std::string_view(read_buffer.data(), bytes_read));
                 engine.wake_writer();
-                if (result_value == http2_feed_result::protocol_failure || engine.write_failed()) {
-                    if (result_value == http2_feed_result::protocol_failure) {
+                if (result_value == http2_feed_status::protocol_failure || engine.write_failed()) {
+                    if (result_value == http2_feed_status::protocol_failure) {
                         reader_terminal_error = std::make_error_code(std::errc::protocol_error);
                     }
                     break;

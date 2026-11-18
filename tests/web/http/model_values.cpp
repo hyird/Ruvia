@@ -1369,7 +1369,7 @@ TEST(Ruvia, model_dynamic_owned_tokens_and_presence_survive_rebinding_and_reclai
         }
         EXPECT_TRUE(retained.is_present<"value">() && retained.is_present<"object">());
         EXPECT_TRUE(!retained.is_present<"note">() && retained.get<"note">().has_value());
-        EXPECT_TRUE(retained.get<"value">()->get<ruvia::string>("text").value()->view() == text);
+        EXPECT_TRUE(retained.get<"value">()->get<ruvia::string>("text").take_value()->view() == text);
         for (int index = 0; index < 32; ++index) {
             {
                 auto parsed_value = ruvia::parse_json<owned_values>(body).take_value();
@@ -1382,7 +1382,7 @@ TEST(Ruvia, model_dynamic_owned_tokens_and_presence_survive_rebinding_and_reclai
                     EXPECT_EQ(result.error().code(), ruvia::model_parse_error::code_type::invalid_format);
                 }
             }
-            EXPECT_TRUE(retained.get<"object">()->get<ruvia::string>("text").value()->view() == text);
+            EXPECT_TRUE(retained.get<"object">()->get<ruvia::string>("text").take_value()->view() == text);
         }
     }
 }
@@ -1635,3 +1635,6 @@ static_assert(!std::is_copy_constructible_v<ruvia::model_parse_result<resource_p
 static_assert(!std::is_move_assignable_v<ruvia::model_parse_result<resource_parent>>);
 static_assert(!std::is_copy_assignable_v<ruvia::model_parse_result<resource_parent>>);
 static_assert(!offers_rvalue_value<ruvia::model_parse_result<resource_parent>>);
+
+static_assert(!offers_rvalue_value<ruvia::json_field_lookup<ruvia::string>>);
+static_assert(!std::is_move_assignable_v<ruvia::json_field_lookup<ruvia::string>>);

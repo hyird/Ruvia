@@ -752,7 +752,7 @@ public:
         co_await writer.write("first-");
         (void)co_await writer.sleep(server_stall);
         co_await writer.write("second");
-        co_await writer.end();
+        co_await writer.finish();
     }
     // Never reads its content, so a 100-continue upload is never released.
     ruvia::task<ruvia::http_response> held_upload(ruvia::context& context) {
@@ -861,8 +861,8 @@ inline void append(std::string& target, const std::optional<std::span<const std:
     EXPECT_TRUE(co_await failure_of(exchange.body().write("lost", {.stop_token_ = stop.token()})) == cancelled);
     EXPECT_THROW((void)exchange.body().write("lost", {.timeout_ = 0ms}), std::invalid_argument);
     co_await exchange.body().write("kept");
-    EXPECT_TRUE(co_await failure_of(exchange.body().end({}, {.stop_token_ = stop.token()})) == cancelled);
-    co_await exchange.body().end();
+    EXPECT_TRUE(co_await failure_of(exchange.body().finish({}, {.stop_token_ = stop.token()})) == cancelled);
+    co_await exchange.body().finish();
     auto response = co_await exchange.response();
     const auto echoed = co_await response.bytes();
     EXPECT_EQ(echoed.text(), "echo:kept");
@@ -871,7 +871,7 @@ inline void append(std::string& target, const std::optional<std::span<const std:
 // Waiting for the final head is a read: its timeout ends only that wait.
 [[nodiscard]] inline ruvia::task<void> check_response_wait(ruvia::http_client_ref client) {
     auto exchange = co_await client.post("/operation/late-head").upload({});
-    co_await exchange.body().end();
+    co_await exchange.body().finish();
     EXPECT_TRUE(co_await failure_of(exchange.response({.timeout_ = interruption})) == timed_out);
     auto response = co_await exchange.response();
     const auto text = co_await response.bytes();

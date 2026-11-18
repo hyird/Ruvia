@@ -326,12 +326,13 @@ TEST(Ruvia, BlockingResultFactoriesFixCategory) {
     EXPECT_TRUE(void_value.completed());
     const auto failed = blocking_result<int>::with_error(std::make_exception_ptr(std::runtime_error("failed")));
     EXPECT_TRUE(failed.failed());
-    EXPECT_EQ(failed.status(), blocking_status::completed);
+    EXPECT_EQ(failed.status(), blocking_status::failed);
     EXPECT_THROW(static_cast<void>(failed.value()), std::runtime_error);
     const auto rejected = blocking_result<int>::with_status(blocking_status::queue_full);
     EXPECT_EQ(rejected.status(), blocking_status::queue_full);
     EXPECT_THROW(static_cast<void>(rejected.value()), blocking_operation_rejected);
     EXPECT_THROW(static_cast<void>(blocking_result<int>::with_status(blocking_status::completed)), std::invalid_argument);
+    EXPECT_THROW(static_cast<void>(blocking_result<int>::with_status(blocking_status::failed)), std::invalid_argument);
     EXPECT_THROW(static_cast<void>(blocking_result<int>::with_error(nullptr)), std::invalid_argument);
 }
 

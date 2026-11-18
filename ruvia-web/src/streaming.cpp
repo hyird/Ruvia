@@ -200,7 +200,7 @@ task<timer_sleep_result> response_stream_writer::sleep(timeout_duration duration
     return operation_scope_.attach(sleep_stopped_by_either(target_, sleep_, duration, stop_token_, std::move(stop)));
 }
 
-task<void> response_stream_writer::end(std::span<const http_header_view> trailers, operation_options operation) & {
+task<void> response_stream_writer::finish(std::span<const http_header_view> trailers, operation_options operation) & {
     require_output();
     std::vector<http_header> owned_trailers_value;
     owned_trailers_value.reserve(trailers.size());
@@ -214,8 +214,8 @@ task<timer_sleep_result> sse_writer::sleep(timeout_duration duration, stop_token
     return writer().sleep(duration, std::move(stop));
 }
 
-task<void> sse_writer::end(std::span<const http_header_view> trailers, operation_options operation) & {
-    return writer().end(trailers, std::move(operation));
+task<void> sse_writer::finish(std::span<const http_header_view> trailers, operation_options operation) & {
+    return writer().finish(trailers, std::move(operation));
 }
 
 task<void> sse_writer::write(const sse_message& message, operation_options operation) & {

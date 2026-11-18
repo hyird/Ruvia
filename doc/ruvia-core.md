@@ -1396,7 +1396,8 @@ flowchart LR
 
 | 成员 | 含义 | `describe_blocking_status` |
 | --- | --- | --- |
-| `completed` | 可调用对象运行完成（可能抛出，那是结果而非拒绝） | `"completed"` |
+| `completed` | 执行和结果交付成功 | `"completed"` |
+| `failed` | 执行或结果交付抛出异常 | `"blocking operation failed"` |
 | `queue_full` | 池队列已满，未运行 | `"blocking pool queue is full"` |
 | `pool_stopped` | 线程取到任务前池已停止，未运行 | `"blocking pool is stopped"` |
 | `worker_stopping` | 任务在途时 Worker 停止，无人接收结果；可调用对象可能已运行，结果在池线程丢弃 | `"worker is stopping"` |
@@ -1427,7 +1428,7 @@ flowchart LR
 | `template <typename u_type> requires(!std::is_void_v<T> && std::constructible_from<T, u_type&&>) [[nodiscard]] static blocking_result with_value(u_type&& value);` | 构造成功结果 |
 | `[[nodiscard]] static blocking_result with_value() noexcept requires std::is_void_v<T>;` | 仅 `void` |
 | `[[nodiscard]] static blocking_result with_error(std::exception_ptr error);` | 空异常抛 `std::invalid_argument` |
-| `[[nodiscard]] static blocking_result with_status(blocking_status status);` | `completed` 抛 `std::invalid_argument` |
+| `[[nodiscard]] static blocking_result with_status(blocking_status status);` | `completed`、`failed` 抛 `std::invalid_argument` |
 
 - **一致性**：`completed()`、`failed()` 与 `value()` 不会因结果替换或异常被移走而出现“成功但无值”；不要求负载移动为 `noexcept`。
 - **组合**：`with_*` 构造与 `run_blocking` 相同的结果，供组合式卸载复用。

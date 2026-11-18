@@ -90,7 +90,7 @@ void exercise_client(bool reset_peer, bool secure = false) {
             const auto input = std::string_view(bytes_value.data(), count);
             for (;;) {
                 const auto fed = connection.feed(input);
-                EXPECT_TRUE(fed != ruvia::http2_feed_result::protocol_failure);
+                EXPECT_TRUE(fed != ruvia::http2_feed_status::protocol_failure);
                 while (auto event = connection.next_event()) {
                     if (auto* request = event->request_head()) {
                         const auto built_request = request->build_request();
@@ -132,7 +132,7 @@ void exercise_client(bool reset_peer, bool secure = false) {
                         saw_client_end = true;
                     }
                 }
-                if (fed != ruvia::http2_feed_result::events_pending) {
+                if (fed != ruvia::http2_feed_status::events_pending) {
                     break;
                 }
             }
@@ -247,7 +247,7 @@ void exercise_closing_peer(closing_peer behavior) {
             const auto bytes_value = std::string_view(input.data(), count);
             for (;;) {
                 const auto fed = connection.feed(bytes_value);
-                EXPECT_TRUE(fed != ruvia::http2_feed_result::protocol_failure);
+                EXPECT_TRUE(fed != ruvia::http2_feed_status::protocol_failure);
                 while (auto event = connection.next_event()) {
                     if (auto* head = event->request_head()) {
                         const auto built_request = head->build_request();
@@ -270,7 +270,7 @@ void exercise_closing_peer(closing_peer behavior) {
                         }
                     }
                 }
-                if (fed != ruvia::http2_feed_result::events_pending) {
+                if (fed != ruvia::http2_feed_status::events_pending) {
                     break;
                 }
             }
@@ -428,7 +428,7 @@ void exercise_handshake_end(handshake_end mode) {
             const auto bytes_value = std::string_view(input.data(), count);
             for (;;) {
                 const auto fed = connection.feed(bytes_value);
-                EXPECT_TRUE(fed != ruvia::http2_feed_result::protocol_failure);
+                EXPECT_TRUE(fed != ruvia::http2_feed_status::protocol_failure);
                 while (auto event = connection.next_event()) {
                     auto* head = event->request_head();
                     if (head == nullptr) {
@@ -457,7 +457,7 @@ void exercise_handshake_end(handshake_end mode) {
                     }
                     request.emplace(std::move(*head));
                 }
-                if (fed != ruvia::http2_feed_result::events_pending) {
+                if (fed != ruvia::http2_feed_status::events_pending) {
                     break;
                 }
             }

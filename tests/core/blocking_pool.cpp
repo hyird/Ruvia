@@ -73,7 +73,7 @@ task<void> exercise_receiver_move_failure(worker_ref worker, bool& success) {
     auto result = co_await run_blocking(worker, [receiver] {
         return receiver_move_failure(receiver);
     });
-    if (result.status() != blocking_status::completed || !result.failed()) {
+    if (result.status() != blocking_status::failed || !result.failed()) {
         co_return;
     }
     try {
@@ -289,7 +289,7 @@ task<void> exercise_results(worker_ref worker_value, bool& success) {
     const auto failure = thrown.error();
     auto relocated = std::move(thrown);
     for (auto* outcome : {&thrown, &relocated}) {
-        if (outcome->status() != blocking_status::completed || !outcome->failed() || outcome->completed() || outcome->error() != failure) {
+        if (outcome->status() != blocking_status::failed || !outcome->failed() || outcome->completed() || outcome->error() != failure) {
             co_return;
         }
         bool rethrown = false;

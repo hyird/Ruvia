@@ -153,13 +153,13 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
         if (department_page.size() != 1 || department_count != 2 || department_page[0].get<"employees">().size() != 2) {
             throw std::runtime_error("one-to-many pagination truncated the employees");
         }
-        auto department_value = co_await departments.find_one({.where_ = department::column<"id">() == 1, .relations_ = department_relations});
+        auto department_value = co_await departments.find_first({.where_ = department::column<"id">() == 1, .relations_ = department_relations});
         if (!department_value || department_value->get<"employees">().size() != 2) {
             throw std::runtime_error("findOne did not preserve the complete collection");
         }
         auto next_page = departments.query_builder("d");
         next_page.left_join_and_select("d.employees", "e").order_by(department::column<"id">().asc()).offset(1).limit(1);
-        auto second = co_await next_page.get_one();
+        auto second = co_await next_page.get_first();
         if (!second || second->get<"id">() != 2 || second->get<"employees">().size() != 1) {
             throw std::runtime_error("relation query offset did not page departments");
         }
@@ -182,7 +182,7 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
             throw std::runtime_error("many-to-many pagination truncated the courses");
         }
         const borrowed_text student_relations[]{"students"};
-        auto inverse_courses = co_await courses.find_one({.where_ = course::column<"id">() == 2, .relations_ = student_relations});
+        auto inverse_courses = co_await courses.find_first({.where_ = course::column<"id">() == 2, .relations_ = student_relations});
         if (!inverse_courses || inverse_courses->get<"students">().size() != 2) {
             throw std::runtime_error("inverse many-to-many mapping failed");
         }

@@ -232,7 +232,8 @@ public:
     // the current probe timeout (RFC 9000 §10.2).
     [[nodiscard]] ngtcp2_duration close_period() const noexcept;
 
-    [[nodiscard]] std::optional<http3_event> next_event();
+    [[nodiscard]] std::optional<http3_event> next_event() &;
+    std::optional<http3_event> next_event() && = delete;
     [[nodiscard]] http3_connection& http3() noexcept;
     [[nodiscard]] const http3_connection& http3() const noexcept;
     // The HTTP/3 code of the CONNECTION_CLOSE this connection sent or

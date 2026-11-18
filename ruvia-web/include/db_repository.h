@@ -532,7 +532,7 @@ struct db_map_related_entities final {
 };
 
 template <typename entity_type>
-struct db_map_one_related_entity final {
+struct db_map_first_related_entity final {
     db_relation_plan plan_;
     std::optional<entity_type> operator()(db_rows&& rows) {
         auto entities = db_relation_decoder(plan_).template decode<entity_type>(rows);
@@ -831,7 +831,7 @@ struct db_map_projection final {
     bool wildcard_{false};
 };
 template <typename e_type>
-struct db_map_one_projection final {
+struct db_map_first_projection final {
     db_map_projection<e_type> mapper_;
     std::optional<e_type> operator()(db_rows&& rows) const {
         if (rows.empty()) {
@@ -1237,16 +1237,16 @@ public:
         return db_command_set<executor_type>::template query_mapped<entity_rows<output_type>>(executor_, target_query, std::move(mapper));
     }
     template <typename output_type = entity_type>
-    [[nodiscard]] task<std::optional<output_type>> get_one() const {
+    [[nodiscard]] task<std::optional<output_type>> get_first() const {
         auto mapper = projection_mapper<output_type>();
         auto query = single_row_query();
         if constexpr (std::same_as<output_type, entity_type>) {
             if (hydrates()) {
                 auto prepared = prepare_relation_query(query);
-                return db_command_set<executor_type>::template query_mapped<std::optional<entity_type>>(executor_, prepared ? *prepared : query, detail::db_map_one_related_entity<entity_type>{relations_->clone()});
+                return db_command_set<executor_type>::template query_mapped<std::optional<entity_type>>(executor_, prepared ? *prepared : query, detail::db_map_first_related_entity<entity_type>{relations_->clone()});
             }
         }
-        return db_command_set<executor_type>::template query_mapped<std::optional<output_type>>(executor_, query, detail::db_map_one_projection<output_type>{std::move(mapper)});
+        return db_command_set<executor_type>::template query_mapped<std::optional<output_type>>(executor_, query, detail::db_map_first_projection<output_type>{std::move(mapper)});
     }
     [[nodiscard]] task<db_rows> get_raw_many() const {
         std::optional<db_query> active_query;
@@ -1649,9 +1649,9 @@ public:
         return db_command_set<executor_type>::template query_mapped<entity_rows<output_type>>(executor_, query_, detail::db_map_projection<output_type>(selected_.columns_, false, selected_.wildcard_));
     }
     template <typename output_type = entity_type>
-    [[nodiscard]] task<std::optional<output_type>> get_one() const {
-        require_returning<output_type>("get_one requires RETURNING");
-        return db_command_set<executor_type>::template query_mapped<std::optional<output_type>>(executor_, query_, detail::db_map_one_projection<output_type>{detail::db_map_projection<output_type>(selected_.columns_, false, selected_.wildcard_)});
+    [[nodiscard]] task<std::optional<output_type>> get_first() const {
+        require_returning<output_type>("get_first requires RETURNING");
+        return db_command_set<executor_type>::template query_mapped<std::optional<output_type>>(executor_, query_, detail::db_map_first_projection<output_type>{detail::db_map_projection<output_type>(selected_.columns_, false, selected_.wildcard_)});
     }
     [[nodiscard]] task<db_rows> get_raw_many() const {
         require_returning("get_raw_many requires RETURNING");
@@ -1781,8 +1781,8 @@ public:
     [[nodiscard]] task<entity_rows<entity_type>> find(const db_find_options& options = {}) const {
         return find_builder(options).get_many();
     }
-    [[nodiscard]] task<std::optional<entity_type>> find_one(const db_find_options& options = {}) const {
-        return find_builder(options).get_one();
+    [[nodiscard]] task<std::optional<entity_type>> find_first(const db_find_options& options = {}) const {
+        return find_builder(options).get_first();
     }
     [[nodiscard]] task<std::pair<entity_rows<entity_type>, std::uint64_t>> find_and_count(const db_find_options& options = {}) const {
         return find_builder(options).get_many_and_count();

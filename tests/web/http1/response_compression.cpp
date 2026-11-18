@@ -188,7 +188,7 @@ class response_compression_routes final {
         const std::string_view body(small_body);
         co_await writer.write(body.substr(0, body.size() / 2));
         co_await writer.write(body.substr(body.size() / 2));
-        co_await writer.end();
+        co_await writer.finish();
     }
     ruvia::task<void> hold_stream(ruvia::context& context_value) {
         auto& writer = context_value.stream_text();
@@ -206,7 +206,7 @@ class response_compression_routes final {
             co_return;
         }
         co_await writer.write(std::string_view(small_body));
-        co_await writer.end();
+        co_await writer.finish();
     }
 
     ruvia::task<void> stream_custom_coding(ruvia::context& context_value) {
@@ -216,7 +216,7 @@ class response_compression_routes final {
             co_return;
         }
         co_await writer.write("custom-stream-payload");
-        co_await writer.end();
+        co_await writer.finish();
     }
     ruvia::task<void> stream_mixed_coding(ruvia::context& context_value) {
         const std::array headers{ruvia::http_header_view{"Content-Encoding", "br, x-custom"}};
@@ -225,13 +225,13 @@ class response_compression_routes final {
             co_return;
         }
         co_await writer.write("mixed-stream-payload");
-        co_await writer.end();
+        co_await writer.finish();
     }
     ruvia::task<void> stream_no_content(ruvia::context& context_value) {
-        co_await context_value.stream_text({.status_ = ruvia::http_status::no_content}).end();
+        co_await context_value.stream_text({.status_ = ruvia::http_status::no_content}).finish();
     }
     ruvia::task<void> stream_not_modified(ruvia::context& context_value) {
-        co_await context_value.stream_text({.status_ = ruvia::http_status::not_modified}).end();
+        co_await context_value.stream_text({.status_ = ruvia::http_status::not_modified}).finish();
     }
     ruvia::task<ruvia::http_response> tiny(ruvia::context& context_value) {
         co_return context_value.text("hello");

@@ -418,7 +418,7 @@ void set_unsigned_header(http_response& response, std::string_view name, std::ui
 }  // namespace
 
 http_error_info rate_limit_rejection_error() noexcept {
-    return http_error_info({.status_ = ruvia::http_status::too_many_requests, .code_ = "too_many_requests", .message_ = "rate limit exceeded"});
+    return http_error_info({.status_ = ruvia::http_status::too_many_requests, .code_ = rate_limit_error_code.view(), .message_ = "rate limit exceeded"});
 }
 
 // Remaining is 0 because the refusal itself shows the estimate has no room.

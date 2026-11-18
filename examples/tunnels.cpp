@@ -50,7 +50,7 @@ private:
         while (auto packet = co_await stream.read()) {
             // The adapter handles context ID 0 and ignores unknown contexts.
             // A zero-byte payload is a valid UDP packet, not an EOF marker.
-            co_await stream.send(packet->bytes());
+            co_await stream.write(packet->bytes());
         }
         co_await stream.finish();
     }

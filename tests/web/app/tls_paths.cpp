@@ -89,7 +89,7 @@ public:
         }
         co_await writer.write(*control_ran ? "|control-ran|" : "|control-starved|");
         co_await writer.write(std::string(hot_stream_tail_bytes, 'y'));
-        co_await writer.end();
+        co_await writer.finish();
     }
 };
 

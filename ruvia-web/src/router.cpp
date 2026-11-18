@@ -404,8 +404,8 @@ private:
             co_return;
         }
         const auto status = stream.request().known_method() == http_known_method::connect ? http_status::ok : http_status::switching_protocols;
-        auto* tunnel = co_await stream.accept_tunnel_impl(status, endpoint.tunnel()->config());
-        context_tunnel_binding tunnel_binding(context_value, *tunnel);
+        auto& tunnel = (co_await stream.accept_tunnel_impl(status, endpoint.tunnel()->config())).get();
+        context_tunnel_binding tunnel_binding(context_value, tunnel);
         co_await resolved.stream_handler()(context_value);
     }
 

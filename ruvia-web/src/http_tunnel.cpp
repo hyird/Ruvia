@@ -568,7 +568,7 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::caps
         throw;
     }
 }
-task<void> http_datagram_stream::send(outbound_bytes payload_value, operation_options operation) & {
+task<void> http_datagram_stream::write(outbound_bytes payload_value, operation_options operation) & {
     if (!stream_.state_) {
         throw std::logic_error("HTTP Datagram stream is empty");
     }

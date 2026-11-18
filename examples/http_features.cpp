@@ -93,7 +93,7 @@ private:
         // cookie mutation is allowed once the first write publishes the head.
         co_await output.write("second\n");
         const std::array<ruvia::http_header_view, 1> trailers{{{"X-Example-Complete", "yes"}}};
-        co_await output.end(trailers);
+        co_await output.finish(trailers);
     }
 
     ruvia::task<ruvia::http_response> upload(ruvia::context& c) {

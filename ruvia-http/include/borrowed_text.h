@@ -59,6 +59,27 @@ concept http_temporary_owning_range = !std::is_lvalue_reference_v<range_type&&> 
 
 namespace ruvia {
 
+// Text in static storage, checked at compile time.
+class static_text final {
+public:
+    constexpr static_text() noexcept = default;
+
+    // Keeps embedded NUL bytes and drops only the literal's terminator.
+    template <std::size_t n>
+    consteval explicit static_text(const char (&literal)[n]) noexcept :
+        value_(literal, n > 0 && literal[n - 1] == '\0' ? n - 1 : n) {}
+
+    consteval explicit static_text(std::string_view value) noexcept :
+        value_(value) {}
+
+    [[nodiscard]] constexpr std::string_view view() const noexcept {
+        return value_;
+    }
+
+private:
+    std::string_view value_{};
+};
+
 // Zero-copy text held by a configuration or message value that outlives the
 // call which set it -- cookie attributes, SSE fields, security header policies,
 // Redis SCAN patterns, outbound request lines.

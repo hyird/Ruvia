@@ -879,7 +879,7 @@ ngtcp2_duration http3_quic_connection::close_period() const noexcept {
     return pto > UINT64_MAX / 3 ? UINT64_MAX : 3 * pto;
 }
 
-std::optional<http3_event> http3_quic_connection::next_event() {
+std::optional<http3_event> http3_quic_connection::next_event() & {
     for (;;) {
         auto event = impl_->http3_.next_event();
         if (!event) {

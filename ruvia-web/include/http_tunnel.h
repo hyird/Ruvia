@@ -160,7 +160,7 @@ private:
 // Protocol streams cannot be promoted to this channel.
 // Empty payloads are data; an empty optional is EOF. Use exclusively with the tunnel.
 // Operations occupy separate read and send/finish lanes when started; unstarted
-// operations may coexist. send() owns its payload before returning. `operation`
+// operations may coexist. write() owns its payload before returning. `operation`
 // and borrowing follow http_capsule_stream.
 class http_datagram_stream final {
 public:
@@ -170,8 +170,8 @@ public:
     http_datagram_stream& operator=(http_datagram_stream&&) noexcept = default;
     [[nodiscard]] task<std::optional<http_datagram>> read(operation_options operation = {}) &;
     task<std::optional<http_datagram>> read(operation_options = {}) && = delete;
-    [[nodiscard]] task<void> send(outbound_bytes payload, operation_options operation = {}) &;
-    task<void> send(outbound_bytes, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(outbound_bytes payload, operation_options operation = {}) &;
+    task<void> write(outbound_bytes, operation_options = {}) && = delete;
     [[nodiscard]] task<void> finish(operation_options operation = {}) & {
         return stream_.finish(std::move(operation));
     }

@@ -124,7 +124,7 @@ ruvia::task<void> echo_udp(ruvia::context& context) {
     EXPECT_EQ(context.req().param("host").value_or(""), "echo.test");
     auto channel = context.tunnel().udp();
     while (auto datagram = co_await channel.read()) {
-        co_await channel.send(datagram->bytes());
+        co_await channel.write(datagram->bytes());
     }
     co_await channel.finish();
 }
@@ -517,7 +517,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
                         EXPECT_TRUE(tunnel != nullptr) << label;
                         if (tunnel != nullptr) {
                             auto channel = tunnel->stream().udp();
-                            co_await channel.send(std::string_view("datagram"));
+                            co_await channel.write(std::string_view("datagram"));
                             const auto packet = co_await channel.read();
                             EXPECT_TRUE(packet.has_value()) << label;
                             if (packet) {
@@ -772,7 +772,7 @@ TEST(Ruvia, public_router_buffered_body_reads_honour_their_operation) {
                     co_await exchange.body().write("def");
                     co_await await_phase(2);
                     co_await exchange.body().write("ghi");
-                    co_await exchange.body().end();
+                    co_await exchange.body().finish();
                     auto response = co_await exchange.response();
                     EXPECT_EQ(response.status(), ruvia::http_status::ok) << entry.label_;
                     const auto content = co_await response.bytes();

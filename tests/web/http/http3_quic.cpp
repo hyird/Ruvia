@@ -1111,7 +1111,7 @@ public:
         const auto updated = context.req().priority();
         std::string second("u=" + std::string(std::to_string(updated.urgency_.value())) + ",i=" + (updated.incremental_ ? "1" : "0"));
         co_await stream.write(second);
-        co_await stream.end();
+        co_await stream.finish();
     }
 };
 

@@ -71,7 +71,7 @@ TEST(Ruvia, db_repository_projects_computed_dto_and_owns_expression_sources) {
                 EXPECT_TRUE(statement.sql().find(database_config().driver_ == db_driver::postgresql ? "\"row_number\"() OVER (ORDER BY" : "row_number() OVER (ORDER BY") != std::string_view::npos);
                 EXPECT_EQ(statement.params().size(), std::size_t{1});
                 auto many = builder.get_many<item_summary>();
-                auto one = builder.get_one<item_summary>();
+                auto one = builder.get_first<item_summary>();
                 auto page = builder.get_many_and_count<item_summary>();
                 EXPECT_TRUE(testing::throws_on([&] {
                     (void)builder.get_many();
@@ -254,8 +254,8 @@ TEST(Ruvia, db_repository_array_results_own_tokens_in_scalars_entities_and_proje
         auto remove = repository.delete_builder();
         remove.where(array_entity::column<"id">() > 0).returning({"values"});
         const auto returned_many = co_await remove.get_scalars<nullable_text_array>();
-        const auto entity = co_await read.get_one();
-        const auto projection = co_await read.get_one<array_projection>();
+        const auto entity = co_await read.get_first();
+        const auto projection = co_await read.get_first<array_projection>();
         bool rejected_null = false;
         try {
             (void)co_await read.get_scalar<std::vector<std::string>>();
@@ -355,7 +355,7 @@ TEST(Ruvia, db_repository_wildcards_decode_result_names_and_reject_ambiguous_map
         auto returned_operation = [&] {
             auto remove = repository.delete_builder("d");
             remove.where(entity_type::column<"id">() == 9).returning({db_selection::star("d"), db_expr::value(6).as("rank")});
-            return remove.get_one<entity_with_rank>();
+            return remove.get_first<entity_with_rank>();
         }();
         const auto returned = co_await std::move(returned_operation);
         EXPECT_TRUE(returned.has_value());
@@ -366,7 +366,7 @@ TEST(Ruvia, db_repository_wildcards_decode_result_names_and_reject_ambiguous_map
         }
         bool missing = false;
         try {
-            (void)co_await builder.get_one<entity_with_rank>();
+            (void)co_await builder.get_first<entity_with_rank>();
         } catch (const conversion_error& error) {
             missing = error.code() == conversion_error::code_type::missing_column;
         }
@@ -378,7 +378,7 @@ TEST(Ruvia, db_repository_wildcards_decode_result_names_and_reject_ambiguous_map
             ambiguous = error.code() == conversion_error::code_type::invalid_format;
         }
         EXPECT_TRUE(ambiguous);
-        EXPECT_TRUE(!(co_await builder.get_one<entity_with_rank>()).has_value());
+        EXPECT_TRUE(!(co_await builder.get_first<entity_with_rank>()).has_value());
     });
 }
 
@@ -391,7 +391,7 @@ TEST(Ruvia, db_repository_consumes_selected_projection_rows_and_owns_selection) 
         auto one_operation = [&] {
             auto builder = repository.query_builder("i");
             builder.select({{"label", db_expr::column("name", "i")}});
-            return builder.get_one<item_summary>();
+            return builder.get_first<item_summary>();
         }();
         const auto one = co_await std::move(one_operation);
         EXPECT_TRUE(one.has_value());
@@ -417,7 +417,7 @@ TEST(Ruvia, db_repository_consumes_selected_projection_rows_and_owns_selection) 
         }
         auto builder = repository.query_builder("i");
         builder.select({{"label", db_expr::column("name", "i")}});
-        const auto empty = co_await builder.get_one<item_summary>();
+        const auto empty = co_await builder.get_first<item_summary>();
         EXPECT_TRUE(!empty.has_value());
     });
 }
@@ -442,7 +442,7 @@ TEST(Ruvia, db_repository_add_select_maps_computed_dto_columns_and_rejects_dupli
         }));
         bool missing_label = false;
         try {
-            (void)co_await explicit_qb.get_one<item_summary>();
+            (void)co_await explicit_qb.get_first<item_summary>();
         } catch (const conversion_error& error) {
             missing_label = error.code() == conversion_error::code_type::missing_column;
         }
@@ -1051,7 +1051,7 @@ TEST(Ruvia, db_repository_builder_orders_entity_fields_and_owns_predicates) {
         EXPECT_TRUE(relation_statement.sql().find("INNER JOIN") != std::string_view::npos);
         {
             auto many = builder.get_many();
-            auto one = builder.get_one();
+            auto one = builder.get_first();
             auto count = builder.get_count();
             auto exists = builder.get_exists();
             auto page = builder.get_many_and_count();
@@ -1429,11 +1429,11 @@ TEST(Ruvia, db_repository_save_compiles_returning_on_every_driver_but_update_ret
             auto updated = repository.update_builder();
             updated.where(entity_type::column<"id">() == 1).set({entity_type::column<"name">() = "next"}).returning({{"id"}});
             if (driver == db_driver::postgresql) {
-                auto one = updated.get_one();
+                auto one = updated.get_first();
                 (void)one;
             } else {
                 EXPECT_TRUE(testing::throws_on([&] {
-                    (void)updated.get_one();
+                    (void)updated.get_first();
                 }));
             }
             co_return;
@@ -1478,7 +1478,7 @@ TEST(Ruvia, db_repository_builders_support_typed_joins_assignments_upserts_delet
         EXPECT_TRUE(insert_dev_sql.sql().find("protocol_address\") VALUES") == std::string_view::npos);
         EXPECT_TRUE(insert_dev_sql.sql().find("DO UPDATE SET \"name\" = excluded.\"name\"") != std::string_view::npos);
         EXPECT_TRUE(insert_dev_sql.sql().find("RETURNING \"devices\".\"id\", \"devices\".\"name\", \"devices\".\"revision\", \"devices\".\"protocol_address\", \"devices\".\"updated_at\"") != std::string_view::npos);
-        auto one_inserted = insert_dev.get_one();
+        auto one_inserted = insert_dev.get_first();
         (void)one_inserted;
 
         db_query incoming;
@@ -1531,7 +1531,7 @@ TEST(Ruvia, db_repository_builders_support_typed_joins_assignments_upserts_delet
                 trigger_populated_entity::column<"updated_at">().set_now(),
             })
             .returning({{"id"}, trigger_populated_entity::column<"name">().coalesce("", "label"), {"rank", trigger_populated_entity::column<"revision">()}});
-        auto ret_one = ret_one_builder.get_one<item_summary>();
+        auto ret_one = ret_one_builder.get_first<item_summary>();
         (void)ret_one;
         co_return;
     });
@@ -1609,7 +1609,7 @@ TEST(Ruvia, db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_j
             "\"updated_at\" = \"now\"(), \"revision\" = (\"articles\".\"revision\" + $4) RETURNING \"articles\".\"id\" AS \"id\"");
         {
             auto op1 = repo.find({.where_ = soft_entity::column<"id">() == 1});
-            auto op2 = repo.find_one({.where_ = soft_entity::column<"id">() == 1});
+            auto op2 = repo.find_first({.where_ = soft_entity::column<"id">() == 1});
             auto op3 = repo.find_and_count({.where_ = soft_entity::column<"id">() == 1});
             auto op4 = repo.count({.where_ = soft_entity::column<"id">() == 1});
             auto op5 = repo.exists({.where_ = soft_entity::column<"id">() == 1});

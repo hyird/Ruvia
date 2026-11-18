@@ -188,13 +188,13 @@ private:
 [[nodiscard]] inline http_protocol_error make_http_protocol_error(http1_chunk_decode_error error) noexcept {
     switch (error) {
         case http1_chunk_decode_error::invalid_framing:
-            return http_protocol_error(http_status::bad_request, "invalid_chunked_body", "invalid chunked request body");
+            return http_protocol_error(http_status::bad_request, static_text{"invalid_chunked_body"}, "invalid chunked request body");
         case http1_chunk_decode_error::body_limit_exceeded:
             return make_http_protocol_error(http_request_body_failure::too_large);
         case http1_chunk_decode_error::framing_limit_exceeded:
-            return http_protocol_error(http_status::content_too_large, "chunked_framing_too_large", "request body framing is too large");
+            return http_protocol_error(http_status::content_too_large, static_text{"chunked_framing_too_large"}, "request body framing is too large");
     }
-    return http_protocol_error(http_status::bad_request, "invalid_chunked_body", "invalid chunked request body");
+    return http_protocol_error(http_status::bad_request, static_text{"invalid_chunked_body"}, "invalid chunked request body");
 }
 
 }  // namespace ruvia

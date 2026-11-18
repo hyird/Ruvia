@@ -841,8 +841,9 @@ using string_lookup = ruvia::json_field_lookup<ruvia::string>;
 template <typename lookup_type>
 concept lookup_offers_value = requires(lookup_type&& lookup) { std::forward<lookup_type>(lookup).value(); };
 static_assert(std::is_same_v<decltype(std::declval<const string_lookup&>().value()), const std::optional<ruvia::string>&>);
-static_assert(std::is_same_v<decltype(std::declval<string_lookup&>().value()), std::optional<ruvia::string>&>);
-static_assert(std::is_same_v<decltype(std::declval<string_lookup>().value()), std::optional<ruvia::string>>);
+static_assert(std::is_same_v<decltype(std::declval<string_lookup&>().value()), const std::optional<ruvia::string>&>);
+static_assert(std::is_same_v<decltype(std::declval<string_lookup>().take_value()), std::optional<ruvia::string>>);
+static_assert(!lookup_offers_value<string_lookup>);
 static_assert(!lookup_offers_value<const string_lookup>);
 
 using lookup_status = ruvia::unique_lookup_status;
@@ -1011,7 +1012,7 @@ TEST(Ruvia, json_object_get_reports_a_repeated_field_name_without_a_value) {
 
     const auto value = ruvia::json_value::parse(R"({"name":"first","name":"second","id":7})").take_value();
     EXPECT_TRUE(value.get<ruvia::string>("name").status() == lookup_status::repeated);
-    const auto id = value.get<ruvia::int32>("id").value();
+    const auto id = value.get<ruvia::int32>("id").take_value();
     EXPECT_TRUE(id.has_value());
     EXPECT_EQ(static_cast<std::int32_t>(*id), 7);
 }

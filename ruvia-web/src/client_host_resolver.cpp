@@ -78,6 +78,7 @@ task<client_resolve_result> client_host_resolver::resolve_query(std::string host
     auto result = co_await run_blocking(*worker_, query{std::move(host), port}, linked.options());
     switch (result.status()) {
         case blocking_status::completed:
+        case blocking_status::failed:
             co_return std::move(result).take_value();
         case blocking_status::timed_out:
             co_return client_resolve_result{.error_ = asio::error::timed_out};

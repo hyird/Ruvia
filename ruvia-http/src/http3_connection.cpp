@@ -1445,7 +1445,7 @@ http3_transport_result http3_connection::read_stream(std::int64_t stream_id, std
     return {.credit_bytes_ = static_cast<std::size_t>(result)};
 }
 
-std::optional<http3_event> http3_connection::next_event() {
+std::optional<http3_event> http3_connection::next_event() & {
     if (impl_->event_offset_ == impl_->events_.size()) {
         return std::nullopt;
     }

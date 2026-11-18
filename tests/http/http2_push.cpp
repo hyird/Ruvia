@@ -103,7 +103,7 @@ TEST(Ruvia, http2_push_metadata_outlives_input_and_connection_for_complete_and_f
                 std::string wire = ruvia::test::drain_output(server);
                 const auto first = ruvia::parse_http2_frame_header(std::span(wire.data(), wire.size()));
                 EXPECT_TRUE(first && ((first->flags_ & 4U) != 0) == (value_bytes == 1000));
-                EXPECT_TRUE(client.feed(wire) == ruvia::http2_feed_result::accepted);
+                EXPECT_TRUE(client.feed(wire) == ruvia::http2_feed_status::accepted);
                 auto received = client.next_event();
                 EXPECT_TRUE(received && received->push_promise());
                 if (received) {
@@ -159,7 +159,7 @@ TEST(Ruvia, http2_parent_reset_cancels_fragmented_push_and_keeps_hpack_state) {
         std::string payload("\0\0\0\2", 4);
         payload.append(block.data(), split);
         const auto promise_start = make_frame(ruvia::http2_frame_type::push_promise, 0, parent_id, payload);
-        EXPECT_TRUE(client.feed(promise_start) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(client.feed(promise_start) == ruvia::http2_feed_status::accepted);
         EXPECT_TRUE(client.header_block_in_progress());
         EXPECT_TRUE(client.submit_reset(parent_id, ruvia::http2_error_code::cancel) == ruvia::http_submit_status::accepted);
         // A PUSH_PROMISE whose associated stream closed before its block ended
@@ -176,17 +176,17 @@ TEST(Ruvia, http2_parent_reset_cancels_fragmented_push_and_keeps_hpack_state) {
         }
         EXPECT_TRUE(!client.wants_write());
         const auto promise_end = make_frame(ruvia::http2_frame_type::continuation, 4, parent_id, std::string_view(block).substr(split));
-        EXPECT_TRUE(client.feed(promise_end) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(client.feed(promise_end) == ruvia::http2_feed_status::accepted);
         EXPECT_TRUE(!client.header_block_in_progress());
         EXPECT_TRUE(!client.next_event());
         const std::string pushed_block(1, static_cast<char>(0x88));
         const auto pushed_response = make_frame(ruvia::http2_frame_type::headers, 5, 2, pushed_block);
-        EXPECT_TRUE(client.feed(pushed_response) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(client.feed(pushed_response) == ruvia::http2_feed_status::accepted);
         EXPECT_TRUE(!client.next_event());
         // Index 62 was introduced by the push, despite cancellation of its parent.
         const std::string indexed_block("\x88\xbe", 2);
         const auto other_response = make_frame(ruvia::http2_frame_type::headers, 5, other_id, indexed_block);
-        EXPECT_TRUE(client.feed(other_response) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(client.feed(other_response) == ruvia::http2_feed_status::accepted);
         auto other_head = client.next_event();
         EXPECT_TRUE(other_head && other_head->response_head() && other_head->response_head()->stream_id() == other_id);
         if (other_head && other_head->response_head()) {
@@ -261,7 +261,7 @@ TEST(Ruvia, http2_push_promise_unsafe_method_resets_promised_stream_without_goaw
 
     // Feed to client
     const auto feed_status = client.feed(frame);
-    EXPECT_TRUE(feed_status == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(feed_status == ruvia::http2_feed_status::accepted);
     EXPECT_TRUE(!client.connection_error());
 
     // Client should have emitted RST_STREAM on promised stream 2
@@ -293,7 +293,7 @@ TEST(Ruvia, http2_push_reservation_does_not_consume_peer_concurrency_until_respo
         for (std::size_t i = 0; i < 4; ++i) {
             frame[11 + i] = static_cast<char>(limit >> (24 - i * 8));
         }
-        EXPECT_TRUE(server.feed(std::string_view(frame.data(), frame.size())) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(server.feed(std::string_view(frame.data(), frame.size())) == ruvia::http2_feed_status::accepted);
         (void)ruvia::test::drain_output(server);
     };
     // MCS = 0 admits no pushed stream at all, so no promise is made (RFC 9113 8.4).
@@ -385,7 +385,7 @@ TEST(Ruvia, http2_push_finish_releases_peer_concurrency_while_its_request_lease_
         EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(settings).first(9), 6, ruvia::http2_frame_type::settings, 0, 0));
         settings[10] = 3;
         settings[14] = 1;
-        EXPECT_TRUE(server.feed(std::string_view(settings.data(), settings.size())) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(server.feed(std::string_view(settings.data(), settings.size())) == ruvia::http2_feed_status::accepted);
         auto first = server.submit_push_request(1, {.authority_ = "example.test", .target_ = "/one"});
         const auto second = server.submit_push_request(1, {.authority_ = "example.test", .target_ = "/two"});
         EXPECT_TRUE(first.index() == 0 && second.index() == 0);
@@ -425,7 +425,7 @@ TEST(Ruvia, http2_push_refused_up_front_when_peer_concurrency_admits_no_pushed_s
         EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(settings).first(9), 6, ruvia::http2_frame_type::settings, 0, 0));
         settings[10] = 3;
         settings[14] = static_cast<char>(limit);
-        EXPECT_TRUE(server.feed(std::string_view(settings.data(), settings.size())) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(server.feed(std::string_view(settings.data(), settings.size())) == ruvia::http2_feed_status::accepted);
         (void)ruvia::test::drain_output(server);
         std::optional<ruvia::http2_request_head_event> opened;
         if (limit != 0) {
@@ -464,7 +464,7 @@ TEST(Ruvia, http2_server_goaway_releases_unprocessed_local_push_streams) {
     const auto push = server.submit_push_request(1, {.authority_ = "example.test"});
     EXPECT_TRUE((push.index() == 0));
     const std::array<char, 17> goaway{0, 0, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    EXPECT_TRUE(server.feed(std::string_view(goaway.data(), goaway.size())) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(server.feed(std::string_view(goaway.data(), goaway.size())) == ruvia::http2_feed_status::accepted);
     auto draining = server.next_event();
     auto closed = server.next_event();
     EXPECT_TRUE(draining && draining->goaway());
@@ -560,12 +560,12 @@ TEST(Ruvia, http2_push_rejects_incomplete_parent_and_discards_promises_after_goa
     std::string partial_headers(ruvia::http2_frame_header_bytes, '\0');
     EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(partial_headers).first(9), static_cast<std::uint32_t>(req_block.size()), ruvia::http2_frame_type::headers, 0x1 /* END_STREAM only */, 1));
     partial_headers.append(req_block);
-    EXPECT_TRUE(server.feed(partial_headers) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(server.feed(partial_headers) == ruvia::http2_feed_status::accepted);
     const auto push_incomplete = server.submit_push_request(1, {.authority_ = "example.test", .target_ = "/a"});
     EXPECT_TRUE(push_incomplete.index() == 1 && std::get<1>(push_incomplete) == ruvia::http2_push_submit_error::invalid_state);
     std::array<char, 9> empty_cont{};
     EXPECT_TRUE(ruvia::encode_http2_frame_header(empty_cont, 0, ruvia::http2_frame_type::continuation, 0x4, 1));
-    EXPECT_TRUE(server.feed(std::string_view(empty_cont.data(), empty_cont.size())) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(server.feed(std::string_view(empty_cont.data(), empty_cont.size())) == ruvia::http2_feed_status::accepted);
     (void)server.next_event();
     (void)server.next_event();
 
@@ -597,7 +597,7 @@ TEST(Ruvia, http2_push_rejects_incomplete_parent_and_discards_promises_after_goa
     EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(bad_promise).first(9), static_cast<std::uint32_t>(4 + push_block.size()), ruvia::http2_frame_type::push_promise, 0x4, 1));
     bad_promise[12] = 2;
     bad_promise.append(push_block);
-    EXPECT_TRUE(connect_client.feed(bad_promise) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(connect_client.feed(bad_promise) == ruvia::http2_feed_status::accepted);
     EXPECT_TRUE(!connect_client.connection_error());
     const auto pending_connect_push = connect_client.next_event();
     EXPECT_TRUE(pending_connect_push && pending_connect_push->push_promise());
@@ -626,7 +626,7 @@ TEST(Ruvia, http2_push_rejects_incomplete_parent_and_discards_promises_after_goa
     EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(drain_promise).first(9), static_cast<std::uint32_t>(4 + dyn_push_block.size()), ruvia::http2_frame_type::push_promise, 0x4, 1));
     drain_promise[12] = 2;
     drain_promise.append(dyn_push_block);
-    EXPECT_TRUE(drain_client.feed(drain_promise) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(drain_client.feed(drain_promise) == ruvia::http2_feed_status::accepted);
     EXPECT_TRUE(!drain_client.next_event());
     EXPECT_TRUE(ruvia::test::drain_output(drain_client).empty());
 
@@ -635,7 +635,7 @@ TEST(Ruvia, http2_push_rejects_incomplete_parent_and_discards_promises_after_goa
     std::string resp_frame(ruvia::http2_frame_header_bytes, '\0');
     EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(resp_frame).first(9), static_cast<std::uint32_t>(resp_block.size()), ruvia::http2_frame_type::headers, 0x5, 1));
     resp_frame.append(resp_block);
-    EXPECT_TRUE(drain_client.feed(resp_frame) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(drain_client.feed(resp_frame) == ruvia::http2_feed_status::accepted);
     const auto resp_head = drain_client.next_event();
     EXPECT_TRUE(resp_head && resp_head->response_head());
     if (resp_head && resp_head->response_head()) {
@@ -672,7 +672,7 @@ TEST(Ruvia, http2_server_goaway_ignores_completed_push_stream_retained_by_lease)
     submit_buffered_response(server, std::get<0>(pushed).stream_id(), response);
 
     const std::array<char, 17> goaway{0, 0, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    EXPECT_TRUE(server.feed(std::string_view(goaway.data(), goaway.size())) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(server.feed(std::string_view(goaway.data(), goaway.size())) == ruvia::http2_feed_status::accepted);
     const auto draining = server.next_event();
     EXPECT_TRUE(draining && draining->goaway());
     EXPECT_TRUE(!server.next_event());
@@ -756,7 +756,7 @@ TEST(Ruvia, http2_goaway_closes_more_reserved_pushes_than_the_concurrency_limit)
     }
 
     const std::array<char, 17> goaway{0, 0, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    EXPECT_TRUE(server.feed(std::string_view(goaway.data(), goaway.size())) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(server.feed(std::string_view(goaway.data(), goaway.size())) == ruvia::http2_feed_status::accepted);
     EXPECT_TRUE(!server.connection_error());
     const auto draining = server.next_event();
     EXPECT_TRUE(draining && draining->goaway());
@@ -815,7 +815,7 @@ TEST(Ruvia, http2_push_promise_on_connected_tunnel_is_a_stream_error) {
     EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(promise).first(9), static_cast<std::uint32_t>(4 + push_block.size()), ruvia::http2_frame_type::push_promise, 0x4, 1));
     promise[12] = 2;
     promise.append(push_block);
-    EXPECT_TRUE(client.feed(promise) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(client.feed(promise) == ruvia::http2_feed_status::accepted);
     EXPECT_TRUE(!client.connection_error());
 
     const auto closed = client.next_event();
@@ -865,7 +865,7 @@ TEST(Ruvia, http2_push_releasing_more_than_max_concurrent_streams_leases_before_
         (void)ruvia::test::drain_output(server);
     }
     const std::array<char, 17> goaway{0, 0, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    EXPECT_TRUE(server.feed(std::string_view(goaway.data(), goaway.size())) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(server.feed(std::string_view(goaway.data(), goaway.size())) == ruvia::http2_feed_status::accepted);
     // Release all 131 held leases BEFORE draining server.next_event()!
     held_heads.clear();
     std::size_t closed_events = 0;
@@ -909,7 +909,7 @@ TEST(Ruvia, http2_push_remote_promise_flood_does_not_starve_client_request_submi
         std::string wire(ruvia::http2_frame_header_bytes, '\0');
         EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(wire.data(), wire.size()), static_cast<std::uint32_t>(payload.size()), ruvia::http2_frame_type::push_promise, 0x4, parent_id));
         wire.append(payload);
-        EXPECT_TRUE(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(client.feed(wire) == ruvia::http2_feed_status::accepted);
         while (client.next_event()) {
         }
     }
@@ -1025,11 +1025,11 @@ TEST(Ruvia, http2_connection_advertisement_validates_stream_state_and_ignores_tu
     std::string partial_frame(ruvia::http2_frame_header_bytes, '\0');
     EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(partial_frame).first(9), static_cast<std::uint32_t>(partial_block.size()), ruvia::http2_frame_type::headers, 0x1, 1));
     partial_frame.append(partial_block);
-    EXPECT_TRUE(server.feed(partial_frame) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(server.feed(partial_frame) == ruvia::http2_feed_status::accepted);
     EXPECT_TRUE(server.submit_alternative_service_advertisement(1, "", "h3=\":443\"") == ruvia::http_submit_status::invalid_state);
     std::array<char, 9> cont{};
     EXPECT_TRUE(ruvia::encode_http2_frame_header(cont, 0, ruvia::http2_frame_type::continuation, 0x4, 1));
-    EXPECT_TRUE(server.feed(std::string_view(cont.data(), cont.size())) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(server.feed(std::string_view(cont.data(), cont.size())) == ruvia::http2_feed_status::accepted);
     auto req1 = server.next_event();
     (void)server.next_event();
     EXPECT_TRUE(server.submit_alternative_service_advertisement(1, "", "h3=\":443\"") == ruvia::http_submit_status::accepted);
@@ -1095,7 +1095,7 @@ TEST(Ruvia, http2_connection_advertisement_validates_stream_state_and_ignores_tu
 
     std::string altsvc_on_tunnel(ruvia::http2_frame_header_bytes + 8, '\0');
     EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(altsvc_on_tunnel).first(9), 8, ruvia::http2_frame_type::alternative_service, 0, connect_id));
-    EXPECT_TRUE(client.feed(altsvc_on_tunnel) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(client.feed(altsvc_on_tunnel) == ruvia::http2_feed_status::accepted);
     EXPECT_TRUE(!client.connection_error());
     while (auto event = client.next_event()) {
         EXPECT_TRUE(event->stream_closed() == nullptr);
@@ -1115,7 +1115,7 @@ TEST(Ruvia, http2_connection_advertisement_validates_stream_state_and_ignores_tu
         }
         std::string altsvc_on_reserved(ruvia::http2_frame_header_bytes + 8, '\0');
         EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(altsvc_on_reserved).first(9), 8, ruvia::http2_frame_type::alternative_service, 0, pushed2_id));
-        EXPECT_TRUE(client.feed(altsvc_on_reserved) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(client.feed(altsvc_on_reserved) == ruvia::http2_feed_status::accepted);
         EXPECT_TRUE(!client.connection_error());
         EXPECT_TRUE(!client.next_event().has_value());
         EXPECT_TRUE(ruvia::test::drain_output(client).empty());
@@ -1156,9 +1156,9 @@ TEST(Ruvia, http2_connection_ignores_valid_altsvc_on_tunnel_idle_and_closed_stre
 
     const auto altsvc_tunnel = std::get<0>(ruvia::encode_http2_alternative_service_frame(connect_id, "", "h3=\":443\"", 16384));
     const auto altsvc_idle = std::get<0>(ruvia::encode_http2_alternative_service_frame(99, "", "h3=\":443\"", 16384));
-    EXPECT_TRUE(client.feed(std::string_view(altsvc_tunnel.data(), altsvc_tunnel.size())) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(client.feed(std::string_view(altsvc_tunnel.data(), altsvc_tunnel.size())) == ruvia::http2_feed_status::accepted);
     EXPECT_TRUE(!client.next_event().has_value());
-    EXPECT_TRUE(client.feed(std::string_view(altsvc_idle.data(), altsvc_idle.size())) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(client.feed(std::string_view(altsvc_idle.data(), altsvc_idle.size())) == ruvia::http2_feed_status::accepted);
     EXPECT_TRUE(!client.next_event().has_value());
     EXPECT_TRUE(!client.connection_error().has_value());
 
@@ -1185,14 +1185,14 @@ TEST(Ruvia, http2_connection_ignores_valid_altsvc_on_tunnel_idle_and_closed_stre
     EXPECT_TRUE(ruvia::encode_http2_frame_header(hdr, 11, ruvia::http2_frame_type::alternative_service, 0, push_id));
     client_altsvc.append(hdr.data(), hdr.size());
     client_altsvc.append("\0\0h3=\":443\"", 11);
-    EXPECT_TRUE(server.feed(client_altsvc) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(server.feed(client_altsvc) == ruvia::http2_feed_status::accepted);
     EXPECT_TRUE(!server.connection_error().has_value());
 
     // Client ignores server-sent ORIGIN on reserved(remote) push stream (RFC 8336 section 2.2).
     std::string server_origin;
     EXPECT_TRUE(ruvia::encode_http2_frame_header(hdr, 0, ruvia::http2_frame_type::origin, 0, push_id));
     server_origin.append(hdr.data(), hdr.size());
-    EXPECT_TRUE(client.feed(server_origin) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(client.feed(server_origin) == ruvia::http2_feed_status::accepted);
     EXPECT_TRUE(!client.connection_error().has_value());
 
     (void)server.release(std::move(std::get<0>(pushed)));
@@ -1233,7 +1233,7 @@ TEST(Ruvia, http2_priority_update_idle_stream_budget_and_wrong_peer_role) {
         EXPECT_TRUE(server.next_event()->priority_update());
     }
     EXPECT_TRUE(client.submit_priority_update(257, {}) == ruvia::http_submit_status::accepted);
-    EXPECT_TRUE(relay.feed(client, server) == ruvia::http2_feed_result::protocol_failure);
+    EXPECT_TRUE(relay.feed(client, server) == ruvia::http2_feed_status::protocol_failure);
     EXPECT_TRUE(server.connection_error() == ruvia::http2_error_code::protocol_error);
 }
 
@@ -1250,7 +1250,7 @@ TEST(Ruvia, http2_priority_update_rejects_invalid_ids_even_with_malformed_values
         frame[ruvia::http2_frame_header_bytes + 3] = id;
         frame[ruvia::http2_frame_header_bytes + 4] = 'u';
         frame[ruvia::http2_frame_header_bytes + 5] = '=';
-        EXPECT_TRUE(server.feed(std::string_view(frame.data(), frame.size())) == ruvia::http2_feed_result::protocol_failure);
+        EXPECT_TRUE(server.feed(std::string_view(frame.data(), frame.size())) == ruvia::http2_feed_status::protocol_failure);
         EXPECT_TRUE(server.connection_error() == ruvia::http2_error_code::protocol_error);
     }
 }
@@ -1268,7 +1268,7 @@ TEST(Ruvia, http2_priority_update_zero_length_on_client_yields_protocol_error) {
     EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(frame.data(), frame.size()), 0 /* length */, ruvia::http2_frame_type::priority_update, 0 /* flags */, 0 /* stream_id */));
 
     const auto feed_status = client.feed(std::string_view(frame.data(), frame.size()));
-    EXPECT_TRUE(feed_status == ruvia::http2_feed_result::protocol_failure);
+    EXPECT_TRUE(feed_status == ruvia::http2_feed_status::protocol_failure);
     // RFC 9218 §7.1: client receiving PRIORITY_UPDATE MUST treat as PROTOCOL_ERROR,
     // not FRAME_SIZE_ERROR even though length is 0 (< 4).
     EXPECT_TRUE(client.connection_error() == ruvia::http2_error_code::protocol_error);
@@ -1509,7 +1509,7 @@ TEST(Ruvia, websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields)
         std::string settings_wire;
         constexpr std::array<char, 6> enable_connect_protocol{0x00, 0x08, 0x00, 0x00, 0x00, 0x01};
         append_frame(settings_wire, ruvia::http2_frame_type::settings, 0, 0, std::string_view(enable_connect_protocol.data(), enable_connect_protocol.size()));
-        EXPECT_TRUE(connection.feed(settings_wire) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(connection.feed(settings_wire) == ruvia::http2_feed_status::accepted);
         while (connection.next_event()) {
         }
 
@@ -1524,7 +1524,7 @@ TEST(Ruvia, websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields)
         ruvia::hpack_encoder::encode_header(block, name, value);
         std::string wire;
         append_frame(wire, ruvia::http2_frame_type::headers, 0x4, std::get<std::uint32_t>(submitted), block);
-        EXPECT_TRUE(connection.feed(wire) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(connection.feed(wire) == ruvia::http2_feed_status::accepted);
         auto event = connection.next_event();
         const auto* head = event ? event->response_head() : nullptr;
         EXPECT_TRUE(head != nullptr);
@@ -1540,7 +1540,7 @@ TEST(Ruvia, websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields)
         EXPECT_TRUE(ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(enable_connect_protocol.size()), ruvia::http2_frame_type::settings, 0, 0));
         settings_wire.append(header.data(), header.size());
         settings_wire.append(enable_connect_protocol.data(), enable_connect_protocol.size());
-        EXPECT_TRUE(connection.feed(settings_wire) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(connection.feed(settings_wire) == ruvia::http2_feed_status::accepted);
         while (connection.next_event()) {
         }
         ruvia::websocket_client_negotiation negotiation({});
@@ -1582,7 +1582,7 @@ TEST(Ruvia, websocket_h2_client_response_head_reports_end_stream_only_from_heade
         std::string settings_wire;
         constexpr std::array<char, 6> enable_connect_protocol{0x00, 0x08, 0x00, 0x00, 0x00, 0x01};
         append_frame(settings_wire, ruvia::http2_frame_type::settings, 0, 0, std::string_view(enable_connect_protocol.data(), enable_connect_protocol.size()));
-        EXPECT_TRUE(connection.feed(settings_wire) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(connection.feed(settings_wire) == ruvia::http2_feed_status::accepted);
         while (connection.next_event()) {
         }
         ruvia::websocket_client_negotiation negotiation({});
@@ -1603,7 +1603,7 @@ TEST(Ruvia, websocket_h2_client_response_head_reports_end_stream_only_from_heade
                                  "bye",
                     7));
         }
-        EXPECT_TRUE(connection.feed(wire) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(connection.feed(wire) == ruvia::http2_feed_status::accepted);
         auto event = connection.next_event();
         const auto* head = event ? event->response_head() : nullptr;
         EXPECT_TRUE(head != nullptr);

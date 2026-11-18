@@ -78,7 +78,7 @@ public:
     }
     // `code` must name static storage (empty selects the status default);
     // `message` is copied.
-    [[nodiscard]] static http_request_rejection error(http_status_code status, std::string_view code, std::string_view message) noexcept {
+    [[nodiscard]] static http_request_rejection error(http_status_code status, static_text code, std::string_view message) noexcept {
         return http_request_rejection(http_protocol_error(status, code, message), std::nullopt);
     }
 

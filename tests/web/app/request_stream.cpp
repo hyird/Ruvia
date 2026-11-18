@@ -139,7 +139,7 @@ public:
             co_await context.stream().write(std::string_view(chunk));
             ++proxy_chunks_written;
         }
-        co_await context.stream().end();
+        co_await context.stream().finish();
     }
 };
 
@@ -254,7 +254,7 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
             std::invalid_argument);
         (void)co_await stream.stream({.headers_ = runtime_headers}).commit();
         co_await stream.stream().write(std::string_view("runtime-ready"));
-        co_await stream.stream().end();
+        co_await stream.stream().finish();
         co_return;
     }
     if (stream.tunnel_requested()) {
@@ -293,10 +293,10 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
             co_await stream.stream().write(std::string_view("denied"));
             co_await await_refusal_reader(stream.worker(), stream.stop_token());
             if (request.protocol_version() == ruvia::http_protocol_version::http11) {
-                co_await stream.stream().end();
+                co_await stream.stream().finish();
             } else {
                 const std::array fields{ruvia::http_header_view{"x-denial-finished", "yes"}};
-                co_await stream.stream().end(fields);
+                co_await stream.stream().finish(fields);
             }
             refusal_returned = true;
             co_return;
@@ -304,7 +304,7 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
         const bool capsules = request.path() == "/capsules";
         const bool udp = request.protocol() == "connect-udp" || request.path().starts_with("/.well-known/masque/udp/");
         if (capsules || udp) {
-            auto* tunnel = co_await stream.accept_tunnel(request.known_method() == ruvia::http_known_method::connect ? ruvia::http_status::ok : ruvia::http_status::switching_protocols, {.datagrams_ = capsules});
+            auto* tunnel = &(co_await stream.accept_tunnel(request.known_method() == ruvia::http_known_method::connect ? ruvia::http_status::ok : ruvia::http_status::switching_protocols, {.datagrams_ = capsules})).get();
             if (capsules) {
                 auto channel = tunnel->capsules();
                 while (auto capsule = co_await channel.read()) {
@@ -314,7 +314,7 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
             } else {
                 auto channel = tunnel->udp();
                 while (auto datagram = co_await channel.read()) {
-                    co_await channel.send(datagram->bytes());
+                    co_await channel.write(datagram->bytes());
                 }
                 co_await channel.finish();
             }
@@ -329,7 +329,7 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
             }
             EXPECT_TRUE(invalid_datagrams);
         }
-        auto* tunnel = co_await stream.accept_tunnel(request.known_method() == ruvia::http_known_method::connect ? ruvia::http_status::ok : ruvia::http_status::switching_protocols);
+        auto* tunnel = &(co_await stream.accept_tunnel(request.known_method() == ruvia::http_known_method::connect ? ruvia::http_status::ok : ruvia::http_status::switching_protocols)).get();
         co_await echo_tunnel(*tunnel);
         co_return;
     }
@@ -356,7 +356,7 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
     if (request.path() == "/pushed") {
         (void)co_await stream.stream().commit();
         co_await stream.stream().write(std::string_view("pushed-body"));
-        co_await stream.stream().end();
+        co_await stream.stream().finish();
         co_return;
     }
     if (request.path() == "/advertise") {
@@ -407,7 +407,7 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
     }
     const auto length = std::to_string(body.size());
     const std::array trailers{ruvia::http_header_view{"x-body-bytes", length}};
-    co_await stream.stream().end(trailers);
+    co_await stream.stream().finish(trailers);
 }
 
 [[nodiscard]] std::string large_payload() {
@@ -445,7 +445,7 @@ ruvia::task<void> exercise(ruvia::http_client_ref client, ruvia::http_protocol_v
         co_await exchange.body().write("uploaded:");
         co_await exchange.body().write("content");
         const std::array fields{ruvia::http_header_view{"x-upload-checksum", "verified"}};
-        co_await exchange.body().end(fields);
+        co_await exchange.body().finish(fields);
         auto response = co_await exchange.response();
         EXPECT_EQ(response.status(), ruvia::http_status::ok) << label;
         const auto interim = response.informational_responses();
@@ -532,7 +532,7 @@ ruvia::task<void> exercise(ruvia::http_client_ref client, ruvia::http_protocol_v
         if (tunnel != nullptr) {
             auto channel = tunnel->stream().udp();
             for (const auto message : {std::string_view{}, std::string_view("reliable-udp")}) {
-                co_await channel.send(message);
+                co_await channel.write(message);
                 auto packet = co_await channel.read();
                 EXPECT_TRUE(packet.has_value()) << label;
                 if (packet.has_value()) {
@@ -1186,7 +1186,7 @@ TEST(Ruvia, request_stream_body_wait_cancellation_and_reset_are_isolated) {
             const std::string connection_id = std::to_string(request.conn().connection_id());
             const std::array headers{ruvia::http_header_view{"x-connection-id", connection_id}};
             (void)co_await request.stream({.status_ = status, .headers_ = headers}).commit();
-            co_await request.stream().end();
+            co_await request.stream().finish();
         }, .connection_failure_ = [&](const ruvia::connection_failure_record& record) noexcept {
             try {
                 std::rethrow_exception(record.exception());
@@ -1258,7 +1258,7 @@ TEST(Ruvia, request_stream_body_wait_cancellation_and_reset_are_isolated) {
                         }
                         if (resume_body) {
                             co_await exchange.body().write("resumed");
-                            co_await exchange.body().end();
+                            co_await exchange.body().finish();
                         }
                         bool reset_seen = false;
                         try {
@@ -1272,7 +1272,7 @@ TEST(Ruvia, request_stream_body_wait_cancellation_and_reset_are_isolated) {
                         EXPECT_EQ(reset_seen, reset);
                         if (survivor) {
                             co_await survivor->body().write("alive");
-                            co_await survivor->body().end();
+                            co_await survivor->body().finish();
                             auto response = co_await survivor->response();
                             EXPECT_EQ(response.header("x-connection-id").value_or(""), std::to_string(connection));
                             (void)co_await response.bytes();
@@ -1438,7 +1438,7 @@ TEST(Ruvia, request_stream_operation_options_bound_each_wait) {
                 }
                 EXPECT_EQ((co_await response.commit()), ruvia::stream_commit_result::body);
                 co_await response.write(received);
-                co_await response.end();
+                co_await response.finish();
                 co_return;
             }
             if (path == "/prestopped") {
@@ -1455,7 +1455,7 @@ TEST(Ruvia, request_stream_operation_options_bound_each_wait) {
                                 (void)response.write(std::string_view("x"), {.timeout_ = 0ms});
                                 break;
                             case 2:
-                                (void)response.end({}, {.timeout_ = -1ms});
+                                (void)response.finish({}, {.timeout_ = -1ms});
                                 break;
                             default:
                                 (void)request.inform(hints, {.timeout_ = 0ms});
@@ -1489,13 +1489,13 @@ TEST(Ruvia, request_stream_operation_options_bound_each_wait) {
                 prestopped += expect_interrupted(failure, std::errc::operation_canceled);
                 co_await response.write(std::string_view("ok"));
                 try {
-                    co_await response.end({}, stopped);
+                    co_await response.finish({}, stopped);
                 } catch (...) {
                     failure = std::current_exception();
                 }
                 prestopped += expect_interrupted(failure, std::errc::operation_canceled);
                 EXPECT_FALSE(response.aborted());
-                co_await response.end();
+                co_await response.finish();
                 co_return;
             }
             // /write/timeout and /write/stop: the client reads nothing, so the
@@ -1559,7 +1559,7 @@ TEST(Ruvia, request_stream_operation_options_bound_each_wait) {
                     co_await exchange.body().write("abc");
                     co_await await_phase(2);
                     co_await exchange.body().write("def");
-                    co_await exchange.body().end();
+                    co_await exchange.body().finish();
                     auto read_response = co_await exchange.response();
                     EXPECT_EQ(read_response.status(), ruvia::http_status::ok) << target.label_;
                     const auto read_bytes = co_await read_response.bytes();
@@ -1677,7 +1677,7 @@ TEST(Ruvia, tunnel_operation_options_bound_each_wait) {
             const auto& request = stream.request();
             const auto& worker = stream.worker();
             if (request.path() == "/op-capsules") {
-                auto* tunnel = co_await stream.accept_tunnel(ruvia::http_status::ok, {.datagrams_ = true});
+                auto* tunnel = &(co_await stream.accept_tunnel(ruvia::http_status::ok, {.datagrams_ = true})).get();
                 auto channel = tunnel->capsules();
                 try {
                     (void)channel.read({.timeout_ = 0ms});
@@ -1704,10 +1704,10 @@ TEST(Ruvia, tunnel_operation_options_bound_each_wait) {
                 co_return;
             }
             if (request.protocol() == "connect-udp" || request.path().starts_with("/.well-known/masque/udp/")) {
-                auto* tunnel = co_await stream.accept_tunnel(request.known_method() == ruvia::http_known_method::connect ? ruvia::http_status::ok : ruvia::http_status::switching_protocols);
+                auto* tunnel = &(co_await stream.accept_tunnel(request.known_method() == ruvia::http_known_method::connect ? ruvia::http_status::ok : ruvia::http_status::switching_protocols)).get();
                 auto channel = tunnel->udp();
                 try {
-                    (void)channel.send(std::string_view("x"), {.timeout_ = 0ms});
+                    (void)channel.write(std::string_view("x"), {.timeout_ = 0ms});
                 } catch (const std::invalid_argument&) {
                     ++rejected;
                 }
@@ -1720,14 +1720,14 @@ TEST(Ruvia, tunnel_operation_options_bound_each_wait) {
                 const auto datagram = co_await channel.read();
                 EXPECT_TRUE(datagram.has_value());
                 ruvia::stop_source stop;
-                prestopped += co_await fails_with(channel.send(std::string_view("must-not-be-sent"), stopped_options(stop)), std::errc::operation_canceled);
+                prestopped += co_await fails_with(channel.write(std::string_view("must-not-be-sent"), stopped_options(stop)), std::errc::operation_canceled);
                 if (datagram) {
-                    co_await channel.send(datagram->bytes());
+                    co_await channel.write(datagram->bytes());
                 }
                 co_await channel.finish();
                 co_return;
             }
-            auto* tunnel = co_await stream.accept_tunnel();
+            auto* tunnel = &(co_await stream.accept_tunnel()).get();
             if (request.target() == "read.test:443") {
                 for (const auto attempt : {0, 1, 2}) {
                     try {
@@ -1883,9 +1883,9 @@ TEST(Ruvia, tunnel_operation_options_bound_each_wait) {
                             EXPECT_TRUE((co_await client_failure(channel.read({.timeout_ = 30ms}))) == std::make_error_code(std::errc::timed_out)) << target.label_;
                             ruvia::stop_source stop;
                             stop.request_stop();
-                            EXPECT_TRUE((co_await client_failure(channel.send(std::string_view("lost"), {.stop_token_ = stop.token()}))) == std::make_error_code(std::errc::operation_canceled)) << target.label_;
+                            EXPECT_TRUE((co_await client_failure(channel.write(std::string_view("lost"), {.stop_token_ = stop.token()}))) == std::make_error_code(std::errc::operation_canceled)) << target.label_;
                             co_await await_phase(6);
-                            co_await channel.send(std::string_view("dgram"));
+                            co_await channel.write(std::string_view("dgram"));
                             const auto echoed = co_await channel.read();
                             EXPECT_TRUE(echoed.has_value()) << target.label_;
                             if (echoed) {
@@ -1986,7 +1986,7 @@ TEST(Ruvia, response_pipe_bounds_upstream_reads_and_downstream_writes) {
                 // Only a hang ends the stall by time.
                 (void)co_await output.sleep(10s, release);
                 co_await output.write(std::string_view("second"));
-                co_await output.end();
+                co_await output.finish();
                 co_return;
             }
             if (path == "/large") {
@@ -1995,7 +1995,7 @@ TEST(Ruvia, response_pipe_bounds_upstream_reads_and_downstream_writes) {
                 for (unsigned index = 0; index != 1024; ++index) {
                     co_await output.write(std::string_view(chunk));
                 }
-                co_await output.end();
+                co_await output.finish();
                 co_return;
             }
             const bool downstream = path == "/proxy/downstream-timeout";
@@ -2028,7 +2028,7 @@ TEST(Ruvia, response_pipe_bounds_upstream_reads_and_downstream_writes) {
             }
             release.request_stop();
             co_await source.stream().pipe_to(output);
-            co_await output.end();
+            co_await output.finish();
         };
         ruvia::http_server server(attachment.loop(), {.request_stream_ = handle});
         server.listen({.address_ = "127.0.0.1", .http_ = plain.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
@@ -2155,7 +2155,7 @@ TEST(Ruvia, response_pipe_to_request_stream_forwards_status_headers_body_and_tra
                 (void)co_await request.stream({.status_ = ruvia::http_status::created, .headers_ = fields}).commit();
                 co_await request.stream().write("forwarded-body");
                 const std::array trailers{ruvia::http_header_view{"x-checksum", "complete"}};
-                co_await request.stream().end(std::span(trailers).first(fixed && !trailing_fixed ? 0 : 1));
+                co_await request.stream().finish(std::span(trailers).first(fixed && !trailing_fixed ? 0 : 1));
             } else {
 #ifdef RUVIA_ENABLE_HTTP2
                 if (request.request().path() == "/proxy-multiplexed") {
@@ -2230,7 +2230,7 @@ TEST(Ruvia, request_stream_policy_reaches_accepted_tunnel_head) {
         const auto origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
         ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& request) -> ruvia::task<void> {
             request.policy().header("x-tunnel-policy", "applied");
-            auto* tunnel = co_await request.accept_tunnel(ruvia::http_status::ok);
+            auto* tunnel = &(co_await request.accept_tunnel(ruvia::http_status::ok)).get();
             co_await echo_tunnel(*tunnel);
         }});
         server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
@@ -2335,14 +2335,14 @@ TEST(Ruvia, request_stream_text_and_event_streams_stage_their_default_head) {
                 auto events = request.stream_sse();
                 if (co_await events.commit() == ruvia::stream_commit_result::body) {
                     co_await events.write({.data_ = "tick", .event_ = "update"});
-                    co_await events.end();
+                    co_await events.finish();
                 }
                 co_return;
             }
             auto& text = request.stream_text({.status_ = ruvia::http_status::accepted});
             if (co_await text.commit() == ruvia::stream_commit_result::body) {
                 co_await text.write("streamed-text");
-                co_await text.end();
+                co_await text.finish();
             }
         }});
         server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
@@ -2399,7 +2399,7 @@ TEST(Ruvia, response_pipe_retains_blocked_body_when_upstream_pool_shuts_down) {
             const std::array fields{ruvia::http_header_view{"content-length", length}};
             (void)co_await request.stream({.headers_ = fields}).commit();
             co_await request.stream().write(payload);
-            co_await request.stream().end();
+            co_await request.stream().finish();
         } else {
             auto response = co_await upstream.client().get("/source").send();
             co_await response.pipe_to(request);

@@ -1443,7 +1443,7 @@ public:
     db_query_result_cache(const db_query_result_cache& other) noexcept;
     db_query_result_cache& operator=(const db_query_result_cache&) = delete;
     // Removes the entries cached under each id passed to cache(), including the
-    // get_one/get_exists/get_count results a repository builder derived from it.
+    // get_first/get_exists/get_count results a repository builder derived from it.
     [[nodiscard]] task<void> remove(std::span<const std::string_view> ids) const;
     template <typename... ids_type>
         requires(sizeof...(ids_type) > 0 && (std::convertible_to<ids_type&&, std::string_view> && ...))

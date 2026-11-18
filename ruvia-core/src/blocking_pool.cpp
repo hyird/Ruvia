@@ -207,6 +207,8 @@ std::string_view describe_blocking_status(blocking_status status) noexcept {
     switch (status) {
         case blocking_status::completed:
             return "completed";
+        case blocking_status::failed:
+            return "blocking operation failed";
         case blocking_status::queue_full:
             return "blocking pool queue is full";
         case blocking_status::pool_stopped:

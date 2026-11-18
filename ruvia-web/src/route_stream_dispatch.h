@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstddef>
 #include <exception>
+#include <functional>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -635,11 +636,11 @@ struct tunnel_upgrade_session_operation final {
         co_return;
     }
 
-    [[nodiscard]] task<http_tunnel*> accept_request_stream_tunnel(context& context_value, http_tunnel_route_config config) {
+    [[nodiscard]] task<std::reference_wrapper<http_tunnel>> accept_request_stream_tunnel(context& context_value, http_tunnel_route_config config) {
         config_ = route_endpoint::validate_tunnel_config(!request_.protocol().empty() || request_.known_method() != http_known_method::connect, udp_, config);
         co_await establish(context_value);
         scanner_entry_.enter_long_lived();
-        co_return &session_->tunnel();
+        co_return std::ref(session_->tunnel());
     }
 
     [[nodiscard]] websocket_accept_result accept_websocket_attempt(const websocket_route_endpoint& websocket_endpoint, websocket_upgrade_attempt<transport_type>&& attempt) {
@@ -672,7 +673,7 @@ struct tunnel_upgrade_session_operation final {
             auto accept = [this, &context_value](http_status_code, http_tunnel_route_config config) {
                 return accept_request_stream_tunnel(context_value, config);
             };
-            const auto accept_ref = callback_access::bind<task<http_tunnel*>(http_status_code, http_tunnel_route_config)>(accept);
+            const auto accept_ref = callback_access::bind<task<std::reference_wrapper<http_tunnel>>(http_status_code, http_tunnel_route_config)>(accept);
             auto accept_websocket = [this, &context_value](const websocket_route_endpoint& endpoint) {
                 return accept_request_stream_websocket(context_value, endpoint);
             };

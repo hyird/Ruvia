@@ -1020,7 +1020,7 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
         return ruvia::http_server_callbacks{.request_stream_ = [](ruvia::request_stream& stream) -> ruvia::task<void> {
             if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
                 co_await stream.stream().write("ocsp");
-                co_await stream.stream().end();
+                co_await stream.stream().finish();
             }
         }};
     });

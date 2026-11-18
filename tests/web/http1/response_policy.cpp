@@ -185,7 +185,7 @@ class response_policy_routes final {
         }
         head_loop_aborted.store(output.aborted());
         head_loop_token_stopped.store(token.stop_requested());
-        co_await output.end();
+        co_await output.finish();
         head_loop_completed.store(true);
     }
 
@@ -240,7 +240,7 @@ class response_policy_routes final {
         }
         co_await output.write("body");
         const std::array<ruvia::http_header_view, 1> trailers{{{"X-Complete", "yes"}}};
-        co_await output.end(trailers);
+        co_await output.finish(trailers);
     }
 
     ruvia::task<ruvia::http_response> plain(ruvia::context& context_value) {

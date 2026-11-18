@@ -1448,12 +1448,12 @@ TEST(Ruvia, http1_client_request_framing_reuses_one_connection_at_exact_boundari
                 auto exchange = co_await handle.post("/known").upload({.content_length_ = ruvia::http_content_length(6)});
                 co_await exchange.body().write("abc");
                 co_await exchange.body().write("def");
-                co_await exchange.body().end();
+                co_await exchange.body().finish();
                 observe(co_await exchange.response());
             }
             {
                 auto exchange = co_await handle.post("/zero").upload({.content_length_ = ruvia::http_content_length(0)});
-                co_await exchange.body().end();
+                co_await exchange.body().finish();
                 observe(co_await exchange.response());
             }
             {
@@ -1461,7 +1461,7 @@ TEST(Ruvia, http1_client_request_framing_reuses_one_connection_at_exact_boundari
                 co_await exchange.body().write("abc");
                 co_await exchange.body().write("def");
                 const std::array trailers{ruvia::http_header_view{"x-end", "done"}};
-                co_await exchange.body().end(trailers);
+                co_await exchange.body().finish(trailers);
                 observe(co_await exchange.response());
             }
             sent_bytes = handle.stats().plaintext_bytes_sent_;

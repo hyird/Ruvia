@@ -230,7 +230,7 @@ private:
             const std::string_view bytes(input.data(), count);
             for (;;) {
                 const auto status = connection.feed(bytes);
-                if (status == ruvia::http2_feed_result::protocol_failure) {
+                if (status == ruvia::http2_feed_status::protocol_failure) {
                     throw std::runtime_error("invalid HTTP/2 input");
                 }
                 while (auto event = connection.next_event()) {
@@ -256,7 +256,7 @@ private:
                         throw std::runtime_error("HTTP/2 response rejected");
                     }
                 }
-                if (status != ruvia::http2_feed_result::events_pending) {
+                if (status != ruvia::http2_feed_status::events_pending) {
                     break;
                 }
             }
@@ -778,7 +778,7 @@ TEST(Ruvia, http_client_upload_progress_keeps_the_response_head_wait_alive) {
             co_await exchange.body().write(std::string_view("chunk"));
             (void)co_await ruvia::sleep_for(worker, 50ms);
         }
-        co_await exchange.body().end();
+        co_await exchange.body().finish();
         auto response = co_await exchange.response();
         EXPECT_TRUE(response.ok());
         const auto body = co_await response.bytes();
@@ -1114,7 +1114,7 @@ TEST(Ruvia, http_client_redirect_hop_observation_and_streaming_upload_redirect) 
             return true;
         }).upload();
         co_await upload_exchange.body().write("upload-payload");
-        co_await upload_exchange.body().end();
+        co_await upload_exchange.body().finish();
         auto redirected_resp = co_await upload_exchange.response();
         EXPECT_EQ(redirected_resp.status(), ruvia::http_status::ok);
         const auto landed_body = co_await redirected_resp.bytes();
@@ -1170,7 +1170,7 @@ TEST(Ruvia, http_client_upload_redirect_preserves_its_original_configured_deadli
     ruvia::http_client_config config{.base_url_ = base_url, .request_timeout_ = 200ms};
     run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_ref& worker) -> ruvia::task<void> {
         auto exchange = co_await client.client().with_options({.timeout_ = 5s}).post("/drain-redirect").upload();
-        co_await exchange.body().end();
+        co_await exchange.body().finish();
         (void)co_await ruvia::sleep_for(worker, 400ms);
         bool timed_out = false;
         try {

@@ -2894,8 +2894,8 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                     }
                     response = make_auto_https_redirect_response(parsed_value.request(), redirect->https_port_);
                     if (http_response_needs_not_acceptable(admission->tail().coding_policy(), parsed_value.request(), response)) {
-                        const auto not_acceptable = http_not_acceptable_coding_error();
-                        request_rejection = http_request_rejection::error(not_acceptable.status_, not_acceptable.code_.view(), not_acceptable.message_.view());
+                        constexpr auto not_acceptable = http_not_acceptable_coding_error();
+                        request_rejection = http_request_rejection::error(not_acceptable.status_, static_text{not_acceptable.code_.view()}, not_acceptable.message_.view());
                         break;
                     }
                     request_completion.emplace(close_with_framework_response(response, parsed_value.connection_plan()));

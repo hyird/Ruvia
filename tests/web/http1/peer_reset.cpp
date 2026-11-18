@@ -97,7 +97,7 @@ class peer_reset_routes final {
         (void)co_await ruvia::sleep_for(c.worker(), idle_timeout + 500ms);
         auto& writer = c.stream({.status_ = ruvia::http_status::no_content});
         try {
-            co_await writer.end();
+            co_await writer.finish();
         } catch (const std::exception&) {
             head_write_failed.store(true);
             head_write_aborted.store(writer.aborted());

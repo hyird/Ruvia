@@ -91,7 +91,7 @@ protocol_byte_limit http_request_body_limit(const route_resolution& resolution, 
 http_request_rejection http_request_rejection::rate_limited(rate_limit_rejection rejection) noexcept {
     // The shared 429 metadata names static storage; its message is copied.
     const auto error = rate_limit_rejection_error();
-    return http_request_rejection(http_protocol_error(error.status(), error.code(), error.message()), rejection);
+    return http_request_rejection(http_protocol_error(error.status(), rate_limit_error_code, error.message()), rejection);
 }
 
 task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request, http_request_rejection rejection, const context_services& services) {

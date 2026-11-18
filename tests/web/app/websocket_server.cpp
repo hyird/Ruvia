@@ -229,7 +229,7 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
     const auto path = request.request().path();
     if (path == "/forbidden") {
         (void)co_await request.stream({.status_ = ruvia::http_status::forbidden}).commit();
-        co_await request.stream().end();
+        co_await request.stream().finish();
         try {
             (void)co_await request.accept_websocket();
         } catch (const std::logic_error&) {
@@ -240,7 +240,7 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
     if (path == "/cold") {
         observed.expired_accept_.emplace(request.accept_websocket());
         (void)co_await request.stream({.status_ = ruvia::http_status::forbidden}).commit();
-        co_await request.stream().end();
+        co_await request.stream().finish();
         co_return;
     }
     if (path == "/wire") {

@@ -237,6 +237,7 @@ private:
     rate_limit_rejection rejection_;
 };
 
+inline constexpr static_text rate_limit_error_code{"too_many_requests"};
 [[nodiscard]] http_error_info rate_limit_rejection_error() noexcept;
 
 // Every 429 a rate-limit rule produces carries the same fields: Retry-After
