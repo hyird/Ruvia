@@ -232,12 +232,12 @@ public:
         return content_coding_;
     }
 
-    [[nodiscard]] std::string_view bytes() const noexcept {
-        return bytes_;
+    [[nodiscard]] const std::shared_ptr<const std::string>& bytes_owner() const noexcept {
+        return *bytes_;
     }
 
     [[nodiscard]] std::uint64_t size() const noexcept {
-        return static_cast<std::uint64_t>(bytes_.size());
+        return static_cast<std::uint64_t>((*bytes_)->size());
     }
 
     [[nodiscard]] std::uint64_t modified_token() const noexcept {
@@ -259,16 +259,16 @@ public:
 private:
     friend class static_root_entry_view;
 
-    static_root_memory_variant_view(http_content_coding content_coding, std::string_view bytes_value, std::uint64_t modified_token, std::time_t modified_seconds, std::string_view etag, std::string_view last_modified) noexcept :
+    static_root_memory_variant_view(http_content_coding content_coding, const std::shared_ptr<const std::string>& bytes_value, std::uint64_t modified_token, std::time_t modified_seconds, std::string_view etag, std::string_view last_modified) noexcept :
         content_coding_(content_coding),
-        bytes_(bytes_value),
+        bytes_(&bytes_value),
         modified_token_(modified_token),
         modified_seconds_(modified_seconds),
         etag_(etag),
         last_modified_(last_modified) {}
 
     http_content_coding content_coding_;
-    std::string_view bytes_;
+    const std::shared_ptr<const std::string>* bytes_;
     std::uint64_t modified_token_;
     std::time_t modified_seconds_;
     std::string_view etag_;
@@ -331,21 +331,21 @@ public:
         }
         for (const auto& variant : *memory_variants_) {
             if (variant.content_coding_ == coding) {
-                return static_root_memory_variant_view(variant.content_coding_, *variant.bytes_, variant.modified_token_, variant.modified_seconds_, variant.etag_, variant.last_modified_);
+                return static_root_memory_variant_view(variant.content_coding_, variant.bytes_, variant.modified_token_, variant.modified_seconds_, variant.etag_, variant.last_modified_);
             }
         }
         return std::nullopt;
     }
 
     // The file's indexed bytes when the snapshot keeps them in memory.
-    [[nodiscard]] const std::string* resident_bytes() const noexcept {
+    [[nodiscard]] const std::shared_ptr<const std::string>* resident_bytes() const noexcept {
         return resident_bytes_;
     }
 
 private:
     friend class static_root_access;
 
-    static_root_entry_view(const http_native_path_char_type* file_path, std::string_view content_type_value, std::string_view cache_control_value, std::string_view etag, std::string_view last_modified, std::uint64_t size, http_response_file_identity identity, std::uint64_t modified_token, std::time_t modified_seconds, static_range_request_policy range_requests, static_response_validator_policy response_validators, bool directly_servable, const std::vector<static_root_memory_variant>* memory_variants, const std::string* resident_bytes) noexcept :
+    static_root_entry_view(const http_native_path_char_type* file_path, std::string_view content_type_value, std::string_view cache_control_value, std::string_view etag, std::string_view last_modified, std::uint64_t size, http_response_file_identity identity, std::uint64_t modified_token, std::time_t modified_seconds, static_range_request_policy range_requests, static_response_validator_policy response_validators, bool directly_servable, const std::vector<static_root_memory_variant>* memory_variants, const std::shared_ptr<const std::string>* resident_bytes) noexcept :
         file_path_(file_path),
         content_type_(content_type_value),
         cache_control_(cache_control_value),
@@ -374,7 +374,7 @@ private:
     static_response_validator_policy response_validators_;
     bool directly_servable_;
     const std::vector<static_root_memory_variant>* memory_variants_;
-    const std::string* resident_bytes_;
+    const std::shared_ptr<const std::string>* resident_bytes_;
 };
 
 // One indexed file's open for a response, owning everything it reads: it runs

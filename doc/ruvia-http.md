@@ -2597,6 +2597,7 @@ public:
     void body(string_type&& value) noexcept;
     void static_body(static_text value) noexcept;
     void file_bytes_body(std::string&& value) noexcept;
+    void file_bytes_body(std::shared_ptr<const std::string> value);
     void file_body(http_native_path_string_type file, http_content_length size, http_content_length offset,
                    http_content_length length, http_response_file_identity identity,
                    http_response_file_descriptor opened = {});
@@ -2643,7 +2644,7 @@ public:
 
 长度为零的文件片段仍然存在，调用方必须完成适用的文件校验（打开、identity 验证），不能因写计划 `send_body() == false` 就丢弃它；`send_body()` 只表示方法/状态允许且正文长度非零时需要传送 payload（见 [`http_buffered_response_write_plan`](#api-http-response-body-h)）。
 
-`take_body_bytes() &&` 移出拥有型字节（含 `file_bytes_body()`），或复制静态字节；成功后清空正文、保留首部。文件计划须由驱动读取；对其调用会抛 `std::logic_error`，不改变响应。
+`take_body_bytes() &&` 移出独占字节或复制静态、共享字节；成功后清空正文、保留首部。文件计划须由驱动读取；对其调用会抛 `std::logic_error`，不改变响应。
 
 正文设置（每次设置都替换整个正文：先发布完整的新表示，再释放旧正文资源；释放回调中重入替换的结果保留。重新设置正文会清除 HEAD 元数据标记）：
 
@@ -2653,6 +2654,7 @@ public:
 | `body(std::string&&) noexcept` | 仅精确的非 const `std::string` 右值接管存储，不复制；空串得到空正文。 |
 | `static_body(static_text) noexcept` | 零拷贝借用经编译期检查的[静态文本](#api-borrowed-text-h)；空输入得到空正文。 |
 | `file_bytes_body(std::string&&) noexcept` | 接管从文件读取的字节（整个文件、一个字节范围或 multipart byteranges 负载）。与 `body()` 的设置重载不同，即使为空也保持文件表示（`has_file_representation() == true`）。 |
+| `file_bytes_body(std::shared_ptr<const std::string> value)` | 保活完整的不可变缓冲，不复制字节；空字符串仍保留文件表示。指针为空或不持有所有权时抛 `std::invalid_argument`，响应不变。 |
 | `file_body(file, size, offset, length, identity, opened = {})` | 设置文件正文：按值接收原生路径，移动右值的存储而不复制堆上字节；保留运行时不透明 identity。`opened` 若已占用，是运行时据以分帧的已打开描述符，由正文拥有并在销毁或替换时释放。`file` 为空或 `[offset, offset + length)` 超出 `size` 时抛 `std::invalid_argument`，正文不变，被拒绝的 `opened` 随调用释放。 |
 | `multipart_file_body(file, size, identity, plan, opened = {})` | 设置 `multipart/byteranges` 文件正文；路径与句柄所有权同 `file_body()`。`plan` 为 [`http_multipart_byte_range_plan`](#api-http-range-h)。`file` 为空、计划无片段、无文件片段、某文件片段长度为零或超出 `size` 时抛 `std::invalid_argument`，正文不变，`opened` 被释放。 |
 | `head_metadata_body() noexcept` | 把正文替换为仅描述 HEAD 所选表示的空正文：保留首部、释放原正文资源。序列化 HEAD 时保留显式 `Content-Length`（作为 GET 表示的长度）；未提供长度时不推断为零。标记随移动转移，不影响 GET 等其他方法的正文规则。 |

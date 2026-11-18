@@ -261,6 +261,13 @@ void http_response::file_bytes_body(std::string&& value) noexcept {
     body_.set_file_bytes(std::move(value));
 }
 
+void http_response::file_bytes_body(std::shared_ptr<const std::string> value) {
+    if (!value || value.use_count() == 0) {
+        throw std::invalid_argument("file response bytes require an owner");
+    }
+    body_.replace(std::move(value));
+}
+
 void http_response::apply_content_encoding(std::string_view content_encoding) {
     apply_encoded_representation(content_encoding, nullptr);
 }

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <initializer_list>
 #include <limits>
+#include <memory>
 #include <new>
 #include <optional>
 #include <stdexcept>
@@ -1335,6 +1336,15 @@ TEST(Ruvia, response_file_move_assignment_commits_before_old_body_reuses_source)
     }
     EXPECT_EQ(previous.releases_, 1U);
     EXPECT_EQ(incoming.releases_, 1U);
+}
+
+TEST(Ruvia, file_response_rejects_unowned_shared_bytes_without_replacing_body) {
+    http_response response;
+    response.body("preserved");
+    const std::string borrowed("borrowed");
+    const std::shared_ptr<const std::string> unowned(std::shared_ptr<const std::string>{}, &borrowed);
+    EXPECT_THROW(response.file_bytes_body(unowned), std::invalid_argument);
+    EXPECT_EQ(response.body_bytes(), "preserved");
 }
 
 TEST(Ruvia, file_response_adopts_native_path_storage) {

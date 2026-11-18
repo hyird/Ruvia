@@ -334,6 +334,32 @@ TEST(Ruvia, static_file_response_owns_path_after_handler_local_root_is_destroyed
     });
 }
 
+TEST(Ruvia, static_file_responses_share_resident_bytes_beyond_root_lifetime) {
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_resident_lifetime");
+    const auto& dir = directory.path();
+    const std::string expected(4096, 'r');
+    std::ofstream(dir / "resident.txt", std::ios::binary) << expected;
+
+    static_file_test_request request;
+    request.set_method("GET");
+    with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+        std::optional<ruvia::http_response> retained;
+        {
+            const ruvia::static_root root(dir, {.resident_max_bytes_ = expected.size(), .resident_budget_bytes_ = expected.size()});
+            retained.emplace(co_await context_value.static_file(root, {.relative_path_ = "resident.txt"}));
+            const auto second = co_await context_value.static_file(root, {.relative_path_ = "resident.txt"});
+            EXPECT_TRUE(retained->has_file_representation());
+            EXPECT_FALSE(retained->file_body().has_value());
+            EXPECT_EQ(second.body_bytes().data(), retained->body_bytes().data());
+            EXPECT_EQ(second.body_bytes(), expected);
+        }
+        EXPECT_EQ(retained->body_bytes(), expected);
+        auto extracted = std::move(*retained).take_body_bytes();
+        EXPECT_EQ(extracted, expected);
+        EXPECT_TRUE(retained->body_bytes().empty());
+    });
+}
+
 TEST(Ruvia, static_file_type_policy_has_closed_exact_alternatives) {
     namespace fs = std::filesystem;
     const ruvia::test::scoped_temp_directory directory("ruvia_static_file_type_policy");

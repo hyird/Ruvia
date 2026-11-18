@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -476,6 +477,9 @@ public:
         if (const auto* body = owned_bytes()) {
             return body->bytes();
         }
+        if (const auto* body = std::get_if<std::shared_ptr<const std::string>>(&value_)) {
+            return **body;
+        }
         return {};
     }
     [[nodiscard]] std::string_view bytes() const&& = delete;
@@ -495,7 +499,7 @@ public:
         if (const auto* body = owned_bytes()) {
             return body->file_representation();
         }
-        return owned_file() != nullptr || multipart_body() != nullptr;
+        return std::holds_alternative<std::shared_ptr<const std::string>>(value_) || owned_file() != nullptr || multipart_body() != nullptr;
     }
 
     [[nodiscard]] bool head_metadata_only() const noexcept {
@@ -519,7 +523,7 @@ private:
     friend class ::ruvia::http_response;
     friend struct http_response_body_access;
 
-    using value_type = std::variant<http_empty_response_body, http_static_response_bytes, http_owned_response_bytes, http_owned_response_file, http_multipart_response_body>;
+    using value_type = std::variant<http_empty_response_body, http_static_response_bytes, http_owned_response_bytes, std::shared_ptr<const std::string>, http_owned_response_file, http_multipart_response_body>;
     static_assert(std::is_nothrow_move_constructible_v<value_type>);
 
     template <typename body_type>

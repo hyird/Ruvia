@@ -4,6 +4,7 @@
 #include <ctime>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -170,7 +171,7 @@ public:
         return file_response_body_source(std::move(path));
     }
 
-    [[nodiscard]] static file_response_body_source bytes_value(std::string_view bytes_value) {
+    [[nodiscard]] static file_response_body_source bytes_value(const std::shared_ptr<const std::string>& bytes_value) noexcept {
         return file_response_body_source(bytes_value);
     }
 
@@ -179,18 +180,17 @@ public:
             path->set_body(response, size, offset, length);
             return;
         }
-        const auto bytes_value = std::get<std::string_view>(value_);
+        const auto& owner = *std::get<const std::shared_ptr<const std::string>*>(value_);
+        const std::string_view bytes_value(*owner);
         if (offset > bytes_value.size() || length > bytes_value.size() - offset) {
             throw std::logic_error("static memory response slice is out of range");
         }
-        // Copied, not borrowed: the snapshot is not guaranteed to outlive the
-        // response. A document-root lease ends when dispatch returns, before
-        // the transport writes the body, and a caller's static_root carries no
-        // lease at all. Borrowing would need a per-response reference on the
-        // snapshot (shared ownership on the hot path) or a lease release hook
-        // inside http_response.
-        std::string owned(bytes_value.substr(static_cast<std::size_t>(offset), static_cast<std::size_t>(length)));
-        response.file_bytes_body(std::move(owned));
+        if (offset == 0 && length == bytes_value.size()) {
+            response.file_bytes_body(owner);
+        } else {
+            // Do not pin an entire old file version to serve a small range.
+            response.file_bytes_body(std::string(bytes_value.substr(static_cast<std::size_t>(offset), static_cast<std::size_t>(length))));
+        }
     }
 
     void set_full_body(http_response& response, std::uint64_t size) {
@@ -202,7 +202,7 @@ public:
             path->set_multipart_body(response, size, std::move(plan));
             return;
         }
-        const auto source_value = std::get<std::string_view>(value_);
+        const std::string_view source_value(**std::get<const std::shared_ptr<const std::string>*>(value_));
         std::size_t total_size = 0;
         for (const auto& segment : plan.segments()) {
             total_size += segment.kind_ == http_multipart_byte_range_plan::segment_kind::file ? static_cast<std::size_t>(segment.file_length_) : segment.metadata_length_;
@@ -223,10 +223,10 @@ private:
     explicit file_response_body_source(file_response_path path) noexcept :
         value_(std::move(path)) {}
 
-    explicit file_response_body_source(std::string_view bytes_value) noexcept :
-        value_(bytes_value) {}
+    explicit file_response_body_source(const std::shared_ptr<const std::string>& bytes_value) noexcept :
+        value_(&bytes_value) {}
 
-    std::variant<file_response_path, std::string_view> value_;
+    std::variant<file_response_path, const std::shared_ptr<const std::string>*> value_;
 };
 
 // What one file response describes: which bytes, when they last changed, and
@@ -537,8 +537,8 @@ void apply_file_response_state(const http_response& head, const file_response_so
     const auto* const memory_variant = served.memory_variant();
     // A document-root snapshot keeps small files' bytes; they describe exactly
     // the indexed metadata, so the response is framed and sent from memory.
-    const auto* const resident_bytes = memory_variant == nullptr ? served_entry.resident_bytes() : nullptr;
-    const bool file_backed = memory_variant == nullptr && resident_bytes == nullptr;
+    const auto* const resident_bytes = memory_variant == nullptr ? served_entry.resident_bytes() : &memory_variant->bytes_owner();
+    const bool file_backed = resident_bytes == nullptr;
     const file_response_source source_value{
         .size_ = memory_variant == nullptr ? served_entry.size() : memory_variant->size(),
         .modified_token_ = memory_variant == nullptr ? served_entry.modified_token() : memory_variant->modified_token(),
@@ -567,9 +567,7 @@ void apply_file_response_state(const http_response& head, const file_response_so
             throw static_file_changed_error();
         }
     }
-    auto body = memory_variant != nullptr
-        ? file_response_body_source::bytes_value(memory_variant->bytes())
-        : resident_bytes != nullptr
+    auto body = resident_bytes != nullptr
         ? file_response_body_source::bytes_value(*resident_bytes)
         : file_response_body_source::file(file_response_path(http_native_path_view_type(served_entry.file_path()), served_entry.identity(), std::move(opened)));
     co_return make_file_response(head, source_value, body, planned);

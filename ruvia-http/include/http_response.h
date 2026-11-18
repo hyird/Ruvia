@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -70,7 +71,7 @@ public:
     std::string_view body() const&& = delete;
     [[nodiscard]] std::string_view body_bytes() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view body_bytes() const&& = delete;
-    // Transfers owned bytes or copies static bytes, then empties the body.
+    // Transfers owned bytes or copies static/shared bytes, then empties the body.
     // File plans require a driver and throw without changing the response.
     [[nodiscard]] std::string take_body_bytes() &&;
     [[nodiscard]] std::optional<http_response_file_view> file_body() const& noexcept RUVIA_LIFETIMEBOUND;
@@ -101,6 +102,8 @@ public:
     // byte-range payload of it. Unlike body(), the body remains a file
     // representation, even when empty.
     void file_bytes_body(std::string&& value) noexcept;
+    // The owner must keep the backing string alive and immutable.
+    void file_bytes_body(std::shared_ptr<const std::string> value);
     // Owns the path and the optional opened descriptor. Rvalue paths transfer
     // their storage. Validation precedes body replacement; a rejected call
     // releases the incoming descriptor.

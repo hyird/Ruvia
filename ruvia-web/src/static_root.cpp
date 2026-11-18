@@ -159,7 +159,7 @@ void share_memory_variant(detail::static_root_entry& entry_value, const detail::
 }
 
 void store_precompressed_variant(detail::static_root_entry& entry_value, http_content_coding coding, std::string encoded, bool emit_response_validators) {
-    auto bytes = std::make_shared<std::string>(std::move(encoded));
+    auto bytes = std::make_shared<const std::string>(std::move(encoded));
     auto& variant = entry_value.memory_variants_.emplace_back();
     variant.content_coding_ = coding;
     variant.modified_token_ = entry_value.modified_token_;
@@ -233,7 +233,7 @@ std::optional<detail::static_root_entry_view> detail::static_root_access::find_v
     if (entry_value == nullptr) {
         return std::nullopt;
     }
-    return detail::static_root_entry_view(entry_value->file_path_.c_str(), entry_value->content_type_, state_value.config_.cache_control_, entry_value->etag_, entry_value->last_modified_, entry_value->size_, entry_value->identity_, entry_value->modified_token_, entry_value->modified_seconds_, state_value.config_.range_requests_, state_value.config_.response_validators_, entry_value->directly_servable_, &entry_value->memory_variants_, entry_value->resident_bytes_.get());
+    return detail::static_root_entry_view(entry_value->file_path_.c_str(), entry_value->content_type_, state_value.config_.cache_control_, entry_value->etag_, entry_value->last_modified_, entry_value->size_, entry_value->identity_, entry_value->modified_token_, entry_value->modified_seconds_, state_value.config_.range_requests_, state_value.config_.response_validators_, entry_value->directly_servable_, &entry_value->memory_variants_, entry_value->resident_bytes_ ? &entry_value->resident_bytes_ : nullptr);
 }
 
 bool detail::static_root_access::is_indexed_directory(const static_root& root, std::string_view relative_path) noexcept {
@@ -375,7 +375,7 @@ void detail::static_root_access::install_resident_bodies(static_root& root, cons
         if (!bytes.has_value()) {
             continue;
         }
-        entry.resident_bytes_ = std::make_shared<std::string>(std::move(*bytes));
+        entry.resident_bytes_ = std::make_shared<const std::string>(std::move(*bytes));
         used += size;
     }
 }
