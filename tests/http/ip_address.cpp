@@ -72,6 +72,13 @@ TEST(RuviaHttp, ip_address_rejects_nonliteral_and_malformed_input) {
     EXPECT_FALSE(ruvia::ip_address::parse(bounded).has_value());
 }
 
+TEST(RuviaHttp, ip_address_format_view_borrows_output_not_address) {
+    std::array<char, ruvia::ip_address::max_text_size> storage{};
+    const auto formatted = ruvia::ip_address::ipv4({192, 0, 2, 1}).format_to(storage);
+    EXPECT_EQ(formatted, "192.0.2.1");
+    EXPECT_EQ(formatted.data(), storage.data());
+}
+
 TEST(RuviaHttp, ip_address_formats_maximal_scoped_ipv6) {
     const auto address = ruvia::ip_address::parse("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff%4294967295");
     ASSERT_TRUE(address.has_value());

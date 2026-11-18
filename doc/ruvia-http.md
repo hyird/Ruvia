@@ -814,7 +814,7 @@ public:
     [[nodiscard]] bool is_public_unicast() const noexcept;
 
     static constexpr std::size_t max_text_size = 50;
-    [[nodiscard]] std::string_view format_to(std::span<char, max_text_size> output) const noexcept;
+    [[nodiscard]] std::string_view format_to(std::span<char, max_text_size> output RUVIA_LIFETIMEBOUND) const noexcept;
     [[nodiscard]] std::string to_string() const;
 
     friend constexpr bool operator==(const ip_address&, const ip_address&) noexcept = default;

@@ -137,7 +137,7 @@ public:
     // longest zero run compressed, IPv4-mapped as "::ffff:a.b.c.d", and a zone
     // as "%<scope>". Writes the text at the start of `output` and returns that
     // prefix without allocating.
-    [[nodiscard]] std::string_view format_to(std::span<char, max_text_size> output) const noexcept;
+    [[nodiscard]] std::string_view format_to(std::span<char, max_text_size> output RUVIA_LIFETIMEBOUND) const noexcept;
 
     // The format_to() text as an owning string.
     [[nodiscard]] std::string to_string() const;
