@@ -10320,7 +10320,7 @@ struct http_udp_datagram_view final {
     std::uint64_t context_id_{0};
     std::span<const char> payload_{};
 };
-[[nodiscard]] std::optional<http_udp_datagram_view> decode_http_udp_datagram(std::span<const char> input) noexcept;
+[[nodiscard]] std::optional<http_udp_datagram_view> decode_http_udp_datagram(std::span<const char> input RUVIA_LIFETIMEBOUND) noexcept;
 template </* 临时拥有型 char 范围 */ typename input_type>
 std::optional<http_udp_datagram_view> decode_http_udp_datagram(input_type&&) noexcept = delete;
 [[nodiscard]] std::variant<std::size_t, http_capsule_codec_error> encode_http_udp_datagram_prefix(std::span<char> output, std::uint64_t context_id = 0) noexcept;
@@ -10442,10 +10442,10 @@ public:
     http_datagram_session() noexcept = default;
     void close_send() noexcept;
     void close_receive() noexcept;
-    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode mode, std::span<const char> payload) const noexcept;
+    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode mode, std::span<const char> payload RUVIA_LIFETIMEBOUND) const noexcept;
     template </* 临时拥有型 char 范围 */ typename payload_type>
     std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode, payload_type&&) const noexcept = delete;
-    [[nodiscard]] std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode mode, std::span<const char> input) const noexcept;
+    [[nodiscard]] std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode mode, std::span<const char> input RUVIA_LIFETIMEBOUND) const noexcept;
     template </* 临时拥有型 char 范围 */ typename input_type>
     std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode, input_type&&) const noexcept = delete;
 };

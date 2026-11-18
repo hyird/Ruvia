@@ -31,7 +31,7 @@ struct http_udp_datagram_view final {
 };
 // RFC 9298: context ID zero carries a UDP payload; unknown contexts are dropped.
 // The payload view borrows `input`.
-[[nodiscard]] std::optional<http_udp_datagram_view> decode_http_udp_datagram(std::span<const char> input) noexcept;
+[[nodiscard]] std::optional<http_udp_datagram_view> decode_http_udp_datagram(std::span<const char> input RUVIA_LIFETIMEBOUND) noexcept;
 template <detail::http_temporary_owning_range<char> input_type>
 std::optional<http_udp_datagram_view> decode_http_udp_datagram(input_type&&) noexcept = delete;
 template <typename element_type>
@@ -181,7 +181,7 @@ public:
     void close_receive() noexcept {
         receive_open_ = false;
     }
-    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode mode, std::span<const char> payload) const noexcept;
+    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode mode, std::span<const char> payload RUVIA_LIFETIMEBOUND) const noexcept;
     template <detail::http_temporary_owning_range<char> payload_type>
     std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode, payload_type&&) const noexcept = delete;
     template <typename element_type>
@@ -191,7 +191,7 @@ public:
     // Returns the payload within `input`. Empty optional means silently dropped:
     // the receive side is closed, or `connect_udp` saw an unknown Context ID.
     // Only `connect_udp` reports errors (malformed Context ID, oversized payload).
-    [[nodiscard]] std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode mode, std::span<const char> input) const noexcept;
+    [[nodiscard]] std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode mode, std::span<const char> input RUVIA_LIFETIMEBOUND) const noexcept;
     template <detail::http_temporary_owning_range<char> input_type>
     std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode, input_type&&) const noexcept = delete;
     template <typename element_type>
@@ -199,7 +199,7 @@ public:
     std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode, std::initializer_list<element_type>) const noexcept = delete;
 
 private:
-    [[nodiscard]] static std::variant<http_datagram_write_plan, http_datagram_error> plan_datagram_capsule(std::span<const char> payload, std::string_view context_prefix) noexcept;
+    [[nodiscard]] static std::variant<http_datagram_write_plan, http_datagram_error> plan_datagram_capsule(std::span<const char> payload RUVIA_LIFETIMEBOUND, std::string_view context_prefix) noexcept;
 
     bool send_open_{true};
     bool receive_open_{true};
