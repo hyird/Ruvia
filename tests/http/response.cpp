@@ -17,6 +17,7 @@
 
 #include "content_decoding_fixture.h"
 #include "http_header.h"
+#include "http_range.h"
 #include "http_representation.h"
 #include "http_request.h"
 #include "http_response.h"
@@ -1136,7 +1137,7 @@ TEST(Ruvia, response_file_setter_keeps_typed_identity_and_validates_before_repla
 
     response.body("preserved");
     EXPECT_TRUE(throws_invalid_argument([&] {
-        response.file_body(ruvia::http_native_path_view_type{}, 10, 0, 10, unchecked);
+        response.file_body({}, 10, 0, 10, unchecked);
     }));
     EXPECT_TRUE(throws_invalid_argument([&] {
         response.file_body(std::filesystem::path("invalid-range.bin").native(), 10, 8, 3, unchecked);
@@ -1334,6 +1335,27 @@ TEST(Ruvia, response_file_move_assignment_commits_before_old_body_reuses_source)
     }
     EXPECT_EQ(previous.releases_, 1U);
     EXPECT_EQ(incoming.releases_, 1U);
+}
+
+TEST(Ruvia, file_response_adopts_native_path_storage) {
+    const auto identity = ruvia::http_response_file_identity::checked({9, 8, 7, 6});
+    for (const bool multipart : {false, true}) {
+        http_response response;
+        ruvia::http_native_path_string_type path(128, static_cast<ruvia::http_native_path_char_type>('f'));
+        const auto* const storage = path.data();
+        if (multipart) {
+            const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,4-5", 10);
+            auto plan = ruvia::make_http_multipart_byte_range_plan(ranges, 10, "text/plain", "b");
+            response.multipart_file_body(std::move(path), 10, identity, std::move(plan));
+        } else {
+            response.file_body(std::move(path), 10, 2, 4, identity);
+        }
+        const auto file = response.file_body();
+        ASSERT_TRUE(file.has_value());
+        EXPECT_EQ(file->native_path_c_str(), storage);
+        EXPECT_EQ(file->identity(), identity);
+        EXPECT_EQ(response.has_multipart_file_body(), multipart);
+    }
 }
 
 TEST(Ruvia, response_file_body_move_preserves_owned_path_and_identity) {

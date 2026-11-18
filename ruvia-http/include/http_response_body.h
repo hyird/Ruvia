@@ -365,8 +365,6 @@ private:
         identity_(identity),
         opened_(std::move(opened)) {}
 
-    http_owned_response_file(http_native_path_view_type file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, http_response_file_identity identity, http_response_file_descriptor opened) :
-        http_owned_response_file(http_native_path_string_type(file), size, offset, length, identity, std::move(opened)) {}
     http_native_path_string_type native_path_;
     std::uint64_t size_;
     std::uint64_t offset_;
@@ -377,8 +375,8 @@ private:
 
 class http_multipart_response_body final {
 public:
-    http_multipart_response_body(http_native_path_view_type path, std::uint64_t size, http_response_file_identity identity, http_multipart_byte_range_plan plan, http_response_file_descriptor opened) :
-        native_path_(path),
+    http_multipart_response_body(http_native_path_string_type&& path, std::uint64_t size, http_response_file_identity identity, http_multipart_byte_range_plan plan, http_response_file_descriptor opened) :
+        native_path_(std::move(path)),
         plan_(std::move(plan)),
         size_(size),
         identity_(identity),
@@ -571,13 +569,13 @@ private:
         replace(std::move(body));
     }
 
-    void set_owned_file(http_native_path_view_type file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, http_response_file_identity identity, http_response_file_descriptor opened) {
-        http_owned_response_file body(file, size, offset, length, identity, std::move(opened));
+    void set_owned_file(http_native_path_string_type&& file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, http_response_file_identity identity, http_response_file_descriptor opened) noexcept {
+        http_owned_response_file body(std::move(file), size, offset, length, identity, std::move(opened));
         replace(std::move(body));
     }
 
-    void set_multipart(http_native_path_view_type file, std::uint64_t size, http_response_file_identity identity, http_multipart_byte_range_plan plan, http_response_file_descriptor opened) {
-        http_multipart_response_body replacement(file, size, identity, std::move(plan), std::move(opened));
+    void set_multipart(http_native_path_string_type&& file, std::uint64_t size, http_response_file_identity identity, http_multipart_byte_range_plan plan, http_response_file_descriptor opened) {
+        http_multipart_response_body replacement(std::move(file), size, identity, std::move(plan), std::move(opened));
         replace(std::move(replacement));
     }
 

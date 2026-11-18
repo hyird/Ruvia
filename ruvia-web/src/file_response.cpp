@@ -128,34 +128,38 @@ template <typename value_type>
     return std::move(result).take_value();
 }
 
-// Names the response file by a borrowed native path that outlives
-// make_file_response: a static_root index entry or context::file's opened
-// copy. http_response copies the path into its own storage, so neither
-// borrow reaches the returned body. The handle opened for the response goes
-// with the body, so the transport reads it on the blocking pool and never
-// reopens the path.
+// The validated handle travels with the path. An indexed path is copied only
+// when a file body is published; a direct open has already paid for ownership.
 class file_response_path final {
+    using native_path_type = std::variant<http_native_path_view_type, http_native_path_string_type>;
+
 public:
-    // `path` must be NUL-terminated (a c_str() or path::native() view).
-    file_response_path(http_native_path_view_type path, http_response_file_identity identity, http_response_file_descriptor opened) :
-        path_(path),
+    file_response_path(native_path_type path, http_response_file_identity identity, http_response_file_descriptor opened) :
+        path_(std::move(path)),
         identity_(identity),
         opened_(std::move(opened)) {
-        if (path_.empty() || !opened_) {
-            throw std::logic_error("file response has no native path or opened handle");
+        if (!opened_) {
+            throw std::logic_error("file response has no opened handle");
         }
     }
 
     void set_body(http_response& response, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
-        response.file_body(path_, size, offset, length, identity_, std::move(opened_));
+        response.file_body(take_path(), size, offset, length, identity_, std::move(opened_));
     }
 
     void set_multipart_body(http_response& response, std::uint64_t size, http_multipart_byte_range_plan&& plan) {
-        response.multipart_file_body(path_, size, identity_, std::move(plan), std::move(opened_));
+        response.multipart_file_body(take_path(), size, identity_, std::move(plan), std::move(opened_));
     }
 
 private:
-    http_native_path_view_type path_;
+    [[nodiscard]] http_native_path_string_type take_path() {
+        if (auto* owned = std::get_if<http_native_path_string_type>(&path_)) {
+            return std::move(*owned);
+        }
+        return http_native_path_string_type(std::get<http_native_path_view_type>(path_));
+    }
+
+    native_path_type path_;
     http_response_file_identity identity_;
     http_response_file_descriptor opened_;
 };
@@ -520,7 +524,7 @@ void apply_file_response_state(const http_response& head, const file_response_so
         .negotiates_encoding_ = false,
     };
     const file_response_plan planned(context_value, source_value, head.status());
-    auto body = file_response_body_source::file(file_response_path(opened.path_, snapshot.identity_, std::move(opened.file_.handle_)));
+    auto body = file_response_body_source::file(file_response_path(std::move(opened.path_), snapshot.identity_, std::move(opened.file_.handle_)));
     co_return make_file_response(head, source_value, body, planned);
 }
 

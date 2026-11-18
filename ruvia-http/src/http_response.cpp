@@ -315,7 +315,7 @@ void http_response::apply_encoded_representation(std::string_view content_encodi
     update.publish();
 }
 
-void http_response::file_body(http_native_path_view_type file, http_content_length size, http_content_length offset, http_content_length length, http_response_file_identity identity, http_response_file_descriptor opened) {
+void http_response::file_body(http_native_path_string_type file, http_content_length size, http_content_length offset, http_content_length length, http_response_file_identity identity, http_response_file_descriptor opened) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
@@ -323,14 +323,14 @@ void http_response::file_body(http_native_path_view_type file, http_content_leng
         throw std::invalid_argument("file response byte range is outside the file");
     }
 
-    body_.set_owned_file(file, size.value(), offset.value(), length.value(), identity, std::move(opened));
+    body_.set_owned_file(std::move(file), size.value(), offset.value(), length.value(), identity, std::move(opened));
 }
 
-void http_response::multipart_file_body(http_native_path_view_type file, http_content_length size, http_response_file_identity identity, http_multipart_byte_range_plan&& plan, http_response_file_descriptor opened) {
+void http_response::multipart_file_body(http_native_path_string_type file, http_content_length size, http_response_file_identity identity, http_multipart_byte_range_plan&& plan, http_response_file_descriptor opened) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
-    body_.set_multipart(file, size.value(), identity, std::move(plan), std::move(opened));
+    body_.set_multipart(std::move(file), size.value(), identity, std::move(plan), std::move(opened));
 }
 
 void http_response::content_range(http_content_length offset, http_content_length length, http_content_length size) {

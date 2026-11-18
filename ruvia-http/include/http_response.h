@@ -101,13 +101,11 @@ public:
     // byte-range payload of it. Unlike body(), the body remains a file
     // representation, even when empty.
     void file_bytes_body(std::string&& value) noexcept;
-    // Own the native path and preserve the
-    // runtime's opaque identity token. `opened`, when engaged, is the descriptor the
-    // runtime framed the response from; the body owns it and releases it on
-    // destruction or replacement. Path and range validation precede body
-    // replacement; a rejected call releases `opened`.
-    void file_body(http_native_path_view_type file, http_content_length size, http_content_length offset, http_content_length length, http_response_file_identity identity, http_response_file_descriptor opened = {});
-    void multipart_file_body(http_native_path_view_type file, http_content_length size, http_response_file_identity identity, http_multipart_byte_range_plan&& plan, http_response_file_descriptor opened = {});
+    // Owns the path and the optional opened descriptor. Rvalue paths transfer
+    // their storage. Validation precedes body replacement; a rejected call
+    // releases the incoming descriptor.
+    void file_body(http_native_path_string_type file, http_content_length size, http_content_length offset, http_content_length length, http_response_file_identity identity, http_response_file_descriptor opened = {});
+    void multipart_file_body(http_native_path_string_type file, http_content_length size, http_response_file_identity identity, http_multipart_byte_range_plan&& plan, http_response_file_descriptor opened = {});
     void content_range(http_content_length offset, http_content_length length, http_content_length size);
     void content_range_unsatisfied(http_content_length size);
     void add_vary_token(std::string_view token);
