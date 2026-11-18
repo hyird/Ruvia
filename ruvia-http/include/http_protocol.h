@@ -109,7 +109,7 @@ public:
         return code_.view();
     }
 
-    [[nodiscard]] const char* what() const noexcept override {
+    [[nodiscard]] const char* what() const noexcept RUVIA_LIFETIMEBOUND override {
         return message_.data();
     }
 

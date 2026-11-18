@@ -1190,7 +1190,7 @@ public:
     http_protocol_error(http_status_code status, static_text code, std::string_view message) noexcept;
     [[nodiscard]] http_status_code status() const noexcept;
     [[nodiscard]] std::string_view code() const noexcept;
-    [[nodiscard]] const char* what() const noexcept override;
+    [[nodiscard]] const char* what() const noexcept RUVIA_LIFETIMEBOUND override;
 };
 }
 ```
@@ -1201,7 +1201,7 @@ public:
 | --- | --- |
 | 构造 | `status` 为应答状态；`code` 为稳定的 snake_case 机器码（如 `"missing_host"`、`"conflicting_content_length"`），通过 [static_text](#api-borrowed-text-h) 在编译期要求静态存储期；`message` 被复制到固定 128 字节的内部存储（最多 127 字节，超出截断，以 NUL 结尾）。不分配、不借用 `message`。 |
 | `status()` / `code()` | 应答状态与机器码。 |
-| `what()` | 复制后的可读消息。 |
+| `what()` | 返回借用异常对象内部存储的可读消息。 |
 
 #### 4.10.4 `enum class http_parse_error` 与 `make_http_protocol_error`
 
