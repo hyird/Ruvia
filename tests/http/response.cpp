@@ -1021,6 +1021,38 @@ void check_response_body_moves(prepare_type&& prepare, inspect_type&& inspect) {
 
 }  // namespace
 
+TEST(Ruvia, response_take_headers_preserves_field_storage_and_order) {
+    for (const auto capacity : {0U, 32U}) {
+        http_response response;
+        response.reserve_headers(capacity);
+        response.status(ruvia::http_status::created);
+        response.body("unchanged");
+        response.header("Content-Type", "text/plain");
+        const std::string value(512, 'x');
+        response.header("X-Value", value);
+        constexpr ruvia::http_response_header_options append{.mode_ = ruvia::http_response_header_mode::append};
+        response.header("Link", "</first>", append);
+        response.header("Link", "</second>", append);
+        const auto* const storage = response.header("X-Value")->data();
+
+        const auto headers = std::move(response).take_headers();
+        EXPECT_TRUE(response.headers().empty());
+        EXPECT_EQ(response.status(), ruvia::http_status::created);
+        EXPECT_EQ(response.body_bytes(), "unchanged");
+        response.header("X-Value", "replacement");
+
+        ASSERT_EQ(headers.size(), 4U);
+        EXPECT_EQ(headers.header("content-type"), "text/plain");
+        const auto retained = headers.header("x-value");
+        ASSERT_TRUE(retained.has_value());
+        EXPECT_EQ(retained->data(), storage);
+        EXPECT_EQ(*retained, value);
+        EXPECT_EQ(headers.header("link"), "</first>");
+        EXPECT_EQ(headers.begin()[2].value(), "</first>");
+        EXPECT_EQ(headers.begin()[3].value(), "</second>");
+    }
+}
+
 TEST(Ruvia, response_public_body_owns_its_source) {
     http_response response;
     std::string source_value = "owned copy";

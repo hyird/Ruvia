@@ -2560,6 +2560,7 @@ public:
     [[nodiscard]] http_status_code status() const noexcept;
     [[nodiscard]] const http_response_headers& headers() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const http_response_headers& headers() const&& = delete;
+    [[nodiscard]] http_response_headers take_headers() && noexcept;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const&& = delete;
 
@@ -2618,6 +2619,7 @@ public:
 | `status()` | 返回当前最终状态码。 |
 | `status(http_status_code)` | 设置最终状态。仅接受 `200..599`；`101` 抛 `std::invalid_argument`（协议切换必须由专用协议驱动处理），其他非最终状态码同样抛 `std::invalid_argument`。临时 `1xx` 响应使用 `http_interim_response_head`。 |
 | `headers() const&` | 借用整个首部块（只读），有效至本响应下一次首部变更或销毁；右值重载被删除，拒绝从临时响应取得悬垂引用。 |
+| `take_headers() && noexcept` | 移交首部块，不复制字段字节；源首部为空，状态与正文不变。迭代器应从结果重新获取。 |
 | `header(name) const&` | 按名称大小写不敏感查找，语义同 [`http_response_headers::header`](#api-http-response-headers-h)；返回视图借用本响应。右值重载删除。 |
 | `header(key, value)` / `header(key, value, options)` / `content_type` / `allow_methods` / `remove_header` / `set_cookie` / `content_range` / `content_range_unsatisfied` / `add_vary_token` | 转发到同名 `http_response_headers` 成员，校验与所有权规则见 [6.2](#api-http-response-headers-h)。`allow_methods` 先按 `method_mask` 写出已知方法，再追加扩展方法；扩展方法须为非空 HTTP token，可借用当前首部存储。 |
 | `reserve_headers(count)` | 转发到 `http_response_headers::reserve`。 |

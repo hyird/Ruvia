@@ -154,6 +154,7 @@ private:
         ruvia::http_response response;
         std::string body(256 * 1024, 'm');
         response.body(std::move(body));
+        response.header("X-Owned", std::string(512, 'h'));
         co_return response;
     }
 
@@ -204,6 +205,7 @@ TEST(Ruvia, testing_facade_retains_owned_response_memory_across_app_lifetime) {
     }
     EXPECT_EQ(retained->body().size(), std::size_t(256 * 1024));
     EXPECT_TRUE(retained->body().front() == 'm');
+    EXPECT_EQ(retained->headers().header("x-owned"), std::string(512, 'h'));
 }
 
 namespace {

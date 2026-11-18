@@ -619,23 +619,12 @@ namespace {
 constexpr std::size_t max_subrequest_header_bytes = 64 * 1024;
 }  // namespace
 
-std::optional<std::string_view> dispatch_response::header(std::string_view name) const& noexcept {
-    for (const auto& header : headers_) {
-        if (http_ascii_equals_ignore_case(header.name(), name)) {
-            return header.value();
-        }
-    }
-    return std::nullopt;
-}
+dispatch_response::dispatch_response(http_response&& response) noexcept :
+    status_(response.status()),
+    headers_(std::move(response).take_headers()) {}
 
-void dispatch_response::copy_head_from(const http_response& response) {
-    status_ = response.status();
-    if (!response.headers().empty()) {
-        headers_.reserve(response.headers().size());
-        for (const auto& header : response.headers()) {
-            headers_.emplace_back(header.name(), header.value());
-        }
-    }
+std::optional<std::string_view> dispatch_response::header(std::string_view name) const& noexcept {
+    return headers_.header(name);
 }
 
 task<dispatch_response> context::dispatch(dispatch_options options) {
@@ -743,8 +732,7 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
         const auto discarded_body = std::move(body_storage);
         const auto discarded_headers = std::move(headers);
     }
-    dispatch_response result;
-    result.copy_head_from(response);
+    dispatch_response result(std::move(response));
     // As on the wire: HEAD and content-forbidden statuses carry no body.
     if (!plan_http_response_body(known_method, response.status()).body_suppressed()) {
         result.body_ = std::move(response).take_body_bytes();

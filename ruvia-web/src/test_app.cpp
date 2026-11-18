@@ -181,8 +181,7 @@ struct test_app::impl_type final {
         const auto* ready = preparation.ready();
         const auto prepared = ready != nullptr ? *ready : co_await tail.finish_prepare(preparation, response, options_, routes_value, request_services);
 
-        dispatch_response result_value;
-        result_value.copy_head_from(response);
+        dispatch_response result_value(std::move(response));
         // On the wire, HEAD responses and content-forbidden statuses carry no
         // body, so the facade must not surface one
         // either. Writer-synthesized fields (Content-Length, Date, Connection)

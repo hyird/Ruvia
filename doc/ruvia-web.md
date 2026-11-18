@@ -1737,7 +1737,7 @@ auto sub = co_await c.dispatch({.method_ = "GET", .target_ = "/api/internal/prof
 | `body_` | `borrowed_text` | `{}` | 缓冲请求正文 |
 | `stop_token_` | `stop_token` | `{}` | 与调用方 context 的 token 合并 |
 
-`dispatch_response`（子请求结果，独立拥有状态、头与正文；接管已拥有的字节正文，不再复制；构造私有）：
+`dispatch_response`（子请求结果，只能移动构造；独立拥有状态、首部与正文，接管首部块和已拥有的字节正文，不复制其字节存储；构造私有）：
 
 | 声明 | 说明 |
 | --- | --- |
@@ -1745,9 +1745,9 @@ auto sub = co_await c.dispatch({.method_ = "GET", .target_ = "/api/internal/prof
 | `std::string_view body() const& noexcept` | 正文视图，借用本 `dispatch_response` |
 | `std::string_view body() const&& = delete` | 拒绝从临时 `dispatch_response` 借用正文视图（视图会在完整表达式结束时悬空） |
 | `std::string take_body_bytes() && noexcept` | 移交正文存储，不复制堆上字节；源正文为空，状态与首部不变。可将结果直接交给 `c.body()` 或 `c.text()`。 |
-| `std::span<const http_header> headers() const& noexcept` | 全部响应头，借用本对象 |
-| `std::span<const http_header> headers() const&& = delete` | 拒绝从临时对象借用头列表 |
-| `std::optional<std::string_view> header(std::string_view name) const& noexcept` | 按名称取头，借用本对象 |
+| `const http_response_headers& headers() const& noexcept` | 借用整个首部块；可遍历全部字段，保留重复字段的顺序 |
+| `const http_response_headers& headers() const&& = delete` | 拒绝从临时对象借用首部块 |
+| `std::optional<std::string_view> header(std::string_view name) const& noexcept` | 大小写不敏感地查找首个同名字段，结果借用本对象 |
 | `std::optional<std::string_view> header(std::string_view) const&& = delete` | 拒绝从临时对象借用头值 |
 
 `template <typename t_type> using request_state_binding = detail::request_binding_guard<t_type>;`：`bind_request_state()` 返回的 RAII 句柄。不可复制、不可移动；析构即解绑（严格 LIFO）。只能保存在局部变量中（`const auto binding = ...`），不得延长到绑定对象之后。

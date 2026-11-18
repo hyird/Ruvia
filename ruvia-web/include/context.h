@@ -199,6 +199,8 @@ struct dispatch_options final {
 // Owns its response metadata and body independently of the child subrequest.
 class dispatch_response final {
 public:
+    dispatch_response(dispatch_response&&) noexcept = default;
+
     [[nodiscard]] http_status_code status() const noexcept {
         return status_;
     }
@@ -210,20 +212,19 @@ public:
     [[nodiscard]] std::string take_body_bytes() && noexcept {
         return std::exchange(body_, {});
     }
-    [[nodiscard]] std::span<const http_header> headers() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const http_response_headers& headers() const& noexcept RUVIA_LIFETIMEBOUND {
         return headers_;
     }
-    std::span<const http_header> headers() const&& = delete;
+    const http_response_headers& headers() const&& = delete;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     std::optional<std::string_view> header(std::string_view) const&& = delete;
 
 private:
     friend class context;
     friend class test_app;
-    dispatch_response() = default;
-    void copy_head_from(const http_response& response);
-    http_status_code status_{http_status::ok};
-    std::vector<http_header> headers_;
+    explicit dispatch_response(http_response&& response) noexcept;
+    http_status_code status_;
+    http_response_headers headers_;
     std::string body_;
 };
 

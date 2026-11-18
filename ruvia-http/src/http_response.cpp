@@ -199,6 +199,10 @@ const http_response_headers& http_response::headers() const& noexcept {
     return headers_;
 }
 
+http_response_headers http_response::take_headers() && noexcept {
+    return std::move(headers_);
+}
+
 std::optional<std::string_view> http_response::header(std::string_view name) const& noexcept {
     return headers_.header(name);
 }

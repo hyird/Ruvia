@@ -40,6 +40,8 @@ public:
     [[nodiscard]] http_status_code status() const noexcept;
     [[nodiscard]] const http_response_headers& headers() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const http_response_headers& headers() const&& = delete;
+    // Transfers the header block without copying field bytes. Status and body stay unchanged.
+    [[nodiscard]] http_response_headers take_headers() && noexcept;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const&& = delete;
     // A generic http_response is always final (200..599). Interim 1xx progress
