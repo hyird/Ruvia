@@ -57,7 +57,7 @@ TEST(RuviaHttpPublicApi, strict_byte_ranges_content_range_and_streaming_slicer) 
     // Streaming slicer for multipart/byteranges (including offset-based feeding).
     constexpr std::string_view payload = "0123456789abcdefghijklmnopqrstuvwxyz";
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=2-5, 10-14, 30-35", payload.size());
-    const auto plan = ruvia::make_http_multipart_byte_range_plan(ranges, payload.size(), "text/plain", "slice_boundary");
+    const auto plan = ruvia::make_http_multipart_byte_range_plan(ranges, payload.size(), "text/plain", "slice boundary");
     std::string expected;
     for (const auto& seg : plan.segments()) {
         if (seg.kind_ == ruvia::http_multipart_byte_range_plan::segment_kind::metadata) {
@@ -67,8 +67,10 @@ TEST(RuviaHttpPublicApi, strict_byte_ranges_content_range_and_streaming_slicer) 
         }
     }
 
-    ruvia::http_byte_range_slicer slicer(ranges, payload.size(), "text/plain", "slice_boundary");
+    ruvia::http_byte_range_slicer slicer(ranges, payload.size(), "text/plain", "slice boundary");
     EXPECT_TRUE(slicer.multipart());
+    EXPECT_EQ(slicer.content_type(), "multipart/byteranges; boundary=\"slice boundary\"");
+    EXPECT_EQ(ruvia::compute_http_byte_range_content_length(ranges, payload.size(), "text/plain", "slice boundary"), expected.size());
     EXPECT_EQ(slicer.content_length(), expected.size());
 
     std::string sliced;
@@ -171,11 +173,14 @@ TEST(Ruvia, multipart_range_plan_rejects_invalid_media_type) {
 }
 
 TEST(Ruvia, multipart_range_plan_rejects_content_length_overflow) {
-    auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-9223372036854775806,9223372036854775808-18446744073709551614", (std::numeric_limits<std::uint64_t>::max)());
-    EXPECT_EQ(ranges.size(), std::size_t{2});
+    constexpr auto length = (std::numeric_limits<std::uint64_t>::max)();
+    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-9223372036854775806,9223372036854775808-18446744073709551614", length);
+    ASSERT_EQ(ranges.size(), std::size_t{2});
+    EXPECT_FALSE(ruvia::compute_http_byte_range_content_length(ranges, length, "application/octet-stream", "overflow_check").has_value());
+    EXPECT_THROW((void)ruvia::http_byte_range_slicer(ranges, length, "application/octet-stream", "overflow_check"), std::length_error);
     bool threw = false;
     try {
-        static_cast<void>(ruvia::make_http_multipart_byte_range_plan(ranges, (std::numeric_limits<std::uint64_t>::max)(), "application/octet-stream", "overflow_check"));
+        static_cast<void>(ruvia::make_http_multipart_byte_range_plan(ranges, length, "application/octet-stream", "overflow_check"));
     } catch (const std::length_error&) {
         threw = true;
     }

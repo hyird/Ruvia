@@ -5301,7 +5301,7 @@ struct http_content_range final {
 | --- | --- |
 | `http_content_range` | 已解析的 `bytes first-last/total`（RFC 9110 §14.4）。`first()` / `last()` / `total()` 返回原值；`offset()` 等于 `first_`；`length()` 为 `last_ - first_ + 1`；`range()` 为对应 `http_byte_range`；`operator==` 逐成员比较 |
 | `parse_http_content_range(value)` | 严格要求 `bytes`（大小写不敏感）后恰好单个 SP，随后为 `first-last/total`，无前后空白；要求 `first <= last < total`。不支持未满足形式 `bytes */length` 与未知总长 `/*`，非法返回 `nullopt`。 |
-| `compute_http_byte_range_content_length(ranges, length, media_type, boundary)` | 计算与切片器 / multipart 计划输出完全一致的 `206` 正文字节数。区间为空、表示长度为 `0`、任一区间长度为 `0` 或越界时返回 `std::nullopt`；单区间返回其长度（忽略 `media_type` / `boundary`）；多区间要求 `media_type` 是合法 `Content-Type` 值、`boundary` 是合法 multipart 边界，并计入每部分的分隔行、`Content-Type`、`Content-Range` 与结尾边界，`uint64` 溢出时返回 `std::nullopt` |
+| `compute_http_byte_range_content_length(ranges, length, media_type, boundary)` | 不分配、不生成正文，按切片器与文件计划共用的 multipart 分帧规则计算 `206` 正文字节数。区间为空、表示长度为 `0`、任一区间长度为 `0` 或越界时返回 `std::nullopt`；单区间返回其长度（忽略 `media_type` / `boundary`）；多区间要求 `media_type` 是合法 `Content-Type` 值、`boundary` 是合法 multipart 边界，并计入每部分的分隔行、`Content-Type`、`Content-Range` 与结尾边界，`uint64` 溢出时返回 `std::nullopt` |
 | 集合重载 | `ignored()` 或 `unsatisfiable()` 时返回 `std::nullopt`，否则转发到 span 重载 |
 
 #### 9.3.3 `class http_byte_range_slicer`

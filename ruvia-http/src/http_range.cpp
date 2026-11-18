@@ -19,6 +19,76 @@
 #include "http_multipart.h"
 
 namespace ruvia {
+namespace {
+
+constexpr std::string_view boundary_prefix = "--";
+constexpr std::string_view part_type_prefix = "\r\nContent-Type: ";
+constexpr std::string_view part_range_prefix = "\r\nContent-Range: bytes ";
+constexpr std::string_view part_head_end = "\r\n\r\n";
+constexpr std::string_view part_end = "\r\n";
+constexpr std::string_view multipart_end = "--\r\n";
+
+void write_multipart_range_type(std::string& output, std::string_view boundary) {
+    constexpr std::string_view prefix = "multipart/byteranges; boundary=";
+    const bool quote = http_token_prefix_size(boundary) != boundary.size();
+    output.reserve(prefix.size() + boundary.size() + (quote ? 2U : 0U));
+    output.append(prefix);
+    if (quote) {
+        output.push_back('"');
+    }
+    output.append(boundary);
+    if (quote) {
+        output.push_back('"');
+    }
+}
+
+void append_range_part_head(std::string& output, std::string_view boundary, std::string_view media_type, http_byte_range range, std::uint64_t representation_length) {
+    output.append(boundary_prefix).append(boundary).append(part_type_prefix).append(media_type).append(part_range_prefix);
+    append_decimal(output, range.offset_);
+    output.push_back('-');
+    append_decimal(output, range.offset_ + range.length_ - 1);
+    output.push_back('/');
+    append_decimal(output, representation_length);
+    output.append(part_head_end);
+}
+
+void append_multipart_range_end(std::string& output, std::string_view boundary) {
+    output.append(boundary_prefix).append(boundary).append(multipart_end);
+}
+
+struct multipart_range_size final {
+    multipart_range_size(std::size_t boundary_bytes, std::uint64_t representation_length) noexcept :
+        metadata_(boundary_prefix.size() + boundary_bytes + multipart_end.size()),
+        total_(metadata_),
+        fixed_part_bytes_(boundary_prefix.size() + boundary_bytes + part_type_prefix.size() + part_range_prefix.size() + 2U + decimal_size(representation_length) + part_head_end.size() + part_end.size()) {}
+
+    [[nodiscard]] bool add(http_byte_range range, std::size_t media_type_bytes) noexcept {
+        constexpr auto max_bytes = (std::numeric_limits<std::uint64_t>::max)();
+        const auto overhead = fixed_part_bytes_ + decimal_size(range.offset_) + decimal_size(range.offset_ + range.length_ - 1);
+        if (media_type_bytes > max_bytes - overhead) {
+            return false;
+        }
+        const auto part_metadata = overhead + static_cast<std::uint64_t>(media_type_bytes);
+        if (part_metadata > max_bytes - total_ || range.length_ > max_bytes - total_ - part_metadata) {
+            return false;
+        }
+        metadata_ += part_metadata;
+        total_ += part_metadata + range.length_;
+        return true;
+    }
+
+    [[nodiscard]] bool add_all(std::span<const http_byte_range> ranges, std::size_t media_type_bytes) noexcept {
+        return std::ranges::all_of(ranges, [&](http_byte_range range) {
+            return add(range, media_type_bytes);
+        });
+    }
+
+    std::uint64_t metadata_;
+    std::uint64_t total_;
+    std::uint64_t fixed_part_bytes_;
+};
+
+}  // namespace
 
 http_multipart_byte_range_plan make_http_multipart_byte_range_plan(const http_byte_range_set& ranges, http_content_length representation_length_value, std::string_view media_type, std::string_view boundary) {
     const auto representation_length = representation_length_value.value();
@@ -26,40 +96,25 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(const http_by
         throw std::invalid_argument("invalid multipart byte-range plan input");
     }
 
-    const auto representation_digits = decimal_size(representation_length);
-    std::size_t metadata_size = 2U + boundary.size() + 4U;
-    std::uint64_t total_content_length = metadata_size;
+    multipart_range_size size(boundary.size(), representation_length);
     for (std::size_t index = 0; index < ranges.size(); ++index) {
         const auto range = ranges[index];
         if (range.length_ == 0 || range.offset_ > representation_length || range.length_ > representation_length - range.offset_) {
             throw std::invalid_argument("multipart range is outside the representation");
         }
-        const auto part_metadata_size = 2U + boundary.size() + 16U + media_type.size() + 23U + decimal_size(range.offset_) + 1U + decimal_size(range.offset_ + range.length_ - 1) + 1U + representation_digits + 6U;
-        if (part_metadata_size > (std::numeric_limits<std::size_t>::max)() - metadata_size) {
-            throw std::length_error("multipart response metadata size overflows size_t");
-        }
-        metadata_size += part_metadata_size;
-        if (total_content_length > (std::numeric_limits<std::uint64_t>::max)() - part_metadata_size || total_content_length + part_metadata_size > (std::numeric_limits<std::uint64_t>::max)() - range.length_) {
+        if (!size.add(range, media_type.size())) {
             throw std::length_error("multipart response content length overflows uint64_t");
         }
-        total_content_length += part_metadata_size + range.length_;
+    }
+    if (!std::in_range<std::size_t>(size.metadata_)) {
+        throw std::length_error("multipart response metadata size overflows size_t");
     }
 
     http_multipart_byte_range_plan plan;
     auto& storage = *plan.state_;
     auto& metadata = storage.metadata_;
-    static constexpr std::string_view content_type_prefix = "multipart/byteranges; boundary=";
-    const bool boundary_is_token = http_token_prefix_size(boundary) == boundary.size();
-    storage.content_type_.reserve(content_type_prefix.size() + boundary.size() + (boundary_is_token ? 0U : 2U));
-    storage.content_type_.append(content_type_prefix);
-    if (!boundary_is_token) {
-        storage.content_type_.push_back('"');
-    }
-    storage.content_type_.append(boundary);
-    if (!boundary_is_token) {
-        storage.content_type_.push_back('"');
-    }
-    metadata.reserve(metadata_size);
+    write_multipart_range_type(storage.content_type_, boundary);
+    metadata.reserve(static_cast<std::size_t>(size.metadata_));
     const auto record_metadata = [&storage](std::size_t offset) noexcept {
         const auto length = storage.metadata_.size() - offset;
         if (storage.segment_count_ != 0) {
@@ -75,31 +130,19 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(const http_by
     for (std::size_t index = 0; index < ranges.size(); ++index) {
         const auto range = ranges[index];
         const auto part_offset = metadata.size();
-        metadata.append("--");
-        metadata.append(boundary);
-        metadata.append("\r\nContent-Type: ");
-        metadata.append(media_type);
-        metadata.append("\r\nContent-Range: bytes ");
-        append_decimal(metadata, range.offset_);
-        metadata.push_back('-');
-        append_decimal(metadata, range.offset_ + range.length_ - 1);
-        metadata.push_back('/');
-        append_decimal(metadata, representation_length);
-        metadata.append("\r\n\r\n");
+        append_range_part_head(metadata, boundary, media_type, range, representation_length);
         record_metadata(part_offset);
 
         storage.segments_[storage.segment_count_++] = {http_multipart_byte_range_plan::segment_kind::file, 0, 0, range.offset_, range.length_};
         const auto separator_offset = metadata.size();
-        metadata.append("\r\n");
+        metadata.append(part_end);
         record_metadata(separator_offset);
     }
 
     const auto closing_offset = metadata.size();
-    metadata.append("--");
-    metadata.append(boundary);
-    metadata.append("--\r\n");
+    append_multipart_range_end(metadata, boundary);
     record_metadata(closing_offset);
-    storage.content_length_ = total_content_length;
+    storage.content_length_ = size.total_;
     return plan;
 }
 
@@ -297,17 +340,11 @@ std::optional<std::uint64_t> compute_http_byte_range_content_length(std::span<co
     if (!is_valid_http_content_type_field_value(media_type) || !multipart_boundary::try_from_value(boundary).has_value()) {
         return std::nullopt;
     }
-    const auto representation_digits = decimal_size(representation_length);
-    std::uint64_t total = 2U + boundary.size() + 4U;
-    for (const auto& range : ranges) {
-        const std::uint64_t part_metadata = 2U + boundary.size() + 16U + media_type.size() + 23U + decimal_size(range.offset_) + 1U + decimal_size(range.offset_ + range.length_ - 1) + 1U + representation_digits + 6U;
-        constexpr auto max_u64 = (std::numeric_limits<std::uint64_t>::max)();
-        if (total > max_u64 - part_metadata || total + part_metadata > max_u64 - range.length_) {
-            return std::nullopt;
-        }
-        total += part_metadata + range.length_;
+    multipart_range_size size(boundary.size(), representation_length);
+    if (!size.add_all(ranges, media_type.size())) {
+        return std::nullopt;
     }
-    return total;
+    return size.total_;
 }
 
 std::optional<std::uint64_t> compute_http_byte_range_content_length(const http_byte_range_set& ranges, http_content_length representation_length, std::string_view media_type, std::string_view boundary) noexcept {
@@ -360,37 +397,12 @@ http_byte_range_slicer::http_byte_range_slicer(std::span<const http_byte_range> 
     if (!is_valid_http_content_type_field_value(media_type) || !multipart_boundary::try_from_value(boundary).has_value()) {
         throw std::invalid_argument("invalid multipart media type or boundary for byte-range slicer");
     }
-    const auto computed = compute_http_byte_range_content_length(ranges_, representation_length_value, media_type, boundary);
-    if (!computed.has_value()) {
+    multipart_range_size size(boundary.size(), representation_length_);
+    if (!size.add_all(ranges_, media_type.size())) {
         throw std::length_error("multipart byte-range response content length overflows uint64_t");
     }
-    content_length_ = *computed;
-    static constexpr std::string_view content_type_prefix = "multipart/byteranges; boundary=";
-    const bool boundary_is_token = http_token_prefix_size(boundary) == boundary.size();
-    content_type_.reserve(content_type_prefix.size() + boundary.size() + (boundary_is_token ? 0U : 2U));
-    content_type_.append(content_type_prefix);
-    if (!boundary_is_token) {
-        content_type_.push_back('"');
-    }
-    content_type_.append(boundary);
-    if (!boundary_is_token) {
-        content_type_.push_back('"');
-    }
-}
-
-void http_byte_range_slicer::emit_part_header(std::size_t index, std::string& output) const {
-    const auto range = ranges_[index];
-    output.append("--");
-    output.append(boundary_);
-    output.append("\r\nContent-Type: ");
-    output.append(media_type_);
-    output.append("\r\nContent-Range: bytes ");
-    append_decimal(output, range.offset_);
-    output.push_back('-');
-    append_decimal(output, range.offset_ + range.length_ - 1);
-    output.push_back('/');
-    append_decimal(output, representation_length_);
-    output.append("\r\n\r\n");
+    content_length_ = size.total_;
+    write_multipart_range_type(content_type_, boundary);
 }
 
 void http_byte_range_slicer::write(std::string_view chunk, std::string& output) {
@@ -433,7 +445,7 @@ void http_byte_range_slicer::write(std::uint64_t chunk_offset, std::string_view 
                 break;
             }
             if (progress == 0 && multipart()) {
-                emit_part_header(index, output);
+                append_range_part_head(output, boundary_, media_type_, range, representation_length_);
             }
             const auto slice_start = static_cast<std::size_t>(next_needed - chunk_offset);
             const auto copy_bytes = static_cast<std::size_t>((std::min<std::uint64_t>)(range.length_ - progress, chunk.size() - slice_start));
@@ -443,15 +455,13 @@ void http_byte_range_slicer::write(std::uint64_t chunk_offset, std::string_view 
                 break;
             }
             if (multipart()) {
-                output.append("\r\n");
+                output.append(part_end);
             }
             ++index;
             progress = 0;
         }
         if (index == ranges_.size() && multipart()) {
-            output.append("--");
-            output.append(boundary_);
-            output.append("--\r\n");
+            append_multipart_range_end(output, boundary_);
         }
     } catch (...) {
         // All writes append; shrinking restores the original bytes without allocation.

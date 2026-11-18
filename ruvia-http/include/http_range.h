@@ -190,8 +190,6 @@ public:
     void reset(std::uint64_t start_offset = 0) noexcept;
 
 private:
-    void emit_part_header(std::size_t index, std::string& output) const;
-
     std::vector<http_byte_range> ranges_;
     std::string media_type_;
     std::string boundary_;
