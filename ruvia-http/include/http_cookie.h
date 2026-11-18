@@ -294,7 +294,7 @@ public:
     }
 
 private:
-    friend std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noexcept;
+    friend std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value RUVIA_LIFETIMEBOUND) noexcept;
 
     constexpr http_set_cookie_view(std::string_view name, std::string_view value) noexcept :
         name_(name),
@@ -314,7 +314,7 @@ private:
     std::uint8_t attributes_{0};
 };
 
-[[nodiscard]] std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noexcept;
+[[nodiscard]] std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value RUVIA_LIFETIMEBOUND) noexcept;
 
 template <detail::http_temporary_owning_char_string value_type>
 std::optional<http_set_cookie_view> parse_set_cookie(value_type&&) = delete;

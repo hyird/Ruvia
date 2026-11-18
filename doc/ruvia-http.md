@@ -5618,7 +5618,7 @@ public:
     [[nodiscard]] constexpr std::optional<cookie_same_site> same_site() const noexcept;
 };
 
-[[nodiscard]] std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noexcept;
+[[nodiscard]] std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value RUVIA_LIFETIMEBOUND) noexcept;
 
 template </* 未指定实现约束：临时拥有型 std::basic_string<char, ...> */ typename value_type>
 std::optional<http_set_cookie_view> parse_set_cookie(value_type&&) = delete;
