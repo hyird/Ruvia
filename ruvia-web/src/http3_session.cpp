@@ -1066,7 +1066,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
             admission.tail().disable_response_coding();
             // Replay rejection bypasses application and error handlers alike.
             response.status(ruvia::http_status::too_early);
-            response.static_body("Replay-unsafe request requires a completed handshake");
+            response.static_body(static_text{"Replay-unsafe request requires a completed handshake"});
         } else if (const auto& body_failure = stream->body_failure(); body_failure.has_value() && admission.endpoint() != http_request_endpoint::rejection) {
             body_failure_handled = true;
             response = co_await respond_http_request_body_failure(routes, request, *body_failure, request_services, admission.tail());

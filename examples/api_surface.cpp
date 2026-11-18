@@ -287,7 +287,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> bytes_body(ruvia::context& c) {
-        const auto bytes_value = co_await c.req().bytes();
+        const auto bytes_value = co_await c.req().body_bytes();
         std::string body;
         body.append("bytes bytes=");
         ruvia::append_decimal(body, bytes_value.size());
@@ -299,7 +299,7 @@ private:
 
     ruvia::task<ruvia::http_response> json_message(ruvia::context& c) {
         const auto& json = c.req().validated<surface_json_message>();
-        const auto raw = co_await c.req().text();
+        const auto raw = co_await c.req().body_text();
         std::string body;
         body.append("json-value bytes=");
         ruvia::append_decimal(body, raw.size());
@@ -317,7 +317,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> replace_item(ruvia::context& c) {
-        const auto body = co_await c.req().text();
+        const auto body = co_await c.req().body_text();
         std::string output;
         output.append("replace id=");
         output.append(c.req().param("id").value_or(""));
@@ -328,7 +328,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> patch_item(ruvia::context& c) {
-        const auto body = co_await c.req().text();
+        const auto body = co_await c.req().body_text();
         std::string output;
         output.append("patch id=");
         output.append(c.req().param("id").value_or(""));

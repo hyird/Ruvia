@@ -234,7 +234,7 @@ void raw_stream(bool http2, bool configured_raw) {
             EXPECT_EQ(bytes, std::string_view(upstream.encoded_).substr(0, 1));
             (void)co_await ruvia::sleep_for(worker, std::chrono::milliseconds(20));
             upstream.release();
-            auto rest = co_await response.bytes();
+            auto rest = co_await response.collect_body();
             bytes.append(rest.text());
             EXPECT_EQ(bytes, upstream.encoded_);
             EXPECT_NE(upstream.received_.find("unparsed forwarded value"), std::string::npos);
@@ -682,7 +682,7 @@ TEST(Ruvia, http_client_builders_enforce_consumed_state_websocket_options_and_di
         auto pending = std::move(builder).send();
         auto response = co_await std::move(pending);
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
-        const auto body = co_await response.bytes();
+        const auto body = co_await response.collect_body();
         EXPECT_EQ(body.text(), "ok");
 
         EXPECT_THROW(client.client().websocket("/ws").configure({.dial_port_ = 0}), std::invalid_argument);
@@ -771,11 +771,11 @@ TEST(Ruvia, http_client_plain_connect_omits_origin_cookies_even_for_matching_aut
                 .cookies_ = {{"configured_secret", "1"}},
             });
         auto seeded = co_await client.client().get("/seed").send();
-        const auto seeded_body = co_await seeded.bytes();
+        const auto seeded_body = co_await seeded.collect_body();
         EXPECT_EQ(seeded_body.text(), "ok");
 
         auto verified = co_await client.client().get("/verify").send();
-        const auto verified_body = co_await verified.bytes();
+        const auto verified_body = co_await verified.collect_body();
         EXPECT_EQ(verified_body.text(), "ok");
 
         auto pending = [&] {
@@ -942,7 +942,7 @@ TEST(Ruvia, http1_client_generic_upgrade_rejection_is_an_ordinary_response) {
         EXPECT_EQ(response.header("x-rejected"), std::optional<std::string_view>("yes"));
         EXPECT_EQ(response.framing(), ruvia::http_client_response_framing::fixed_length);
         EXPECT_EQ(response.content_length(), std::optional<std::uint64_t>(6));
-        const auto body = co_await response.bytes();
+        const auto body = co_await response.collect_body();
         EXPECT_EQ(body.text(), "denied");
     });
 }
@@ -997,7 +997,7 @@ TEST(Ruvia, http1_client_response_unique_header_reports_repeated_lines) {
         EXPECT_TRUE(empty.value_.empty());
         // The singular getter keeps the first line.
         EXPECT_EQ(response.header("content-type"), std::optional<std::string_view>("text/plain"));
-        const auto body = co_await response.bytes();
+        const auto body = co_await response.collect_body();
         EXPECT_EQ(body.text(), "ok");
     });
 }
@@ -1030,7 +1030,7 @@ TEST(Ruvia, http1_client_informational_callbacks_backpressure_coalesced_heads) {
                 auto response = co_await std::move(request).send();
                 returned = true;
                 EXPECT_EQ(response.informational_responses().size(), std::size_t{2});
-                const auto body = co_await response.bytes();
+                const auto body = co_await response.collect_body();
                 EXPECT_EQ(body.text(), "ok");
             } catch (...) {
                 failure = std::current_exception();
@@ -1099,7 +1099,7 @@ TEST(Ruvia, http1_client_response_framing_comes_from_parser_precedence) {
             auto response = co_await client.client().request(scenario.method_, "/framing").send();
             EXPECT_EQ(response.framing(), scenario.framing_);
             EXPECT_EQ(response.content_length(), scenario.length_);
-            const auto body = co_await response.bytes();
+            const auto body = co_await response.collect_body();
             EXPECT_EQ(body.text(), scenario.body_);
             EXPECT_EQ(response.framing(), scenario.framing_);
             EXPECT_EQ(response.content_length(), scenario.length_);
@@ -1248,7 +1248,7 @@ TEST(Ruvia, http1_client_buffered_upload_receives_hints_before_blocked_write_com
                     auto response = co_await std::move(request).send();
                     EXPECT_NE(expected, outcome::cancel);
                     EXPECT_EQ(response.status().value(), expected == outcome::early_final ? 413 : 200);
-                    const auto body = co_await response.bytes();
+                    const auto body = co_await response.collect_body();
                     EXPECT_EQ(body.text(), expected == outcome::early_final ? "" : "ok");
                 } catch (const ruvia::http_client_error& error) {
                     error_code = error.code();

@@ -26,13 +26,13 @@ namespace {
 using ruvia::http_header_view;
 using ruvia::http_request;
 
-// Entry points that retain caller bytes refuse owning temporaries at compile time.
 template <typename value_type>
 concept static_body_binds = requires(ruvia::http_response& response, value_type&& value) { response.static_body(std::forward<value_type>(value)); };
 template <typename value_type>
 concept stable_header_binds = requires(ruvia::http_response& response, value_type&& value) { response.header_stable_view("X-Test", std::forward<value_type>(value)); };
-static_assert(static_body_binds<std::string_view> && static_body_binds<const char (&)[3]> && static_body_binds<const std::string&>);
-static_assert(!static_body_binds<std::string>);
+static_assert(static_body_binds<ruvia::static_text>);
+static_assert(!static_body_binds<ruvia::borrowed_text> && !static_body_binds<std::string_view> && !static_body_binds<const char (&)[3]>);
+static_assert(!static_body_binds<std::string> && !static_body_binds<std::string&> && !static_body_binds<const std::string&>);
 static_assert(stable_header_binds<std::string_view> && stable_header_binds<const std::string&>);
 static_assert(!stable_header_binds<std::string>);
 
@@ -1046,6 +1046,18 @@ TEST(Ruvia, response_public_body_takes_rvalue_string_storage) {
     EXPECT_EQ(response.body_bytes().size(), std::size_t{4096});
 }
 
+TEST(Ruvia, response_static_body_preserves_storage_across_move) {
+    static constexpr char payload[] = "static\0body";
+    constexpr ruvia::static_text body{payload};
+    http_response source;
+    source.static_body(body);
+
+    http_response response(std::move(source));
+
+    EXPECT_EQ(response.body_bytes().data(), body.view().data());
+    EXPECT_EQ(response.body_bytes(), std::string_view(payload, sizeof(payload) - 1));
+}
+
 TEST(Ruvia, public_response_file_view_exposes_read_only_descriptor) {
     const std::filesystem::path path("public-fixture.bin");
     const auto identity = ruvia::http_response_file_identity::checked({1, 2, 3, 4});
@@ -1141,7 +1153,7 @@ struct reentrant_response_file_release final {
             *record.replacement_target_ = std::move(*record.replacement_source_);
         }
         if (record.rewritten_response_ != nullptr) {
-            record.rewritten_response_->static_body("callback");
+            record.rewritten_response_->static_body(ruvia::static_text{"callback"});
         }
     }
 };

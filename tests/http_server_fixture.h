@@ -831,8 +831,8 @@ inline void append(std::string& target, const std::optional<std::span<const std:
 // An interrupted collection keeps what it received for the next one.
 [[nodiscard]] inline ruvia::task<void> check_body_collection(ruvia::http_client_ref client) {
     auto response = co_await client.get("/operation/stalled-body").send();
-    EXPECT_TRUE(co_await failure_of(response.bytes(ruvia::default_max_buffered_body_bytes, {.timeout_ = interruption})) == timed_out);
-    const auto rest = co_await response.bytes();
+    EXPECT_TRUE(co_await failure_of(response.collect_body(ruvia::default_max_buffered_body_bytes, {.timeout_ = interruption})) == timed_out);
+    const auto rest = co_await response.collect_body();
     EXPECT_EQ(rest.text(), "first-second");
 }
 
@@ -864,7 +864,7 @@ inline void append(std::string& target, const std::optional<std::span<const std:
     EXPECT_TRUE(co_await failure_of(exchange.body().finish({}, {.stop_token_ = stop.token()})) == cancelled);
     co_await exchange.body().finish();
     auto response = co_await exchange.response();
-    const auto echoed = co_await response.bytes();
+    const auto echoed = co_await response.collect_body();
     EXPECT_EQ(echoed.text(), "echo:kept");
 }
 
@@ -874,7 +874,7 @@ inline void append(std::string& target, const std::optional<std::span<const std:
     co_await exchange.body().finish();
     EXPECT_TRUE(co_await failure_of(exchange.response({.timeout_ = interruption})) == timed_out);
     auto response = co_await exchange.response();
-    const auto text = co_await response.bytes();
+    const auto text = co_await response.collect_body();
     EXPECT_EQ(text.text(), "late");
 }
 

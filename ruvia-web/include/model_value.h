@@ -32,6 +32,12 @@ class bytes;
 
 namespace ruvia::detail {
 
+[[nodiscard]] inline bool model_address_within(const void* address, const void* begin, std::size_t bytes_value) noexcept {
+    const auto value = reinterpret_cast<std::uintptr_t>(address);
+    const auto first = reinterpret_cast<std::uintptr_t>(begin);
+    return value >= first && value - first < bytes_value;
+}
+
 // Text semantics (ordinary string or JSON token) belong to the facade. This
 // value owns the common borrow/clone/transfer and strong publication rules.
 class model_text_storage final {
@@ -45,7 +51,25 @@ public:
         value_(std::move(other.value_)) {
         other.assign_borrowed({});
     }
-    model_text_storage& operator=(model_text_storage&&) = delete;
+
+    model_text_storage& operator=(model_text_storage&& other) {
+        if (this != &other) {
+            if (const auto* borrowed = std::get_if<std::string_view>(&other.value_)) {
+                const auto* owned = std::get_if<std::string>(&value_);
+                if (owned != nullptr && model_address_within(borrowed->data(), owned->data(), owned->size())) {
+                    // Copy before releasing the destination's bytes. If it
+                    // throws, neither storage has changed.
+                    assign_owned(*borrowed);
+                } else {
+                    assign_borrowed(*borrowed);
+                }
+            } else {
+                assign_owned(std::move(std::get<std::string>(other.value_)));
+            }
+            other.assign_borrowed({});
+        }
+        return *this;
+    }
 
     [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND {
         if (const auto* borrowed = std::get_if<std::string_view>(&value_)) {
@@ -85,14 +109,12 @@ public:
         return rebound;
     }
 
-    void assign_from(model_text_storage&& source_value) {
+    void assign_owned_from(model_text_storage&& source_value) {
         if (this == &source_value) {
             return;
         }
-        auto rebound = std::move(source_value).rebind();
-        // Rebinding may throw; replacing with an already-owned variant cannot.
-        std::destroy_at(&value_);
-        std::construct_at(&value_, std::move(rebound.value_));
+        source_value.own_borrowed_in_place();
+        *this = std::move(source_value);
     }
 
 private:
@@ -168,12 +190,6 @@ enum class model_string_storage : std::uint8_t {
     borrowed,
     owned,
 };
-
-[[nodiscard]] inline bool model_address_within(const void* address, const void* begin, std::size_t bytes_value) noexcept {
-    const auto value = reinterpret_cast<std::uintptr_t>(address);
-    const auto first = reinterpret_cast<std::uintptr_t>(begin);
-    return value >= first && value - first < bytes_value;
-}
 
 [[noreturn]] inline void throw_model_move_source_owns_destination() {
     throw std::invalid_argument("model move source owns its destination");
@@ -313,7 +329,7 @@ public:
     string(string&& other) noexcept = default;
 
     string& operator=(string&& other) {
-        storage_.assign_from(std::move(other.storage_));
+        storage_.assign_owned_from(std::move(other.storage_));
         return *this;
     }
 

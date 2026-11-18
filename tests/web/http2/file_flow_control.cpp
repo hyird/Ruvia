@@ -321,7 +321,7 @@ void check_concurrent_credit_waiters(std::string_view target, std::string_view e
             if (index % 3 == 0) {
                 co_return;
             }
-            const auto body = co_await response.bytes();
+            const auto body = co_await response.collect_body();
             EXPECT_EQ(body.text(), expected);
             received[index] = true;
         };
@@ -333,7 +333,7 @@ void check_concurrent_credit_waiters(std::string_view target, std::string_view e
             {
                 auto response = co_await client.client().get(target).send();
                 EXPECT_TRUE(response.ok());
-                const auto body = co_await response.bytes();
+                const auto body = co_await response.collect_body();
                 EXPECT_EQ(body.text(), expected);
             }
             for (std::size_t i = 0; i < received.size(); ++i) {
@@ -1321,7 +1321,7 @@ void exercise(response_mode mode) {
                 co_await exchange.body().write("payload");
                 co_await exchange.body().finish();
                 auto response = co_await exchange.response();
-                const auto bytes = co_await response.bytes();
+                const auto bytes = co_await response.collect_body();
                 const auto body = bytes.bytes();
                 EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), "ok");
                 co_await peer.join();
@@ -1338,7 +1338,7 @@ void exercise(response_mode mode) {
                 }
                 bool cancelled = false;
                 try {
-                    (void)co_await retained->bytes();
+                    (void)co_await retained->collect_body();
                 } catch (const ruvia::http_client_error& error) {
                     cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
                 }
@@ -1354,7 +1354,7 @@ void exercise(response_mode mode) {
                 const std::string payload(65536, 'b');
                 auto response = co_await client.client().post("/upload").body(payload).send();
                 EXPECT_TRUE(response.status() == ruvia::http_status::no_content);
-                const auto bytes = co_await response.bytes();
+                const auto bytes = co_await response.collect_body();
                 EXPECT_TRUE(bytes.bytes().empty());
                 EXPECT_TRUE(response.stream().complete());
             } else if (mode == response_mode::streaming) {
@@ -1362,7 +1362,7 @@ void exercise(response_mode mode) {
                 auto exchange = co_await client.client().request("POST", "/upload").upload({.content_length_ = payload.size(), .max_chunk_bytes_ = payload.size()});
                 auto response = co_await exchange.response();
                 EXPECT_TRUE(response.status() == ruvia::http_status::no_content);
-                const auto bytes = co_await response.bytes();
+                const auto bytes = co_await response.collect_body();
                 EXPECT_TRUE(bytes.bytes().empty());
                 EXPECT_TRUE(response.stream().complete());
                 co_await exchange.body().write(payload);
@@ -1373,7 +1373,7 @@ void exercise(response_mode mode) {
                 auto exchange = co_await client.client().request("POST", "/upload").upload({.content_length_ = 7, .expectation_ = expect ? ruvia::http_client_request_expectation::continue_ : ruvia::http_client_request_expectation::none});
                 auto response = co_await exchange.response();
                 EXPECT_EQ(response.status().value(), mode == response_mode::rejected ? 413 : 200);
-                const auto bytes = co_await response.bytes();
+                const auto bytes = co_await response.collect_body();
                 const auto body = bytes.bytes();
                 EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), mode == response_mode::rejected ? "no" : "ok");
                 EXPECT_TRUE(response.stream().complete());
@@ -1417,7 +1417,7 @@ void exercise(response_mode mode) {
             }
             if (mode != response_mode::disconnected && mode != response_mode::connection_lost_upload && mode != response_mode::goaway_upload && mode != response_mode::refused_always) {
                 auto next = co_await client.client().get("/next").send();
-                const auto bytes = co_await next.bytes();
+                const auto bytes = co_await next.collect_body();
                 const auto body = bytes.bytes();
                 EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), "next");
                 co_await peer.join();

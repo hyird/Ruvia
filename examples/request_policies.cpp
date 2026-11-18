@@ -49,7 +49,7 @@ private:
     ruvia::task<ruvia::http_response> small(ruvia::context& c) {
         // body_limit is checked before buffering. More than 16 bytes produces
         // 413; a route may tighten, but cannot enlarge, the server-wide limit.
-        const auto body = co_await c.req().text();
+        const auto body = co_await c.req().body_text();
         co_return c.text(body);
     }
 

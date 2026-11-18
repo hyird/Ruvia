@@ -1119,7 +1119,7 @@ template task<std::optional<std::span<const std::byte>>> detail::http_client_res
 template task<std::optional<std::string_view>> detail::http_client_response_state::consume_body<std::string_view>(operation_options, std::nullptr_t);
 template task<void> detail::http_client_response_state::consume_body<void>(operation_options, detail::http_client_response_output);
 
-task<http_client_response_bytes> http_client_response::bytes(std::size_t max_bytes, operation_options operation) & {
+task<http_client_response_bytes> http_client_response::collect_body(std::size_t max_bytes, operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
     return state_value.body_operation_scope_.attach(state_value.collect_body(max_bytes, std::move(operation)));
 }

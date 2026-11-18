@@ -1783,7 +1783,7 @@ TEST(Ruvia, http2_public_stream_progress_refunds_non_progress_frame_budget) {
         auto* head = event ? event->request_head() : nullptr;
         ASSERT_NE(head, nullptr);
         ruvia::http_response response;
-        response.static_body("ok");
+        response.static_body(ruvia::static_text{"ok"});
         ASSERT_EQ(submit_buffered_response(server, stream_id, response), ruvia::http_submit_status::accepted);
         EXPECT_EQ(server.release(std::move(*head)), ruvia::http2_server_request_release_status::released);
         while (server.next_event()) {

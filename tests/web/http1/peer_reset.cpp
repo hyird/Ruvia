@@ -74,7 +74,7 @@ class peer_reset_routes final {
         co_await wait_for_peer_close(c);
         // The client expected 100 Continue and sent no body: the lazy read
         // writes the interim response first.
-        (void)co_await c.req().text();
+        (void)co_await c.req().body_text();
         handlers_finished.fetch_add(1);
         co_return c.text("read");
     }

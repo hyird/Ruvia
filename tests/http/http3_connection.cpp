@@ -2628,7 +2628,7 @@ TEST(Ruvia, http3_response_submission_validates_method_plan_and_connect_state) {
 
         ruvia::http_response response;
         response.status(ruvia::http_status::ok);
-        response.static_body("hello");
+        response.static_body(ruvia::static_text{"hello"});
         const auto mismatched_plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response);
         const auto result = peers.server_.submit_response_head(0, response, mismatched_plan);
         const auto* err = std::get_if<ruvia::http_response_head_error>(&result);

@@ -94,8 +94,8 @@ class pipelining_routes final {
     }
 
     ruvia::task<ruvia::http_response> echo(ruvia::context& c) {
-        const auto first = co_await c.req().text();
-        const auto second = co_await c.req().text();
+        const auto first = co_await c.req().body_text();
+        const auto second = co_await c.req().body_text();
         if (first != second) {
             co_return c.text("mismatch");
         }
@@ -111,7 +111,7 @@ class pipelining_routes final {
     }
 
     ruvia::task<void> stream_echo(ruvia::context& c) {
-        const auto body = "stream-echo-" + std::string(co_await c.req().text());
+        const auto body = "stream-echo-" + std::string(co_await c.req().body_text());
         if (co_await c.stream().commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }

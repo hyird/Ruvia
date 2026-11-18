@@ -2587,7 +2587,7 @@ public:
     void body(std::string_view value);
     template <std::same_as<std::string> string_type>
     void body(string_type&& value) noexcept;
-    void static_body(borrowed_text value) noexcept;
+    void static_body(static_text value) noexcept;
     void file_bytes_body(std::string&& value) noexcept;
     void file_body(http_native_path_view_type file, http_content_length size, http_content_length offset,
                    http_content_length length, http_response_file_identity identity,
@@ -2640,7 +2640,7 @@ public:
 | --- | --- |
 | `body(std::string_view)` | 复制字节；空输入得到空正文（无 segment）。分配失败抛分配异常且正文不变。 |
 | `body(std::string&&) noexcept` | 仅精确的非 const `std::string` 右值接管存储，不复制；空串得到空正文。 |
-| `static_body(borrowed_text) noexcept` | 零拷贝借用 `value`；调用方须保证这些字节在本响应（或其移动目标）保留该正文期间有效且不变。`borrowed_text` 本身拒绝临时拥有型字符串，见 [`"borrowed_text.h"`](#api-borrowed-text-h)。空输入得到空正文。 |
+| `static_body(static_text) noexcept` | 零拷贝借用经编译期检查的[静态文本](#api-borrowed-text-h)；空输入得到空正文。 |
 | `file_bytes_body(std::string&&) noexcept` | 接管从文件读取的字节（整个文件、一个字节范围或 multipart byteranges 负载）。与 `body()` 的设置重载不同，即使为空也保持文件表示（`has_file_representation() == true`）。 |
 | `file_body(file, size, offset, length, identity, opened = {})` | 设置文件正文：拥有原生路径副本，保留运行时不透明 identity；`opened` 若已占用，是运行时据以分帧的已打开描述符，由正文拥有并在销毁或替换时释放。`file` 为空或 `[offset, offset + length)` 超出 `size` 时抛 `std::invalid_argument`，正文不变，被拒绝的 `opened` 随调用释放。 |
 | `multipart_file_body(file, size, identity, plan, opened = {})` | 设置 `multipart/byteranges` 文件正文，`plan` 为 [`http_multipart_byte_range_plan`](#api-http-range-h)。`file` 为空、计划无片段、无文件片段、某文件片段长度为零或超出 `size` 时抛 `std::invalid_argument`，正文不变，`opened` 被释放。 |

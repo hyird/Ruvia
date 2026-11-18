@@ -82,7 +82,7 @@ class inbound_memory_routes final {
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> buffered_body(ruvia::context& context_value) {
-        const auto body = co_await context_value.req().text();
+        const auto body = co_await context_value.req().body_text();
         co_return context_value.text(std::string(std::to_string(body.size())));
     }
 
@@ -319,7 +319,7 @@ TEST(Ruvia, http2_request_body_inbound_budget_exhaustion_answers_with_503) {
         for (const std::string_view path : {"/inbound-buffered", "/inbound-stream"}) {
             auto response = co_await client.client().post(path).body(payload).send();
             EXPECT_EQ(response.status(), ruvia::http_status::service_unavailable);
-            const auto body = co_await response.bytes();
+            const auto body = co_await response.collect_body();
             EXPECT_NE(body.text().find("inbound_buffer_limit"), std::string_view::npos);
         }
         co_await client.shutdown();

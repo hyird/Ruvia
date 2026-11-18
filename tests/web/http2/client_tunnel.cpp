@@ -377,7 +377,7 @@ TEST(Ruvia, http2_client_capsule_stream_closes_when_its_tunnel_owner_is_destroye
             EXPECT_TRUE(cold_write_rejected);
             stream.abort();
             auto sibling = co_await client_origin.get("/sibling").send();
-            const auto sibling_body = co_await sibling.bytes();
+            const auto sibling_body = co_await sibling.collect_body();
             EXPECT_EQ(sibling_body.text(), std::string_view("sibling"));
         } catch (...) {
             failure = std::current_exception();
@@ -816,7 +816,7 @@ void exercise_http2_held_tunnel_budget(bool worker_budget) {
                 // complete DATA was processed before the handler starts its
                 // read. This removes socket fragmentation from the test.
                 auto barrier = co_await origin.get("/held-budget-barrier").send();
-                const auto barrier_body = co_await barrier.bytes();
+                const auto barrier_body = co_await barrier.collect_body();
                 EXPECT_EQ(barrier_body.text(), std::string_view("barrier"));
                 permit_read.notify();
                 const auto read = co_await reads.receive({.timeout_ = std::chrono::seconds(5)});

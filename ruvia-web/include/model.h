@@ -2718,18 +2718,13 @@ private:
     std::optional<t_type> value_;
 };
 
-// json_value and json_object borrow their complete input body by default. An
-// owning string passed to parse() must therefore outlive the parsed view;
-// basic_string rvalues are rejected before a dangling view can be created.
-// Model fields may copy the JSON token when the parse owns its strings.
-// Dynamic JSON token, not an ordinary field-validation schema. parse() borrows
-// the complete token; parse_json<Model>() owns it instead.
-// Move construction preserves borrowing/ownership. Move assignment owns the
-// result (copying borrowed storage). A successful move or rvalue field transfer
-// resets the source to its default token without allocation. Failed rebinding
-// preserves both tokens; self-move assignment is a no-op. Existing views must
-// be refreshed after either changes. Views and potentially borrowed get<T>()
-// results must not outlive their token. Default construction represents JSON null.
+// Dynamic JSON tokens borrow lvalue parse input and adopt std::string rvalues.
+// Both moves preserve borrowing/ownership, except that assignment copies a
+// borrow into the destination's own bytes before replacing that destination.
+// Use clone() or into_owned() to retain a token independently of its input.
+// Successful moves reset the source to its default token; self-move is a no-op
+// and failed allocation leaves both operands unchanged. Refresh outstanding
+// views and borrowed get<T>() results after changing their source token.
 namespace detail {
 
 template <typename derived_type, fixed_string default_token>
@@ -2745,7 +2740,7 @@ public:
 
     json_token_base& operator=(json_token_base&& other) {
         if (this != &other) {
-            storage_.assign_from(std::move(other.storage_));
+            storage_ = std::move(other.storage_);
             other.storage_.assign_borrowed(default_token.view());
         }
         return *this;
@@ -2755,6 +2750,17 @@ public:
         return storage_.view();
     }
     [[nodiscard]] std::string_view view() const&& = delete;
+
+    // Make an independent owned copy without changing this token.
+    [[nodiscard]] derived_type clone() const {
+        return derived_type(storage_.rebind());
+    }
+
+    // Reuse owned storage or copy borrowed bytes, then reset this token.
+    [[nodiscard]] derived_type into_owned() && {
+        storage_.own_borrowed_in_place();
+        return std::move(static_cast<derived_type&>(*this));
+    }
 
     // The callback receives a field name and json_value borrowing this object's
     // token; both are valid only for the duration of the callback.
@@ -2811,13 +2817,11 @@ protected:
     }
 
     [[nodiscard]] derived_type rebind_for_model() const& {
-        return derived_type(storage_.rebind());
+        return clone();
     }
 
     [[nodiscard]] derived_type rebind_for_model() && {
-        auto rebound = derived_type(std::move(storage_).rebind());
-        storage_.assign_borrowed(default_token.view());
-        return rebound;
+        return std::move(*this).into_owned();
     }
 
     model_text_storage storage_;

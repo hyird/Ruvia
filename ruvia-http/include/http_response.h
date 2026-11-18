@@ -91,9 +91,8 @@ public:
     void body(string_type&& value) noexcept {
         body_.set_owned(std::move(value));
     }
-    // Borrows `value` without copying; keep its bytes valid and unchanged while
-    // this response or a moved-to response retains the body.
-    void static_body(borrowed_text value) noexcept;
+    // References static-storage bytes without copying.
+    void static_body(static_text value) noexcept;
     // Own bytes read from a file: all of it, a byte range, or a multipart
     // byte-range payload of it. Unlike body(), the body remains a file
     // representation, even when empty.

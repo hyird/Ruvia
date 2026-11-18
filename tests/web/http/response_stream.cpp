@@ -126,7 +126,7 @@ struct stream_lane_observation final {
 class stream_early_respond_middleware final {
 public:
     ruvia::task<void> invoke(ruvia::context& context_value, ruvia::next&) {
-        const auto body = co_await context_value.req().text();
+        const auto body = co_await context_value.req().body_text();
         context_value.respond(context_value.text("early:" + std::string(body)));
     }
 };
@@ -250,7 +250,7 @@ class stream_lane_routes final {
             co_return;
         }
         co_await writer.write("x");
-        const auto body = co_await context_value.req().text();
+        const auto body = co_await context_value.req().body_text();
         co_await writer.write(body);
     }
 
@@ -1215,7 +1215,7 @@ struct context_body_read_observation final {
 inline std::unique_ptr<ruvia::task<std::string_view>> make_expired_context_text_read() {
     std::unique_ptr<ruvia::task<std::string_view>> operation;
     (void)with_context(ruvia::test_request::post("/").body("body"), [&](ruvia::context& context_value) -> ruvia::task<void> {
-        operation.reset(new ruvia::task<std::string_view>(context_value.req().text()));
+        operation.reset(new ruvia::task<std::string_view>(context_value.req().body_text()));
         co_return;
     });
     return operation;
@@ -1233,7 +1233,7 @@ inline context_body_read_observation read_context_gzip_body(std::string_view enc
     context_body_read_observation observation;
     (void)with_context(ruvia::test_request::post("/").header("Content-Encoding", "gzip").body(encoded), [&](ruvia::context& context_value) -> ruvia::task<void> {
         try {
-            observation.body_ = co_await context_value.req().text();
+            observation.body_ = co_await context_value.req().body_text();
         } catch (const ruvia::http_protocol_error& error) {
             observation.error_status_ = error.status();
         }
@@ -1345,26 +1345,26 @@ class body_lane_routes final {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
         const auto request = context_value.req();
         try {
-            (void)request.text({.timeout_ = std::chrono::milliseconds(0)});
+            (void)request.body_text({.timeout_ = std::chrono::milliseconds(0)});
         } catch (const std::invalid_argument&) {
             ++observed.buffered_rejected_;
         }
         ruvia::stop_source stopped;
         stopped.request_stop();
         try {
-            (void)co_await request.text({.stop_token_ = stopped.token()});
+            (void)co_await request.body_text({.stop_token_ = stopped.token()});
         } catch (const std::system_error& error) {
             observed.buffered_prestopped_ += error.code() == std::errc::operation_canceled;
         }
         try {
-            (void)co_await request.text({.timeout_ = std::chrono::milliseconds(100)});
+            (void)co_await request.body_text({.timeout_ = std::chrono::milliseconds(100)});
         } catch (const std::system_error& error) {
             if (error.code() != std::errc::timed_out) {
                 throw;
             }
             observed.buffered_waiting_ = true;
         }
-        co_return context_value.text(co_await request.text());
+        co_return context_value.text(co_await request.body_text());
     }
 
     ruvia::task<ruvia::http_response> read(ruvia::context& context_value) {
@@ -1459,7 +1459,7 @@ class body_lane_routes final {
     }
 
     ruvia::task<ruvia::http_response> pipelined_echo(ruvia::context& context_value) {
-        co_return context_value.text(co_await context_value.req().text());
+        co_return context_value.text(co_await context_value.req().body_text());
     }
 
     ruvia::task<ruvia::http_response> consume_buffered(ruvia::context& context_value) {
@@ -1470,13 +1470,13 @@ class body_lane_routes final {
             if (discard) {
                 co_await context_value.req().discard_body();
             } else {
-                buffered = co_await context_value.req().text();
+                buffered = co_await context_value.req().body_text();
             }
         };
         consumers.spawn(consume());
         unsigned overlap_rejected{};
         try {
-            (void)co_await context_value.req().text();
+            (void)co_await context_value.req().body_text();
         } catch (const std::logic_error&) {
             ++overlap_rejected;
         }
@@ -1491,13 +1491,13 @@ class body_lane_routes final {
         if (discard) {
             bool reread_rejected{};
             try {
-                (void)co_await context_value.req().text();
+                (void)co_await context_value.req().body_text();
             } catch (const std::logic_error&) {
                 reread_rejected = true;
             }
             co_return context_value.text(overlap_rejected == 2 && reread_rejected ? "discarded" : "invalid-discard");
         }
-        const auto retained = co_await context_value.req().text();
+        const auto retained = co_await context_value.req().body_text();
         co_return context_value.text(overlap_rejected == 2 && retained == buffered ? retained : std::string_view("invalid-read"));
     }
 
@@ -1507,14 +1507,14 @@ class body_lane_routes final {
             if (context_value.req().param("operation") == "discard") {
                 co_await context_value.req().discard_body();
             } else {
-                (void)co_await context_value.req().text();
+                (void)co_await context_value.req().body_text();
             }
         } catch (const ruvia::http_protocol_error&) {
             failed = true;
         }
         unsigned rejected{};
         try {
-            (void)co_await context_value.req().text();
+            (void)co_await context_value.req().body_text();
         } catch (const std::logic_error&) {
             ++rejected;
         }
@@ -1947,7 +1947,7 @@ TEST(Ruvia, web_request_decodes_content_coding_stacks_in_reverse_order) {
         return;
     }
     (void)ruvia::test::with_context(ruvia::test_request::post("/").header("Content-Encoding", "gzip, deflate").body(*encoded), [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto body = co_await context_value.req().text();
+        const auto body = co_await context_value.req().body_text();
         EXPECT_EQ(body, std::string_view(plain));
     });
 }

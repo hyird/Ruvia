@@ -243,7 +243,7 @@ void http_response::body(std::string_view value) {
     body_.set_copy(value);
 }
 
-void http_response::static_body(borrowed_text value) noexcept {
+void http_response::static_body(static_text value) noexcept {
     body_.set_static(value.view());
 }
 

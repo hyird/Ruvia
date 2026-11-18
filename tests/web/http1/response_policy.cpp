@@ -216,7 +216,7 @@ class response_policy_routes final {
             if (phase == ruvia::stream_commit_result::body) {
                 co_await output.write("first");
             }
-            const auto body = co_await context_value.req().text();
+            const auto body = co_await context_value.req().body_text();
             {
                 std::lock_guard lock(read_after_write_mutex);
                 read_after_write_body.assign(body);

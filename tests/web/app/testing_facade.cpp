@@ -453,7 +453,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> json_array(ruvia::context& c) const {
-        const auto raw = co_await c.req().text();
+        const auto raw = co_await c.req().body_text();
         auto parsed = ruvia::parse_json<ruvia::array<ruvia::string>>(raw);
         if (!parsed.has_value()) {
             throw ruvia::http_error({.status_ = ruvia::http_status::bad_request, .code_ = "invalid_json", .message_ = parsed.error().message(), .validation_issues_ = parsed.error().issues()});

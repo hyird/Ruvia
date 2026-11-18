@@ -26,6 +26,7 @@
 namespace ruvia {
 
 class context;
+class http_client_request_body_writer;
 
 // Route-level policy declaration that switches the matched route's request body
 // from buffered to streamed (read via c.request_body() or
@@ -42,6 +43,7 @@ class operation_interrupt_source;
 class body_reader final {
 private:
     friend struct detail::streaming_access;
+    friend class http_client_request_body_writer;
     friend class multipart_reader;
 
     using read_type = detail::callback_ref<task<std::optional<std::span<const std::byte>>>(operation_options)>;
@@ -73,6 +75,11 @@ public:
     /// lifetime, linear operation and `operation` contract.
     [[nodiscard]] task<std::optional<std::string_view>> read_text(operation_options operation = {}) &;
     task<std::optional<std::string_view>> read_text(operation_options = {}) && = delete;
+
+    // Relays the same bytes as read(), without copying into the upload queue.
+    // Both lanes are reserved for the entire operation. Does not finish the upload.
+    [[nodiscard]] task<void> pipe_to(http_client_request_body_writer& output, operation_options operation = {}) &;
+    task<void> pipe_to(http_client_request_body_writer&, operation_options = {}) && = delete;
 
 private:
     void bind_worker(const worker_ref& worker_value) noexcept {

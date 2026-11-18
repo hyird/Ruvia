@@ -585,7 +585,7 @@ private:
         co_return c.text("limited");
     }
     ruvia::task<ruvia::http_response> small(ruvia::context& c) {
-        const auto body = co_await c.req().text();
+        const auto body = co_await c.req().body_text();
         co_return c.body(body);
     }
 
@@ -594,7 +594,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> default_body(ruvia::context& c) {
-        const auto body = co_await c.req().text();
+        const auto body = co_await c.req().body_text();
         co_return c.body(body);
     }
 };

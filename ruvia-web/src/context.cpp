@@ -165,7 +165,7 @@ http_response request_exchange<host_type>::body(outbound_bytes body, response_op
 template <typename host_type>
 http_response request_exchange<host_type>::body(static_text body, response_options options) const {
     auto response = detail::make_response(options);
-    response.static_body(body.view());
+    response.static_body(body);
     return response;
 }
 
@@ -181,7 +181,7 @@ template <typename host_type>
 http_response request_exchange<host_type>::text(static_text body, response_options options) const {
     auto response = detail::make_response(options);
     mark_plain_text_defaults(response);
-    response.static_body(body.view());
+    response.static_body(body);
     return response;
 }
 
@@ -245,7 +245,7 @@ template <typename host_type>
 http_response request_exchange<host_type>::html(static_text body, response_options options) const {
     auto response = detail::make_response(options);
     set_default_content_type(response, http_content_type::text_html_utf8);
-    response.static_body(body.view());
+    response.static_body(body);
     return response;
 }
 
@@ -477,14 +477,14 @@ void require_probe_status(const response_options& extra) {
 
 http_response make_health_response(context&, response_options extra) {
     require_probe_status(extra);
-    return detail::context_access::make_static_json_response(R"({"status":"ok"})", extra);
+    return detail::context_access::make_static_json_response(static_text{R"({"status":"ok"})"}, extra);
 }
 
 http_response make_readiness_response(context&, readiness_response_options options, response_options extra) {
     require_probe_status(extra);
     switch (options.state_) {
         case readiness_state::ready:
-            return detail::context_access::make_static_json_response(R"({"status":"ready"})", extra);
+            return detail::context_access::make_static_json_response(static_text{R"({"status":"ready"})"}, extra);
         case readiness_state::unavailable:
             break;
         default:
@@ -493,7 +493,7 @@ http_response make_readiness_response(context&, readiness_response_options optio
 
     const auto reason = options.unavailable_reason_.view();
     if (reason.empty()) {
-        auto response = detail::context_access::make_static_json_response(R"({"status":"not_ready"})", extra);
+        auto response = detail::context_access::make_static_json_response(static_text{R"({"status":"not_ready"})"}, extra);
         response.status(http_status::service_unavailable);
         return response;
     }
@@ -1073,20 +1073,20 @@ inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
     return parsed_coding;
 }
 
-template <typename view_type>
-task<view_type> read_request_body(const context& context_value, operation_options operation) {
-    const auto as_view = [](std::string_view text) -> view_type {
-        if constexpr (std::is_same_v<view_type, std::string_view>) {
-            return text;
-        } else {
+template <typename result_type>
+task<result_type> read_request_body(const context& context_value, operation_options operation) {
+    const auto as_result = [](std::string_view text) -> result_type {
+        if constexpr (std::is_same_v<result_type, std::span<const std::byte>>) {
             return as_bytes(text);
+        } else {
+            return result_type(text);
         }
     };
     if (operation.stop_token_.stop_requested()) {
         detail::operation_interrupt::throw_cause(detail::operation_interrupt_cause::cancelled, "request body read");
     }
     if (const auto decoded = detail::context_access::decoded_body(context_value)) {
-        co_return as_view(*decoded);
+        co_return as_result(*decoded);
     }
 
     const auto& body_source = detail::context_access::request_body_source(context_value);
@@ -1100,7 +1100,7 @@ task<view_type> read_request_body(const context& context_value, operation_option
         raw = as_chars(request.body_bytes());
     }
     if (detail::context_access::body_identity(context_value)) {
-        co_return as_view(raw);
+        co_return as_result(raw);
     }
 
     // Transparently decode a request body whose Content-Encoding we understand,
@@ -1110,7 +1110,7 @@ task<view_type> read_request_body(const context& context_value, operation_option
     const auto codings = parsed_coding.codings();
     if (codings.empty()) {
         detail::context_access::mark_body_identity(context_value);
-        co_return as_view(raw);
+        co_return as_result(raw);
     }
     const auto max_decoded_bytes = services.max_decoded_request_body_bytes();
     bool offload = services.worker().blocking_pool() != nullptr && max_decoded_bytes > inline_request_decode_bytes;
@@ -1131,12 +1131,16 @@ task<view_type> read_request_body(const context& context_value, operation_option
             return decode_http_content(std::span<const http_content_coding>(owned_codings.data(), coding_count), owned_raw, {.max_decoded_bytes_ = limit});
         }, {.stop_token_ = context_value.stop_token()});
         decode_result = std::move(decoded).take_value();
+        // Another read may have published its views while decoding was offloaded.
+        if (const auto cached = detail::context_access::decoded_body(context_value)) {
+            co_return as_result(*cached);
+        }
     }
     auto* decoded_content = std::get_if<std::string>(&decode_result);
     if (decoded_content == nullptr) {
         throw make_http_protocol_error(std::get<http_content_decode_error>(decode_result), http_coding_field::content_encoding);
     }
-    co_return as_view(detail::context_access::store_decoded_body(context_value, std::move(*decoded_content)));
+    co_return as_result(detail::context_access::store_decoded_body(context_value, std::move(*decoded_content)));
 }
 
 task<std::vector<multipart_part>> read_request_multipart(const context& context_value, operation_options operation) {
@@ -1431,12 +1435,16 @@ std::optional<std::string_view> context_request::negotiate(negotiable_field fiel
     return best;
 }
 
-task<std::string_view> context_request::text(operation_options operation) const {
+task<std::string_view> context_request::body_text(operation_options operation) const {
     return context_->operation_scope_.attach(read_request_body<std::string_view>(*context_, std::move(operation)));
 }
 
-task<std::span<const std::byte>> context_request::bytes(operation_options operation) const {
+task<std::span<const std::byte>> context_request::body_bytes(operation_options operation) const {
     return context_->operation_scope_.attach(read_request_body<std::span<const std::byte>>(*context_, std::move(operation)));
+}
+
+task<std::string> context_request::collect_body(operation_options operation) const {
+    return context_->operation_scope_.attach(read_request_body<std::string>(*context_, std::move(operation)));
 }
 
 std::optional<std::string_view> context_request::signed_cookie(signed_cookie_lookup_options options) const {

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstddef>
 #include <exception>
 #include <optional>
@@ -9,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "byte_view.h"
 #include "http_capsule.h"
 #include "http_client.h"
 #include "http_client_pool.h"
@@ -20,6 +22,8 @@
 #include "io_operation.h"
 #include "operation_options.h"
 #include "operation_scope.h"
+#include "stop_token.h"
+#include "streaming.h"
 #include "task.h"
 
 namespace ruvia::detail {
@@ -174,6 +178,82 @@ struct upload_output_policy final {
     }
 };
 }  // namespace
+
+task<void> body_reader::pipe_to(http_client_request_body_writer& writer, operation_options operation) & {
+    if (writer.state_ == nullptr || worker_ == nullptr || !worker_->is_current()) {
+        throw std::logic_error("request body forwarding requires live endpoints on the current worker");
+    }
+    require_writable(*writer.state_);
+    auto relay = writer.state_->upload_->output_.output_scope_.attach(writer.relay_body(http_client_response(writer.state_), *this, std::move(operation)));
+    return operation_scope_.attach([](task<void> transfer) -> task<void> {
+        co_await std::move(transfer);
+    }(std::move(relay)));
+}
+
+task<void> http_client_request_body_writer::relay_body(http_client_response pin, body_reader& source, operation_options operation) {
+    auto& state = *pin.state_;
+    auto& upload = *state.upload_;
+    auto& output = upload.output_;
+    auto read_lane = detail::claim_operation_lane(source.read_active_, "request body read is already in progress");
+    auto write_lane = detail::claim_operation_lane(output.operation_active_, "HTTP client output operation is already active");
+    require_writable(state);
+    stop_source downstream_stop;
+    const stop_group read_stop{operation.stop_token_, downstream_stop.token()};
+    struct relay_registration final {
+        detail::http_client_output_queue& output_;
+        ~relay_registration() {
+            output_.relay_stop_ = nullptr;
+        }
+    } registered{output};
+    output.relay_stop_ = &downstream_stop;
+    const detail::operation_steps steps(operation);
+    for (;;) {
+        if (output.stopped_) {
+            upload_output_policy::throw_stopped(state);
+        }
+        auto read_operation = steps.next("request body forwarding");
+        read_operation.stop_token_ = read_stop.token();
+        std::optional<std::span<const std::byte>> chunk;
+        try {
+            chunk = co_await source.read_(std::move(read_operation));
+        } catch (...) {
+            if (downstream_stop.stop_requested() && !operation.stop_token_.stop_requested()) {
+                upload_output_policy::throw_stopped(state);
+            }
+            throw;
+        }
+        if (output.stopped_) {
+            upload_output_policy::throw_stopped(state);
+        }
+        if (!chunk) {
+            co_return;
+        }
+        auto bytes = as_chars(*chunk);
+        while (!bytes.empty()) {
+            const auto count = (std::min)(bytes.size(), upload.config_.max_chunk_bytes_);
+            const detail::http_client_operation_interruption interruption(state, detail::http_client_operation_lane::output, steps.next("request body forwarding"));
+            if (output.stopped_) {
+                upload_output_policy::throw_stopped(state);
+            }
+            if (output.chunk_ready_) {
+                throw std::logic_error("HTTP client output queue still owns a chunk");
+            }
+            output.borrowed_chunk_ = bytes.substr(0, count);
+            output.chunk_ready_ = true;
+            output.notify_data();
+            // A stopped write can still hold a socket/TLS or protocol borrow.
+            while (output.chunk_ready_ && (!output.stopped_ || output.chunk_in_flight_)) {
+                co_await output.space_.wait();
+            }
+            output.borrowed_chunk_.reset();
+            state.throw_if_output_interrupted();
+            if (output.chunk_ready_) {
+                upload_output_policy::throw_stopped(state);
+            }
+            bytes.remove_prefix(count);
+        }
+    }
+}
 
 http_client_exchange::http_client_exchange(http_client_response response) noexcept :
     response_(std::move(response)),

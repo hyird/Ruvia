@@ -32,7 +32,7 @@ ruvia::task<void> follow_redirect(const ruvia::http_client_ref& origin) {
         // Disable the fluent client's automatic redirects to inspect each hop.
         auto response = co_await origin.get(target).redirects(0).send();
         if (!ruvia::is_http_redirect_status(response.status())) {
-            auto bytes_value = co_await response.bytes();
+            auto bytes_value = co_await response.collect_body();
             auto allocation = std::move(bytes_value).take_bytes();
             auto fields = std::move(response).take_headers();
             std::cout << "redirected bytes=" << allocation.get_deleter().size() << " fields=" << fields.size() << '\n';
@@ -100,7 +100,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(ruvia::event_loop loop, 
             while (auto push = origin.next_push()) {
                 std::cout << "push=" << push->request().target_ << '\n';
                 auto pushed = co_await push->response();
-                auto content = co_await pushed.bytes(4096);
+                auto content = co_await pushed.collect_body(4096);
                 std::cout << "pushed bytes=" << content.bytes().size() << '\n';
             }
             while (auto advertisement = origin.next_advertisement()) {
@@ -115,10 +115,10 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(ruvia::event_loop loop, 
         }
         {
             auto response = co_await bounded.get("/features/download").send();
-            // read(), read_text(), bytes(), and pipe_to() consume ONE linear body
-            // reader. bytes() collects only its unread remainder, with both
+            // read(), read_text(), collect_body(), and pipe_to() consume ONE linear body
+            // reader. collect_body() collects only its unread remainder, with both
             // a per-call limit and a total retained-result budget.
-            retained.emplace(co_await response.bytes(4096));
+            retained.emplace(co_await response.collect_body(4096));
             if (response.trailer("X-Example-Complete") != "yes") {
                 throw std::runtime_error("missing response trailer");
             }

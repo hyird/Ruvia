@@ -326,7 +326,7 @@ ruvia::task<std::uint64_t> get(ruvia::http_client& client, std::string_view targ
     auto response = co_await client.client().get(target).configure(std::move(options)).send();
     EXPECT_TRUE(response.ok());
     EXPECT_EQ(response.connection_info().reused_, expect_reused);
-    const auto body = co_await response.bytes();
+    const auto body = co_await response.collect_body();
     EXPECT_EQ(body.text(), target);
     co_return response.connection_info().id_;
 }
@@ -408,7 +408,7 @@ TEST(Ruvia, http_client_upgrade_on_a_negotiated_h2_origin_uses_an_http11_connect
     run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_ref&) -> ruvia::task<void> {
         auto ordinary = co_await client.client().get("/ordinary").send();
         EXPECT_TRUE(ordinary.protocol_version() == ruvia::http_protocol_version::http2);
-        (void)co_await ordinary.bytes();
+        (void)co_await ordinary.collect_body();
         auto upgraded = co_await client.client().get("/chat").header("Connection", "Upgrade").header("Upgrade", "chat").connect();
         auto* tunnel = upgraded.tunnel();
         if (tunnel == nullptr) {
@@ -422,7 +422,7 @@ TEST(Ruvia, http_client_upgrade_on_a_negotiated_h2_origin_uses_an_http11_connect
         auto again = co_await client.client().get("/again").send();
         EXPECT_TRUE(again.protocol_version() == ruvia::http_protocol_version::http2);
         EXPECT_TRUE(again.connection_info().reused_);
-        (void)co_await again.bytes();
+        (void)co_await again.collect_body();
     });
     ASSERT_EQ(peer.connections_.size(), 2U);
     EXPECT_EQ(peer.connections_[0].selected_alpn_, "h2");
@@ -445,12 +445,12 @@ TEST(Ruvia, http_client_request_versions_override_the_alias_offer) {
     run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_ref&) -> ruvia::task<void> {
         auto multiplexed = co_await client.client().get("/h2").send();
         EXPECT_TRUE(multiplexed.protocol_version() == ruvia::http_protocol_version::http2);
-        (void)co_await multiplexed.bytes();
+        (void)co_await multiplexed.collect_body();
         ruvia::http_client_request_options http1;
         http1.versions_ = ruvia::http_client_versions{.http2_ = false};
         auto serial = co_await client.client().get("/h1").configure(std::move(http1)).send();
         EXPECT_TRUE(serial.protocol_version() == ruvia::http_protocol_version::http11);
-        const auto body = co_await serial.bytes();
+        const auto body = co_await serial.collect_body();
         EXPECT_EQ(body.text(), "/h1");
         ruvia::http_client_request_options none;
         none.versions_ = ruvia::http_client_versions{.http1_ = false, .http2_ = false};
@@ -495,11 +495,11 @@ TEST(Ruvia, http_client_unreachable_alt_svc_falls_back_to_tcp_and_rests) {
     run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_ref& worker) -> ruvia::task<void> {
         auto learned = co_await client.client().get("/learn").send();
         EXPECT_TRUE(learned.protocol_version() == ruvia::http_protocol_version::http11);
-        (void)co_await learned.bytes();
+        (void)co_await learned.collect_body();
         // The advertised alternative never answers: the request falls back to TCP.
         auto fallback = co_await client.client().get("/fallback").send();
         EXPECT_TRUE(fallback.protocol_version() == ruvia::http_protocol_version::http11);
-        const auto fallback_body = co_await fallback.bytes();
+        const auto fallback_body = co_await fallback.collect_body();
         EXPECT_EQ(fallback_body.text(), "/fallback");
         (void)co_await ruvia::sleep_for(worker, 100ms);
         EXPECT_NE(datagrams, 0U);
@@ -508,7 +508,7 @@ TEST(Ruvia, http_client_unreachable_alt_svc_falls_back_to_tcp_and_rests) {
         for (int request = 0; request != 3; ++request) {
             auto rested = co_await client.client().get("/rested").send();
             EXPECT_TRUE(rested.protocol_version() == ruvia::http_protocol_version::http11);
-            (void)co_await rested.bytes();
+            (void)co_await rested.collect_body();
         }
         (void)co_await ruvia::sleep_for(worker, 100ms);
         EXPECT_EQ(datagrams, attempted);
@@ -564,11 +564,11 @@ TEST(Ruvia, http_client_origin_less_alias_follows_alt_svc_per_route) {
     run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_ref& worker) -> ruvia::task<void> {
         auto learned = co_await client.client().get("/learn").configure(route()).send();
         EXPECT_TRUE(learned.protocol_version() == ruvia::http_protocol_version::http11);
-        (void)co_await learned.bytes();
+        (void)co_await learned.collect_body();
         // The route's advertised alternative is tried, then TCP serves the request.
         auto fallback = co_await client.client().get("/fallback").configure(route()).send();
         EXPECT_TRUE(fallback.protocol_version() == ruvia::http_protocol_version::http11);
-        const auto body = co_await fallback.bytes();
+        const auto body = co_await fallback.collect_body();
         EXPECT_EQ(body.text(), "/fallback");
         (void)co_await ruvia::sleep_for(worker, 100ms);
         EXPECT_NE(datagrams, 0U);
@@ -618,14 +618,14 @@ TEST(Ruvia, http_client_second_alt_svc_clear_header_evicts_advertised_service) {
     run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_ref& worker) -> ruvia::task<void> {
         auto initial = co_await client.client().get("/cleared-in-same-response").send();
         EXPECT_EQ(initial.protocol_version(), ruvia::http_protocol_version::http11);
-        (void)co_await initial.bytes();
+        (void)co_await initial.collect_body();
 
         // Subsequent request must stay on TCP without dialing the cleared UDP alternative.
         peer.alt_svc_.clear();
         peer.extra_alt_svc_headers_.clear();
         auto follow_up = co_await client.client().get("/after-clear").send();
         EXPECT_EQ(follow_up.protocol_version(), ruvia::http_protocol_version::http11);
-        const auto follow_up_body = co_await follow_up.bytes();
+        const auto follow_up_body = co_await follow_up.collect_body();
         EXPECT_EQ(follow_up_body.text(), "/after-clear");
         (void)co_await ruvia::sleep_for(worker, 50ms);
         EXPECT_EQ(datagrams, 0U);
@@ -634,17 +634,17 @@ TEST(Ruvia, http_client_second_alt_svc_clear_header_evicts_advertised_service) {
         // response carrying h3 followed by Alt-Svc: clear evicts the previously cached entry too.
         peer.alt_svc_ = "h3=\":" + std::to_string(alternative_port) + "\"; ma=3600";
         auto advertised = co_await client.client().get("/advertise").send();
-        (void)co_await advertised.bytes();
+        (void)co_await advertised.collect_body();
         peer.extra_alt_svc_headers_ = {"clear"};
         // Force a TCP response that carries both h3 and trailing clear before HTTP/3 is attempted:
         auto evicted = co_await client.client().get("/evict").configure({.versions_ = ruvia::http_client_versions{.http2_ = false, .http3_ = false}}).send();
-        (void)co_await evicted.bytes();
+        (void)co_await evicted.collect_body();
         peer.alt_svc_.clear();
         peer.extra_alt_svc_headers_.clear();
 
         auto after_evict = co_await client.client().get("/after-evict").send();
         EXPECT_EQ(after_evict.protocol_version(), ruvia::http_protocol_version::http11);
-        (void)co_await after_evict.bytes();
+        (void)co_await after_evict.collect_body();
         (void)co_await ruvia::sleep_for(worker, 50ms);
         EXPECT_EQ(datagrams, 0U);
 
@@ -675,7 +675,7 @@ TEST(Ruvia, http_client_connection_limits_bound_open_and_idle_connections_withou
         const auto hold = [&](std::optional<std::uint64_t>& id) -> ruvia::task<void> {
             auto response = co_await handle.get("/hold").send();
             id = response.connection_info().id_;
-            (void)co_await response.bytes();
+            (void)co_await response.collect_body();
         };
         held.spawn(hold(first_id));
         held.spawn(hold(second_id));
@@ -710,7 +710,7 @@ TEST(Ruvia, http_client_connection_limits_bound_open_and_idle_connections_withou
         EXPECT_TRUE(reused.connection_info().reused_);
         const auto kept = reused.connection_info().id_;
         EXPECT_TRUE(kept == *first_id || kept == *second_id);
-        (void)co_await reused.bytes();
+        (void)co_await reused.collect_body();
         EXPECT_TRUE(handle.close_connection(kept));
         for (int attempt = 0; attempt != 1000 && handle.stats().open_connections_ != 0; ++attempt) {
             (void)co_await ruvia::sleep_for(worker, 1ms);
@@ -736,7 +736,7 @@ TEST(Ruvia, http_client_reuses_the_most_recently_idle_http1_connection) {
         ruvia::task_scope held(worker);
         const auto hold = [&]() -> ruvia::task<void> {
             auto response = co_await handle.get("/hold").send();
-            (void)co_await response.bytes();
+            (void)co_await response.collect_body();
         };
         held.spawn(hold());
         held.spawn(hold());
@@ -781,7 +781,7 @@ TEST(Ruvia, http_client_upload_progress_keeps_the_response_head_wait_alive) {
         co_await exchange.body().finish();
         auto response = co_await exchange.response();
         EXPECT_TRUE(response.ok());
-        const auto body = co_await response.bytes();
+        const auto body = co_await response.collect_body();
         EXPECT_EQ(body.text(), "/drain");
     });
     ASSERT_EQ(peer.connections_.size(), 1U);
@@ -856,12 +856,12 @@ TEST(Ruvia, http1_client_abandoned_upload_keeps_the_early_response) {
         EXPECT_FALSE(exchange.body().complete());
         EXPECT_FALSE(exchange.body().writable());
         EXPECT_THROW((void)exchange.body().write(std::string_view("late")), ruvia::http_client_error);
-        const auto body = co_await response.bytes();
+        const auto body = co_await response.collect_body();
         EXPECT_EQ(body.text(), "/early");
         // The unfinished request leaves the connection unusable.
         auto next = co_await client.client().get("/next").send();
         EXPECT_FALSE(next.connection_info().reused_);
-        (void)co_await next.bytes();
+        (void)co_await next.collect_body();
     });
     ASSERT_EQ(peer.connections_.size(), 2U);
     EXPECT_TRUE(peer.connections_[0].closed_);
@@ -886,7 +886,7 @@ TEST(Ruvia, http2_client_abandoned_upload_ends_only_its_sending_half) {
         EXPECT_TRUE(response.protocol_version() == ruvia::http_protocol_version::http2);
         exchange.body().abandon();
         EXPECT_FALSE(exchange.body().complete());
-        const auto body = co_await response.bytes();
+        const auto body = co_await response.collect_body();
         EXPECT_TRUE(body.empty());
         EXPECT_TRUE(response.stream().complete());
         for (int attempt = 0; attempt != 200 && (peer.connections_.empty() || peer.connections_[0].resets_.empty()); ++attempt) {
@@ -911,10 +911,10 @@ TEST(Ruvia, http_client_worker_idle_bound_spans_aliases) {
         const auto first = client.client("first");
         const auto second = client.client("second");
         auto a = co_await first.get("/a").send();
-        (void)co_await a.bytes();
+        (void)co_await a.collect_body();
         EXPECT_EQ(first.stats().idle_connections_, 1U);
         auto b = co_await second.get("/b").send();
-        (void)co_await b.bytes();
+        (void)co_await b.collect_body();
         // Each alias allows 64 idle connections; the worker keeps one, so
         // the least recently used, of the other alias, closes.
         for (int attempt = 0; attempt != 200 && first.stats().open_connections_ != 0; ++attempt) {
@@ -964,7 +964,7 @@ TEST(Ruvia, http_client_alias_without_a_fixed_origin_routes_each_request_to_its_
         }
         EXPECT_TRUE(rejected);
         auto response = co_await handle.get("/direct").configure(to(authority)).send();
-        const auto direct = co_await response.bytes();
+        const auto direct = co_await response.collect_body();
         EXPECT_EQ(direct.text(), "/direct");
         // Every dial address passes the validator.
         const auto rejected_dial = co_await fails_with(std::move(handle.get("/").configure(to("127.0.0.2:" + std::to_string(peer.port())))));
@@ -972,14 +972,14 @@ TEST(Ruvia, http_client_alias_without_a_fixed_origin_routes_each_request_to_its_
         // Without a policy a cross-origin redirect is not followed.
         auto unfollowed = co_await handle.get("/redirect").configure(to(authority)).send();
         EXPECT_EQ(unfollowed.status().value(), 302);
-        (void)co_await unfollowed.bytes();
+        (void)co_await unfollowed.collect_body();
         // An accepted origin is reached through this alias with its authority.
         auto followed = co_await handle.get("/redirect")
                             .configure(to(authority))
                             .on_redirect([](const ruvia::http_client_redirect_hop&, ruvia::stop_token) -> ruvia::task<bool> {
             co_return true;
         }).send();
-        const auto landing = co_await followed.bytes();
+        const auto landing = co_await followed.collect_body();
         EXPECT_EQ(landing.text(), "/landing");
     });
     ASSERT_EQ(peer.connections_.size(), 1U);
@@ -1019,7 +1019,7 @@ TEST(Ruvia, http_client_dns_refresh_queries_only_live_routes_and_retires_moved_c
         handle.update_dns(moved);
         auto first = co_await handle.get("/first").send();
         EXPECT_EQ(first.connection_info().remote_.address().to_string(), "127.0.0.2");
-        (void)co_await first.bytes();
+        (void)co_await first.collect_body();
         // The refresh finds localhost elsewhere and retires the moved connection.
         for (int attempt = 0; attempt != 400 && !peer.connections_[0].closed_; ++attempt) {
             (void)co_await ruvia::sleep_for(worker, 5ms);
@@ -1028,7 +1028,7 @@ TEST(Ruvia, http_client_dns_refresh_queries_only_live_routes_and_retires_moved_c
         EXPECT_GE(handle.stats().dns_refreshes_, 1U);
         auto second = co_await handle.get("/second").send();
         EXPECT_NE(second.connection_info().remote_.address().to_string(), "127.0.0.2");
-        (void)co_await second.bytes();
+        (void)co_await second.collect_body();
         lookups.join();
     });
 }
@@ -1049,9 +1049,9 @@ TEST(Ruvia, http_client_dns_refresh_concurrency_is_bounded_per_worker) {
         const auto first = client.client("first");
         const auto second = client.client("second");
         auto a = co_await first.get("/a").send();
-        (void)co_await a.bytes();
+        (void)co_await a.collect_body();
         auto b = co_await second.get("/b").send();
-        (void)co_await b.bytes();
+        (void)co_await b.collect_body();
         // Hold the only lookup thread: the first refresh started stays
         // running, and every other period of either alias defers.
         const auto total_started = [&] {
@@ -1117,7 +1117,7 @@ TEST(Ruvia, http_client_redirect_hop_observation_and_streaming_upload_redirect) 
         co_await upload_exchange.body().finish();
         auto redirected_resp = co_await upload_exchange.response();
         EXPECT_EQ(redirected_resp.status(), ruvia::http_status::ok);
-        const auto landed_body = co_await redirected_resp.bytes();
+        const auto landed_body = co_await redirected_resp.collect_body();
         EXPECT_EQ(landed_body.text(), "/final-destination");
         EXPECT_EQ(observed_targets.size(), 1U);
         if (!observed_targets.empty()) {
@@ -1129,7 +1129,7 @@ TEST(Ruvia, http_client_redirect_hop_observation_and_streaming_upload_redirect) 
         auto early_upload = co_await handle.post("/redirect").upload();
         auto early_resp = co_await early_upload.response();
         EXPECT_FALSE(early_upload.body().writable());
-        const auto early_body = co_await early_resp.bytes();
+        const auto early_body = co_await early_resp.collect_body();
         EXPECT_EQ(early_body.text(), "/final-destination");
 
         // 3) Returning false from on_redirect stops following and returns the 302 response.
@@ -1138,7 +1138,7 @@ TEST(Ruvia, http_client_redirect_hop_observation_and_streaming_upload_redirect) 
             return false;
         }).send();
         EXPECT_EQ(stopped_resp.status(), ruvia::http_status::found);
-        (void)co_await stopped_resp.bytes();
+        (void)co_await stopped_resp.collect_body();
 
         // 4) Subsequent hop connection failure reports redirect_hops() == 1 after hop 0 succeeded.
         second_peer.stop();
@@ -1198,7 +1198,7 @@ TEST(Ruvia, http_client_non_destructive_dns_resolution_preserves_active_connecti
 
         auto first = co_await handle.get("/first").send();
         EXPECT_EQ(first.connection_info().remote_.address().to_string(), "127.0.0.2");
-        (void)co_await first.bytes();
+        (void)co_await first.collect_body();
 
         // Non-destructive DNS resolution returns sorted, deduplicated addresses
         // without retiring the active 127.0.0.2 connection or changing dns_snapshot().
@@ -1222,7 +1222,7 @@ TEST(Ruvia, http_client_non_destructive_dns_resolution_preserves_active_connecti
         auto second = co_await handle.get("/second").send();
         EXPECT_TRUE(second.connection_info().reused_);
         EXPECT_EQ(second.connection_info().remote_.address().to_string(), "127.0.0.2");
-        (void)co_await second.bytes();
+        (void)co_await second.collect_body();
         lookups.join();
     });
 }

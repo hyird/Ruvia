@@ -431,7 +431,8 @@ public:
     [[nodiscard]] const request_name_value_list& param_fields() const;
     [[nodiscard]] std::optional<std::string_view> signed_cookie(signed_cookie_lookup_options options) const;
 
-    // Buffered views borrow context storage; read the media type with header("Content-Type").
+    // Buffered views borrow context storage; collect_body() returns an owning
+    // copy of the same decoded bytes. Read the media type with header("Content-Type").
     // `operation` bounds the wait for body bytes in each of these reads, and
     // in json_if(), form_if() and multipart(): a timeout or stop ends only
     // that call with std::system_error (timed_out or operation_canceled),
@@ -439,8 +440,9 @@ public:
     // the call starts throws operation_canceled. A non-positive timeout throws
     // std::invalid_argument. Server body timeouts still apply. This view is a
     // copyable handle: the operations borrow the context, not the view.
-    [[nodiscard]] task<std::string_view> text(operation_options operation = {}) const;
-    [[nodiscard]] task<std::span<const std::byte>> bytes(operation_options operation = {}) const;
+    [[nodiscard]] task<std::string_view> body_text(operation_options operation = {}) const;
+    [[nodiscard]] task<std::span<const std::byte>> body_bytes(operation_options operation = {}) const;
+    [[nodiscard]] task<std::string> collect_body(operation_options operation = {}) const;
     [[nodiscard]] task<void> discard_body(operation_options operation = {}) const;
 
     // Typed optional parsing with schema and field-rule validation. Only a
@@ -1026,7 +1028,7 @@ template <validation_target target, typename model_type>
     if (!request_has_body_media_type<target>(context_value.req().header("Content-Type"))) {
         co_return std::nullopt;
     }
-    const auto request_body = co_await context_value.req().text(std::move(operation));
+    const auto request_body = co_await context_value.req().body_text(std::move(operation));
     co_return parse_and_validate_request_model<target, model_type>(request_body);
 }
 
@@ -1079,7 +1081,7 @@ task<void> model_validation_middleware<target, body_type, reject_unknown_fields>
         if (!request_has_body_media_type<target>(c.req().header("Content-Type"))) {
             throw_invalid_content_type<target>();
         }
-        const auto request_body = co_await c.req().text();
+        const auto request_body = co_await c.req().body_text();
         auto body = parse_and_validate_request_model<target, body_type>(request_body, {.reject_unknown_fields_ = reject_unknown_fields});
         auto binding = bind_validated_model(c, body);
         co_await next_value();

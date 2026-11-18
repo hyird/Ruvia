@@ -81,7 +81,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
-        const auto name = co_await c.req().text();
+        const auto name = co_await c.req().body_text();
         std::uint64_t id = 0;
         co_await insert_user(c, name, id);
         std::string body;

@@ -748,7 +748,9 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
             writer.release_content();
             continue_timer.cancel();
             if (upload.output_.chunk_ready_) {
-                const auto chunk = writer.plan_chunk(std::span<const char>(upload.output_.chunk_.data(), upload.output_.chunk_.size()));
+                const http_client_output_queue::chunk_lease payload(upload.output_);
+                const auto bytes = payload.view();
+                const auto chunk = writer.plan_chunk(std::span<const char>(bytes.data(), bytes.size()));
                 if (chunk.index() != 0) {
                     throw http_client_error(make_error_code(http_client_errc::invalid_request), "HTTP upload content length mismatch");
                 }

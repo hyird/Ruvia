@@ -87,7 +87,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> set_value(ruvia::context& c) {
-        auto body = co_await c.req().text();
+        auto body = co_await c.req().body_text();
         (void)(co_await c.redis().set(c.req().param("key").value_or(""), body));
         co_return c.text("OK\n");
     }
@@ -129,7 +129,7 @@ public:
 
     ruvia::task<ruvia::http_response> strings(ruvia::context& c) {
         const auto key = c.req().param("key").value_or("");
-        const auto value = co_await c.req().text();
+        const auto value = co_await c.req().body_text();
         auto redis = c.redis();
         (void)(co_await redis.set(key, value));
         ruvia::redis_set_options set_options;

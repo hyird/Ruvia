@@ -70,7 +70,7 @@ public:
         co_return context.text(std::string(std::size_t{64} * 1024, 'x'));
     }
     ruvia::task<ruvia::http_response> upload(ruvia::context& context) {
-        const auto body = co_await context.req().text();
+        const auto body = co_await context.req().body_text();
         observed().uploaded_bytes_ = body.size();
         ++observed().uploads_;
         co_return context.text("uploaded");

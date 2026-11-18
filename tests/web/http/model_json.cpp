@@ -545,6 +545,29 @@ TEST(Ruvia, model_json_codec_owns_dynamic_tokens_and_preserves_retained_results)
     }
 }
 
+TEST(Ruvia, model_set_copies_borrowed_dynamic_tokens_and_adopts_owned_rvalues) {
+    const std::string expected("{\"payload\":\"" + std::string(160, 'x') + "\"}");
+    codec_dynamic model;
+    {
+        const std::string input(expected);
+        auto value = ruvia::json_value::parse(input).take_value();
+        const auto object = ruvia::json_object::parse(input).take_value();
+        model.set<"value">(std::move(value)).set<"object">(object);
+        EXPECT_TRUE(value.is_null());
+        EXPECT_EQ(object.view().data(), input.data());
+        EXPECT_NE(model.get<"value">().view().data(), input.data());
+        EXPECT_NE(model.get<"object">().view().data(), input.data());
+    }
+    EXPECT_EQ(model.get<"value">().view(), expected);
+    EXPECT_EQ(model.get<"object">().view(), expected);
+
+    auto value = model.get<"value">().clone();
+    const auto* storage = value.view().data();
+    model.set<"value">(std::move(value));
+    EXPECT_EQ(model.get<"value">().view().data(), storage);
+    EXPECT_TRUE(value.is_null());
+}
+
 TEST(Ruvia, model_json_codec_roundtrips_empty_schema_and_rejects_non_object_root) {
     auto parsed_value = ruvia::parse_json<codec_empty>(R"({})").take_value();
     const auto output = ruvia::to_json(parsed_value);
@@ -848,30 +871,94 @@ static_assert(!lookup_offers_value<const string_lookup>);
 
 using lookup_status = ruvia::unique_lookup_status;
 
+template <typename token_type>
+concept token_offers_into_owned = requires(token_type&& token) { { std::forward<token_type>(token).into_owned() } -> std::same_as<std::remove_cvref_t<token_type>>; };
+static_assert(token_offers_into_owned<ruvia::json_value>);
+static_assert(token_offers_into_owned<ruvia::json_object>);
+static_assert(!token_offers_into_owned<ruvia::json_value&>);
+static_assert(!token_offers_into_owned<ruvia::json_object&>);
+static_assert(!token_offers_into_owned<const ruvia::json_value>);
+static_assert(!token_offers_into_owned<const ruvia::json_object>);
+
 TEST(Ruvia, json_token_moves_preserve_complete_tokens_and_reset_sources) {
     const std::string input("{\"payload\":\"" + std::string(160, 'x') + "\"}");
     const auto check = [&]<typename token_type>(std::string_view empty) {
-        {
+        for (const bool owning : {false, true}) {
+            auto source = owning ? token_type::parse(std::string(input)).take_value() : token_type::parse(input).take_value();
+            const auto* storage = source.view().data();
+            EXPECT_EQ(storage == input.data(), !owning);
+            token_type moved(std::move(source));
+            EXPECT_EQ(moved.view(), input);
+            EXPECT_EQ(moved.view().data(), storage);
+            EXPECT_EQ(source.view(), empty);
+            auto target = token_type::parse(std::string(input)).take_value();
+            target = std::move(moved);
+            EXPECT_EQ(target.view(), input);
+            EXPECT_EQ(target.view().data(), storage);
+            EXPECT_EQ(moved.view(), empty);
+            auto* const self = &target;
+            target = std::move(*self);
+            EXPECT_EQ(target.view(), input);
+            EXPECT_EQ(target.view().data(), storage);
+            source = std::move(target);
+            EXPECT_EQ(source.view(), input);
+            EXPECT_EQ(source.view().data(), storage);
+            EXPECT_EQ(target.view(), empty);
+        }
+    };
+    check.template operator()<ruvia::json_value>("null");
+    check.template operator()<ruvia::json_object>("{}");
+}
+
+TEST(Ruvia, json_token_explicit_ownership_copies_borrows_and_reuses_owned_storage) {
+    const std::string expected(" \n{\"payload\":\"" + std::string(160, 'x') + "\"}\t ");
+    const auto check = [&]<typename token_type>(std::string_view empty) {
+        const auto [cloned, converted] = [&] {
+            std::string input(expected);
+            auto source = token_type::parse(input).take_value();
+            auto copy = std::as_const(source).clone();
+            EXPECT_EQ(source.view(), expected);
+            EXPECT_EQ(source.view().data(), input.data());
+            EXPECT_NE(copy.view().data(), input.data());
+            auto owned = std::move(source).into_owned();
+            EXPECT_NE(owned.view().data(), input.data());
+            EXPECT_EQ(source.view(), empty);
+            return std::array<token_type, 2>{std::move(copy), std::move(owned)};
+        }();
+        EXPECT_EQ(cloned.view(), expected);
+        EXPECT_EQ(converted.view(), expected);
+
+        auto source = token_type::parse(std::string(expected)).take_value();
+        const auto* storage = source.view().data();
+        const auto copy = source.clone();
+        EXPECT_EQ(source.view().data(), storage);
+        EXPECT_NE(copy.view().data(), storage);
+        const auto adopted = std::move(source).into_owned();
+        EXPECT_EQ(adopted.view().data(), storage);
+        EXPECT_EQ(adopted.view(), expected);
+        EXPECT_EQ(copy.view(), expected);
+        EXPECT_EQ(source.view(), empty);
+    };
+    check.template operator()<ruvia::json_value>("null");
+    check.template operator()<ruvia::json_object>("{}");
+}
+
+TEST(Ruvia, json_token_move_assignment_copies_only_children_of_owned_destinations) {
+    const auto check = []<typename token_type>(std::string_view empty) {
+        for (const auto& expected : {std::string("{}"), "{\"payload\":\"" + std::string(160, 'x') + "\"}"}) {
+            const std::string input("{\"child\":" + expected + "}");
             for (const bool owning : {false, true}) {
-                auto source = token_type::parse(input).take_value();
-                if (owning) {
-                    token_type owned;
-                    owned = std::move(source);
-                    source = std::move(owned);
+                auto target = owning ? token_type::parse(std::string(input)).take_value() : token_type::parse(input).take_value();
+                auto child = target.template get<token_type>("child").take_value();
+                ASSERT_TRUE(child.has_value());
+                EXPECT_EQ(child->view(), expected);
+                EXPECT_EQ(child->view().data(), target.view().data() + input.find(expected));
+                target = std::move(*child);
+                EXPECT_EQ(target.view(), expected);
+                EXPECT_EQ(child->view(), empty);
+                if (!owning) {
+                    EXPECT_EQ(target.view().data(), input.data() + input.find(expected));
                 }
-                token_type moved(std::move(source));
-                EXPECT_EQ(moved.view(), std::string_view(input));
-                EXPECT_EQ(source.view(), empty);
-                token_type target;
-                target = std::move(moved);
-                EXPECT_EQ(target.view(), std::string_view(input));
-                EXPECT_EQ(moved.view(), empty);
-                auto* const self = &target;
-                target = std::move(*self);
-                EXPECT_EQ(target.view(), std::string_view(input));
-                source = std::move(target);
-                EXPECT_EQ(source.view(), std::string_view(input));
-                EXPECT_EQ(target.view(), empty);
             }
         }
     };

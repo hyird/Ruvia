@@ -1071,7 +1071,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> body(ruvia::context& context) {
-        const auto bytes = co_await context.req().text();
+        const auto bytes = co_await context.req().body_text();
         std::string result(context.early_data() ? "early:" : "one-rtt:");
         result.append(bytes);
         co_return context.text(std::move(result));
@@ -1251,7 +1251,7 @@ ruvia::task<void> exercise_outbound_resumption(ruvia::event_loop loop, ruvia::ht
         auto client = owner.client();
         {
             auto response = co_await client.get("/resumption/safe").send();
-            auto text = co_await response.bytes();
+            auto text = co_await response.collect_body();
             EXPECT_TRUE(response.ok());
             EXPECT_EQ(text.text(), "one-rtt");
         }
@@ -1259,7 +1259,7 @@ ruvia::task<void> exercise_outbound_resumption(ruvia::event_loop loop, ruvia::ht
         (void)co_await ruvia::sleep_for(owner.worker(), 250ms);
         {
             auto response = co_await client.get("/resumption/safe").send();
-            auto text = co_await response.bytes();
+            auto text = co_await response.collect_body();
             EXPECT_TRUE(response.ok());
             // TLS resumption can succeed while pacing delays HEADERS until 1-RTT.
             // The ordered early-flight tests below verify actual 0-RTT delivery.
@@ -1269,7 +1269,7 @@ ruvia::task<void> exercise_outbound_resumption(ruvia::event_loop loop, ruvia::ht
         {
             const auto before = early_retries.load();
             auto response = co_await client.get("/resumption/retry").send();
-            auto text = co_await response.bytes();
+            auto text = co_await response.collect_body();
             EXPECT_TRUE(response.ok());
             EXPECT_EQ(text.text(), "retried");
             EXPECT_TRUE(early_retries.load() - before <= 1);
@@ -1277,7 +1277,7 @@ ruvia::task<void> exercise_outbound_resumption(ruvia::event_loop loop, ruvia::ht
         (void)co_await ruvia::sleep_for(owner.worker(), 250ms);
         {
             auto response = co_await client.get("/resumption/body").body("buffered").send();
-            auto text = co_await response.bytes();
+            auto text = co_await response.collect_body();
             EXPECT_TRUE(response.ok());
             EXPECT_EQ(text.text(), "one-rtt:buffered");
         }
@@ -1374,7 +1374,7 @@ ruvia::task<void> exercise_blocked_migration(ruvia::event_loop_attachment& attac
         {
             auto warm = co_await client.get("/resumption/safe").send();
             EXPECT_TRUE(warm.ok());
-            (void)co_await warm.bytes();
+            (void)co_await warm.collect_body();
         }
         relay.block();
         ruvia::stop_source stop;
@@ -1436,7 +1436,7 @@ ruvia::task<void> exercise_outbound_migration(ruvia::event_loop loop, ruvia::htt
                 co_await client.migrate("127.0.0.1");
             }
             auto response = co_await client.get("/resumption/worker").send();
-            auto text = co_await response.bytes();
+            auto text = co_await response.collect_body();
             EXPECT_TRUE(response.ok());
             if (change == 0) {
                 worker = text.text();
@@ -1475,7 +1475,7 @@ ruvia::task<void> exercise_outbound_features(ruvia::event_loop loop, ruvia::http
         auto client = owner.client();
         {
             auto response = co_await client.get("/resumption/advertise").header("priority", "u=4, i").send();
-            auto text = co_await response.bytes();
+            auto text = co_await response.collect_body();
             EXPECT_TRUE(response.ok());
             EXPECT_EQ(text.text(), "u=4,i=1");
             EXPECT_EQ(response.header("priority"), std::optional<std::string_view>("u=2, i"));
@@ -1509,7 +1509,7 @@ ruvia::task<void> exercise_outbound_features(ruvia::event_loop loop, ruvia::http
         {
             auto retry_client = retry_owner.client();
             auto response = co_await retry_client.get("/resumption/safe").send();
-            auto text = co_await response.bytes();
+            auto text = co_await response.collect_body();
             EXPECT_TRUE(response.ok());
             EXPECT_EQ(text.text(), "one-rtt");
         }
@@ -1527,18 +1527,18 @@ ruvia::task<void> run_resumption_lane(ruvia::http_client_ref c, ruvia::http_clie
     for (int round = 0; round < 4; ++round) {
         auto r1 = co_await c.get("/resumption/retry").send();
         EXPECT_TRUE(r1.ok());
-        auto t1 = co_await r1.bytes();
+        auto t1 = co_await r1.collect_body();
         EXPECT_EQ(t1.text(), "retried");
 
         const std::string payload("payload-" + std::string(std::to_string(lane)) + "-" + std::string(std::to_string(round)));
         auto r2 = co_await c.get("/resumption/body").body(payload).send();
         EXPECT_TRUE(r2.ok());
-        auto t2 = co_await r2.bytes();
+        auto t2 = co_await r2.collect_body();
         EXPECT_TRUE(t2.text() == std::string("early:") + payload || t2.text() == std::string("one-rtt:") + payload);
 
         auto r3 = co_await rc.get("/resumption/safe").send();
         EXPECT_TRUE(r3.ok());
-        auto t3 = co_await r3.bytes();
+        auto t3 = co_await r3.collect_body();
         EXPECT_EQ(t3.text(), "one-rtt");
     }
 }
@@ -1555,7 +1555,7 @@ ruvia::task<void> exercise_concurrent_early_data_and_retry_worker(ruvia::event_l
         {
             auto seed = co_await owner.client().get("/resumption/safe").send();
             EXPECT_TRUE(seed.ok());
-            (void)co_await seed.bytes();
+            (void)co_await seed.collect_body();
         }
         ruvia::task_scope scope(loop.worker());
         for (int lane = 0; lane < 8; ++lane) {
@@ -1585,7 +1585,7 @@ ruvia::task<route_observation> observe_route(ruvia::http_client_ref client, ruvi
     auto response = co_await client.get("/resumption/route").configure(std::move(options)).send();
     EXPECT_TRUE(response.ok());
     EXPECT_TRUE(response.protocol_version() == ruvia::http_protocol_version::http3);
-    const auto body = co_await response.bytes();
+    const auto body = co_await response.collect_body();
     const auto text = body.text();
     const auto first = text.find('|');
     const auto second = text.find('|', first + 1);
@@ -1717,7 +1717,7 @@ ruvia::task<void> exercise_route_alt_svc(ruvia::event_loop loop, ruvia::http_cli
         const auto fetch = [&](std::string_view host) -> ruvia::task<std::pair<ruvia::http_protocol_version, std::string>> {
             auto response = co_await client.get("/resumption/route").configure(route_options(authority(host))).send();
             EXPECT_TRUE(response.ok());
-            const auto body = co_await response.bytes();
+            const auto body = co_await response.collect_body();
             co_return std::pair{response.protocol_version(), std::string(body.text())};
         };
         const auto learned = co_await fetch("a.localhost");
@@ -1737,7 +1737,7 @@ ruvia::task<void> exercise_route_alt_svc(ruvia::event_loop loop, ruvia::http_cli
             options.versions_ = ruvia::http_client_versions{.http2_ = false, .http3_ = false};
             auto refreshed = co_await client.get("/resumption/route").configure(std::move(options)).send();
             EXPECT_NE(refreshed.protocol_version(), ruvia::http_protocol_version::http3);
-            (void)co_await refreshed.bytes();
+            (void)co_await refreshed.collect_body();
             for (const std::string_view retained_host : {"a.localhost", "b.localhost"}) {
                 const auto retained = co_await fetch(retained_host);
                 EXPECT_EQ(retained.first, ruvia::http_protocol_version::http3);

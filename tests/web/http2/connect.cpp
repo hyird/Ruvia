@@ -74,7 +74,7 @@ public:
 // the request body it was handed.
 ruvia::task<ruvia::http_response> answer_rejected_expectation(ruvia::context& context_value, ruvia::http_error_info error) {
     co_await hold_off(context_value);
-    const auto body = co_await context_value.req().text();
+    const auto body = co_await context_value.req().body_text();
     std::string text;
     text.append("body=");
     text.append(std::to_string(body.size()));

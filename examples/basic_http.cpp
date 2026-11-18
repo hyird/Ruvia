@@ -117,9 +117,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> echo(ruvia::context& c) {
-        const auto body = co_await c.req().text();
-        std::string owned;
-        owned.assign(body.data(), body.size());
+        auto owned = co_await c.req().collect_body();
         const std::array headers{ruvia::http_header_view{"X-Echo", "true"}};
         co_return c.text(std::move(owned), {.status_ = ruvia::http_status::created, .headers_ = headers});
     }

@@ -1649,14 +1649,14 @@ ruvia::task<ruvia::http_response> show(ruvia::context& c) {
     const auto id = c.req().param<std::uint64_t>("id");        // 非法整数抛 HTTP 400
     const auto verbose = c.req().query<bool>("verbose").value_or(false);
     const auto lang = c.req().negotiate(ruvia::context_request::negotiable_field::language, {"en", "zh"});
-    const auto body = co_await c.req().text();                 // 视图借用 context
+    const auto body = co_await c.req().body_text();            // 视图借用 context
     co_return c.text(std::string(body), {.status_ = ruvia::http_status::ok});
 }
 ```
 
 - **类型化参数**：`param<T>` / `query<T>` 支持整数（`detail::parsed_integer` 约束的整数类型）与 `bool`；缺失返回 `std::nullopt`，存在但非法抛 HTTP 400。
 - **重复字段**：`header()` / `query()` / `cookie()` 取首个出现；会话 ID、CSRF 令牌等安全单值字段用 `unique_cookie()` / `unique_header()`，重复时返回 `repeated` 而不选取任何一个（[`http_unique_field_lookup`](ruvia-http.md#api-http-header-h)）。
-- **逐次等待正文**：`text()` / `bytes()` / `discard_body()` / `json_if()` / `form_if()` / `multipart()` 的 `operation` 限定本次等待正文字节：超时或停止只结束本次调用（`std::system_error`，`timed_out` / `operation_canceled`），已到字节保留，再次调用继续；启动前已停止抛 `operation_canceled`；非正超时抛 `std::invalid_argument`；服务器正文超时仍生效。
+- **逐次等待正文**：`body_text()` / `body_bytes()` / `collect_body()` / `discard_body()` / `json_if()` / `form_if()` / `multipart()` 的 `operation` 限定本次等待正文字节：超时或停止只结束本次调用（`std::system_error`，`timed_out` / `operation_canceled`），已到字节保留，再次调用继续；启动前已停止抛 `operation_canceled`；非正超时抛 `std::invalid_argument`；服务器正文超时仍生效。
 - **可复制句柄**：`context_request` 是可复制句柄，操作借用 context 而非句柄，可直接在 `c.req()` 临时句柄上调用。
 - **流式正文**：`stream_body` 路由用 `c.request_body()` / `c.request_multipart()`（[`streaming.h`](#api-streaming-h)）；缓冲路由调用 `request_body()` 抛 `std::logic_error`。
 
@@ -1883,8 +1883,9 @@ auto sub = co_await c.dispatch({.method_ = "GET", .target_ = "/api/internal/prof
 | `const request_name_value_list& cookie_fields() const` | 全部 Cookie（名称区分大小写） |
 | `const request_name_value_list& param_fields() const` | 全部路径参数 |
 | `std::optional<std::string_view> signed_cookie(signed_cookie_lookup_options options) const` | 按 `unique_cookie` 查找并验证 HMAC，返回原值；重复或验证失败为 `nullopt` |
-| `task<std::string_view> text(operation_options operation = {}) const` | 完整缓冲正文文本视图 |
-| `task<std::span<const std::byte>> bytes(operation_options operation = {}) const` | 与 `text()` 共用读取与解码主链，直接返回同一缓冲存储的字节视图 |
+| `task<std::string_view> body_text(operation_options operation = {}) const` | 完整缓冲正文文本视图，借用 context |
+| `task<std::span<const std::byte>> body_bytes(operation_options operation = {}) const` | 与 `body_text()` 共用同一解码后存储 |
+| `task<std::string> collect_body(operation_options operation = {}) const` | 拷贝解码后正文到独立的字符串；不使已有借用失效，可将结果移交到其他线程 |
 | `task<void> discard_body(operation_options operation = {}) const` | 丢弃剩余正文 |
 | `template <typename t_type> task<std::optional<t_type>> json_if(operation_options operation = {}) const` | `t_type` 须为 `RUVIA_MODEL`（[`model.h`](#api-model-h)）；Content-Type 不匹配为 `nullopt`，格式错误抛 400，规则违反抛携带 issues 的 `http_error` |
 | `template <typename t_type> task<std::optional<t_type>> form_if(operation_options operation = {}) const` | 同上，表单 |
@@ -2643,6 +2644,8 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 | `task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
 | `task<std::optional<std::string_view>> read_text(operation_options operation = {}) &` | 同一读通道，以字符视图返回，不做字符集转换或 UTF-8 校验，块边界可能切开多字节字符 |
 | `task<std::optional<std::string_view>> read_text(operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
+| `task<void> pipe_to(http_client_request_body_writer& output, operation_options operation = {}) &` | 同一 worker 内转发 `read()` 交付的正文（不改变内容编码语义），占用两端通道；当前块写完或传输驱动释放借用后才推进。`operation` 约束整次转发；写入时超时或取消会中止上传，读取时中断不撤回已转发字节。返回后由调用方决定 `finish()`、Trailer 和最终响应处理。 |
+| `task<void> pipe_to(http_client_request_body_writer&, operation_options = {}) && = delete` | 禁止从临时读取器启动转发 |
 
 #### 9.2.5 `enum class stream_commit_result`
 
@@ -3371,7 +3374,7 @@ ruvia::app().client({
 | `max_chunk_bytes_` | `std::size_t` | `64 * 1024` | 单次传输写入上限，独立于 Capsule 负载上限 |
 | `idle_timeout_` | `std::optional<timeout_duration>` | `{}` | 接受后任一方向无字节达此时长即以 timeout 关闭；`read_timeout_` 不再适用；`nullopt` 仅受 `request_timeout_` 约束 |
 
-`struct http_client_result_budget_config final`：约束 `bytes()` / `text()` 与流收集保留的字节——独立客户端按拥有者计，应用内按一个业务 worker 的全部 alias 计。
+`struct http_client_result_budget_config final`：约束收集响应正文时可保留的字节——独立客户端按拥有者计，应用内按一个业务 worker 的全部 alias 计。
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -3512,7 +3515,7 @@ ruvia::app().client({
 - **句柄作用域**：请求中的 `http_client_ref` 受请求作用域约束，不能跨请求保存；`with_options(operation_options)` 附加用户取消与更紧期限，但不能替换请求宿主取消。
 - **单次消费构建器**：`http_client_request`、`http_client_connect_request`、`http_client_websocket_request` 的终结方法只接受右值（左值重载 `= delete`）；设置方法保持值类别——临时对象链直接调用终结方法，具名构造器写 `std::move(builder).send()`，重复消费在编译期拒绝。构建器在返回冷任务前拥有全部输入；无重放需要时移动自有输入，需重放时保留必要副本。
 - **终结动词**：`send()` 一次 HTTP 交换；`upload()` 流式上传交换；`connect()` 建立隧道（CONNECT、CONNECT-UDP、HTTP/1.1 Upgrade）或 WebSocket。
-- **线性正文**：`bytes()`、`json<T>()`、`stream()` 消费同一条线性正文流，不缓存可重读副本；收集同时受 `max_bytes`、alias `max_response_bytes_` 与 worker 结果预算约束。
+- **线性正文**：`collect_body()`、`json<T>()`、`stream()` 消费同一条线性正文流，不缓存可重读副本；收集同时受 `max_bytes`、alias `max_response_bytes_` 与 worker 结果预算约束。
 - **逐次操作期限**：出站流式与会话 I/O 的末参数为 `operation_options operation = {}`（见 [core](ruvia-core.md#api-operation-options-h)），从操作启动起计时，非正超时在调用处抛 `std::invalid_argument`；请求自身期限与宿主取消仍约束整个交换。
 - **就绪读取**：单次明文读取的已就绪完成在等待器挂起前消费，不额外排队；未就绪读取仍在所属 worker 上恢复，TLS 组合读取保持异步驱动。
 - **失败阶段**：后续正文失败不撤销已校验的终态头，正文接口保留并抛出原失败；信息回调与必需内容解码失败仍阻断头交付。
@@ -3536,7 +3539,7 @@ co_return c.text(body.text());
 
 | 入口 | 超时或取消时 |
 | --- | --- |
-| 正文 `read()` / `read_text()`、`bytes()` / `json<T>()`，隧道 `read()` / `read_text()` | 只结束本次等待，抛 `http_client_error`（`errc::timed_out` / `operation_canceled`）；已缓冲正文与读通道保留 |
+| 正文 `read()` / `read_text()`、`collect_body()` / `json<T>()`，隧道 `read()` / `read_text()` | 只结束本次等待，抛 `http_client_error`（`errc::timed_out` / `operation_canceled`）；已缓冲正文与读通道保留 |
 | `http_client_exchange::response()`、`http_client_push::response()` | 只结束本次等待响应头，之后可再次调用 |
 | 上传 `write()` / `finish()`，隧道 `write()` / `finish()` | 中止该交换或隧道（已写出部分无法撤回）；启动前已停止则不排队任何内容 |
 | `stream().pipe_to(writer)`、`pipe_to(c)` / `pipe_to(stream)` | 约束整次转发；已提交的下游随异常中止 |
@@ -3741,8 +3744,8 @@ co_return c.text(body.text());
 | `std::optional<std::string_view> trailer(std::string_view) const&& = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
 | `http_client_response_body& stream() & noexcept` | 借用的正文门面 |
 | `http_client_response_body& stream() && = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
-| `task<http_client_response_bytes> bytes(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &` | 在 `stream()` 读通道上收集未读正文；`max_bytes` 为附加上限；中断保留已收字节供下一次正文操作 |
-| `task<http_client_response_bytes> bytes(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
+| `task<http_client_response_bytes> collect_body(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &` | 收集并独立拥有 `stream()` 的未读正文；`max_bytes` 为附加上限；中断保留已收字节供下一次正文操作 |
+| `task<http_client_response_bytes> collect_body(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete` | 禁止在临时响应上调用：冷任务借用响应 |
 | `template <typename value_type> requires detail::is_model_json_value<value_type> task<model_parse_result<value_type>> json(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &` | 收集正文并以 `parse_json<value_type>` 解析；语法、结构及字段规则失败返回领域错误，不抛本服务的 `http_error`；传输中断及分配／配置异常仍传播 |
 | `template <typename value_type> requires detail::is_model_json_value<value_type> task<model_parse_result<value_type>> json(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
 | `task<void> pipe_to(context& output, operation_options operation = {}) &` | 转发状态、端到端字段、未读正文与 Trailer 到当前服务端响应；准入、`Connection` 错误（`protocol_error`）的提交前 / 后区别、长度与 `take_headers()` 之后的行为见 11.3.2；冷操作随本响应或目标失效 |
@@ -4667,7 +4670,7 @@ JSON 解析的整文档资源预算（含嵌套数组），用于 `parse_json`�
 #### 12.4.11 `json_value` 与 `json_object`
 
 **存储契约**：`parse(borrowed_text)` 校验整个输入后借用原始字节，不复制；输入必须比 token 及派生视图活得久。`parse(std::string&&)` 校验成功才接管精确的非 const `std::string` 右值，无须复制；失败不消费输入。两者均保留输入的前后空白。作为模型字段时，`parse_json` 解析会复制 token（拥有），请求绑定可能借用请求体。
-**移动契约**：移动构造保留借用/拥有；移动赋值让目标拥有结果（复制借用内容）；成功移动或右值字段转移后源恢复为默认 token（`json_value` 为 `null`，`json_object` 为 `{}`），重置不分配，源仍可查询、赋值或序列化；重绑定失败保留双方；自移动无操作。任一方改变后需重新取 `view()`。
+**移动契约**：移动构造与移动赋值均保留借用或拥有；若源借用目标将被替换的自有字节，赋值先复制以避免悬垂。成功移动或右值字段转移后源恢复为默认 token（`json_value` 为 `null`，`json_object` 为 `{}`）；自移动无操作。任一方改变后需重新取 `view()`。
 **比较**：`operator==` 逐字节比较保留的 token，不做 JSON 规范化。
 **序列化**：作为模型字段时原样输出 `view()`。
 
@@ -4677,6 +4680,8 @@ JSON 解析的整文档资源预算（含嵌套数组），用于 `parse_json`�
 | --- | --- |
 | `std::string_view view() const& noexcept` | 原始 token 字节 |
 | `std::string_view view() const&& = delete` | 禁止从右值取视图 |
+| `clone() const` | 复制为独立拥有的 token，不修改源 |
+| `into_owned() &&` | 接管自有存储，只有借用时才复制；成功后源恢复为默认 token |
 | `template <typename visitor_type> bool for_each_field(visitor_type&& visitor) const` | 按出现顺序以 `(std::string_view key, const json_value& value)` 调用；`key` 已解码，二者只在回调期间有效；回调返回可转为 `bool` 的值，`false` 中止。完整遍历返回 `true`，中止或 token 不是对象（`json_value` 时）返回 `false` |
 | `friend bool operator==(const json_value& left, const json_value& right) noexcept` | 逐字节比较 |
 | `friend bool operator==(const json_object& left, const json_object& right) noexcept` | 逐字节比较 |
@@ -4690,10 +4695,10 @@ JSON 解析的整文档资源预算（含嵌套数组），用于 `parse_json`�
 | `template <typename model_type> requires detail::is_model<model_type> explicit json_value(const model_type& value)` | 以模型 writer 写出的对象文本构造拥有型 token；与 `to_json_value` 同一路径 |
 | `static model_parse_result<json_value> parse(borrowed_text body, model_parse_options options = {})` | 校验并借用恰好一个 JSON 值；非法返回 `invalid_format`（`message()` 为 `"invalid JSON value"`） |
 | `static model_parse_result<json_value> parse(std::string&& body, model_parse_options options = {})` | 同上校验；成功接管原字符串 |
-| `json_value(const json_value&) = delete` | 禁止拷贝构造：token 可能借用输入，复制需显式 `parse` 或移动赋值取得拥有 |
+| `json_value(const json_value&) = delete` | 禁止拷贝构造；显式调用 `clone()` 可取得拥有副本 |
 | `json_value& operator=(const json_value&) = delete` | 禁止拷贝赋值 |
 | `json_value(json_value&&) noexcept = default` | 保留借用/拥有；源恢复为 `null`（见移动契约） |
-| `json_value& operator=(json_value&&) = default` | 目标拥有结果；源恢复为 `null`；失败保留双方（见移动契约） |
+| `json_value& operator=(json_value&&) = default` | 保留借用/拥有；源恢复为 `null`（见移动契约） |
 | `kind_type kind() const noexcept` | 按首个非空白字节判定 |
 | `bool is_object() const noexcept` | `kind() == kind_type::object` |
 | `bool is_array() const noexcept` | `kind() == kind_type::array` |
@@ -4719,7 +4724,7 @@ JSON 解析的整文档资源预算（含嵌套数组），用于 `parse_json`�
 | `json_object(const json_object&) = delete` | 禁止拷贝构造（同 `json_value`） |
 | `json_object& operator=(const json_object&) = delete` | 禁止拷贝赋值 |
 | `json_object(json_object&&) noexcept = default` | 保留借用/拥有；源恢复为 `{}`（见移动契约） |
-| `json_object& operator=(json_object&&) = default` | 目标拥有结果；源恢复为 `{}`；失败保留双方 |
+| `json_object& operator=(json_object&&) = default` | 保留借用/拥有；源恢复为 `{}`（见移动契约） |
 | `template <typename t_type> requires detail::is_model_field<t_type> json_field_lookup<t_type> get(std::string_view field) const&` | 查找解码后名称等于 `field` 的唯一成员：无则 `absent`；两次及以上则 `repeated`（不选取任何一次，扫描在第二次出现处停止，与模型解析拒绝重复字段一致）；唯一时 `found` 并用 `json_value::get<t_type>()` 转换 |
 | `template <typename t_type> requires detail::is_model_field<t_type> json_field_lookup<t_type> get(std::string_view field) const&& = delete` | 禁止在右值 token 上查找：结果可能借用即将销毁的 token 字节 |
 

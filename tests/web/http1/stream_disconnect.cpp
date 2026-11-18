@@ -132,12 +132,12 @@ class routes final {
         const bool early = c.req().query("early").has_value();
         if (early) {
             if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
-                static_cast<void>(co_await c.req().text());
+                static_cast<void>(co_await c.req().body_text());
                 co_return;
             }
             co_await writer.write("early");
         }
-        const auto received = co_await c.req().text();
+        const auto received = co_await c.req().body_text();
         body_complete.fetch_add(1);
         if (!early && co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
@@ -149,7 +149,7 @@ class routes final {
     }
 
     ruvia::task<void> post_sse(ruvia::context& c) {
-        const auto received = co_await c.req().text();
+        const auto received = co_await c.req().body_text();
         auto writer = c.stream_sse();
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
@@ -158,7 +158,7 @@ class routes final {
     }
 
     ruvia::task<ruvia::http_response> echo(ruvia::context& c) {
-        const auto text = co_await c.req().text();
+        const auto text = co_await c.req().body_text();
         co_return c.text(text);
     }
 

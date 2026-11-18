@@ -835,7 +835,7 @@ private:
     std::exception_ptr failure;
     try {
         auto response = co_await client.client().get("/happy-eyeballs").send();
-        const auto body = co_await response.bytes();
+        const auto body = co_await response.collect_body();
         const std::string_view body_text(reinterpret_cast<const char*>(body.bytes().data()), body.size());
         EXPECT_TRUE(body_text == "ok");
     } catch (...) {
@@ -941,7 +941,7 @@ ruvia::task<void> hold_executor(ruvia::worker_ref worker, std::shared_ptr<held_q
 ruvia::task<void> send_query(ruvia::http_client& client, ruvia::stop_token stop, std::optional<std::error_code>& code) {
     try {
         auto response = co_await client.client().with_options({.stop_token_ = std::move(stop)}).get("/resolve").send();
-        (void)co_await response.bytes();
+        (void)co_await response.collect_body();
     } catch (const ruvia::http_client_error& error) {
         code = error.code();
     }

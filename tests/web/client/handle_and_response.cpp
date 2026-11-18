@@ -159,7 +159,7 @@ void exercise_legacy_http_peer(int version, ruvia::http_client_versions protocol
             auto response = co_await client.client().get("/legacy").send();
             EXPECT_TRUE(response.protocol_version() == ruvia::http_protocol_version::http11);
             EXPECT_TRUE(response.status() == ruvia::http_status::ok);
-            const auto body = co_await response.bytes();
+            const auto body = co_await response.collect_body();
             EXPECT_EQ(body.text(), std::string_view("legacy"));
             exchanged = true;
         } catch (const ruvia::http_client_error& error) {
@@ -323,12 +323,12 @@ TEST(Ruvia, http_client_response_and_body_moved_from_throw_logic_error) {
                 (void)original.stream().read_text();
             }));
             EXPECT_TRUE(throws_logic_error([&] {
-                (void)original.bytes();
+                (void)original.collect_body();
             }));
 
             EXPECT_TRUE(active.status() == ruvia::http_status::ok);
             EXPECT_EQ(active.header("x-test"), std::optional<std::string_view>("ok"));
-            auto body = co_await active.bytes();
+            auto body = co_await active.collect_body();
             EXPECT_EQ(body.text(), std::string_view("hi"));
         } catch (...) {
             failure = std::current_exception();
@@ -394,7 +394,7 @@ public:
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> inspect(ruvia::context& c) {
-        const auto body = co_await c.req().bytes();
+        const auto body = co_await c.req().body_bytes();
         fluent_client_observation observed;
         observed.set<"method">(c.req().method()).set<"body">(std::string_view(reinterpret_cast<const char*>(body.data()), body.size())).set<"query">(c.req().query("escaped name").value_or("")).set<"single_header">(c.req().header("x-owned").value_or("")).set<"span_header">(c.req().header("x-span").value_or("")).set<"authorization">(c.req().header("authorization").value_or("")).set<"proxy_authorization">(c.req().header("proxy-authorization").value_or("")).set<"cookie">(c.req().header("cookie").value_or("")).set<"content_type">(c.req().header("content-type").value_or("")).set<"authority">(c.req().authority().empty() ? c.req().header("host").value_or("") : c.req().authority());
         const auto cookie = c.req().query("set-cookie");
@@ -403,7 +403,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> redirect(ruvia::context& c) {
-        (void)co_await c.req().bytes();
+        (void)co_await c.req().body_bytes();
         const std::array headers{ruvia::http_header_view{"location", c.req().query("location").value_or("/fluent/inspect")}};
         co_return c.text("redirect", {.status_ = ruvia::http_status_code(c.req().query<std::uint16_t>("status").value_or(302)), .headers_ = headers});
     }
@@ -419,7 +419,7 @@ public:
         ruvia::stop_source independent;
         try {
             auto response = co_await c.client("source").with_options({.timeout_ = std::chrono::milliseconds(500), .stop_token_ = independent.token()}).get("/fluent/hold").send();
-            (void)co_await response.bytes();
+            (void)co_await response.collect_body();
         } catch (const ruvia::http_client_error& error) {
             if (error.code() == std::make_error_code(std::errc::operation_canceled) && !independent.stop_requested()) {
                 ++host_cancelled_requests;
@@ -442,7 +442,7 @@ public:
         auto origin = c.client(mode == "downgrade" ? "secure" : "source");
         auto response = co_await origin.post("/fluent/redirect").query("location", std::string(target) + "/fluent/inspect").header("authorization", "Bearer source-secret").header("proxy-authorization", "Basic proxy-secret").header("cookie", "explicit=source-secret").header("content-type", "text/plain").body("source-body").send();
         const auto status = response.status();
-        auto body = co_await response.bytes();
+        auto body = co_await response.collect_body();
         co_return c.body(body.bytes(), {.status_ = status});
     }
 
@@ -506,7 +506,7 @@ public:
             const auto second = co_await response.stream().read();
             consumed += second ? second->size() : 0;
         } else if (mode == "all") {
-            const auto body = co_await response.bytes();
+            const auto body = co_await response.collect_body();
             consumed = body.size();
         }
         const auto consumed_text = std::to_string(consumed);
@@ -672,7 +672,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
             EXPECT_EQ(observed.get<"query">().view(), "a &b=+/%?#\xc3\xa9");
             EXPECT_EQ(observed.get<"single_header">().view(), "owned-value");
             EXPECT_EQ(observed.get<"span_header">().view(), "span-value");
-            EXPECT_TRUE((co_await response.bytes()).empty());
+            EXPECT_TRUE((co_await response.collect_body()).empty());
             EXPECT_TRUE(!(co_await response.stream().read()));
             const auto replay = co_await response.json<fluent_client_observation>();
             EXPECT_FALSE(replay.has_value());
@@ -718,13 +718,13 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                     }
                 }
                 EXPECT_EQ(links, std::size_t{2});
-                const auto contents = co_await piped.bytes();
+                const auto contents = co_await piped.collect_body();
                 EXPECT_EQ(contents.text(), "firstsecond");
                 EXPECT_TRUE(piped.trailer("x-finished") == "yes");
                 auto bounded = co_await origin.get("/fluent/pipe-bounded").send();
                 EXPECT_TRUE(bounded.status() == ruvia::http_status::created);
                 EXPECT_TRUE(bounded.header("x-stream-source") == "retained");
-                const auto bounded_contents = co_await bounded.bytes();
+                const auto bounded_contents = co_await bounded.collect_body();
                 EXPECT_EQ(bounded_contents.text(), "firstsecond");
                 EXPECT_TRUE(bounded.trailer("x-finished") == "yes");
             }
@@ -735,18 +735,18 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 if (mode == std::string_view("decoded")) {
                     EXPECT_FALSE(piped.header("content-encoding"));
                     EXPECT_FALSE(piped.header("content-length"));
-                    const auto body = co_await piped.bytes();
+                    const auto body = co_await piped.collect_body();
                     EXPECT_EQ(body.text(), "decoded representation");
                 } else if (suppressed) {
                     const auto expected = mode == std::string_view("204") ? std::optional<std::string_view>{} : std::optional<std::string_view>{mode == std::string_view("205") ? "0" : "65553"};
                     EXPECT_EQ(piped.header("content-length"), expected);
-                    EXPECT_TRUE((co_await piped.bytes()).empty());
+                    EXPECT_TRUE((co_await piped.collect_body()).empty());
                 } else {
                     const auto expected = mode == std::string_view("head") ? 0 : 65553 - consumed;
                     EXPECT_EQ(piped.content_length(), expected);
                     EXPECT_EQ(piped.framing(), ruvia::http_client_response_framing::fixed_length);
                     EXPECT_FALSE(piped.header("transfer-encoding"));
-                    const auto body = co_await piped.bytes();
+                    const auto body = co_await piped.collect_body();
                     EXPECT_EQ(body.text(), std::string(expected, 'x'));
                     if (mode == std::string_view("partial")) {
                         EXPECT_GT(consumed, 0U);
@@ -757,14 +757,14 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
             {
                 auto head = co_await origin.head("/fluent/pipe-fixed").send();
                 EXPECT_EQ(head.content_length(), 65553U);
-                EXPECT_TRUE((co_await head.bytes()).empty());
+                EXPECT_TRUE((co_await head.collect_body()).empty());
             }
 
             {
                 fluent_client_tests::committed_pipe_rejections.store(0);
                 auto committed = co_await origin.get("/fluent/pipe-fixed").query("mode", "committed").send();
                 EXPECT_EQ(committed.content_length(), 0U);
-                EXPECT_TRUE((co_await committed.bytes()).empty());
+                EXPECT_TRUE((co_await committed.collect_body()).empty());
                 ruvia::test::wait_until([] {
                     return fluent_client_tests::committed_pipe_rejections.load() == 1;
                 }, std::chrono::seconds(5));
@@ -795,7 +795,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 auto result = co_await (origin.*make)("/fluent/inspect").send();
                 EXPECT_TRUE(result.ok());
                 EXPECT_TRUE(result.header("x-observed-method") == method);
-                auto body = co_await result.bytes();
+                auto body = co_await result.collect_body();
                 if (method == "HEAD") {
                     EXPECT_TRUE(body.empty());
                 } else {
@@ -823,13 +823,13 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 auto result = co_await origin.head("/fluent/redirect").query("status", "303").send();
                 EXPECT_TRUE(result.ok());
                 EXPECT_TRUE(result.header("x-observed-method") == "HEAD");
-                EXPECT_TRUE((co_await result.bytes()).empty());
+                EXPECT_TRUE((co_await result.collect_body()).empty());
             }
             {
                 auto result = co_await origin.get("/fluent/redirect").redirects(0).send();
                 EXPECT_TRUE(!result.ok());
                 EXPECT_TRUE(result.status() == ruvia::http_status::found);
-                auto text = co_await result.bytes();
+                auto text = co_await result.collect_body();
                 EXPECT_EQ(text.text(), "redirect");
             }
             {
@@ -848,7 +848,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 auto result = co_await origin.get("/fluent/registered").query("mode", mode).redirects(0).send();
                 EXPECT_TRUE(!result.ok());
                 EXPECT_TRUE(result.status() == ruvia::http_status::found);
-                auto text = co_await result.bytes();
+                auto text = co_await result.collect_body();
                 EXPECT_EQ(text.text(), "redirect");
             }
             for (const auto protocol : {
@@ -1004,7 +1004,7 @@ void fluent_client_tests::verify_standalone_origins(server& server) {
             }
             for (const auto& origin : {source, destination}) {
                 auto set = co_await origin.get("/fluent/inspect").query("set-cookie", "received=retained; Path=/").send();
-                (void)co_await set.bytes();
+                (void)co_await set.collect_body();
             }
             {
                 auto result = co_await source.get("/fluent/inspect").send();
@@ -1020,13 +1020,13 @@ void fluent_client_tests::verify_standalone_origins(server& server) {
             {
                 auto result = co_await source.get("/fluent/redirect").query("location", std::string(server.targets().unregistered_) + "/fluent/inspect").send();
                 EXPECT_TRUE(result.status() == ruvia::http_status::found);
-                const auto text = co_await result.bytes();
+                const auto text = co_await result.collect_body();
                 EXPECT_EQ(text.text(), "redirect");
             }
             {
                 auto result = co_await client.client("secure").get("/fluent/redirect").query("location", std::string(server.targets().destination_) + "/fluent/inspect").send();
                 EXPECT_TRUE(result.status() == ruvia::http_status::found);
-                const auto text = co_await result.bytes();
+                const auto text = co_await result.collect_body();
                 EXPECT_EQ(text.text(), "redirect");
             }
             bool tls_rejected = false;
@@ -1052,12 +1052,12 @@ void fluent_client_tests::verify_standalone_origins(server& server) {
             ruvia::http_client bounded(attachment.loop(), origins, {.result_budget_ = {.max_retained_bytes_ = 16}});
             try {
                 auto first = co_await bounded.client().get("/fluent/stream-source").send();
-                const auto retained = co_await first.bytes(11);
+                const auto retained = co_await first.collect_body(11);
                 EXPECT_EQ(retained.text(), "firstsecond");
                 auto second = co_await bounded.client("destination").get("/fluent/stream-source").send();
                 bool exhausted = false;
                 try {
-                    (void)co_await second.bytes(11);
+                    (void)co_await second.collect_body(11);
                 } catch (const ruvia::http_client_error& error) {
                     exhausted = error.code() == ruvia::make_error_code(ruvia::http_client_errc::result_budget_exceeded);
                 }

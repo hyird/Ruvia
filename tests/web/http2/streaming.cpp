@@ -174,7 +174,7 @@ class sleeping_stream_routes final {
     }
 
     ruvia::task<ruvia::http_response> bounded_buffered(ruvia::context& context_value) {
-        co_return context_value.text(co_await context_value.req().text());
+        co_return context_value.text(co_await context_value.req().body_text());
     }
 
     ruvia::task<ruvia::http_response> bounded_delayed_stream(ruvia::context& context_value) {
@@ -188,7 +188,7 @@ class sleeping_stream_routes final {
     // Streams the request body and answers with the byte count.
     // A buffered POST body is readable before the SSE response starts.
     ruvia::task<void> post_sse(ruvia::context& context_value) {
-        const auto received = co_await context_value.req().text();
+        const auto received = co_await context_value.req().body_text();
         auto writer = context_value.stream_sse();
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
@@ -938,7 +938,7 @@ TEST(Ruvia, http2_stream_custom_content_encoding_and_bodyless_status_negotiation
 
 namespace {
 ruvia::task<std::string> collect_text(ruvia::http_client_response& response) {
-    const auto bytes_value = co_await response.bytes();
+    const auto bytes_value = co_await response.collect_body();
     const auto view = bytes_value.bytes();
     co_return std::string(reinterpret_cast<const char*>(view.data()), view.size());
 }

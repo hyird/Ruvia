@@ -36,6 +36,7 @@
 #include "websocket_connection.h"
 namespace ruvia {
 
+class body_reader;
 class context;
 class request_stream;
 class response_stream_writer;
@@ -266,13 +267,13 @@ public:
     // max_bytes is a caller bound in addition to the origin's transport bound.
     // An interrupted collection keeps the bytes received so far for the next
     // body operation.
-    [[nodiscard]] task<http_client_response_bytes> bytes(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &;
-    task<http_client_response_bytes> bytes(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
+    [[nodiscard]] task<http_client_response_bytes> collect_body(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &;
+    task<http_client_response_bytes> collect_body(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
     // 传输/配额故障仍抛出；已收集正文的格式、结构与字段错误返回领域结果。
     template <typename value_type>
         requires detail::is_model_json_value<value_type>
     [[nodiscard]] task<model_parse_result<value_type>> json(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) & {
-        return decode_json<value_type>(bytes(max_bytes, std::move(operation)));
+        return decode_json<value_type>(collect_body(max_bytes, std::move(operation)));
     }
     template <typename value_type>
         requires detail::is_model_json_value<value_type>
@@ -296,6 +297,7 @@ private:
         auto owned = co_await std::move(input);
         co_return parse_json<value_type>(owned.text());
     }
+    friend class body_reader;
     friend class detail::http_client_pool;
     friend class detail::http_client_websocket_transport;
     friend class http_client_exchange;
@@ -494,11 +496,13 @@ public:
     void abandon() && = delete;
 
 private:
+    friend class body_reader;
     friend class http_client_exchange;
     friend class http_client_request;
     explicit http_client_request_body_writer(detail::http_client_response_state* state_value) noexcept :
         state_(state_value) {}
     ~http_client_request_body_writer() = default;
+    [[nodiscard]] static task<void> relay_body(http_client_response pin, body_reader& source, operation_options operation);
     detail::http_client_response_state* state_;
 };
 

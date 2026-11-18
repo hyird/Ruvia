@@ -141,7 +141,7 @@ public:
 
     // Runs only with a complete buffered body.
     ruvia::task<ruvia::http_response> inbound_buffered(ruvia::context& context) {
-        const auto body = co_await context.req().text();
+        const auto body = co_await context.req().body_text();
         ++observed().buffered_bodies_;
         co_return context.text(std::string(std::to_string(body.size())));
     }
@@ -217,7 +217,7 @@ public:
         co_await tunnel.finish();
     }
     ruvia::task<ruvia::http_response> upload(ruvia::context& context) {
-        const auto body = co_await context.req().text();
+        const auto body = co_await context.req().body_text();
         observed().uploaded_bytes_ = body.size();
         ++observed().uploads_;
         co_return context.text("uploaded");

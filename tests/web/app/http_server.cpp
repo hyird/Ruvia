@@ -74,7 +74,7 @@ ruvia::task<void> check_response(ruvia::http_client& client, ruvia::http_protoco
     auto response = co_await client.client().post("/echo").body("owned-loop").send();
     EXPECT_EQ(response.status(), ruvia::http_status::ok);
     EXPECT_EQ(response.protocol_version(), protocol);
-    const auto content = co_await response.bytes();
+    const auto content = co_await response.collect_body();
     EXPECT_EQ(content.text(), "owned-loop");
 }
 
@@ -642,7 +642,7 @@ ruvia::task<void> expect_file_responses(ruvia::http_client& client, std::string_
     EXPECT_EQ(full.header("set-cookie"), std::optional<std::string_view>("file=retained; Path=/"));
     const std::string etag(full.header("etag").value_or(""));
     EXPECT_FALSE(etag.empty());
-    const auto body = co_await full.bytes();
+    const auto body = co_await full.collect_body();
     EXPECT_EQ(body.text(), bytes);
 
     auto head = co_await client.client().head(target).send();
@@ -650,28 +650,28 @@ ruvia::task<void> expect_file_responses(ruvia::http_client& client, std::string_
     EXPECT_EQ(head.header("content-type"), full.header("content-type"));
     EXPECT_EQ(head.header("etag"), std::optional<std::string_view>(etag));
     EXPECT_EQ(head.header("content-length"), std::optional<std::string_view>(std::to_string(bytes.size())));
-    EXPECT_TRUE((co_await head.bytes()).empty());
+    EXPECT_TRUE((co_await head.collect_body()).empty());
 
     auto unchanged = co_await client.client().get(target).header("if-none-match", etag).send();
     EXPECT_EQ(unchanged.status(), ruvia::http_status::not_modified);
     EXPECT_EQ(unchanged.header("etag"), std::optional<std::string_view>(etag));
     EXPECT_FALSE(unchanged.header("content-type").has_value());
     EXPECT_FALSE(unchanged.header("content-range").has_value());
-    EXPECT_TRUE((co_await unchanged.bytes()).empty());
+    EXPECT_TRUE((co_await unchanged.collect_body()).empty());
 
     auto partial = co_await client.client().get(target).header("range", "bytes=7-19").send();
     EXPECT_EQ(partial.status(), ruvia::http_status::partial_content);
     EXPECT_EQ(partial.header("content-type"), std::optional<std::string_view>("application/octet-stream"));
     EXPECT_EQ(partial.header("content-length"), std::optional<std::string_view>("13"));
     EXPECT_EQ(partial.header("content-range"), std::optional<std::string_view>("bytes 7-19/" + std::to_string(bytes.size())));
-    const auto partial_body = co_await partial.bytes();
+    const auto partial_body = co_await partial.collect_body();
     EXPECT_EQ(partial_body.text(), bytes.substr(7, 13));
 
     auto multipart = co_await client.client().get(target).header("range", "bytes=3-8,90000-90009").send();
     EXPECT_EQ(multipart.status(), ruvia::http_status::partial_content);
     EXPECT_TRUE(multipart.header("content-type").value_or("").starts_with("multipart/byteranges; boundary="));
     EXPECT_FALSE(multipart.header("content-range").has_value());
-    const auto parts = co_await multipart.bytes();
+    const auto parts = co_await multipart.collect_body();
     EXPECT_EQ(multipart.header("content-length"), std::optional<std::string_view>(std::to_string(parts.text().size())));
     EXPECT_NE(parts.text().find("Content-Type: application/octet-stream\r\n"), std::string_view::npos);
     EXPECT_NE(parts.text().find("Content-Range: bytes 3-8/102417"), std::string_view::npos);
@@ -742,20 +742,20 @@ TEST(Ruvia, independent_request_stream_static_root_rejects_paths_and_changed_ide
         for (const auto target : {"/deny", "/absolute"}) {
             auto denied = co_await client.client().get(target).send();
             EXPECT_EQ(denied.status(), ruvia::http_status::forbidden);
-            (void)co_await denied.bytes();
+            (void)co_await denied.collect_body();
         }
         write_file(directory.path() / "later.bin", "not indexed");
         auto missing = co_await client.client().get("/unindexed").send();
         EXPECT_EQ(missing.status(), ruvia::http_status::not_found);
-        (void)co_await missing.bytes();
+        (void)co_await missing.collect_body();
         fs::rename(path, directory.path() / "original.bin");
         fs::rename(replacement, path);
         auto changed = co_await client.client().head("/static").send();
         EXPECT_EQ(changed.status(), ruvia::http_status::internal_server_error);
-        EXPECT_TRUE((co_await changed.bytes()).empty());
+        EXPECT_TRUE((co_await changed.collect_body()).empty());
         auto stale = co_await client.client().get("/static").send();
         EXPECT_EQ(stale.status(), ruvia::http_status::internal_server_error);
-        (void)co_await stale.bytes();
+        (void)co_await stale.collect_body();
     });
 }
 
@@ -791,16 +791,16 @@ TEST(Ruvia, independent_request_stream_reuses_open_file_after_path_replacement) 
     }, [&](ruvia::http_client& client, ruvia::http_server&) -> ruvia::task<void> {
         auto single_response = co_await client.client().get("/single").send();
         EXPECT_EQ(single_response.status(), ruvia::http_status::ok);
-        const auto single_body = co_await single_response.bytes();
+        const auto single_body = co_await single_response.collect_body();
         EXPECT_EQ(single_body.text(), bytes);
         auto partial_response = co_await client.client().get("/partial").header("range", "bytes=7-19").send();
         EXPECT_EQ(partial_response.status(), ruvia::http_status::partial_content);
         EXPECT_EQ(partial_response.header("content-range"), std::optional<std::string_view>("bytes 7-19/102417"));
-        const auto partial_body = co_await partial_response.bytes();
+        const auto partial_body = co_await partial_response.collect_body();
         EXPECT_EQ(partial_body.text(), std::string_view(bytes).substr(7, 13));
         auto multiple_response = co_await client.client().get("/multiple").header("range", "bytes=0-9,90000-90009").send();
         EXPECT_EQ(multiple_response.status(), ruvia::http_status::partial_content);
-        const auto parts = co_await multiple_response.bytes();
+        const auto parts = co_await multiple_response.collect_body();
         EXPECT_NE(parts.text().find(bytes.substr(0, 10)), std::string_view::npos);
         EXPECT_NE(parts.text().find(bytes.substr(90000, 10)), std::string_view::npos);
         EXPECT_EQ(parts.text().find(std::string(10, 'Z')), std::string_view::npos);
@@ -838,7 +838,7 @@ TEST(Ruvia, independent_request_stream_revalidates_open_files_before_sending_the
             auto response = co_await std::move(request).send();
             EXPECT_EQ(response.status(), ruvia::http_status::internal_server_error);
             EXPECT_FALSE(response.header("content-range").has_value());
-            const auto body = co_await response.bytes();
+            const auto body = co_await response.collect_body();
             EXPECT_NE(body.text().find("\"code\":\"file_read_failed\""), std::string_view::npos);
             EXPECT_EQ(body.text().find(std::string(10, 'Z')), std::string_view::npos);
         }
@@ -895,16 +895,16 @@ TEST(Ruvia, independent_request_stream_response_forms_are_mutually_exclusive_and
             auto response = co_await std::move(request).send();
             EXPECT_EQ(response.status(), ruvia::http_status::conflict);
             EXPECT_EQ(response.header("x-selected"), std::optional<std::string_view>("retained"));
-            const auto body = co_await response.bytes();
+            const auto body = co_await response.collect_body();
             EXPECT_EQ(body.text(), "buffered");
         }
         auto failure = co_await client.client().get("/failure").send();
         EXPECT_EQ(failure.status(), ruvia::http_status::forbidden);
         EXPECT_FALSE(failure.header("x-selected").has_value());
-        (void)co_await failure.bytes();
+        (void)co_await failure.collect_body();
         auto streamed = co_await client.client().get("/stream-first").send();
         EXPECT_EQ(streamed.status(), ruvia::http_status::ok);
-        const auto streamed_body = co_await streamed.bytes();
+        const auto streamed_body = co_await streamed.collect_body();
         EXPECT_EQ(streamed_body.text(), "streamed");
     });
 }
@@ -929,7 +929,7 @@ TEST(Ruvia, independent_request_stream_retires_unstarted_file_and_accept_tasks_w
     }, [&](ruvia::http_client& client, ruvia::http_server&) -> ruvia::task<void> {
         auto response = co_await client.client().get("/cold").send();
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
-        const auto body = co_await response.bytes();
+        const auto body = co_await response.collect_body();
         EXPECT_EQ(body.text(), "no cold operation started");
         for (auto& file : files) {
             bool expired = false;
@@ -1007,7 +1007,7 @@ TEST(Ruvia, independent_request_stream_releases_selected_file_exactly_once_on_er
             co_await server.start();
             auto error = co_await client.client().get("/error").send();
             EXPECT_EQ(error.status(), ruvia::http_status::conflict);
-            (void)co_await error.bytes();
+            (void)co_await error.collect_body();
             EXPECT_EQ(releases, 1);
             asio::ip::tcp::socket peer(io);
             auto connected = co_await ruvia::async_asio([&](auto completion) {

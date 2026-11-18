@@ -289,6 +289,30 @@ public:
             wake_(wake_target_);
         }
     }
+    // Drivers may suspend with this view in a socket write or a flow-control
+    // wait. Stopping the queue does not release that borrow.
+    class chunk_lease final {
+    public:
+        explicit chunk_lease(http_client_output_queue& output) noexcept :
+            output_(output) {
+            output_.chunk_in_flight_ = true;
+        }
+        chunk_lease(const chunk_lease&) = delete;
+        chunk_lease& operator=(const chunk_lease&) = delete;
+        ~chunk_lease() {
+            output_.chunk_in_flight_ = false;
+            if (output_.borrowed_chunk_ && output_.stopped_) {
+                output_.space_.notify();
+            }
+        }
+        [[nodiscard]] std::string_view view() const noexcept {
+            return output_.borrowed_chunk_.value_or(std::string_view(output_.chunk_));
+        }
+
+    private:
+        http_client_output_queue& output_;
+    };
+
     void acknowledge_chunk() noexcept {
         chunk_ready_ = false;
         http_clear_string_retaining_small(chunk_, http_body_buffer_bytes);
@@ -306,12 +330,18 @@ public:
         stopped_ = true;
         notify_data();
         space_.notify();
+        if (auto* stop_relay = relay_stop_) {
+            stop_relay->request_stop();
+        }
     }
     void* wake_target_{};
     void (*wake_)(void*) noexcept {};
     worker_signal data_;
     worker_signal space_;
     std::string chunk_;
+    std::optional<std::string_view> borrowed_chunk_;
+    stop_source* relay_stop_{};
+    bool chunk_in_flight_{};
     bool chunk_ready_{};
     bool end_requested_{};
     bool completion_pending_{};
@@ -510,7 +540,8 @@ template <typename wake_fn_type, typename stop_predicate_type, typename release_
             break;
         }
         if (upload.chunk_ready_) {
-            if (co_await send_chunk(std::string_view(upload.chunk_))) {
+            const http_client_output_queue::chunk_lease chunk(upload);
+            if (co_await send_chunk(chunk.view())) {
                 upload.acknowledge_chunk();
             }
         } else if (upload.end_requested_) {

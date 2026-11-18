@@ -55,7 +55,7 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> forward(ruvia::context& c) {
-        const auto incoming_body = co_await c.req().bytes();
+        const auto incoming_body = co_await c.req().body_bytes();
         auto client = c.client();
 
         try {
@@ -86,8 +86,8 @@ private:
             if (content_type.status_ == ruvia::unique_lookup_status::found) {
                 forwarded[forwarded_count++] = {"content-type", content_type.value_};
             }
-            // bytes() also reserves against this client pool's retained-result budget.
-            auto body = co_await response.bytes();
+            // collect_body() also reserves against this client pool's retained-result budget.
+            auto body = co_await response.collect_body();
             co_return c.body(body.bytes(), {.status_ = response.status(), .headers_ = std::span(forwarded).first(forwarded_count)});
         } catch (const ruvia::http_client_error& error) {
             const auto failure = report_upstream_failure(error);

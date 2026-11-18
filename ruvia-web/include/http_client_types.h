@@ -246,7 +246,7 @@ struct http_client_tunnel_config final {
     // leaves it unbounded except by request_timeout_.
     std::optional<timeout_duration> idle_timeout_{};
 };
-// Bounds bytes retained by response bytes()/text() and stream collection: per standalone client or,
+// Bounds bytes retained by response collect_body(): per standalone client or,
 // in an application, across all registered aliases of one business worker. This is
 // independent of per-response limits and worker-owned memory.
 struct http_client_result_budget_config final {

@@ -175,9 +175,14 @@ class response_compression_routes final {
         co_return resp;
     }
     ruvia::task<ruvia::http_response> echo_decoded(ruvia::context& context_value) {
-        const auto bytes = co_await context_value.req().bytes();
-        const auto body = co_await context_value.req().text();
+        const auto bytes = co_await context_value.req().body_bytes();
+        const auto body = co_await context_value.req().body_text();
+        const auto owned = co_await context_value.req().collect_body();
         EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), body);
+        EXPECT_EQ(owned, body);
+        if (!body.empty()) {
+            EXPECT_NE(owned.data(), body.data());
+        }
         co_return context_value.text(body);
     }
     ruvia::task<void> stream(ruvia::context& context_value) {

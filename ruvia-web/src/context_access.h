@@ -1544,7 +1544,7 @@ struct context_access final {
     // carries the caller's response_options (see make_response).
     [[nodiscard]] static task<http_response> static_file_resolved(context& context_value, const static_root& root, std::string_view relative, std::string_view content_type_value, static_root_entry_view base_entry, static_file_selection_mode mode, http_response head);
 
-    [[nodiscard]] static http_response make_static_json_response(std::string_view json_body, const response_options& options) {
+    [[nodiscard]] static http_response make_static_json_response(static_text json_body, const response_options& options) {
         auto response = make_response(options);
         if (!response.header("Content-Type")) {
             response.content_type(http_content_type::application_json);
