@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -1695,6 +1696,24 @@ TEST(Ruvia, sse_parser_is_independent_of_chunk_boundaries) {
         events.insert(events.end(), chunk_events.begin(), chunk_events.end());
     }
     EXPECT_EQ(events, whatwg_events);
+}
+
+TEST(Ruvia, sse_parser_move_transfers_partial_event_and_requires_source_reset) {
+    ruvia::sse_parser parser;
+    const auto partial = parser.parse("id: previous\nretry: 30\n\nevent: update\nid: next\ndata: pre");
+    ASSERT_TRUE(partial.holds<ruvia::decode_need_input>());
+
+    ruvia::sse_parser moved(std::move(parser));
+    EXPECT_EQ(moved.last_event_id(), "previous");
+    EXPECT_EQ(moved.reconnection_time(), std::chrono::milliseconds{30});
+    EXPECT_EQ(parse_chunks(moved, {"fix\n\n"}), (std::vector<parsed_event>{{"update", "prefix", "next"}}));
+
+    EXPECT_EQ(parser.state(), ruvia::decoder_state::failed);
+    EXPECT_TRUE(parser.last_event_id().empty());
+    EXPECT_FALSE(parser.reconnection_time().has_value());
+    EXPECT_THROW((void)parser.parse("data: fresh\n\n"), std::logic_error);
+    parser.reset();
+    EXPECT_EQ(parse_chunks(parser, {"data: fresh\n\n"}), (std::vector<parsed_event>{{"message", "fresh", ""}}));
 }
 
 TEST(Ruvia, sse_parser_returns_one_event_per_call_with_consumed_bytes) {

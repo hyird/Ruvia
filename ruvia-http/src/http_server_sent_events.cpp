@@ -116,6 +116,31 @@ constexpr std::string_view sse_default_event_type = "message";
 sse_parser::sse_parser(sse_parser_options options) :
     event_limit_(options.event_limit_) {}
 
+sse_parser::sse_parser(sse_parser&& other) noexcept :
+    data_(std::move(other.data_)),
+    event_type_(std::move(other.event_type_)),
+    value_(std::move(other.value_)),
+    last_event_id_buffer_(std::move(other.last_event_id_buffer_)),
+    last_event_id_(std::move(other.last_event_id_)),
+    reconnection_time_(std::exchange(other.reconnection_time_, std::nullopt)),
+    event_limit_(other.event_limit_),
+    retry_value_(other.retry_value_),
+    name_(other.name_),
+    name_size_(other.name_size_),
+    name_overflow_(other.name_overflow_),
+    retry_digits_(other.retry_digits_),
+    retry_valid_(other.retry_valid_),
+    event_id_pending_(other.event_id_pending_),
+    event_published_(other.event_published_),
+    skip_line_feed_(other.skip_line_feed_),
+    bom_matched_(other.bom_matched_),
+    bom_settled_(other.bom_settled_),
+    phase_(other.phase_),
+    field_(other.field_),
+    state_(std::exchange(other.state_, decoder_state::failed)) {
+    other.last_event_id_.clear();
+}
+
 sse_parse_result sse_parser::parse(std::string_view input) & try {
     if (state_ != decoder_state::active) {
         throw std::logic_error("SSE parser is not active");

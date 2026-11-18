@@ -96,7 +96,8 @@ public:
     explicit sse_parser(sse_parser_options options = {});
     sse_parser(const sse_parser&) = delete;
     sse_parser& operator=(const sse_parser&) = delete;
-    sse_parser(sse_parser&&) noexcept = default;
+    // Transfers stream progress. Reset the failed source before reusing it.
+    sse_parser(sse_parser&& other) noexcept;
     sse_parser& operator=(sse_parser&&) = delete;
     ~sse_parser() = default;
 

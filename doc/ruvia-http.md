@@ -3658,7 +3658,7 @@ public:
     explicit sse_parser(sse_parser_options options = {});
     sse_parser(const sse_parser&) = delete;
     sse_parser& operator=(const sse_parser&) = delete;
-    sse_parser(sse_parser&&) noexcept = default;
+    sse_parser(sse_parser&& other) noexcept;
     sse_parser& operator=(sse_parser&&) = delete;
     ~sse_parser() = default;
     [[nodiscard]] sse_parse_result parse(std::string_view input) & RUVIA_LIFETIMEBOUND;
@@ -3697,7 +3697,7 @@ public:
 | `state()` | `active` / `finished` / `failed`。 |
 | `last_event_id() const&` | 空行提交最新合法 `id`（包括空值），转移存储而不复制。流结束或失败时丢弃未提交的 `id`，保留已提交的 `Last-Event-ID`。视图借用解析器，右值重载删除。 |
 | `reconnection_time()` | 最近一个合法 `retry` 字段；未收到前为 `std::nullopt`。 |
-| 移动构造 | 可移动构造（不可赋值）；移动使已返回事件的视图失效。 |
+| 移动构造 | 接管解析进度与重连元数据；已返回事件的视图失效。源对象不再保有重连元数据，进入 `failed`，须 `reset()` 后复用。 |
 
 ```cpp
 ruvia::sse_parser parser;
