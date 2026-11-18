@@ -828,7 +828,7 @@ flowchart LR
 | `template <typename rep_type, typename period_type> [[nodiscard]] constexpr std::chrono::milliseconds ceil_milliseconds(std::chrono::duration<rep_type, period_type> value) noexcept;` | 非正为零；正值向上取整到整毫秒并饱和 |
 
 - **整数换算**：不宽于 `uintmax_t` 的整数计数按有理周期精确换算，正小数 tick 向上取整，负数向零截断，越界饱和。
-- **浮点换算**：经 `long double`；NaN 为零，无穷饱和；正值换算下溢时保留一个目标 tick。
+- **浮点换算**：经 `long double`，支持 C++20 常量求值；NaN 为零，无穷饱和；正值换算下溢时保留一个目标 tick。
 
 **`class timeout_duration final`**：配置输入（超时、心跳间隔、流等待）的整数毫秒时长；可为零或负，由消费者决定策略。
 

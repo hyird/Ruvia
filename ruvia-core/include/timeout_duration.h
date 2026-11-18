@@ -2,7 +2,6 @@
 
 #include <bit>
 #include <chrono>
-#include <cmath>
 #include <compare>
 #include <concepts>
 #include <cstdint>
@@ -103,23 +102,28 @@ template <typename target_type, typename rep_type, typename period_type>
         // not reject an emitted unreachable fallback.
         using wide_type = std::chrono::duration<long double, typename target_type::period>;
         const auto count = std::chrono::duration_cast<wide_type>(value).count();
-        if (std::isnan(count)) {
+        if (count != count) {
             return target_type::zero();
         }
         // Unit conversion may underflow before ceil sees the positive input.
         if (count == 0.0L && value.count() > 0) {
             return target_type(1);
         }
-        const auto rounded = count > 0.0L ? std::ceil(count) : std::trunc(count);
         const auto maximum = static_cast<long double>(target_type::max().count());
-        if (rounded >= maximum) {
+        if (count >= maximum) {
             return target_type::max();
         }
         const auto minimum = static_cast<long double>(target_type::min().count());
-        if (rounded <= minimum) {
+        if (count <= minimum) {
             return target_type::min();
         }
-        return target_type(static_cast<typename target_type::rep>(rounded));
+        // The checked conversion truncates toward zero. Advance only for a
+        // positive fraction so this also works in C++20 constant expressions.
+        auto ticks = static_cast<typename target_type::rep>(count);
+        if (count > 0.0L && count > static_cast<long double>(ticks)) {
+            ++ticks;
+        }
+        return target_type(ticks);
     }
 }
 

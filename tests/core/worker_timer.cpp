@@ -838,6 +838,23 @@ TEST(Ruvia, timer_fractional_duration_conversion_avoids_intermediate_overflow) {
     EXPECT_EQ(ruvia::saturating_duration_cast(unsigned_type::max()), target_type::max());
 }
 
+TEST(Ruvia, timer_floating_duration_rounds_in_cxx20_constant_expressions) {
+    using input_type = std::chrono::duration<double, std::milli>;
+    using milliseconds = std::chrono::milliseconds;
+    using narrow_ticks = std::chrono::duration<signed char, std::milli>;
+    static_assert(ruvia::ceil_milliseconds(input_type{1.25}) == milliseconds{2});
+    static_assert(ruvia::ceil_milliseconds(input_type{1.0}) == milliseconds{1});
+    static_assert(ruvia::saturating_duration_cast<milliseconds>(input_type{-1.25}) == milliseconds{-1});
+    static_assert(ruvia::saturating_duration_cast<narrow_ticks>(input_type{126.5}) == narrow_ticks{127});
+    static_assert(ruvia::saturating_duration_cast<narrow_ticks>(input_type{1000.0}) == (narrow_ticks::max)());
+    static_assert(ruvia::saturating_duration_cast<narrow_ticks>(input_type{-1000.0}) == (narrow_ticks::min)());
+
+    const auto infinity = std::numeric_limits<double>::infinity();
+    EXPECT_EQ(ruvia::saturating_duration_cast<milliseconds>(input_type{infinity}), (milliseconds::max)());
+    EXPECT_EQ(ruvia::saturating_duration_cast<milliseconds>(input_type{-infinity}), (milliseconds::min)());
+    EXPECT_EQ(ruvia::ceil_milliseconds(input_type{std::numeric_limits<double>::quiet_NaN()}), milliseconds::zero());
+}
+
 TEST(Ruvia, timer_floating_duration_underflow_keeps_positive_minimum_tick) {
     using input_type = std::chrono::duration<long double, std::micro>;
     using target_type = std::chrono::steady_clock::duration;
