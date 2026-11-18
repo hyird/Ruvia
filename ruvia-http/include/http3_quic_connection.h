@@ -162,8 +162,10 @@ public:
     [[nodiscard]] http_connection_role role() const noexcept;
     // For the QUIC-TLS adapter's connection reference
     // (ngtcp2_crypto_conn_ref::get_conn); every other capability has a member.
-    [[nodiscard]] ngtcp2_conn* native_handle() noexcept;
-    [[nodiscard]] const ngtcp2_conn* native_handle() const noexcept;
+    [[nodiscard]] ngtcp2_conn* native_handle() & noexcept RUVIA_LIFETIMEBOUND;
+    ngtcp2_conn* native_handle() && = delete;
+    [[nodiscard]] const ngtcp2_conn* native_handle() const& noexcept RUVIA_LIFETIMEBOUND;
+    const ngtcp2_conn* native_handle() const&& = delete;
     [[nodiscard]] void* callback_context() const noexcept;
     void set_tls_native_handle(void* tls_native_handle) noexcept;
     [[nodiscard]] bool handshake_completed() const noexcept;
@@ -234,8 +236,10 @@ public:
 
     [[nodiscard]] std::optional<http3_event> next_event() &;
     std::optional<http3_event> next_event() && = delete;
-    [[nodiscard]] http3_connection& http3() noexcept;
-    [[nodiscard]] const http3_connection& http3() const noexcept;
+    [[nodiscard]] http3_connection& http3() & noexcept RUVIA_LIFETIMEBOUND;
+    http3_connection& http3() && = delete;
+    [[nodiscard]] const http3_connection& http3() const& noexcept RUVIA_LIFETIMEBOUND;
+    const http3_connection& http3() const&& = delete;
     // The HTTP/3 code of the CONNECTION_CLOSE this connection sent or
     // received, or of the codec error it failed on.
     [[nodiscard]] std::optional<http3_error_code> application_error() const noexcept;

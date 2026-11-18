@@ -9416,8 +9416,10 @@ public:
     http3_quic_connection& operator=(http3_quic_connection&&) noexcept;
 
     [[nodiscard]] http_connection_role role() const noexcept;
-    [[nodiscard]] ngtcp2_conn* native_handle() noexcept;
-    [[nodiscard]] const ngtcp2_conn* native_handle() const noexcept;
+    [[nodiscard]] ngtcp2_conn* native_handle() & noexcept RUVIA_LIFETIMEBOUND;
+    ngtcp2_conn* native_handle() && = delete;
+    [[nodiscard]] const ngtcp2_conn* native_handle() const& noexcept RUVIA_LIFETIMEBOUND;
+    const ngtcp2_conn* native_handle() const&& = delete;
     [[nodiscard]] void* callback_context() const noexcept;
     void set_tls_native_handle(void* tls_native_handle) noexcept;
     [[nodiscard]] bool handshake_completed() const noexcept;
@@ -9451,8 +9453,10 @@ public:
 
     [[nodiscard]] std::optional<http3_event> next_event() &;
     std::optional<http3_event> next_event() && = delete;
-    [[nodiscard]] http3_connection& http3() noexcept;
-    [[nodiscard]] const http3_connection& http3() const noexcept;
+    [[nodiscard]] http3_connection& http3() & noexcept RUVIA_LIFETIMEBOUND;
+    http3_connection& http3() && = delete;
+    [[nodiscard]] const http3_connection& http3() const& noexcept RUVIA_LIFETIMEBOUND;
+    const http3_connection& http3() const&& = delete;
     [[nodiscard]] std::optional<http3_error_code> application_error() const noexcept;
     [[nodiscard]] std::optional<std::uint64_t> transport_error() const noexcept;
 };
@@ -9471,7 +9475,8 @@ public:
 | `client(options)` / `server(options)` | 创建连接；选项非法抛 `std::invalid_argument`（见 12.3.2）。 |
 | 析构、移动构造/赋值 | 仅可移动（`noexcept`），不可复制。 |
 | `role()` | 连接角色。 |
-| `native_handle()` | 底层 `ngtcp2_conn*`，仅供 QUIC-TLS 适配器的 `ngtcp2_crypto_conn_ref::get_conn` 使用；其他能力都有对应成员。 |
+| `native_handle()` | 仅从左值连接借用底层 `ngtcp2_conn*`，供 QUIC-TLS 适配器的 `ngtcp2_crypto_conn_ref::get_conn` 使用；其他能力都有对应成员。 |
+| `http3()` | 仅从左值连接借用内部 HTTP/3 编解码器。 |
 | `callback_context()` | 返回选项中的 `callback_context_`。 |
 | `set_tls_native_handle(handle)` | 设置交给 ngtcp2 的 TLS 原生句柄（如 OpenSSL `SSL*`）。 |
 | `handshake_completed()` / `after_retry()` / `stateless_reset_received()` | 握手是否完成 / 客户端是否经历了 Retry / 是否收到无状态重置。 |

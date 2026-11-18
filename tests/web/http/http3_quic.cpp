@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -61,6 +62,27 @@
 namespace {
 
 using namespace std::chrono_literals;
+
+template <typename connection_type>
+concept can_borrow_http3_codec = requires(connection_type&& connection) {
+    std::forward<connection_type>(connection).http3();
+};
+
+template <typename connection_type>
+concept can_borrow_quic_native_handle = requires(connection_type&& connection) {
+    std::forward<connection_type>(connection).native_handle();
+};
+
+static_assert(requires(ruvia::http3_quic_connection& connection, const ruvia::http3_quic_connection& const_connection) {
+    { connection.http3() } -> std::same_as<ruvia::http3_connection&>;
+    { const_connection.http3() } -> std::same_as<const ruvia::http3_connection&>;
+    { connection.native_handle() } -> std::same_as<ngtcp2_conn*>;
+    { const_connection.native_handle() } -> std::same_as<const ngtcp2_conn*>;
+});
+static_assert(!can_borrow_http3_codec<ruvia::http3_quic_connection>);
+static_assert(!can_borrow_http3_codec<const ruvia::http3_quic_connection>);
+static_assert(!can_borrow_quic_native_handle<ruvia::http3_quic_connection>);
+static_assert(!can_borrow_quic_native_handle<const ruvia::http3_quic_connection>);
 
 ngtcp2_conn* get_connection(ngtcp2_crypto_conn_ref* reference) {
     return static_cast<ruvia::http3_quic_connection*>(reference->user_data)->native_handle();

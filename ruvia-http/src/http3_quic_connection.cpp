@@ -448,11 +448,11 @@ http_connection_role http3_quic_connection::role() const noexcept {
     return impl_->role_;
 }
 
-ngtcp2_conn* http3_quic_connection::native_handle() noexcept {
+ngtcp2_conn* http3_quic_connection::native_handle() & noexcept {
     return impl_->connection_;
 }
 
-const ngtcp2_conn* http3_quic_connection::native_handle() const noexcept {
+const ngtcp2_conn* http3_quic_connection::native_handle() const& noexcept {
     return impl_->connection_;
 }
 
@@ -900,11 +900,11 @@ std::optional<http3_event> http3_quic_connection::next_event() & {
     }
 }
 
-http3_connection& http3_quic_connection::http3() noexcept {
+http3_connection& http3_quic_connection::http3() & noexcept {
     return impl_->http3_;
 }
 
-const http3_connection& http3_quic_connection::http3() const noexcept {
+const http3_connection& http3_quic_connection::http3() const& noexcept {
     return impl_->http3_;
 }
 
