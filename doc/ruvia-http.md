@@ -4153,7 +4153,7 @@ struct http_client_ip_result final {
 | `http_forwarded_header_kind::single_ip` | 必须恰好一行、不含逗号的单个地址；地址属于受信代理时不采用。 |
 | `http_forwarded_header_spec` | 一个转发头名称与种类；三个转换构造函数均复制名称。 |
 | `http_client_ip_options::enabled_` | 关闭时 `resolve` 始终返回对端地址。 |
-| `trusted_proxies_` | 受信代理 IP 字面量或 CIDR（如 `"127.0.0.1"`、`"10.0.0.0/8"`、`"::1"`）。 |
+| `trusted_proxies_` | 按 [`ip_cidr::parse`](#api-ip-address-h) 解析受信代理地址或 CIDR。要求主机位为零，不接受 IPv6 zone；不自动扩大受信网段。 |
 | `forwarding_headers_` | 按优先级排列的转发头；为空时默认 `{"X-Forwarded-For", "Forwarded"}`。 |
 | `trust_x_forwarded_proto_` | 是否把与 `X-Forwarded-For` 对齐的 `X-Forwarded-Proto` 项作为 scheme；仅当每个受信代理都清洗并追加匹配的 `X-Forwarded-For` / `X-Forwarded-Proto` 元素时开启。 |
 | `http_client_ip_result::address_` / `address()` | 解析出的客户端地址（IPv4 映射地址已规范化为 IPv4）。 |

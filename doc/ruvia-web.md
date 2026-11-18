@@ -696,7 +696,7 @@ ruvia::app()
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `cidrs_` | `std::vector<std::string>` | `{}` | 可信代理地址或 CIDR；前缀长度按字面量的地址族计位（`127.0.0.0/8` 与 `::ffff:127.0.0.0/104` 是同一映射网段） |
+| `cidrs_` | `std::vector<std::string>` | `{}` | 规则同 [`http_client_ip_options::trusted_proxies_`](ruvia-http.md#api-http-client-ip-h)；`127.0.0.0/8` 与 `::ffff:127.0.0.0/104` 对应同一映射网段 |
 | `forwarding_headers_` | `std::vector<http_forwarded_header_spec>`（[`"http_client_ip.h"`](ruvia-http.md#api-http-client-ip-h)） | `{}` | 按优先级排列的转发头；为空时等价 `{"X-Forwarded-For", "Forwarded"}` |
 | `trust_x_forwarded_proto_` | `bool` | `false` | 仅当每个可信代理都清洗并追加匹配的 `X-Forwarded-For`/`X-Forwarded-Proto` 时开启 |
 

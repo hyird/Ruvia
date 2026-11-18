@@ -358,51 +358,34 @@ bool tls_websocket_truncation_ends_read(asio::io_context& io, const asio::ip::tc
 
 using namespace startup_test;
 
-TEST(Ruvia, app_trusted_proxy_config_accepts_ipv6_prefix_lengths) {
+TEST(Ruvia, app_trusted_proxy_config_requires_network_addresses_and_valid_prefix_lengths) {
     auto& app = ruvia::app();
-    for (const auto cidr : {"127.0.0.0/8", "::ffff:127.0.0.0/104", "::ffff:127.0.0.1/128", "::ffff:127.0.0.0/96", "::ffff:127.0.0.0/0", "2001:db8::/32"}) {
-        bool accepted = true;
-        try {
-            app.trusted_proxies({.cidrs_ = {cidr}});
-        } catch (const std::invalid_argument&) {
-            accepted = false;
-        }
-        EXPECT_TRUE(accepted);
+    for (const auto cidr : {"127.0.0.0/8", "::ffff:127.0.0.0/104", "::ffff:127.0.0.1/128", "::ffff:0.0.0.0/96", "::/0", "2001:db8::/32"}) {
+        SCOPED_TRACE(cidr);
+        EXPECT_NO_THROW(app.trusted_proxies({.cidrs_ = {cidr}}));
     }
-    for (const auto cidr : {"127.0.0.0/33", "::ffff:127.0.0.0/129", "::ffff:127.0.0.0/", "::ffff:127.0.0.0/-1"}) {
-        bool rejected = false;
-        try {
-            app.trusted_proxies({.cidrs_ = {cidr}});
-        } catch (const std::invalid_argument&) {
-            rejected = true;
-        }
-        EXPECT_TRUE(rejected);
+    for (const auto cidr : {"127.0.0.1/8", "::ffff:127.0.0.0/96", "::ffff:127.0.0.0/0", "fe80::%12/64", "127.0.0.0/33", "::ffff:127.0.0.0/129", "::ffff:127.0.0.0/", "::ffff:127.0.0.0/-1"}) {
+        SCOPED_TRACE(cidr);
+        EXPECT_THROW(app.trusted_proxies({.cidrs_ = {cidr}}), std::invalid_argument);
     }
     app.trusted_proxies({});
 }
 
-// A CIDR without '/' is exactly one IP literal, so trusted proxy configuration
-// exposes the strict literal parser: complete IPv4/IPv6 text only, no ports,
-// brackets, padding, partial IPv4 or invalid IPv6 zones.
+// A bare address denotes a full-width CIDR; proxy configuration rejects
+// IPv6 zones even if the standalone IP literal parser accepts them.
 TEST(Ruvia, app_trusted_proxy_config_accepts_only_strict_ip_literals) {
     auto& app = ruvia::app();
-    for (const std::string_view literal : {"192.0.2.1", "0.0.0.0", "255.255.255.255", "2001:0db8:1234:5678:90ab:cdef:1234:5678", "fe80::1%12", "::ffff:192.0.2.1"}) {
-        bool accepted = true;
-        try {
-            app.trusted_proxies({.cidrs_ = {std::string(literal)}});
-        } catch (const std::invalid_argument&) {
-            accepted = false;
-        }
-        EXPECT_TRUE(accepted);
+    for (const auto* literal : {"192.0.2.1", "0.0.0.0", "255.255.255.255", "2001:0db8:1234:5678:90ab:cdef:1234:5678", "fe80::1", "::ffff:192.0.2.1"}) {
+        SCOPED_TRACE(literal);
+        EXPECT_NO_THROW(app.trusted_proxies({.cidrs_ = {literal}}));
     }
     for (const std::string_view literal : {std::string_view{}, std::string_view("not an address"), std::string_view("192.0.2.1\0suffix", 16), std::string_view("192.0.2.1suffix"), std::string_view("192.0.2.1:80"), std::string_view("[::1]:80"), std::string_view("[::1]"), std::string_view("192.0.2"), std::string_view("01.2.3.4"), std::string_view("192.0.2.256"), std::string_view("192.0.2.1."), std::string_view(".192.0.2.1"), std::string_view("192.0.2.1%1"), std::string_view("fe80::1%"), std::string_view("fe80::1%1%2"), std::string_view("::1 "), std::string_view("1"), std::string_view("::ffff:01.2.3.4"), std::string_view("::ffff:192.0.2"), std::string_view("fe80::1%12:80"), std::string_view("fe80::1%12 "), std::string_view("fe80::1%1]:80"), std::string_view("fe80::1%0"), std::string_view("fe80::1%01"), std::string_view("fe80::1%-1"), std::string_view("fe80::1%+1"), std::string_view("fe80::1%12abc"), std::string_view("fe80::1%4294967296"), std::string_view("fe80::1%99999999999999999999"), std::string_view("fe80::1%nonexistent_ruvia_zone_id")}) {
-        bool rejected = false;
-        try {
-            app.trusted_proxies({.cidrs_ = {std::string(literal)}});
-        } catch (const std::invalid_argument&) {
-            rejected = true;
-        }
-        EXPECT_TRUE(rejected);
+        SCOPED_TRACE(literal);
+        EXPECT_THROW(app.trusted_proxies({.cidrs_ = {std::string(literal)}}), std::invalid_argument);
+    }
+    for (const auto* scoped : {"fe80::1%12", "fe80::1%2"}) {
+        SCOPED_TRACE(scoped);
+        EXPECT_THROW(app.trusted_proxies({.cidrs_ = {scoped}}), std::invalid_argument);
     }
     app.trusted_proxies({});
 }
