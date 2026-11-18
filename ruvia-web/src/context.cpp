@@ -1228,13 +1228,13 @@ std::optional<std::string_view> context_request::header(std::string_view name) c
 }
 
 template <typename host_type>
-std::span<const http_header> request_exchange<host_type>::trailers() const noexcept {
+std::span<const http_header> request_exchange<host_type>::trailers() const& noexcept {
     const auto* trailers = exchange().runtime_services().request_trailers();
     return trailers != nullptr ? trailers->fields() : std::span<const http_header>{};
 }
 
 template <typename host_type>
-std::optional<std::string_view> request_exchange<host_type>::trailer(std::string_view name) const noexcept {
+std::optional<std::string_view> request_exchange<host_type>::trailer(std::string_view name) const& noexcept {
     const auto* trailers = exchange().runtime_services().request_trailers();
     return trailers != nullptr ? trailers->field(name) : std::nullopt;
 }

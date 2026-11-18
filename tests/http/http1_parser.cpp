@@ -1340,7 +1340,7 @@ TEST(Ruvia, http1_parse_ignores_bounded_empty_lines_before_request_line) {
     // received before the request-line.
     for (const std::string_view request : {
              std::string_view("\r\nGET /a HTTP/1.1\r\nHost: x\r\n\r\n"),
-             std::string_view("\r\n\r\n\nGET /a HTTP/1.1\r\nHost: x\r\n\r\n"),
+             std::string_view("\r\n\r\nGET /a HTTP/1.1\r\nHost: x\r\n\r\n"),
          }) {
         const auto result_value = parse_http1_request_message(request);
         EXPECT_TRUE(result_value.complete());
@@ -1504,7 +1504,7 @@ TEST(Ruvia, http1_parse_cors_metadata_preserves_body_and_pipeline_boundary) {
 }
 
 TEST(Ruvia, http1_parse_head_resumes_leading_empty_lines_and_request_line_across_segments) {
-    constexpr std::string_view request = "\r\n\n\r\nGET /seg HTTP/1.1\r\nHost: x\r\n\r\n";
+    constexpr std::string_view request = "\r\n\r\n\r\nGET /seg HTTP/1.1\r\nHost: x\r\n\r\n";
     for (const std::size_t segment : {std::size_t{1}, std::size_t{2}, std::size_t{5}}) {
         http1_server_request_parser state;
         std::size_t delivered = 0;
@@ -1526,6 +1526,24 @@ TEST(Ruvia, http1_parse_head_resumes_leading_empty_lines_and_request_line_across
             EXPECT_EQ(header_bytes, request.size());
         }
         EXPECT_EQ(state.request().path(), std::string_view("/seg"));
+    }
+}
+
+TEST(Ruvia, http1_parse_head_rejects_bare_lf_before_request_line) {
+    for (const std::string_view prefix : {std::string_view{}, std::string_view("\r\n\r\n")}) {
+        std::string wire(prefix);
+        wire.append("\nGET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        http1_server_request_parser whole;
+        const auto head = whole.parse(wire);
+        EXPECT_TRUE(is_failure(head, http_parse_error::invalid_request_line));
+        EXPECT_EQ(head.consumed_bytes(), 0U);
+        EXPECT_EQ(whole.connection_plan().close_policy(), http1_close_policy::close_after_response);
+
+        http1_server_request_parser incremental;
+        for (std::size_t size = 1; size <= prefix.size(); ++size) {
+            ASSERT_TRUE(incremental.parse(std::string_view(wire).substr(0, size)).holds<ruvia::decode_need_input>());
+        }
+        EXPECT_TRUE(is_failure(incremental.parse(std::string_view(wire).substr(0, prefix.size() + 1)), http_parse_error::invalid_request_line));
     }
 }
 

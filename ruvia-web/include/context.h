@@ -647,9 +647,12 @@ public:
     [[nodiscard]] ::ruvia::stop_token stop_token() const noexcept;
 
     // Read after request_body() reaches EOF to observe the complete terminal
-    // section. Trailers never replace initial headers or change route selection.
-    [[nodiscard]] std::span<const http_header> trailers() const noexcept;
-    [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const noexcept;
+    // section. The results borrow this exchange. Trailers never replace
+    // initial headers or change route selection.
+    [[nodiscard]] std::span<const http_header> trailers() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::span<const http_header> trailers() const&& = delete;
+    [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
+    std::optional<std::string_view> trailer(std::string_view) const&& = delete;
 
     // Parses request_body() as multipart while it arrives. Decodes no content
     // coding: a coded body is refused with 415 and an invalid

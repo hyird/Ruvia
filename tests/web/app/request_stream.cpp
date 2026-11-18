@@ -61,6 +61,25 @@ namespace request_stream_test {
 
 using namespace std::chrono_literals;
 
+template <typename exchange_type>
+concept can_borrow_request_trailers = requires(exchange_type&& exchange) {
+    std::forward<exchange_type>(exchange).trailers();
+};
+
+template <typename exchange_type>
+concept can_borrow_request_trailer = requires(exchange_type&& exchange) {
+    std::forward<exchange_type>(exchange).trailer("x-upload-checksum");
+};
+
+static_assert(can_borrow_request_trailers<const ruvia::context&>);
+static_assert(can_borrow_request_trailer<const ruvia::context&>);
+static_assert(can_borrow_request_trailers<const ruvia::request_stream&>);
+static_assert(can_borrow_request_trailer<const ruvia::request_stream&>);
+static_assert(!can_borrow_request_trailers<ruvia::context>);
+static_assert(!can_borrow_request_trailer<ruvia::context>);
+static_assert(!can_borrow_request_trailers<ruvia::request_stream>);
+static_assert(!can_borrow_request_trailer<ruvia::request_stream>);
+
 std::atomic<int>& middleware_runs() {
     static std::atomic<int> value{0};
     return value;
@@ -902,6 +921,16 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
         }
         asio::write(socket, asio::buffer(wire));
         EXPECT_TRUE(ruvia::test::read_to_end(socket).starts_with("HTTP/1.1 200 "));
+    }
+    {
+        asio::ip::tcp::socket socket(io);
+        socket.connect(plain_endpoint);
+        constexpr std::string_view wire = "\nPOST /state-none HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        asio::write(socket, asio::buffer(wire));
+        asio::error_code terminal_error;
+        const auto response = ruvia::test::read_to_end(socket, terminal_error);
+        EXPECT_TRUE(response.empty() || response.starts_with("HTTP/1.1 400 "));
+        EXPECT_TRUE(terminal_error == asio::error::eof || terminal_error == asio::error::connection_reset);
     }
 #if defined(RUVIA_ENABLE_HTTP2)
     {

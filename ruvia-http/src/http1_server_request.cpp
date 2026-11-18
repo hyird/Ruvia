@@ -68,10 +68,8 @@ struct parsed_request_header_block {
     http_request_expectations expectations_;
 };
 
-// RFC 9112 section 2.2: a server SHOULD ignore at least one empty line received
-// before the request-line. Leading CRLF or bare LF lines are skipped; they count
-// toward max_http_header_bytes, which bounds how many are ignored. The scan
-// resumes after `skipped` bytes already classified by an earlier call.
+// RFC 9112 section 2.2: skip leading CRLF empty lines, not bare LF.
+// They count toward the head limit. Resume after the already skipped bytes.
 [[nodiscard]] std::size_t http_request_leading_empty_line_bytes(std::string_view buffer, std::size_t skipped) noexcept;
 // find_http_header_end for a request head: the returned end is measured from
 // the start of buffer and includes the ignored leading empty lines, whose
@@ -556,15 +554,10 @@ namespace {
 std::size_t http_request_leading_empty_line_bytes(std::string_view buffer, std::size_t skipped) noexcept {
     buffer = buffer.substr(0, max_http_header_bytes);
     auto cursor_value = std::min(skipped, buffer.size());
-    for (;;) {
-        if (cursor_value < buffer.size() && buffer[cursor_value] == '\n') {
-            ++cursor_value;
-        } else if (buffer.substr(cursor_value).starts_with("\r\n")) {
-            cursor_value += 2;
-        } else {
-            return cursor_value;
-        }
+    while (buffer.substr(cursor_value).starts_with("\r\n")) {
+        cursor_value += 2;
     }
+    return cursor_value;
 }
 
 std::size_t find_http_request_head_end(std::string_view buffer, std::size_t& leading_bytes, std::size_t search_offset) noexcept {
