@@ -2673,7 +2673,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 | `task<timer_sleep_result> sleep(timeout_duration, stop_token = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
 | `bool aborted() const noexcept` | 只报告已观察到的真实失败或取消（写失败、HTTP/1 请求体完整消费后的 FIN/RST、HTTP/2 流终止）；正常完成不为 `true`；`false` 不保证对端仍连接 |
 | `bool committed() const noexcept` | 响应头是否已提交 |
-| `task<void> finish(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &` | 正常结束正文并可附 Trailer（调用返回前复制）；未提交时可用于提交空响应；HTTP/1.0 等无法承载的可选 Trailer 被省略；禁止 Trailer 的状态在未发头前拒绝非空 Trailer；已完成后空 `finish()` 幂等，非空 Trailer 抛 `std::logic_error`。生产正文仍须先显式 `commit()` |
+| `task<void> finish(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &` | 正常结束正文并可附 Trailer；调用返回前检查字段数和字节预算，超限抛 `std::invalid_argument`，否则复制。未提交时可用于提交空响应；HTTP/1.0 等无法承载的可选 Trailer 被省略；禁止 Trailer 的状态在未发头前拒绝非空 Trailer；已完成后空 `finish()` 幂等，预算内的非空 Trailer 抛 `std::logic_error`。生产正文仍须先显式 `commit()` |
 | `task<void> finish(std::span<const http_header_view> = {}, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
 
 #### 9.2.7 `class sse_writer final`

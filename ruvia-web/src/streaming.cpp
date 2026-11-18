@@ -20,6 +20,7 @@
 #include "context.h"
 #include "context_access.h"
 #include "http1_server_response.h"
+#include "http_field_section_budget.h"
 #include "http_header.h"
 #include "http_multipart.h"
 #include "http_server_sent_events.h"
@@ -202,6 +203,12 @@ task<timer_sleep_result> response_stream_writer::sleep(timeout_duration duration
 
 task<void> response_stream_writer::finish(std::span<const http_header_view> trailers, operation_options operation) & {
     require_output();
+    auto budget = http_trailer_section_budget();
+    for (const auto& trailer : trailers) {
+        if (!budget.add_field(trailer.name(), trailer.value())) {
+            throw std::invalid_argument("HTTP response trailer section exceeds its budget");
+        }
+    }
     std::vector<http_header> owned_trailers_value;
     owned_trailers_value.reserve(trailers.size());
     for (const auto& header : trailers) {

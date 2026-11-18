@@ -43,6 +43,7 @@
 #include "http_content_coding.h"
 #include "http_header.h"
 #include "http_multipart.h"
+#include "http_protocol.h"
 #include "http_response.h"
 #include "http_response_stream.h"
 #include "http_server.h"
@@ -152,6 +153,7 @@ class stream_lane_routes final {
     RUVIA_GET("/server-stream-head-atomic", atomic_head);
     RUVIA_GET("/server-stream-head-typed", typed_head);
     RUVIA_GET("/server-stream-head-sse", sse_head);
+    RUVIA_GET("/server-stream-trailer-budget", trailer_budget);
     RUVIA_ROUTES_END
 
     ruvia::task<void> output(ruvia::context& context_value) {
@@ -337,6 +339,24 @@ class stream_lane_routes final {
         }
         co_await writer.write({.data_ = "tick"});
         co_await writer.finish();
+    }
+
+    ruvia::task<void> trailer_budget(ruvia::context& context_value) {
+        auto& writer = context_value.stream_text();
+        {
+            const std::vector<ruvia::http_header_view> too_many(ruvia::max_http_header_fields + 1, {"X-Trailer", "v"});
+            EXPECT_THROW((void)writer.finish(too_many), std::invalid_argument);
+            const std::string value(ruvia::max_http_header_bytes / 2, 'v');
+            const std::array too_large{ruvia::http_header_view{"X-One", value}, ruvia::http_header_view{"X-Two", value}};
+            EXPECT_THROW((void)writer.finish(too_large), std::invalid_argument);
+        }
+        EXPECT_FALSE(writer.committed());
+        auto finish = [&writer] {
+            const std::string value{"retained"};
+            const std::array trailers{ruvia::http_header_view{"X-Trailer", value}};
+            return writer.finish(trailers);
+        }();
+        co_await std::move(finish);
     }
 
     ruvia::task<void> uaf_head_stream(ruvia::context& context_value) {
@@ -715,6 +735,16 @@ TEST(Ruvia, stream_head_options_are_atomic_on_failure) {
     EXPECT_EQ(head.find("X-Candidate"), std::string_view::npos);
     EXPECT_NE(head.find("Content-Type: text/plain; charset=UTF-8\r\n"), std::string_view::npos);
     EXPECT_NE(response->find("atomic", head_end), std::string::npos);
+}
+
+TEST(Ruvia, response_stream_rejects_oversized_trailers_before_retaining_them) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto response = read_until_close(server.endpoint(), "GET /server-stream-trailer-budget HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    ASSERT_TRUE(response.has_value());
+    EXPECT_TRUE(response->starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(response->ends_with("0\r\nX-Trailer: retained\r\n\r\n"));
 }
 
 TEST(Ruvia, stream_text_keeps_an_application_content_type) {
