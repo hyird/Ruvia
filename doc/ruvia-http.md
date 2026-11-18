@@ -527,7 +527,7 @@ inline constexpr std::size_t max_decimal_size = 20;
 [[nodiscard]] constexpr std::size_t decimal_size(std::uint64_t value) noexcept;
 
 template <std::integral integer_type>
-[[nodiscard]] inline std::string_view format_decimal(std::span<char, max_decimal_size> output, integer_type value) noexcept;
+[[nodiscard]] inline std::string_view format_decimal(std::span<char, max_decimal_size> output RUVIA_LIFETIMEBOUND, integer_type value) noexcept;
 
 template <std::integral integer_type>
 inline void append_decimal(std::string& output, integer_type value);

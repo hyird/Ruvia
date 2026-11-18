@@ -15,6 +15,8 @@
 #include <system_error>
 #include <type_traits>
 
+#include "borrowed_text.h"
+
 namespace ruvia {
 
 namespace detail {
@@ -89,7 +91,7 @@ inline constexpr std::size_t max_decimal_size = 20;
 // decimal_size() copy the result instead of formatting in place, so no pointer
 // past the slice is ever formed.
 template <std::integral integer_type>
-[[nodiscard]] inline std::string_view format_decimal(std::span<char, max_decimal_size> output, integer_type value) noexcept {
+[[nodiscard]] inline std::string_view format_decimal(std::span<char, max_decimal_size> output RUVIA_LIFETIMEBOUND, integer_type value) noexcept {
     char* end = nullptr;
     if constexpr (std::signed_integral<integer_type>) {
         end = std::to_chars(output.data(), output.data() + output.size(), static_cast<std::int64_t>(value)).ptr;
