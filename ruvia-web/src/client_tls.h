@@ -11,6 +11,7 @@
 
 #include <openssl/types.h>
 
+#include "borrowed_text.h"
 #include "client_host_resolver.h"
 #include "http_client_types.h"
 #include "operation_options.h"
@@ -69,9 +70,13 @@ struct client_tls_config_storage final {
     client_tls_config_storage& operator=(client_tls_config_storage&&) noexcept = default;
 
     // SNI and verified peer name: the configured override, else the origin host.
-    [[nodiscard]] std::string_view tls_host(std::string_view configured_host) const noexcept {
+    [[nodiscard]] std::string_view tls_host(std::string_view configured_host RUVIA_LIFETIMEBOUND) const& noexcept RUVIA_LIFETIMEBOUND {
         return server_name_.has_value() ? std::string_view(*server_name_) : configured_host;
     }
+    std::string_view tls_host(std::string_view) const&& = delete;
+
+    template <http_temporary_owning_char_string host_type>
+    std::string_view tls_host(host_type&&) const& = delete;
 
     client_tls_mode mode_;
     tls_version minimum_version_;
