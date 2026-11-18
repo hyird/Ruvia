@@ -7,8 +7,6 @@
 #include <exception>
 #include <memory>
 #include <mutex>
-#include <new>
-#include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
@@ -382,8 +380,13 @@ public:
     }
 
 private:
-    void report(std::exception_ptr failure) const noexcept {
-        report_through_loop(loop_, std::move(failure), "event loop stop callback");
+    void finish_callback(std::exception_ptr failure) noexcept {
+        auto active_loop = std::move(active_loop_);
+        if (failure != nullptr) {
+            active_loop->route_failure(std::move(failure), "event loop stop callback");
+        }
+        callback_ = nullptr;
+        active_loop->retirement_.finish();
     }
 
     void start_callback(std::shared_ptr<event_loop_stop_listener> self) noexcept {
@@ -394,32 +397,14 @@ private:
             }
             started_ = true;
         }
-        std::optional<task<void>> task;
         try {
-            task.emplace(callback_());
-        } catch (const std::bad_alloc&) {
-            report(std::current_exception());
-            std::terminate();
-        } catch (...) {
-            report(std::current_exception());
-            callback_ = nullptr;
-            auto active_loop = std::move(active_loop_);
-            active_loop->retirement_.finish();
-            return;
-        }
-
-        try {
-            async_start(std::move(*task), asio::bind_executor(executor_, [self = std::move(self)](std::exception_ptr failure) mutable {
-                if (failure != nullptr) {
-                    self->report(std::move(failure));
-                }
-                self->callback_ = nullptr;
-                auto active_loop = std::move(self->active_loop_);
-                active_loop->retirement_.finish();
+            auto task = callback_();
+            // Keep the listener alive locally until initiation succeeds.
+            async_start(std::move(task), asio::bind_executor(executor_, [self](std::exception_ptr failure) {
+                self->finish_callback(std::move(failure));
             }));
         } catch (...) {
-            report(std::current_exception());
-            std::terminate();
+            finish_callback(std::current_exception());
         }
     }
 

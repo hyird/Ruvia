@@ -479,7 +479,7 @@ flowchart LR
 - **执行器寿命**：执行器借用物理 context，不延长其寿命；停机排空期间仍可供在途操作完成，调用方须在运行时退役前结束原生操作。
 - **清理通道**：`defer_cleanup` 绕过有界准入但取退役保护；回调及其输入在循环释放执行上下文前退役；退役开始后返回 `false`；空 `fn` 抛 `std::invalid_argument`。与 [`worker_ref::defer_completion`](#api-worker-ref-h) 的区别是后者服务已准入操作且不取退役保护。
 - **停机回调**：`on_stop` 在循环线程的后续轮次调用 `fn` 并运行返回的任务，不在请求停机的调用栈内执行；退役等待其完成。无效循环抛 `std::logic_error`，空 `fn` 抛 `std::invalid_argument`，循环已停止接收抛 `std::runtime_error`。
-- **回调异常**：`fn` 或其任务抛出的异常交给循环失败出口；取消未启动回调时在监听锁外移动并销毁目标，这些操作可请求循环停止。
+- **回调异常**：`fn` 抛出、返回的任务无法启动或任务执行失败时，异常交给循环失败出口，不跳过其他停机回调。取消未启动回调时在监听锁外移动并销毁目标，这些操作可请求循环停止。
 - **失败出口**：`report_failure`、被放弃根任务的失败与失败的停机回调都进入同一循环失败出口：池中循环使整个池停止并由 `join()` 重抛；挂载循环请求退役并调用 `failure_`；`worker_runtime::loop()` 使该运行时失败。
 
 **`struct event_loop_attachment_options final`**

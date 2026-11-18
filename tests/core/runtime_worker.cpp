@@ -2920,6 +2920,30 @@ TEST(Ruvia, WorkerStopCallbackFailureReachesJoin) {
 TEST(Ruvia, WorkerStopCallbackFactoryFailureKeepsOtherCallbacksRunning) {
     EXPECT_TRUE(test_stop_callback_factory_failure_does_not_skip_other_callbacks());
 }
+TEST(Ruvia, WorkerStopCallbackRejectsEmptyTaskWithoutSkippingCleanup) {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 4});
+    const auto loop = loops.loop(0);
+    bool cleaned_up = false;
+    std::optional<ruvia::event_loop_stop_registration> empty;
+    empty.emplace(loop.on_stop([&empty]() -> ruvia::task<void> {
+        empty.reset();
+        auto cold = []() -> ruvia::task<void> {
+            co_return;
+        }();
+        auto retained = std::move(cold);
+        return cold;
+    }));
+    const auto cleanup = loop.on_stop([&cleaned_up]() -> ruvia::task<void> {
+        cleaned_up = true;
+        co_return;
+    });
+
+    loops.start();
+    loops.request_stop();
+    EXPECT_THROW(loops.join(), std::logic_error);
+    EXPECT_TRUE(cleaned_up);
+}
+
 TEST(Ruvia, WorkerAsyncStopCallbacksStartTogetherAndKeepCapturesAlive) {
     EXPECT_TRUE(test_async_stop_callbacks_start_together_and_keep_captures_alive());
 }
