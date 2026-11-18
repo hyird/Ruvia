@@ -317,6 +317,50 @@ TEST(Ruvia, stop_token_registration_can_reset_during_synchronous_construction_ca
     EXPECT_EQ(calls.load(std::memory_order_relaxed), 1);
 }
 
+TEST(Ruvia, stop_token_registration_discards_callback_if_source_retires_during_construction) {
+    struct source_state final {
+        std::optional<ruvia::stop_source> source_{std::in_place};
+        int moves_{0};
+    } state;
+    const auto token = state.source_->token();
+    struct retire_source_on_move final {
+        source_state& state_;
+        std::shared_ptr<int> payload_;
+
+        retire_source_on_move(source_state& state, std::shared_ptr<int> payload) noexcept :
+            state_(state),
+            payload_(std::move(payload)) {}
+
+        retire_source_on_move(retire_source_on_move&& other) noexcept :
+            state_(other.state_),
+            payload_(std::move(other.payload_)) {
+            if (++state_.moves_ == move_into_callback_state) {
+                state_.source_.reset();
+            }
+        }
+
+        void operator()() const {
+            ADD_FAILURE() << "retiring an unstopped source must not invoke the callback";
+        }
+    };
+
+    ruvia::stop_registration registration;
+    auto payload = std::make_shared<int>(42);
+    const std::weak_ptr<int> retained = payload;
+    token.register_callback(registration, retire_source_on_move(state, std::move(payload)));
+    EXPECT_FALSE(token.stoppable());
+    EXPECT_FALSE(registration.registered());
+    EXPECT_TRUE(retained.expired());
+
+    state.source_.emplace();
+    bool called = false;
+    state.source_->token().register_callback(registration, [&called] {
+        called = true;
+    });
+    state.source_->request_stop();
+    EXPECT_TRUE(called);
+}
+
 TEST(Ruvia, stop_token_registration_can_reset_when_stop_races_with_callback_construction) {
     ruvia::stop_source first;
     ruvia::stop_source second;

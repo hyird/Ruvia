@@ -50,7 +50,8 @@ void stop_state::request_stop() noexcept {
 
 bool stop_state::link(stop_callback_node& node, std::atomic<stop_registration_phase>& phase) noexcept {
     std::lock_guard lock(mutex_);
-    if ((flags_.load(std::memory_order_relaxed) & requested_flag) != 0) {
+    // Constructing the callback can request stop or retire its source.
+    if (flags_.load(std::memory_order_relaxed) != source_flag) {
         return false;
     }
     node.linked_ = true;

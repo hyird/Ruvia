@@ -783,7 +783,7 @@ flowchart LR
 | `[[nodiscard]] stop_registration register_callback(move_only_function<void()> callback_value) const;` | 返回自有注册 |
 | `void register_callback(stop_registration& registration, move_only_function<void()> callback_value) const;` | 先 `reset()` 调用方注册，再注册新回调；供需在 `await_suspend` 发布 id / 代际后才能形成回调的等待物复用存储 |
 
-- **注册结果**：空回调、无状态或不可取消的令牌不注册也不调用回调；已请求停止时回调在注册返回前同步执行；回调至多执行一次。
+- **注册结果**：空回调、无状态或不可取消的令牌不注册也不调用回调；源在回调构造期间未请求停止即退役时，注册返回前释放回调；已请求停止时回调在注册返回前同步执行；回调至多执行一次。
 - **重入边界**：两种入口都先固定取消状态再移交回调或退役旧注册，之后不再读取令牌宿主；旧载荷析构可清空或销毁该令牌。
 - **回调异常**：停止回调抛出异常触发 `std::terminate()`。
 - **回调线程**：回调在 `request_stop()` 的线程执行，跨线程影响 Worker 状态的规则见 [2.1](#21-worker-亲和与跨线程边界)。

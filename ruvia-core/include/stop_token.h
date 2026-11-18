@@ -113,8 +113,8 @@ private:
     ~stop_state() = default;
 
     void destroy() noexcept;
-    // Returns false, linking nothing, when stop was already requested or
-    // registration was reset before linking.
+    // Returns false without linking if stop was requested, the source retired,
+    // or registration was reset before linking.
     [[nodiscard]] bool link(stop_callback_node& node, std::atomic<stop_registration_phase>& phase) noexcept;
     void unlink(stop_callback_node& node) noexcept;
 
@@ -268,7 +268,7 @@ private:
         auto callback = callback_->take();
         callback_.reset();
         const auto previous_phase = phase_.exchange(registration_phase_type::idle, std::memory_order_acq_rel);
-        if (previous_phase != registration_phase_type::reset_pending) {
+        if (previous_phase != registration_phase_type::reset_pending && state->stop_requested()) {
             detail::stop_callback_node::invoke(std::move(callback));
         }
     }
