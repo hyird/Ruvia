@@ -103,6 +103,10 @@ public:
         return target_;
     }
     std::string_view target() const&& = delete;
+    // Transfers the target, leaving the origin and its classification unchanged.
+    [[nodiscard]] std::string take_target() && noexcept {
+        return std::exchange(target_, {});
+    }
 
     [[nodiscard]] http_scheme scheme() const noexcept {
         return scheme_;

@@ -1350,6 +1350,23 @@ TEST(Ruvia, http_client_redirect_resolution_same_origin_stays_relative) {
     check_resolved_redirect(origin, "/a/b", "HTTP://EXAMPLE.COM:80/x", {http_scheme::http, "EXAMPLE.COM", 80, "/x", false});
 }
 
+TEST(Ruvia, http_client_redirect_resolution_transfers_target_storage) {
+    const auto origin = origin_for("example.com", 80);
+    const std::string target = "/" + std::string(512, 'x') + "?q=1";
+    const std::string location = "https://other.example" + target;
+    auto result = resolve_http_client_redirect_target(origin, {.current_target_ = "/", .location_ = location});
+    auto* resolved = std::get_if<http_client_resolved_redirect>(&result);
+    ASSERT_NE(resolved, nullptr);
+    const auto* const storage = resolved->target().data();
+
+    const auto transferred = std::move(*resolved).take_target();
+    EXPECT_EQ(transferred, target);
+    EXPECT_EQ(transferred.data(), storage);
+    EXPECT_TRUE(resolved->target().empty());
+    EXPECT_EQ(resolved->host(), "other.example");
+    EXPECT_TRUE(resolved->cross_origin());
+}
+
 TEST(Ruvia, http_client_redirect_resolution_classifies_cross_origin) {
     const auto origin = origin_for("example.com", 80);
     // Different host, default port for the located scheme.

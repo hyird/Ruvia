@@ -686,7 +686,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
         }
 
         request.method_.assign(plan.method());
-        request.target_.assign(next->target());
+        request.target_ = std::move(*next).take_target();
         const bool drop = plan.content_disposition() == http_client_redirect_content_disposition::drop;
         std::erase_if(request.headers_, [&](const http_header& field) {
             const auto name = field.name();

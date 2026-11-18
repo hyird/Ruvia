@@ -1101,7 +1101,8 @@ TEST(Ruvia, http_client_redirect_hop_observation_and_streaming_upload_redirect) 
     routing_peer second_peer(io, nullptr);
     const std::string base_url = "http://127.0.0.1:" + std::to_string(peer.port());
     const std::string second_url = "http://127.0.0.1:" + std::to_string(second_peer.port());
-    peer.redirect_location_ = second_url + "/final-destination";
+    const std::string final_target = "/final-destination/" + std::string(512, 'x') + "?q=1";
+    peer.redirect_location_ = second_url + final_target;
     std::array configs{
         ruvia::http_client_config{.alias_ = "default", .base_url_ = base_url},
         ruvia::http_client_config{.alias_ = "second", .base_url_ = second_url},
@@ -1127,10 +1128,10 @@ TEST(Ruvia, http_client_redirect_hop_observation_and_streaming_upload_redirect) 
         auto redirected_resp = co_await upload_exchange.response();
         EXPECT_EQ(redirected_resp.status(), ruvia::http_status::ok);
         const auto landed_body = co_await redirected_resp.collect_body();
-        EXPECT_EQ(landed_body.text(), "/final-destination");
+        EXPECT_EQ(landed_body.text(), final_target);
         EXPECT_EQ(observed_targets.size(), 1U);
         if (!observed_targets.empty()) {
-            EXPECT_EQ(observed_targets[0], second_url + "/final-destination");
+            EXPECT_EQ(observed_targets[0], second_url + final_target);
             EXPECT_EQ(observed_statuses[0], 302U);
         }
 
@@ -1139,7 +1140,7 @@ TEST(Ruvia, http_client_redirect_hop_observation_and_streaming_upload_redirect) 
         auto early_resp = co_await early_upload.response();
         EXPECT_FALSE(early_upload.body().writable());
         const auto early_body = co_await early_resp.collect_body();
-        EXPECT_EQ(early_body.text(), "/final-destination");
+        EXPECT_EQ(early_body.text(), final_target);
 
         // 3) Returning false from on_redirect stops following and returns the 302 response.
         auto stopped_resp = co_await handle.get("/redirect")

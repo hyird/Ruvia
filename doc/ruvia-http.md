@@ -4526,6 +4526,7 @@ public:
 
     [[nodiscard]] std::string_view target() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view target() const&& = delete;
+    [[nodiscard]] std::string take_target() && noexcept;
     [[nodiscard]] http_scheme scheme() const noexcept;
     [[nodiscard]] std::string_view host() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view host() const&& = delete;
@@ -4546,12 +4547,13 @@ public:
 | `unsupported_scheme` | `Location` 的 scheme 不是 `http`/`https`；响应本身合法，由 I/O 所有者决定交出响应还是使交换失败。 |
 | `current_target_` / `location_` | 当前请求的 origin-form 目标与 `Location` 字段值（借用）。 |
 | `target()` | 目标源站上的 origin-form 目标（拥有，借用视图）。 |
+| `take_target() && noexcept` | 移交目标字符串，不复制堆上字节；源目标为空，源站与跨源判定不变。 |
 | `scheme()` / `host()` / `port()` | 目标源站；`host()` 为 `uri-host`，IP-literal 保留方括号，与 `http_origin_view` 工厂契约一致。 |
 | `cross_origin()` | scheme/host/port 三元组任一与请求源站不同即为 `true`；按 RFC 9110 §15.4 与 Fetch 规范，I/O 所有者跟随前须丢弃凭据（`Authorization`、`Proxy-Authorization`、不属于新源站的 Cookie）。 |
 | `origin()` | 由 `host()` 构造的 `http_origin_view`，借用本对象存储，仅在本对象存活期间有效；右值重载删除。 |
 | `resolve_http_client_redirect_target(origin, options)` | 去除 `Location` 首尾 OWS 并剥离片段后，按 RFC 3986 相对 `origin` 与 `current_target_` 解析；不同 http/https 源站是成功分支，由 `cross_origin()` 分类，I/O 所有者在其上实施跨源策略（剥离凭据、拒绝 TLS 降级）。可因分配抛出。 |
 
-示例：[`examples/http_client_advanced.cpp`](../examples/http_client_advanced.cpp) 在重定向回调中使用 `resolve_http_client_redirect_target`。
+示例：[`examples/http_client_advanced.cpp`](../examples/http_client_advanced.cpp) 解析并接管下一跳的请求目标。
 
 ### 8.8 `"http_connection_advertisement.h"`
 <a id="api-http-connection-advertisement-h"></a>

@@ -43,13 +43,13 @@ ruvia::task<void> follow_redirect(const ruvia::http_client_ref& origin) {
             throw std::runtime_error("redirect needs exactly one Location");
         }
         auto destination = ruvia::resolve_http_client_redirect_target(origin.origin(), {.current_target_ = target, .location_ = location.value_});
-        const auto* resolved = std::get_if<ruvia::http_client_resolved_redirect>(&destination);
+        auto* resolved = std::get_if<ruvia::http_client_resolved_redirect>(&destination);
         if (!resolved || resolved->cross_origin()) {
             // Origins are fixed at startup. Following another origin requires
             // a preconfigured client and stripping origin-specific credentials.
             throw std::runtime_error("this example only follows same-origin redirects");
         }
-        target.assign(resolved->target());
+        target = std::move(*resolved).take_target();
         // Drain the old response before reusing its HTTP/1 connection. Abandoning
         // a partially consumed HTTP/1 response closes that connection instead.
         while (co_await response.stream().read()) {
