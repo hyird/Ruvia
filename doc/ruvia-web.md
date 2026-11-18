@@ -3745,7 +3745,7 @@ co_return c.text(body.text());
 | `http_client_response_body& stream() && = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
 | `task<http_client_response_bytes> collect_body(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &` | 收集并独立拥有 `stream()` 的未读正文；`max_bytes` 为附加上限；中断保留已收字节供下一次正文操作 |
 | `task<http_client_response_bytes> collect_body(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete` | 禁止在临时响应上调用：冷任务借用响应 |
-| `template <typename value_type> requires detail::is_model_json_value<value_type> task<model_parse_result<value_type>> json(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &` | 收集正文并以 `parse_json<value_type>` 解析；语法、结构及字段规则失败返回领域错误，不抛本服务的 `http_error`；传输中断及分配／配置异常仍传播 |
+| `template <typename value_type> requires detail::is_model_json_value<value_type> task<model_parse_result<value_type>> json(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &` | 与 `collect_body()` 共用读通道及限额。正文连续时同步借用解析，不复制整份正文；分散在两个缓冲区时合并一次。解析结果独立拥有数据；格式、结构及字段规则失败返回领域错误，传输、限额或分配错误仍抛异常。 |
 | `template <typename value_type> requires detail::is_model_json_value<value_type> task<model_parse_result<value_type>> json(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |
 | `task<void> pipe_to(context& output, operation_options operation = {}) &` | 转发状态、端到端字段、未读正文与 Trailer 到当前服务端响应；准入、`Connection` 错误（`protocol_error`）的提交前 / 后区别、长度与 `take_headers()` 之后的行为见 11.3.2；冷操作随本响应或目标失效 |
 | `task<void> pipe_to(context&, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |

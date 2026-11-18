@@ -1101,10 +1101,19 @@ template task<void> detail::http_client_response_state::consume_body<void>(opera
 
 task<http_client_response_bytes> http_client_response::collect_body(std::size_t max_bytes, operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
-    return state_value.body_operation_scope_.attach(state_value.collect_body(max_bytes, std::move(operation)));
+    return state_value.body_operation_scope_.attach(state_value.collect_body<http_client_response_bytes>(max_bytes, std::move(operation)));
 }
 
-task<http_client_response_bytes> detail::http_client_response_state::collect_body(std::size_t max_bytes, operation_options operation) {
+detail::operation_scope& http_client_response::body_scope() & {
+    return require_response_body_state(state_).body_operation_scope_;
+}
+
+task<void> http_client_response::parse_response_body(detail::http_client_response_state& state, std::size_t max_bytes, operation_options operation, detail::callback_ref<void(std::string_view)> parse) {
+    return state.collect_body<void>(max_bytes, std::move(operation), parse);
+}
+
+template <typename result_type>
+task<result_type> detail::http_client_response_state::collect_body(std::size_t max_bytes, operation_options operation, callback_ref<void(std::string_view)> parse) {
     auto& state_value = *this;
     auto activity = claim_operation_lane(state_value.body_operation_active_, "HTTP client response body operation is already active");
     const http_client_operation_interruption interruption(state_value, http_client_operation_lane::read, operation);
@@ -1135,18 +1144,45 @@ task<http_client_response_bytes> detail::http_client_response_state::collect_bod
     const auto total_remaining = remaining + state_value.pending_.size();
     if (total_remaining == 0) {
         state_value.discard_response_body();
-        co_return http_client_response_bytes{};
+        if constexpr (std::is_void_v<result_type>) {
+            parse({});
+            co_return;
+        } else {
+            co_return http_client_response_bytes{};
+        }
     }
     auto reservation = detail::http_client_result_budget_lease::try_acquire(state_value.memory_domain_.result_budget_domain_, total_remaining);
     if (!reservation) {
         throw http_client_error(make_error_code(http_client_errc::result_budget_exceeded), "HTTP client retained result byte budget is exhausted", std::nullopt, state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr, state_value.request_written_);
     }
-    http_client_response_bytes result_value(std::span(state_value.buffered_).subspan(state_value.offset_), std::span(state_value.pending_), std::move(*reservation));
-    // The result uses independent thread-safe storage. Only release the
-    // worker-owned response buffers after the complete copy succeeds.
-    state_value.consumed_body_bytes_ = saturating_add(state_value.consumed_body_bytes_, static_cast<std::uint64_t>(total_remaining));
-    state_value.discard_response_body();
-    co_return std::move(result_value);
+    const auto consume = [&state_value, total_remaining]() noexcept {
+        state_value.consumed_body_bytes_ = saturating_add(state_value.consumed_body_bytes_, static_cast<std::uint64_t>(total_remaining));
+        state_value.discard_response_body();
+    };
+    const auto buffered = std::string_view(state_value.buffered_).substr(state_value.offset_);
+    const std::string_view pending = state_value.pending_;
+    if constexpr (std::is_void_v<result_type>) {
+        if (buffered.empty() || pending.empty()) {
+            // Parsing here is synchronous and produces an owning result. The
+            // read lane keeps the borrowed bytes stable until parsing returns.
+            try {
+                parse(buffered.empty() ? pending : buffered);
+            } catch (...) {
+                consume();
+                throw;
+            }
+            consume();
+            co_return;
+        }
+    }
+    http_client_response_bytes result_value(std::span(buffered), std::span(pending), std::move(*reservation));
+    consume();
+    if constexpr (std::is_void_v<result_type>) {
+        parse(result_value.text());
+        co_return;
+    } else {
+        co_return std::move(result_value);
+    }
 }
 
 task<void> http_client_response_body::pipe_to(response_stream_writer& output, operation_options operation) & {

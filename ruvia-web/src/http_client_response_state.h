@@ -591,7 +591,8 @@ public:
     // validated by the facade and timed from here.
     template <typename view>
     [[nodiscard]] task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> consume_body(operation_options operation, std::conditional_t<std::is_void_v<view>, http_client_response_output, std::nullptr_t> output = {});
-    [[nodiscard]] task<http_client_response_bytes> collect_body(std::size_t max_bytes, operation_options operation);
+    template <typename result_type>
+    [[nodiscard]] task<result_type> collect_body(std::size_t max_bytes, operation_options operation, callback_ref<void(std::string_view)> parse = {});
     void retain_reference() noexcept;
     void release_reference() noexcept;
     [[nodiscard]] http_client_response_memory_domain& memory_domain() const noexcept {

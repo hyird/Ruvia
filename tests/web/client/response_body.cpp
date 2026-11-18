@@ -1717,6 +1717,39 @@ TEST(Ruvia, client_response_cold_collection_survives_client_and_expires_with_res
     run_operation(worker, io, operation);
 }
 
+TEST(Ruvia, client_json_cold_read_follows_response_moves_and_owns_its_result) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    const std::string payload(32 * 1024, 'x');
+    const std::string text = '"' + payload + '"';
+    loopback_response_server server(io, worker.handle_, {text});
+    server.start();
+    const auto operation = [&]() -> ruvia::task<void> {
+        const std::string url = "http://127.0.0.1:" + std::to_string(server.port());
+        ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(url), {.result_budget_ = {.max_retained_bytes_ = text.size()}});
+        std::optional<ruvia::http_client_response> response(co_await client.client().get("/json").send());
+        auto cold = response->json<ruvia::string>(text.size());
+        auto moved = std::move(*response);
+        response.reset();
+        response.emplace(std::move(moved));
+        auto parsed = (co_await std::move(cold)).take_value();
+        EXPECT_TRUE(response->stream().complete());
+        auto expired = response->json<ruvia::string>();
+        response.reset();
+        bool rejected = false;
+        try {
+            (void)co_await std::move(expired);
+        } catch (const std::logic_error&) {
+            rejected = true;
+        }
+        EXPECT_TRUE(rejected);
+        co_await client.shutdown();
+        EXPECT_EQ(parsed.view(), payload);
+        co_await server.wait();
+    };
+    run_operation(worker, io, operation);
+}
+
 TEST(Ruvia, http_client_sends_heads_beyond_the_retained_buffer_and_rejects_oversized_heads) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);

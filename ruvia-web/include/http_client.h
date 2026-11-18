@@ -13,6 +13,7 @@
 #include <variant>
 #include <vector>
 
+#include "callback_ref.h"
 #include "event_loop.h"
 #include "http2_push.h"
 #include "http_authority.h"
@@ -30,6 +31,7 @@
 #include "http_tunnel.h"
 #include "model.h"
 #include "operation_options.h"
+#include "operation_scope.h"
 #include "outbound_bytes.h"
 #include "stop_token.h"
 #include "websocket.h"
@@ -253,7 +255,8 @@ public:
     template <typename value_type>
         requires detail::is_model_json_value<value_type>
     [[nodiscard]] task<model_parse_result<value_type>> json(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) & {
-        return decode_json<value_type>(collect_body(max_bytes, std::move(operation)));
+        auto& scope = body_scope();
+        return scope.attach(decode_json<value_type>(*state_, max_bytes, std::move(operation)));
     }
     template <typename value_type>
         requires detail::is_model_json_value<value_type>
@@ -272,10 +275,17 @@ public:
 private:
     // The one forwarding chain of both pipe_to() destinations.
     [[nodiscard]] task<void> pipe_to_destination(context& output, response_stream_writer& writer, detail::operation_scope& destination, operation_options operation);
+    [[nodiscard]] detail::operation_scope& body_scope() &;
+    // Invokes parse synchronously on the read lane; it must not retain its input.
+    [[nodiscard]] static task<void> parse_response_body(detail::http_client_response_state& state, std::size_t max_bytes, operation_options operation, detail::callback_ref<void(std::string_view)> parse);
     template <typename value_type>
-    static task<model_parse_result<value_type>> decode_json(task<http_client_response_bytes> input) {
-        auto owned = co_await std::move(input);
-        co_return parse_json<value_type>(owned.text());
+    static task<model_parse_result<value_type>> decode_json(detail::http_client_response_state& state, std::size_t max_bytes, operation_options operation) {
+        std::optional<model_parse_result<value_type>> result;
+        const auto parse = [&result](std::string_view text) {
+            result.emplace(parse_json<value_type>(text));
+        };
+        co_await parse_response_body(state, max_bytes, std::move(operation), detail::callback_access::bind<void(std::string_view)>(parse));
+        co_return std::move(*result);
     }
     friend class body_reader;
     friend class detail::http_client_pool;
