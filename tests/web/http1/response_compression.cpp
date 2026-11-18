@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -25,14 +26,18 @@
 #include <asio/write.hpp>
 
 #include "app.h"
+#include "blocking_pool.h"
 #include "context.h"
 #include "controller.h"
+#include "event_loop.h"
+#include "http_client.h"
 #include "http_content_codec.h"
 #include "http_content_coding.h"
 #include "http_content_negotiation.h"
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "streaming.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "http2_frame.h"
@@ -98,6 +103,9 @@ class response_compression_routes final {
     RUVIA_GET("/compression-custom-coding", custom_coding);
     RUVIA_GET("/compression-mixed-rejected", mixed_rejected_coding);
     RUVIA_POST("/compression-echo-decoded", echo_decoded);
+#if defined(RUVIA_ENABLE_HTTP2)
+    RUVIA_POST("/compression-overlap", read_overlapping);
+#endif
     RUVIA_GET("/compression-zero-declared", head_zero_declared);
     RUVIA_GET("/compression-stream", stream);
     RUVIA_GET("/compression-stream-held", hold_stream);
@@ -204,6 +212,58 @@ class response_compression_routes final {
         }
         co_return context_value.text(body);
     }
+
+#if defined(RUVIA_ENABLE_HTTP2)
+    ruvia::task<ruvia::http_response> read_overlapping(ruvia::context& ctx) {
+        auto* const pool = ctx.worker().blocking_pool();
+        if (pool == nullptr) {
+            throw std::logic_error("test requires a blocking pool");
+        }
+        std::promise<void> unblock;
+        const auto gate = unblock.get_future().share();
+        const auto wait_for_release = [gate] {
+            gate.wait();
+        };
+        for (std::size_t i = 0; i < pool->thread_count(); ++i) {
+            if (!pool->post(wait_for_release).accepted()) {
+                throw std::logic_error("could not occupy the blocking pool");
+            }
+        }
+
+        ruvia::stop_source stop;
+        const auto first_read = [&]() -> ruvia::task<void> {
+            try {
+                (void)co_await ctx.req().body_bytes({.stop_token_ = stop.token()});
+                ADD_FAILURE() << "cancelled read returned the body";
+            } catch (const std::system_error& error) {
+                EXPECT_EQ(error.code(), std::errc::operation_canceled);
+            }
+        };
+        ruvia::task_scope reads(ctx.worker());
+        reads.spawn(first_read());
+        bool rejected = false;
+        std::exception_ptr failure;
+        try {
+            (void)co_await ctx.req().collect_body({.timeout_ = std::chrono::milliseconds(100)});
+        } catch (const std::logic_error&) {
+            rejected = true;
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        stop.request_stop();
+        co_await reads.join();
+        unblock.set_value();
+        EXPECT_TRUE(rejected);
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+        const auto text = co_await ctx.req().body_text();
+        const auto bytes = co_await ctx.req().body_bytes();
+        EXPECT_EQ(bytes.data(), reinterpret_cast<const std::byte*>(text.data()));
+        co_return ctx.text(text);
+    }
+#endif
+
     ruvia::task<void> stream(ruvia::context& context_value) {
         auto& writer = context_value.stream_text();
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
@@ -432,6 +492,34 @@ TEST(Ruvia, http2_websocket_handshake_failure_response_is_not_encoded) {
     EXPECT_FALSE(encoded);
     std::error_code ignored;
     socket.close(ignored);
+    server.finish();
+}
+
+TEST(Ruvia, http2_buffered_request_body_rejects_overlapping_decode_and_allows_retry) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    auto attachment = ruvia::attach_event_loop(io);
+    const std::string plain(96 * 1024, 'x');
+    auto encoded = ruvia::encode_http_content(ruvia::http_content_coding::gzip, plain, {.max_encoded_bytes_ = plain.size()});
+    ASSERT_TRUE(encoded);
+    const auto run = [&]() -> ruvia::task<void> {
+        const auto url = "http://127.0.0.1:" + std::to_string(server.endpoint().port());
+        ruvia::http_client client(attachment.loop(), {.base_url_ = url, .versions_ = ruvia::http_client_versions{.http1_ = false}});
+        std::exception_ptr failure;
+        try {
+            auto response = co_await client.client().post("/compression-overlap").header("Content-Encoding", "gzip").body(std::move(*encoded)).send();
+            EXPECT_EQ(response.status(), ruvia::http_status::ok);
+            const auto received = co_await response.collect_body();
+            EXPECT_EQ(received.text(), plain);
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await client.shutdown();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    ruvia::test::run_worker_tasks(attachment, run());
     server.finish();
 }
 #endif

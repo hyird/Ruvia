@@ -55,6 +55,7 @@
 #include "http_response.h"
 #include "http_tunnel.h"
 #include "inbound_buffer.h"
+#include "io_operation.h"
 #include "middleware.h"
 #include "rate_limit.h"
 #include "request_stream.h"
@@ -1432,6 +1433,7 @@ public:
 
     std::optional<std::string> decoded_body_;
     inbound_buffer_reservation decoded_body_reservation_;
+    bool buffered_body_active_{false};
     std::optional<request_name_value_list> headers_;
     std::optional<request_query_cache> query_;
     std::optional<request_name_value_list> cookies_;
@@ -1570,6 +1572,10 @@ struct context_access final {
 
     [[nodiscard]] static const context_services& services(const context& context_value) noexcept {
         return context_value.runtime_services();
+    }
+
+    [[nodiscard]] static operation_lane_lease claim_buffered_body(const context& context_value) {
+        return claim_operation_lane(context_value.request_storage().buffered_body_active_, "buffered request body operation is already active");
     }
 
     [[nodiscard]] static std::optional<std::string_view> decoded_body(const context& context_value) noexcept {

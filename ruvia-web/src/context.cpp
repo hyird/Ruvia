@@ -1098,6 +1098,7 @@ task<result_type> read_request_body(const context& context_value, operation_opti
     if (const auto decoded = detail::context_access::decoded_body(context_value)) {
         co_return as_result(*decoded);
     }
+    const auto lane = detail::context_access::claim_buffered_body(context_value);
 
     const auto& body_source = detail::context_access::request_body_source(context_value);
     const auto& request = detail::context_access::request(context_value);
@@ -1151,10 +1152,6 @@ task<result_type> read_request_body(const context& context_value, operation_opti
         }
         require_request_body_read(deadline, linked.options().stop_token_);
         decode_result = std::move(decoded).take_value();
-        // Another read may have published its views while decoding was offloaded.
-        if (const auto cached = detail::context_access::decoded_body(context_value)) {
-            co_return as_result(*cached);
-        }
     } else {
         require_request_body_read(deadline, operation.stop_token_);
     }
@@ -1181,6 +1178,7 @@ task<void> discard_request_body(const context& context_value, operation_options 
     operation.timeout_ = deadline.timeout();
     const auto& body_source = detail::context_access::request_body_source(context_value);
     if (const auto* lazy = body_source.lazy()) {
+        const auto lane = detail::context_access::claim_buffered_body(context_value);
         co_await lazy->loader().discard(std::move(operation));
         co_return;
     }

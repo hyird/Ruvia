@@ -433,6 +433,8 @@ public:
 
     // Buffered views borrow context storage; collect_body() returns an owning
     // copy of the same decoded bytes. Read the media type with header("Content-Type").
+    // Only one operation may load or decode the buffered body at a time.
+    // Overlapping consumption throws std::logic_error.
     // `operation` bounds the read and content decoding (or the discard), even
     // when bytes are already cached. json_if(), form_if() and multipart() use
     // that same read bound before synchronous parsing. A timeout or stop ends

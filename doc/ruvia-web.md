@@ -1657,6 +1657,7 @@ ruvia::task<ruvia::http_response> show(ruvia::context& c) {
 - **类型化参数**：`param<T>` / `query<T>` 支持整数（`detail::parsed_integer` 约束的整数类型）与 `bool`；缺失返回 `std::nullopt`，存在但非法抛 HTTP 400。
 - **重复字段**：`header()` / `query()` / `cookie()` 取首个出现；会话 ID、CSRF 令牌等安全单值字段用 `unique_cookie()` / `unique_header()`，重复时返回 `repeated` 而不选取任何一个（[`http_unique_field_lookup`](ruvia-http.md#api-http-header-h)）。
 - **逐次正文操作**：`operation` 约束读取、内容解码或丢弃；即使正文已缓存，也在返回前检查截止期。`json_if()` / `form_if()` / `multipart()` 共用正文读取边界，格式解析同步执行。超时或停止抛 `std::system_error`（`timed_out` / `operation_canceled`），保留已收字节供重试。非正相对超时抛 `std::invalid_argument`；服务器正文超时独立生效。
+- **缓冲正文互斥**：加载或解码期间，只允许一个操作消费缓冲正文；重叠调用抛 `std::logic_error`。首个操作结束后可重试，后续读取复用已解码的字节。
 - **可复制句柄**：`context_request` 是可复制句柄，操作借用 context 而非句柄，可直接在 `c.req()` 临时句柄上调用。
 - **流式正文**：`stream_body` 路由用 `c.request_body()` / `c.request_multipart()`（[`streaming.h`](#api-streaming-h)）；缓冲路由调用 `request_body()` 抛 `std::logic_error`。
 
