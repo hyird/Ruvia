@@ -82,7 +82,7 @@ public:
     http_content_decoder(http_content_decoder&&) = delete;
     http_content_decoder& operator=(http_content_decoder&&) = delete;
 
-    [[nodiscard]] http_content_decode_result decode(std::string_view input, std::span<char> output);
+    [[nodiscard]] http_content_decode_result decode(std::string_view input RUVIA_LIFETIMEBOUND, std::span<char> output RUVIA_LIFETIMEBOUND);
     template <detail::http_temporary_owning_char_string input_type>
     http_content_decode_result decode(input_type&&, std::span<char>) = delete;
     template <std::same_as<char> element_type>

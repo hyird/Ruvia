@@ -45,7 +45,7 @@ public:
     http_transfer_coding_stack_decoder& operator=(const http_transfer_coding_stack_decoder&) = delete;
     http_transfer_coding_stack_decoder(http_transfer_coding_stack_decoder&&) = delete;
     http_transfer_coding_stack_decoder& operator=(http_transfer_coding_stack_decoder&&) = delete;
-    [[nodiscard]] http_transfer_coding_decode_result decode(std::string_view input, std::span<char> output);
+    [[nodiscard]] http_transfer_coding_decode_result decode(std::string_view input, std::span<char> output RUVIA_LIFETIMEBOUND);
     [[nodiscard]] http_transfer_coding_decode_result finish_input() noexcept;
 
     [[nodiscard]] decoder_state state() const noexcept;
