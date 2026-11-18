@@ -464,11 +464,11 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         // Buffered protocol input may still complete the response without I/O.
         // Drain it within the queue limit before waiting for the consumer, so
         // a complete retained response does not depend on a later body read.
-        if (!state_value.collect_all_ && state_value.pending_.size() >= max_response_bytes) {
+        if (!state_value.collecting_body() && state_value.pending_.size() >= max_response_bytes) {
             co_await wait_for_body_space(state_value, timeout);
         }
         connection_.throw_if_aborted();
-        const auto capacity = state_value.collect_all_ ? http_body_buffer_bytes : std::min(http_body_buffer_bytes, max_response_bytes - state_value.pending_.size());
+        const auto capacity = state_value.collecting_body() ? http_body_buffer_bytes : std::min(http_body_buffer_bytes, max_response_bytes - state_value.pending_.size());
         const auto decoded = [&] {
             try {
                 return eof ? body_decoder.finish_input(read_buffer.view(), transfer_output, capacity) : body_decoder.decode(read_buffer.view(), transfer_output, capacity);
@@ -493,7 +493,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         // Only a new network read spends inactivity budget. Outstanding delivery
         // (including the last borrowed chunk) postpones that read, not decoder
         // completion on bytes already received.
-        if (!state_value.collect_all_ && (!state_value.pending_.empty() || !state_value.buffered_.empty())) {
+        if (!state_value.collecting_body() && (!state_value.pending_.empty() || !state_value.buffered_.empty())) {
             co_await wait_for_body_space(state_value, timeout);
         }
         const auto read = co_await read_append(read_buffer, response_read_chunk_bytes, timeout);
@@ -518,7 +518,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
 }
 
 task<void> http1_client_exchange::wait_for_body_space(http_client_response_state& state_value, const operation_deadline& timeout) {
-    while (!state_value.collect_all_ && (!state_value.pending_.empty() || !state_value.buffered_.empty())) {
+    while (!state_value.collecting_body() && (!state_value.pending_.empty() || !state_value.buffered_.empty())) {
         connection_.throw_if_aborted();
         const auto deadline = timeout.deadline();
         if (deadline && *deadline <= std::chrono::steady_clock::now()) {

@@ -645,9 +645,15 @@ public:
         }
     }
     void release_consumed_body_prefix();
+    [[nodiscard]] bool exceeds_body_limit(std::size_t limit) const noexcept {
+        return pending_.size() > limit || buffered_.size() - offset_ > limit - pending_.size();
+    }
+    [[nodiscard]] bool collecting_body() const noexcept {
+        return body_decode_required_ || (collection_limit_ && !exceeds_body_limit(*collection_limit_));
+    }
     [[nodiscard]] bool append_received_body(std::string_view bytes_value, std::size_t max_response_bytes) {
         const auto retained = buffered_.size() - offset_ + pending_.size();
-        if (collect_all_ && bytes_value.size() > max_response_bytes - (std::min)(retained, max_response_bytes)) {
+        if (collecting_body() && bytes_value.size() > max_response_bytes - (std::min)(retained, max_response_bytes)) {
             discard_response_body();
             return false;
         }
@@ -662,7 +668,7 @@ public:
     // is collected whole, or the chunk carried no credit -- so the stream's
     // read stays active.
     [[nodiscard]] bool retain_data_credit(::ruvia::http_received_data_credit&& credit) {
-        if (collect_all_ || !credit.valid()) {
+        if (collecting_body() || !credit.valid()) {
             return false;
         }
         if (data_credit_) {
@@ -760,7 +766,9 @@ public:
     bool head_ready_{false};
     bool complete_{false};
     bool abandoned_{false};
-    bool collect_all_{false};
+    // A chunk crossing this bound is retained for retry, but restores ordinary
+    // receive backpressure before the collection coroutine is resumed.
+    std::optional<std::size_t> collection_limit_;
     bool body_operation_active_{false};
     // The interrupts of the running consumer and output operations; null
     // while none runs. Their source routes stop requests on this worker.

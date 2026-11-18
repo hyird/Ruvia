@@ -247,8 +247,8 @@ public:
     http_client_response_body& stream() && = delete;
     // Collects the unread remainder of the body on stream()'s read lane.
     // max_bytes is a caller bound in addition to the origin's transport bound.
-    // An interrupted collection keeps the bytes received so far for the next
-    // body operation.
+    // Caller-limit failure and interruption keep the unread bytes for the next
+    // operation. A crossed caller limit does not wait for the end of the body.
     [[nodiscard]] task<http_client_response_bytes> collect_body(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &;
     task<http_client_response_bytes> collect_body(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
     // 传输/配额故障仍抛出；已收集正文的格式、结构与字段错误返回领域结果。

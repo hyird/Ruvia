@@ -3743,7 +3743,7 @@ co_return c.text(body.text());
 | `std::optional<std::string_view> trailer(std::string_view) const&& = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
 | `http_client_response_body& stream() & noexcept` | 借用的正文门面 |
 | `http_client_response_body& stream() && = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
-| `task<http_client_response_bytes> collect_body(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &` | 收集并独立拥有 `stream()` 的未读正文；`max_bytes` 为附加上限；消费前检查截止期，即使正文已完整缓冲；中断保留已收字节供下一次正文操作 |
+| `task<http_client_response_bytes> collect_body(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &` | 收集并独立拥有 `stream()` 的未读正文。确认超过 `max_bytes` 即报 `response_too_large`，不等待正文结束；消费前仍检查截止期。调用方超限或操作中断时保留未读字节，可改用流式读取或提高上限重试。客户端配置的传输及解码上限独立生效。 |
 | `task<http_client_response_bytes> collect_body(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete` | 禁止在临时响应上调用：冷任务借用响应 |
 | `template <typename value_type> requires detail::is_model_json_value<value_type> task<model_parse_result<value_type>> json(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &` | 与 `collect_body()` 共用读通道、限额及截止期规则。正文连续时同步借用解析，不复制整份正文；分散在两个缓冲区时合并一次。解析结果独立拥有数据；格式、结构及字段规则失败返回领域错误，传输、限额或分配错误仍抛异常。 |
 | `template <typename value_type> requires detail::is_model_json_value<value_type> task<model_parse_result<value_type>> json(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete` | 禁止在临时对象上调用：返回的冷任务借用本对象，临时对象在任务运行前已销毁 |

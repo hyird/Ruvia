@@ -841,6 +841,46 @@ TEST(Ruvia, http_client_preserves_fixed_length_response_before_unsolicited_bytes
     run_operation(worker, io, operation);
 }
 
+TEST(Ruvia, client_body_collection_limit_rejects_before_end_and_preserves_bytes) {
+    for (const bool parse_json : {false, true}) {
+        auto& io = ruvia::test::new_test_io_context();
+        test_worker worker(io);
+        const auto encoded = large_gzip_response_body();
+        http1_chunked_response_peer peer(io, encoded);
+        peer.start();
+        const auto operation = [&]() -> ruvia::task<void> {
+            const auto url = "http://127.0.0.1:" + std::to_string(peer.port());
+            ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(url));
+            auto response = co_await client.client().get("/limit").send();
+            const ruvia::operation_options bounded{.timeout_ = ruvia::timeout_duration(std::chrono::milliseconds(500))};
+            std::error_code error;
+            try {
+                if (parse_json) {
+                    (void)co_await response.json<ruvia::string>(8, bounded);
+                } else {
+                    (void)co_await response.collect_body(8, bounded);
+                }
+            } catch (const ruvia::http_client_error& failure) {
+                error = failure.code();
+            }
+            EXPECT_EQ(error, ruvia::make_error_code(ruvia::http_client_errc::response_too_large));
+            EXPECT_FALSE(response.stream().complete());
+            const auto prefix = co_await response.stream().read_text();
+            EXPECT_TRUE(prefix && !prefix->empty());
+            const auto prefix_size = prefix ? prefix->size() : 0;
+            peer.release_terminal_chunk();
+            constexpr std::size_t total = 128 * 1024;
+            const auto rest = co_await response.collect_body(total - prefix_size);
+            EXPECT_EQ(rest.text(), std::string(total - prefix_size, 'z'));
+            EXPECT_EQ(response.trailer("x-end"), "retained");
+            EXPECT_TRUE(response.stream().complete());
+            co_await client.shutdown();
+        };
+        run_operation(worker, io, operation);
+        peer.wait();
+    }
+}
+
 TEST(Ruvia, client_response_body_claims_its_shared_lane_only_when_started) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);

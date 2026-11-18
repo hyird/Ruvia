@@ -340,9 +340,7 @@ void configure_http_client_response_decoding(http_client_response_state& state_v
         return coding != http_content_coding::identity;
     });
     state_value.body_decode_required_ = parsed_coding.invalid() != nullptr || parsed_coding.unsupported() != nullptr || transforms_body;
-    if (state_value.body_decode_required_) {
-        state_value.collect_all_ = true;
-    } else {
+    if (!state_value.body_decode_required_) {
         state_value.content_coding_.reset();
     }
 }
@@ -1123,30 +1121,28 @@ task<result_type> detail::http_client_response_state::collect_body(std::size_t m
     operation.timeout_ = deadline.timeout();
     const http_client_operation_interruption interruption(state_value, http_client_operation_lane::read, operation);
     state_value.release_consumed_body_prefix();
-    state_value.collect_all_ = true;
-    if (state_value.pool_ != nullptr) {
-        state_value.pool_->release_response_data(state_value);
+    const auto effective_limit = std::min(max_bytes, state_value.buffered_limit_);
+    if (!state_value.receive_complete() && !state_value.exceeds_body_limit(effective_limit)) {
+        state_value.collection_limit_ = effective_limit;
+        if (state_value.pool_ != nullptr) {
+            state_value.pool_->release_response_data(state_value);
+        }
+        state_value.notify_producer_space();
+        while (!state_value.receive_complete() && !state_value.exceeds_body_limit(effective_limit) && !state_value.read_interrupted() && !deadline.expired()) {
+            co_await state_value.data_signal_.wait();
+        }
+        state_value.collection_limit_.reset();
     }
-    state_value.notify_producer_space();
-    for (;;) {
-        // A ready body can reach this point before the timer callback runs.
-        if (const auto cause = state_value.read_operation_->cause(); cause || deadline.expired()) {
-            // Keep the collected prefix and restore ordinary backpressure.
-            state_value.collect_all_ = false;
-            throw_interrupted(state_value, cause.value_or(operation_interrupt_cause::timed_out), "HTTP client read timed out", "HTTP client read cancelled");
-        }
-        if (state_value.receive_complete()) {
-            break;
-        }
-        co_await state_value.data_signal_.wait();
+    // A ready body can reach this point before the timer callback runs.
+    if (const auto cause = state_value.read_operation_->cause(); cause || deadline.expired()) {
+        throw_interrupted(state_value, cause.value_or(operation_interrupt_cause::timed_out), "HTTP client read timed out", "HTTP client read cancelled");
     }
     state_value.rethrow_response_failure();
     if (state_value.pool_closed_) {
         throw http_client_error(make_error_code(http_client_errc::closing), "HTTP response body read failed", std::nullopt, state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr, state_value.request_written_);
     }
     const auto remaining = state_value.buffered_.size() - state_value.offset_;
-    const auto effective_limit = std::min(max_bytes, state_value.buffered_limit_);
-    if (state_value.pending_.size() > effective_limit || remaining > effective_limit - state_value.pending_.size()) {
+    if (state_value.exceeds_body_limit(effective_limit)) {
         throw http_client_error(make_error_code(http_client_errc::response_too_large), "HTTP response body exceeds its collection byte limit", std::nullopt, state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr, state_value.request_written_);
     }
     const auto total_remaining = remaining + state_value.pending_.size();
