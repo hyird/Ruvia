@@ -747,7 +747,7 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
     result.copy_head_from(response);
     // As on the wire: HEAD and content-forbidden statuses carry no body.
     if (!plan_http_response_body(known_method, response.status()).body_suppressed()) {
-        result.body_.assign(response.body_bytes());
+        result.body_ = std::move(response).take_body_bytes();
     }
     co_return result;
 }

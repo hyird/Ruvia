@@ -201,8 +201,7 @@ struct test_app::impl_type final {
                     result_value.body_.append(chunk.bytes());
                 }
             } else {
-                const auto body = response.body_bytes();
-                result_value.body_.assign(reinterpret_cast<const char*>(body.data()), body.size());
+                result_value.body_ = std::move(response).take_body_bytes();
             }
         }
         co_return result_value;

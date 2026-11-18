@@ -330,6 +330,7 @@ public:
 
 private:
     friend class http_response_body;
+    friend class ::ruvia::http_response;
 
     explicit http_owned_response_bytes(std::string_view bytes_value) :
         bytes_(bytes_value) {}

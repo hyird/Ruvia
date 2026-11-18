@@ -68,6 +68,9 @@ public:
     std::string_view body() const&& = delete;
     [[nodiscard]] std::string_view body_bytes() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view body_bytes() const&& = delete;
+    // Transfers owned bytes or copies static bytes, then empties the body.
+    // File plans require a driver and throw without changing the response.
+    [[nodiscard]] std::string take_body_bytes() &&;
     [[nodiscard]] std::optional<http_response_file_view> file_body() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<http_response_file_view> file_body() const&& = delete;
     [[nodiscard]] bool has_multipart_file_body() const noexcept;

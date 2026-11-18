@@ -1040,6 +1040,13 @@ TEST(Ruvia, response_public_body_takes_rvalue_string_storage) {
 
     EXPECT_EQ(response.body_bytes().data(), storage);
     EXPECT_EQ(response.body_bytes().size(), std::size_t{4096});
+
+    response.header("X-Test", "preserved");
+    const auto extracted = std::move(response).take_body_bytes();
+    EXPECT_EQ(extracted.data(), storage);
+    EXPECT_EQ(extracted, std::string(4096, 'x'));
+    EXPECT_TRUE(response.body_bytes().empty());
+    EXPECT_EQ(response.header("X-Test"), "preserved");
 }
 
 TEST(Ruvia, response_static_body_preserves_storage_across_move) {
@@ -1052,6 +1059,29 @@ TEST(Ruvia, response_static_body_preserves_storage_across_move) {
 
     EXPECT_EQ(response.body_bytes().data(), body.view().data());
     EXPECT_EQ(response.body_bytes(), std::string_view(payload, sizeof(payload) - 1));
+
+    const auto extracted = std::move(response).take_body_bytes();
+    EXPECT_EQ(extracted, body.view());
+    EXPECT_TRUE(response.body_bytes().empty());
+}
+
+TEST(Ruvia, response_take_body_bytes_rejects_file_plan_without_retiring_it) {
+    http_response response;
+    const std::filesystem::path path("response-fixture.bin");
+    response.file_body(path.native(), 3, 0, 3, ruvia::http_response_file_identity::unchecked());
+    EXPECT_THROW((void)std::move(response).take_body_bytes(), std::logic_error);
+    const auto file = response.file_body();
+    ASSERT_TRUE(file);
+    EXPECT_EQ(file->to_path(), path);
+    EXPECT_EQ(file->length(), 3U);
+
+    std::string payload(4096, 'f');
+    const auto* storage = payload.data();
+    response.file_bytes_body(std::move(payload));
+    const auto extracted = std::move(response).take_body_bytes();
+    EXPECT_EQ(extracted.data(), storage);
+    EXPECT_FALSE(response.has_file_representation());
+    EXPECT_TRUE(std::move(response).take_body_bytes().empty());
 }
 
 TEST(Ruvia, public_response_file_view_exposes_read_only_descriptor) {

@@ -1737,7 +1737,7 @@ auto sub = co_await c.dispatch({.method_ = "GET", .target_ = "/api/internal/prof
 | `body_` | `borrowed_text` | `{}` | 缓冲请求正文 |
 | `stop_token_` | `stop_token` | `{}` | 与调用方 context 的 token 合并 |
 
-`dispatch_response`（子请求结果，独立拥有状态、头与正文；构造私有）：
+`dispatch_response`（子请求结果，独立拥有状态、头与正文；接管已拥有的字节正文，不再复制；构造私有）：
 
 | 声明 | 说明 |
 | --- | --- |
@@ -8280,7 +8280,7 @@ auto res = app.request(
 | `test_app& server(server_config config)` | 服务器配置（正文上限、压缩、CORS 等），见 [`server_config`](#api-http-server-h) |
 | `test_app& trusted_proxies(trusted_proxy_config config)` | 可信代理，见 [`trusted_proxy_config`](#api-http-server-h)；配合 `remote()` 与转发头测试客户端判定 |
 | `test_app& trusted_proxies(std::nullptr_t)` | 清空可信代理 |
-| `dispatch_response request(const test_request& request)` | 经生产路由表分发一次请求并返回复制出的响应；请求级失败变为服务器会发送的同一错误响应；处理器在一个真实 worker 上执行，含每 worker 状态语义 |
+| `dispatch_response request(const test_request& request)` | 经生产路由表分发一次请求并返回独立拥有的响应；请求级失败变为服务器会发送的同一错误响应；处理器在一个真实 worker 上执行，含每 worker 状态语义 |
 
 **返回值 `dispatch_response`**：拥有状态、响应头与正文，提供 `status()`、`body()`、`headers()`、`header(name)`；完整签名与契约见 [`"context.h"`](#api-context-h)。
 

@@ -34,7 +34,7 @@ namespace ruvia {
 // running server. The private worker is brought up and retired by the same
 // worker capability chain a server worker uses.
 // No socket is opened; request() drives that worker to completion
-// synchronously and copies the response out.
+// synchronously and returns an independently owned response.
 //
 // Scope: buffered-response routes (including 404/405/501/OPTIONS fallbacks).
 // Streaming/SSE/websocket routes and handlers that await worker-bound
@@ -189,7 +189,7 @@ public:
     test_app& trusted_proxies(std::nullptr_t);
 
     // Dispatches one request through the production route table and returns
-    // the copied-out response. Request-level failures become the same error
+    // an independently owned response. Request-level failures become the same error
     // responses a server would send. Handlers execute on one real Ruvia worker,
     // including per-worker state semantics.
     [[nodiscard]] dispatch_response request(const test_request& request);

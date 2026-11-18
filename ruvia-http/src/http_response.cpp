@@ -90,6 +90,16 @@ std::string_view http_response::body_bytes() const& noexcept {
     return detail::response_body(*this).bytes();
 }
 
+std::string http_response::take_body_bytes() && {
+    if (body_.file()) {
+        throw std::logic_error("file response body requires a transport");
+    }
+    auto* owned = std::get_if<detail::http_owned_response_bytes>(&body_.value_);
+    auto bytes = owned != nullptr ? std::move(owned->bytes_) : std::string(body_.bytes());
+    body_.set_empty();
+    return bytes;
+}
+
 std::optional<http_response_file_view> http_response::file_body() const& noexcept {
     return detail::response_body(*this).file();
 }

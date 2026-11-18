@@ -2577,6 +2577,7 @@ public:
     std::string_view body() const&& = delete;
     [[nodiscard]] std::string_view body_bytes() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view body_bytes() const&& = delete;
+    [[nodiscard]] std::string take_body_bytes() &&;
     [[nodiscard]] std::optional<http_response_file_view> file_body() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<http_response_file_view> file_body() const&& = delete;
     [[nodiscard]] bool has_multipart_file_body() const noexcept;
@@ -2636,6 +2637,8 @@ public:
 | `body_segment(index) const&` | 返回第 `index` 个片段的 `http_response_body_segment_view`（字节片段填 `bytes_`，文件片段填 `file_`）；越界抛 `std::out_of_range`。 |
 
 长度为零的文件片段仍然存在，调用方必须完成适用的文件校验（打开、identity 验证），不能因写计划 `send_body() == false` 就丢弃它；`send_body()` 只表示方法/状态允许且正文长度非零时需要传送 payload（见 [`http_buffered_response_write_plan`](#api-http-response-body-h)）。
+
+`take_body_bytes() &&` 移出拥有型字节（含 `file_bytes_body()`），或复制静态字节；成功后清空正文、保留首部。文件计划须由驱动读取；对其调用会抛 `std::logic_error`，不改变响应。
 
 正文设置（每次设置都替换整个正文：先发布完整的新表示，再释放旧正文资源；释放回调中重入替换的结果保留。重新设置正文会清除 HEAD 元数据标记）：
 
