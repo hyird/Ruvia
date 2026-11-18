@@ -510,10 +510,32 @@ using ruvia::http_target_origin_connection;
 constexpr http_target_origin_connection cleartext{};
 constexpr http_target_origin_connection secured{.secured_ = true};
 
-[[nodiscard]] http_target_origin decide(std::string_view method, std::string_view target, std::string_view host, http_target_origin_connection connection) {
+struct target_origin_snapshot final {
+    http_target_origin_action action_{};
+    http_target_host_kind host_kind_{};
+    std::string host_{};
+    std::vector<std::uint8_t> address_{};
+
+    [[nodiscard]] http_target_origin_action action() const noexcept {
+        return action_;
+    }
+    [[nodiscard]] http_target_host_kind host_kind() const noexcept {
+        return host_kind_;
+    }
+    [[nodiscard]] std::string_view host() const noexcept {
+        return host_;
+    }
+    [[nodiscard]] std::span<const std::uint8_t> address() const noexcept {
+        return address_;
+    }
+};
+
+[[nodiscard]] target_origin_snapshot decide(std::string_view method, std::string_view target, std::string_view host, http_target_origin_connection connection) {
     const std::array headers{ruvia::http_header_view("Host", host)};
     const auto request = ruvia::make_parsed_http_request(method, target, headers, {});
-    return ruvia::plan_http_target_origin(request, connection);
+    const auto origin = ruvia::plan_http_target_origin(request, connection);
+    const auto addr = origin.address();
+    return {origin.action(), origin.host_kind(), std::string(origin.host()), std::vector<std::uint8_t>(addr.begin(), addr.end())};
 }
 
 template <typename origin_type>
@@ -1922,4 +1944,61 @@ TEST(Ruvia, protocol_error_preserves_static_code_and_copies_message) {
     const ruvia::http_protocol_error failure(ruvia::http_status::bad_request, ruvia::static_text{"invalid_request"}, std::string("invalid request"));
     EXPECT_EQ(failure.code(), "invalid_request");
     EXPECT_STREQ(failure.what(), "invalid request");
+}
+
+namespace {
+
+template <typename req_type>
+concept request_allows_rvalue_method = requires(const req_type req) { std::move(req).method(); };
+template <typename req_type>
+concept request_allows_rvalue_target = requires(const req_type req) { std::move(req).target(); };
+template <typename req_type>
+concept request_allows_rvalue_scheme = requires(const req_type req) { std::move(req).scheme(); };
+template <typename req_type>
+concept request_allows_rvalue_authority = requires(const req_type req) { std::move(req).authority(); };
+template <typename req_type>
+concept request_allows_rvalue_protocol = requires(const req_type req) { std::move(req).protocol(); };
+template <typename req_type>
+concept request_allows_rvalue_path = requires(const req_type req) { std::move(req).path(); };
+template <typename req_type>
+concept request_allows_rvalue_query_string = requires(const req_type req) { std::move(req).query_string(); };
+template <typename req_type>
+concept request_allows_rvalue_header = requires(const req_type req) { std::move(req).header("host"); };
+template <typename req_type>
+concept request_allows_rvalue_unique_header = requires(const req_type req) { std::move(req).unique_header("host"); };
+template <typename req_type>
+concept request_allows_rvalue_last_raw_query_value = requires(const req_type req) { std::move(req).last_raw_query_value("a"); };
+template <typename req_type>
+concept request_allows_rvalue_cookie = requires(const req_type req) { std::move(req).cookie("sid"); };
+
+}  // namespace
+
+TEST(Ruvia, request_rvalue_borrow_guards_and_trailers_zero_copy_transfer) {
+    static_assert(!request_allows_rvalue_method<ruvia::http_request>);
+    static_assert(!request_allows_rvalue_target<ruvia::http_request>);
+    static_assert(!request_allows_rvalue_scheme<ruvia::http_request>);
+    static_assert(!request_allows_rvalue_authority<ruvia::http_request>);
+    static_assert(!request_allows_rvalue_protocol<ruvia::http_request>);
+    static_assert(!request_allows_rvalue_path<ruvia::http_request>);
+    static_assert(!request_allows_rvalue_query_string<ruvia::http_request>);
+    static_assert(!request_allows_rvalue_header<ruvia::http_request>);
+    static_assert(!request_allows_rvalue_unique_header<ruvia::http_request>);
+    static_assert(!request_allows_rvalue_last_raw_query_value<ruvia::http_request>);
+    static_assert(!request_allows_rvalue_cookie<ruvia::http_request>);
+
+    std::vector<ruvia::http_header> received;
+    received.emplace_back(std::string("x-trace"), std::string(160, 'v'));
+    const auto* const vec_ptr = received.data();
+    const char* const raw_ptr = received[0].value().data();
+    ruvia::http_request_trailers trailers;
+    EXPECT_FALSE(trailers.append_received(std::move(received)).has_value());
+    ASSERT_EQ(trailers.fields().size(), std::size_t{1});
+    EXPECT_EQ(trailers.fields().data(), vec_ptr);
+    EXPECT_EQ(trailers.fields()[0].value().data(), raw_ptr);
+
+    const auto taken = std::move(trailers).take_fields();
+    ASSERT_EQ(taken.size(), std::size_t{1});
+    EXPECT_EQ(taken.data(), vec_ptr);
+    EXPECT_EQ(taken[0].value().data(), raw_ptr);
+    EXPECT_TRUE(trailers.fields().empty());
 }

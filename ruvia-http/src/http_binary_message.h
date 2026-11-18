@@ -597,15 +597,11 @@ template <typename sink_type>
 }
 
 template <typename sink_type>
-[[nodiscard]] inline bool append_http_binary_websocket_response_fields(sink_type& fields, const websocket_server_negotiation& negotiation, std::uint64_t limit) {
-    // Negotiation fields are already lowercase and validated by their owner.
-    const auto response_fields = negotiation.response_headers();
-    const bool has_date = std::ranges::any_of(response_fields, [](const http_header& field) {
-        return field.name() == "date";
+[[nodiscard]] inline bool append_http_binary_websocket_response_fields(sink_type& fields, std::string_view subprotocol, std::string_view extensions, std::span<const http_header_view> response_fields, std::uint64_t limit) {
+    const bool has_date = std::ranges::any_of(response_fields, [](const http_header_view& field) {
+        return http_ascii_equals_ignore_case(field.name(), "date");
     });
     const auto date = has_date ? std::string_view{} : cached_date_value();
-    const auto subprotocol = negotiation.subprotocol();
-    const auto extensions = negotiation.extensions();
     binary_field_section_size section_size(limit);
     if (!section_size.add(":status", "200") || (!date.empty() && !section_size.add("date", date)) || (!subprotocol.empty() && !section_size.add("sec-websocket-protocol", subprotocol)) || (!extensions.empty() && !section_size.add("sec-websocket-extensions", extensions))) {
         return false;
@@ -629,7 +625,7 @@ template <typename sink_type>
         fields.add("sec-websocket-extensions", extensions);
     }
     for (const auto& field : response_fields) {
-        fields.add(field.name(), field.value());
+        fields.add_lowercase(field.name(), field.value());
     }
     return true;
 }

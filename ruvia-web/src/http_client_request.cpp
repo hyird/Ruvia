@@ -367,6 +367,21 @@ void replace_field(std::vector<http_header>& fields, std::string_view name, std:
     }
 }
 
+void append_request_headers(std::vector<http_header>& headers, std::span<const http_header_view> field_span) {
+    const auto old_size = headers.size();
+    headers.reserve(old_size + field_span.size());
+    try {
+        for (const auto& field : field_span) {
+            headers.emplace_back(field.name(), field.value());
+        }
+    } catch (...) {
+        while (headers.size() > old_size) {
+            headers.pop_back();
+        }
+        throw;
+    }
+}
+
 // The origin a request addresses: its authority override, else the alias.
 // Redirect targets resolve against it.
 [[nodiscard]] http_origin_view request_origin(const http_client_ref& client, const http_client_request_options& options) {
@@ -429,19 +444,8 @@ http_client_request& http_client_request::header(std::string_view name, std::str
     replace_field(headers_, name, value);
     return *this;
 }
-http_client_request& http_client_request::headers(std::span<const http_header_view> fields) & {
-    const auto old_size = headers_.size();
-    headers_.reserve(old_size + fields.size());
-    try {
-        for (const auto& field : fields) {
-            headers_.emplace_back(field.name(), field.value());
-        }
-    } catch (...) {
-        while (headers_.size() > old_size) {
-            headers_.pop_back();
-        }
-        throw;
-    }
+http_client_request& http_client_request::headers(argument_list<http_header_view> fields) & {
+    append_request_headers(headers_, fields.span());
     return *this;
 }
 http_client_request& http_client_request::query(std::string_view name, std::string_view value) & {
@@ -743,19 +747,8 @@ http_client_connect_request& http_client_connect_request::header(std::string_vie
     replace_field(headers_, name, value);
     return *this;
 }
-http_client_connect_request& http_client_connect_request::headers(std::span<const http_header_view> fields) & {
-    const auto old_size = headers_.size();
-    headers_.reserve(old_size + fields.size());
-    try {
-        for (const auto& field : fields) {
-            headers_.emplace_back(field.name(), field.value());
-        }
-    } catch (...) {
-        while (headers_.size() > old_size) {
-            headers_.pop_back();
-        }
-        throw;
-    }
+http_client_connect_request& http_client_connect_request::headers(argument_list<http_header_view> fields) & {
+    append_request_headers(headers_, fields.span());
     return *this;
 }
 http_client_connect_request& http_client_connect_request::configure(http_client_request_options options) & {
@@ -818,30 +811,18 @@ task<http_client_tunnel_result> http_client_connect_request::connect(http_client
 }
 
 #ifdef RUVIA_ENABLE_HTTP3
-namespace {
-task<void> migrate_client_pool(std::shared_ptr<detail::http_client_pool> pool, std::string address, std::uint16_t port, operation_options options, stop_token host_stop) {
-    co_await pool->migrate_http3(std::move(address), port, std::move(options), std::move(host_stop));
-}
-}  // namespace
-#endif
-
 task<void> http_client_ref::migrate(std::string_view local_address, std::uint16_t port) const {
     registration_.require_active();
-#ifdef RUVIA_ENABLE_HTTP3
-    return registration_.attach(migrate_client_pool(pool_owner_, std::string(local_address), port, options_, host_stop_token_));
-#else
-    (void)local_address;
-    (void)port;
-    throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP/3 support is disabled");
-#endif
+    return registration_.attach(detail::http_client_pool::migrate_http3(pool_owner_, std::string(local_address), port, options_, host_stop_token_));
 }
+#else
+task<void> http_client_ref::migrate(std::string_view, std::uint16_t) const {
+    registration_.require_active();
+    throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP/3 support is disabled");
+}
+#endif
 
 namespace {
-
-task<void> refresh_client_dns(std::shared_ptr<detail::http_client_pool> pool, operation_options options, stop_token host_stop) {
-    const linked_operation_options linked(options, host_stop);
-    co_await pool->refresh_dns(linked.options());
-}
 
 [[nodiscard]] ip_address to_ruvia_ip_address(const asio::ip::address& address) noexcept {
     if (address.is_v4()) {
@@ -851,23 +832,27 @@ task<void> refresh_client_dns(std::shared_ptr<detail::http_client_pool> pool, op
     return ip_address::ipv6(v6.to_bytes(), static_cast<std::uint32_t>(v6.scope_id())).normalized_ipv4();
 }
 
-[[nodiscard]] task<std::vector<ip_address>> resolve_dns_owned(worker_ref worker, std::string host, operation_options options, std::shared_ptr<const http_client_address_validator> validator = nullptr, std::uint16_t validator_port = 80) {
+[[nodiscard]] task<std::vector<ip_address>> resolve_dns_owned(worker_ref worker, std::string host, operation_options options, std::shared_ptr<detail::http_client_pool> pool = nullptr, stop_token call_stop = {}, stop_token host_stop = {}) {
+    const linked_operation_options linked(options, std::move(call_stop), std::move(host_stop));
+    const auto& stop = linked.options().stop_token_;
     const operation_deadline timeout(options.timeout_);
-    if (options.stop_token_.stop_requested()) {
+    if (stop.stop_requested()) {
         throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP DNS resolution cancelled", std::nullopt, nullptr, false);
     }
     if (timeout.expired()) {
         throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP DNS resolution timed out", std::nullopt, nullptr, false);
     }
     detail::client_host_resolver resolver(worker);
-    auto pending = resolver.resolve(std::move(host), validator_port, timeout, options.stop_token_);
+    const auto validator = pool ? pool->config().address_validator_ : nullptr;
+    const auto validator_port = pool ? pool->config().dial_port_ : static_cast<std::uint16_t>(80);
+    auto pending = resolver.resolve(std::move(host), validator_port, timeout, stop);
     detail::client_resolve_result result;
     if (auto* immediate = std::get_if<detail::client_resolve_result>(&pending)) {
         result = std::move(*immediate);
     } else {
         result = co_await std::move(std::get<task<detail::client_resolve_result>>(pending));
     }
-    if (options.stop_token_.stop_requested() || result.error_ == asio::error::operation_aborted) {
+    if (stop.stop_requested() || result.error_ == asio::error::operation_aborted) {
         throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP DNS resolution cancelled", std::nullopt, nullptr, false);
     }
     if (timeout.expired() || result.error_ == asio::error::timed_out) {
@@ -899,15 +884,6 @@ task<void> refresh_client_dns(std::shared_ptr<detail::http_client_pool> pool, op
     const auto unique_range = std::ranges::unique(addresses);
     addresses.erase(unique_range.begin(), unique_range.end());
     co_return addresses;
-}
-
-[[nodiscard]] task<std::vector<ip_address>> resolve_client_handle_dns(std::shared_ptr<detail::http_client_pool> pool, std::string host, operation_options handle_options, operation_options call_options, stop_token host_stop) {
-    auto merged = override_operation_options(handle_options, {.timeout_ = call_options.timeout_});
-    if (!merged.timeout_) {
-        merged.timeout_ = operation_timeout(pool->config().connect_timeout_);
-    }
-    const linked_operation_options linked(merged, call_options.stop_token_, host_stop);
-    co_return co_await resolve_dns_owned(pool->worker(), std::move(host), linked.options(), pool->config().address_validator_, pool->config().dial_port_);
 }
 }  // namespace
 
@@ -957,12 +933,12 @@ std::vector<http_client_endpoint_address> http_client_ref::dns_snapshot() const 
     registration_.require_active();
     return pool_->dns_snapshot();
 }
-void http_client_ref::update_dns(std::span<const http_client_endpoint_address> addresses) {
+void http_client_ref::update_dns(argument_list<http_client_endpoint_address> addresses) {
     registration_.require_active();
-    pool_->update_dns(addresses);
+    pool_->update_dns(addresses.span());
 }
 task<void> http_client_ref::refresh_dns() const {
-    return registration_.attach(refresh_client_dns(pool_owner_, options_, host_stop_token_));
+    return registration_.attach(detail::http_client_pool::refresh_dns(pool_owner_, options_, host_stop_token_));
 }
 task<std::vector<ip_address>> http_client_ref::resolve_dns(operation_options options) const {
     registration_.require_active();
@@ -978,7 +954,11 @@ task<std::vector<ip_address>> http_client_ref::resolve_dns(std::string_view host
         throw std::invalid_argument("DNS host must not be empty or contain NUL");
     }
     detail::require_client_host_lookup(host, pool_->worker());
-    return registration_.attach(resolve_client_handle_dns(pool_owner_, std::string(host), options_, std::move(options), host_stop_token_));
+    auto merged = override_operation_options(options_, {.timeout_ = options.timeout_});
+    if (!merged.timeout_) {
+        merged.timeout_ = operation_timeout(pool_->config().connect_timeout_);
+    }
+    return registration_.attach(resolve_dns_owned(pool_->worker(), std::string(host), std::move(merged), pool_owner_, std::move(options.stop_token_), host_stop_token_));
 }
 bool http_client_ref::close_connection(std::uint64_t id) {
     registration_.require_active();

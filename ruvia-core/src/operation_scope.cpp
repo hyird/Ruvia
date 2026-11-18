@@ -34,26 +34,43 @@ struct operation_scope::drain_guard final {
     detail::scoped_operation_registration registration_;
 };
 
-struct operation_scope::join_awaiter final {
-    explicit join_awaiter(operation_scope& scope) noexcept :
-        owner_(scope) {}
-
-    [[nodiscard]] bool await_ready() const noexcept {
-        return owner_.head_ == nullptr;
+operation_scope::join_operation::join_operation(join_operation&& other) noexcept :
+    scope_(std::exchange(other.scope_, nullptr)) {
+    if (other.started_) {
+        std::terminate();
     }
+}
 
-    bool await_suspend(std::coroutine_handle<> continuation) noexcept {
-        if (owner_.head_ == nullptr || owner_.join_continuation_ != nullptr) {
-            std::terminate();
+bool operation_scope::join_operation::await_ready() {
+    if (scope_ == nullptr || started_) {
+        throw std::logic_error("scoped operation scope join cannot be awaited");
+    }
+    scope_->check_worker();
+    if (scope_->join_started_) {
+        if (!scope_->join_complete_) {
+            throw std::logic_error("scoped operation scope can only be joined once");
         }
-        owner_.join_continuation_ = continuation;
+        started_ = true;
         return true;
     }
+    started_ = true;
+    scope_->join_started_ = true;
+    scope_->expire_for_join();
+    if (scope_->head_ == nullptr) {
+        scope_->expire_capabilities();
+        scope_->join_complete_ = true;
+        return true;
+    }
+    return false;
+}
 
-    void await_resume() const noexcept {}
-
-    operation_scope& owner_;
-};
+bool operation_scope::join_operation::await_suspend(std::coroutine_handle<> continuation) noexcept {
+    if (scope_->head_ == nullptr || scope_->join_continuation_ != nullptr) {
+        std::terminate();
+    }
+    scope_->join_continuation_ = continuation;
+    return true;
+}
 
 void operation_scope::close() noexcept {
     if (expiring_capabilities_ || (!active_ && head_ == nullptr && capability_head_ == nullptr)) {
@@ -79,21 +96,8 @@ void operation_scope::seal() noexcept {
     expire_for_join();
 }
 
-task<void> operation_scope::close_and_join() & {
-    if (join_started_) {
-        if (!join_complete_) {
-            throw std::logic_error("scoped operation scope can only be joined once");
-        }
-        co_return;
-    }
-    join_started_ = true;
-    expire_for_join();
-    if (head_ == nullptr) {
-        expire_capabilities();
-        join_complete_ = true;
-        co_return;
-    }
-    co_await join_awaiter(*this);
+operation_scope::join_operation operation_scope::close_and_join() & noexcept {
+    return join_operation(*this);
 }
 
 void operation_scope::retire_cold_operations() noexcept {
@@ -207,7 +211,7 @@ void capability_link::require_active() const {
     }
 }
 
-operation_scope& capability_link::scope() const {
+operation_scope& capability_link::scope() const& {
     require_active();
     return *scope_;
 }

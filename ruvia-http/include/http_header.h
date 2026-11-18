@@ -531,6 +531,7 @@ public:
 
 private:
     friend class websocket_client_negotiation;
+    friend class http_cors_policy;
 
     constexpr http_header() noexcept = default;
 

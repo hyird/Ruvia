@@ -18,6 +18,7 @@
 #include "http_server.h"
 #include "middleware.h"
 #include "model.h"
+#include "outbound_bytes.h"
 #include "rate_limiting.h"
 
 namespace ruvia {
@@ -84,39 +85,59 @@ public:
         return test_request("OPTIONS", target);
     }
 
-    test_request& header(std::string_view name, std::string_view value) {
+    test_request& header(std::string_view name, std::string_view value) & {
         headers_.emplace_back(name, value);
         return *this;
     }
+    test_request&& header(std::string_view name, std::string_view value) && {
+        return std::move(header(name, value));
+    }
 
-    test_request& body(std::string_view bytes_value) {
-        body_.assign(bytes_value);
+    test_request& body(outbound_bytes bytes_value) & {
+        body_ = std::move(bytes_value).into_string();
         return *this;
     }
-
-    test_request& body(std::string_view bytes_value, std::string_view content_type_value) {
-        body_.assign(bytes_value);
-        return header("Content-Type", content_type_value);
+    test_request&& body(outbound_bytes bytes_value) && {
+        return std::move(body(std::move(bytes_value)));
     }
 
-    test_request& json(std::string_view json_text) {
-        return body(json_text, "application/json");
+    test_request& body(outbound_bytes bytes_value, std::string_view content_type_value) & {
+        body_ = std::move(bytes_value).into_string();
+        return header("Content-Type", content_type_value);
+    }
+    test_request&& body(outbound_bytes bytes_value, std::string_view content_type_value) && {
+        return std::move(body(std::move(bytes_value), content_type_value));
+    }
+
+    test_request& json(outbound_bytes json_text) & {
+        return body(std::move(json_text), "application/json");
+    }
+    test_request&& json(outbound_bytes json_text) && {
+        return std::move(json(std::move(json_text)));
     }
 
     template <typename t_type>
         requires detail::is_model_json_value<t_type>
-    test_request& json(const t_type& value) {
-        const auto serialized = to_json(value);
-        return json(std::string_view(serialized));
+    test_request& json(const t_type& value) & {
+        body_ = to_json(value);
+        return header("Content-Type", "application/json");
+    }
+    template <typename t_type>
+        requires detail::is_model_json_value<t_type>
+    test_request&& json(const t_type& value) && {
+        return std::move(json(value));
     }
 
-    test_request& form(std::string_view url_encoded) {
-        return body(url_encoded, "application/x-www-form-urlencoded");
+    test_request& form(outbound_bytes url_encoded) & {
+        return body(std::move(url_encoded), "application/x-www-form-urlencoded");
+    }
+    test_request&& form(outbound_bytes url_encoded) && {
+        return std::move(form(std::move(url_encoded)));
     }
 
     // Appends one pair to the request's single Cookie header, building it the
     // way a browser would ("a=1; b=2").
-    test_request& cookie(std::string_view name, std::string_view value) {
+    test_request& cookie(std::string_view name, std::string_view value) & {
         if (!cookies_.empty()) {
             cookies_.append("; ");
         }
@@ -125,20 +146,29 @@ public:
         cookies_.append(value);
         return *this;
     }
+    test_request&& cookie(std::string_view name, std::string_view value) && {
+        return std::move(cookie(name, value));
+    }
 
-    test_request& remote(std::string_view address, std::uint16_t port = 0) {
+    test_request& remote(std::string_view address, std::uint16_t port = 0) & {
         remote_address_.assign(address);
         remote_port_ = port;
         return *this;
+    }
+    test_request&& remote(std::string_view address, std::uint16_t port = 0) && {
+        return std::move(remote(address, port));
     }
 
     // Pins the steady-clock instant the request arrives at for the app-wide
     // and route rate limits, so a test places requests at exact window
     // offsets instead of sleeping. Unpinned requests read the steady clock,
     // as in a running server. Instants must not run backwards for one client.
-    test_request& arrival(std::chrono::steady_clock::time_point instant) {
+    test_request& arrival(std::chrono::steady_clock::time_point instant) & {
         arrival_ = instant;
         return *this;
+    }
+    test_request&& arrival(std::chrono::steady_clock::time_point instant) && {
+        return std::move(arrival(instant));
     }
 
 private:
@@ -179,25 +209,32 @@ public:
     // named twice fails the first request with "duplicate route registration".
     template <typename... controller_types>
         requires(sizeof...(controller_types) > 0)
-    test_app& controllers() {
+    test_app& controllers() & RUVIA_LIFETIMEBOUND {
         const std::array<detail::controller_registrar, sizeof...(controller_types)> registrars{detail::controller_registrar_of<controller_types>()...};
         return add_controllers(registrars);
     }
+    template <typename... controller_types>
+        requires(sizeof...(controller_types) > 0)
+    test_app& controllers() && = delete;
 
-    test_app& server(server_config config);
-    test_app& trusted_proxies(trusted_proxy_config config);
-    test_app& trusted_proxies(std::nullptr_t);
+    test_app& server(server_config config) & RUVIA_LIFETIMEBOUND;
+    test_app& server(server_config) && = delete;
+    test_app& trusted_proxies(trusted_proxy_config config) & RUVIA_LIFETIMEBOUND;
+    test_app& trusted_proxies(trusted_proxy_config) && = delete;
+    test_app& trusted_proxies(std::nullptr_t) & RUVIA_LIFETIMEBOUND;
+    test_app& trusted_proxies(std::nullptr_t) && = delete;
 
     // Dispatches one request through the production route table and returns
     // an independently owned response. Request-level failures become the same error
     // responses a server would send. Handlers execute on one real Ruvia worker,
     // including per-worker state semantics.
-    [[nodiscard]] dispatch_response request(const test_request& request);
+    [[nodiscard]] dispatch_response request(const test_request& request) &;
+    dispatch_response request(const test_request&) && = delete;
 
 private:
     friend class dispatch_configuration<test_app>;
 
-    test_app& add_controllers(std::span<const detail::controller_registrar> registrars);
+    test_app& add_controllers(std::span<const detail::controller_registrar> registrars) &;
     void edit_configuration(detail::callback_ref<void(detail::app_configuration&)> edit);
 
     struct impl_type;

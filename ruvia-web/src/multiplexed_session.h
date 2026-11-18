@@ -976,7 +976,9 @@ public:
         operation_interrupt interrupt(interrupts_, signal_.worker(), operation, &signal_, &wake_signal, "request body read");
         throw_if_body_failed();
         if (auto* continue_output = std::exchange(continue_output_, nullptr)) {
-            co_await continue_output->send_continue();
+            if (!continue_output->try_send_continue_sync()) {
+                co_await continue_output->send_continue();
+            }
         }
         for (;;) {
             interrupt.throw_if_interrupted();

@@ -232,9 +232,19 @@ private:
 }
 }  // namespace
 
-http_client_ip_extractor::http_client_ip_extractor(const http_client_ip_options& config) :
-    enabled_(config.enabled_),
-    trust_x_forwarded_proto_(config.trust_x_forwarded_proto_) {
+http_client_ip_extractor::http_client_ip_extractor(const http_client_ip_options& config) {
+    initialize(config);
+}
+
+http_client_ip_extractor::http_client_ip_extractor(http_client_ip_options&& config) {
+    initialize(std::move(config));
+}
+
+template <typename config_type>
+void http_client_ip_extractor::initialize(config_type&& config) {
+    enabled_ = config.enabled_;
+    trust_x_forwarded_proto_ = config.trust_x_forwarded_proto_;
+    constexpr bool move_owned = std::is_rvalue_reference_v<config_type&&>;
     trusted_cidrs_.reserve(config.trusted_proxies_.size());
     for (const auto& cidr_text : config.trusted_proxies_) {
         const auto parsed = ip_cidr::parse(cidr_text);
@@ -258,13 +268,17 @@ http_client_ip_extractor::http_client_ip_extractor(const http_client_ip_options&
     }
 
     headers_.reserve(config.forwarding_headers_.size());
-    for (const auto& spec : config.forwarding_headers_) {
+    for (auto& spec : config.forwarding_headers_) {
         if (!is_valid_http_header_name(spec.name_)) {
             throw std::invalid_argument("forwarding header name must be a valid HTTP field name");
         }
         compiled_header entry;
-        entry.name_.assign(spec.name_);
         entry.kind_ = resolve_header_kind(spec.name_, spec.kind_);
+        if constexpr (move_owned) {
+            entry.name_ = std::move(spec.name_);
+        } else {
+            entry.name_.assign(spec.name_);
+        }
         headers_.push_back(std::move(entry));
     }
 }

@@ -1106,8 +1106,81 @@ detail::operation_scope& http_client_response::body_scope() & {
     return require_response_body_state(state_).body_operation_scope_;
 }
 
+bool http_client_response::try_parse_ready_response_body(detail::http_client_response_state& state_value, std::size_t max_bytes, const operation_options& operation, detail::callback_ref<void(std::string_view)> parse) {
+    const auto effective_limit = std::min(max_bytes, state_value.buffered_limit_);
+    const operation_deadline deadline(operation.timeout_);
+    if (!state_value.receive_complete() && !state_value.exceeds_body_limit(effective_limit) && !operation.stop_token_.stop_requested() && !deadline.expired()) {
+        return false;
+    }
+    auto activity = detail::claim_operation_lane(state_value.body_operation_active_, "HTTP client response body operation is already active");
+    if (operation.stop_token_.stop_requested()) {
+        throw_interrupted(state_value, detail::operation_interrupt_cause::cancelled, "HTTP client read timed out", "HTTP client read cancelled");
+    }
+    if (deadline.expired()) {
+        throw_interrupted(state_value, detail::operation_interrupt_cause::timed_out, "HTTP client read timed out", "HTTP client read cancelled");
+    }
+    state_value.release_consumed_body_prefix();
+    state_value.finish_collection<void>(effective_limit, parse);
+    return true;
+}
+
 task<void> http_client_response::parse_response_body(detail::http_client_response_state& state, std::size_t max_bytes, operation_options operation, detail::callback_ref<void(std::string_view)> parse) {
     return state.collect_body<void>(max_bytes, std::move(operation), parse);
+}
+
+template <typename result_type>
+result_type detail::http_client_response_state::finish_collection(std::size_t effective_limit, callback_ref<void(std::string_view)> parse) {
+    auto& state_value = *this;
+    state_value.rethrow_response_failure();
+    if (state_value.pool_closed_) {
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP response body read failed", std::nullopt, state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr, state_value.request_written_);
+    }
+    const auto remaining = state_value.buffered_.size() - state_value.offset_;
+    if (state_value.exceeds_body_limit(effective_limit)) {
+        throw http_client_error(make_error_code(http_client_errc::response_too_large), "HTTP response body exceeds its collection byte limit", std::nullopt, state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr, state_value.request_written_);
+    }
+    const auto total_remaining = remaining + state_value.pending_.size();
+    if (total_remaining == 0) {
+        state_value.discard_response_body();
+        if constexpr (std::is_void_v<result_type>) {
+            parse({});
+            return;
+        } else {
+            return http_client_response_bytes{};
+        }
+    }
+    auto reservation = detail::http_client_result_budget_lease::try_acquire(state_value.memory_domain_.result_budget_domain_, total_remaining);
+    if (!reservation) {
+        throw http_client_error(make_error_code(http_client_errc::result_budget_exceeded), "HTTP client retained result byte budget is exhausted", std::nullopt, state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr, state_value.request_written_);
+    }
+    const auto consume = [&state_value, total_remaining]() noexcept {
+        state_value.consumed_body_bytes_ = saturating_add(state_value.consumed_body_bytes_, static_cast<std::uint64_t>(total_remaining));
+        state_value.discard_response_body();
+    };
+    const auto buffered = std::string_view(state_value.buffered_).substr(state_value.offset_);
+    const std::string_view pending = state_value.pending_;
+    if constexpr (std::is_void_v<result_type>) {
+        if (buffered.empty() || pending.empty()) {
+            // Parsing here is synchronous and produces an owning result. The
+            // read lane keeps the borrowed bytes stable until parsing returns.
+            try {
+                parse(buffered.empty() ? pending : buffered);
+            } catch (...) {
+                consume();
+                throw;
+            }
+            consume();
+            return;
+        }
+    }
+    http_client_response_bytes result_value(std::span(buffered), std::span(pending), std::move(*reservation));
+    consume();
+    if constexpr (std::is_void_v<result_type>) {
+        parse(result_value.text());
+        return;
+    } else {
+        return result_value;
+    }
 }
 
 template <typename result_type>
@@ -1137,56 +1210,7 @@ task<result_type> detail::http_client_response_state::collect_body(std::size_t m
     if (const auto cause = state_value.read_operation_->cause(); cause || deadline.expired()) {
         throw_interrupted(state_value, cause.value_or(operation_interrupt_cause::timed_out), "HTTP client read timed out", "HTTP client read cancelled");
     }
-    state_value.rethrow_response_failure();
-    if (state_value.pool_closed_) {
-        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP response body read failed", std::nullopt, state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr, state_value.request_written_);
-    }
-    const auto remaining = state_value.buffered_.size() - state_value.offset_;
-    if (state_value.exceeds_body_limit(effective_limit)) {
-        throw http_client_error(make_error_code(http_client_errc::response_too_large), "HTTP response body exceeds its collection byte limit", std::nullopt, state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr, state_value.request_written_);
-    }
-    const auto total_remaining = remaining + state_value.pending_.size();
-    if (total_remaining == 0) {
-        state_value.discard_response_body();
-        if constexpr (std::is_void_v<result_type>) {
-            parse({});
-            co_return;
-        } else {
-            co_return http_client_response_bytes{};
-        }
-    }
-    auto reservation = detail::http_client_result_budget_lease::try_acquire(state_value.memory_domain_.result_budget_domain_, total_remaining);
-    if (!reservation) {
-        throw http_client_error(make_error_code(http_client_errc::result_budget_exceeded), "HTTP client retained result byte budget is exhausted", std::nullopt, state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr, state_value.request_written_);
-    }
-    const auto consume = [&state_value, total_remaining]() noexcept {
-        state_value.consumed_body_bytes_ = saturating_add(state_value.consumed_body_bytes_, static_cast<std::uint64_t>(total_remaining));
-        state_value.discard_response_body();
-    };
-    const auto buffered = std::string_view(state_value.buffered_).substr(state_value.offset_);
-    const std::string_view pending = state_value.pending_;
-    if constexpr (std::is_void_v<result_type>) {
-        if (buffered.empty() || pending.empty()) {
-            // Parsing here is synchronous and produces an owning result. The
-            // read lane keeps the borrowed bytes stable until parsing returns.
-            try {
-                parse(buffered.empty() ? pending : buffered);
-            } catch (...) {
-                consume();
-                throw;
-            }
-            consume();
-            co_return;
-        }
-    }
-    http_client_response_bytes result_value(std::span(buffered), std::span(pending), std::move(*reservation));
-    consume();
-    if constexpr (std::is_void_v<result_type>) {
-        parse(result_value.text());
-        co_return;
-    } else {
-        co_return std::move(result_value);
-    }
+    co_return state_value.finish_collection<result_type>(effective_limit, parse);
 }
 
 task<void> http_client_response_body::pipe_to(response_stream_writer& output, operation_options operation) & {

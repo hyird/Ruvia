@@ -832,8 +832,11 @@ task<db_stream_start> postgresql_driver::start_stream(pool_type& pool, std::size
     if (send_stream_query(pool, index, sql, params)) {
         co_await flush_output(pool, index, deadline_value);
     }
-    co_await wait_until_result_ready(pool, index, deadline_value);
-    postgresql_result_owner first(PQgetResult(pool.slot(index).connection_));
+    auto* connection = pool.slot(index).connection_;
+    if (PQisBusy(connection) != 0) {
+        co_await wait_until_result_ready(pool, index, deadline_value);
+    }
+    postgresql_result_owner first(PQgetResult(connection));
     if (first.get() == nullptr) {
         throw postgresql_protocol_failure("PostgreSQL stream ended without its result");
     }
@@ -852,7 +855,9 @@ task<db_stream_step> postgresql_driver::read_stream_row(pool_type& pool, std::si
     auto* connection = pool.slot(index).connection_;
     postgresql_result_owner result_value(static_cast<PGresult*>(std::exchange(pending_result, nullptr)));
     if (result_value.get() == nullptr) {
-        co_await wait_until_result_ready(pool, index, deadline_value);
+        if (PQisBusy(connection) != 0) {
+            co_await wait_until_result_ready(pool, index, deadline_value);
+        }
         result_value.reset(PQgetResult(connection));
     }
     if (result_value.get() == nullptr) {
@@ -866,12 +871,16 @@ task<db_stream_step> postgresql_driver::read_stream_row(pool_type& pool, std::si
         throw postgresql_error(*connection, "PostgreSQL stream", backend_error_code::command_failed, result_value.get());
     }
     result_value.reset();
-    co_await wait_until_result_ready(pool, index, deadline_value);
+    if (PQisBusy(connection) != 0) {
+        co_await wait_until_result_ready(pool, index, deadline_value);
+    }
     result_value.reset(PQgetResult(connection));
     if (result_value.get() != nullptr) {
         throw postgresql_protocol_failure("PostgreSQL stream command boundary is missing");
     }
-    co_await wait_until_result_ready(pool, index, deadline_value);
+    if (PQisBusy(connection) != 0) {
+        co_await wait_until_result_ready(pool, index, deadline_value);
+    }
     result_value.reset(PQgetResult(connection));
     if (result_value.get() == nullptr || PQresultStatus(result_value.get()) != PGRES_PIPELINE_SYNC) {
         throw postgresql_protocol_failure("PostgreSQL stream ended without its Sync");
@@ -885,10 +894,9 @@ task<db_stream_step> postgresql_driver::read_stream_row(pool_type& pool, std::si
 // Abandoning a libpq single-row result still requires draining the whole
 // command. Closing the connection instead is bounded and keeps the worker
 // non-blocking.
-task<void> postgresql_driver::close_stream(pool_type& pool, std::size_t index, void*& pending_result, const operation_deadline&) {
+void postgresql_driver::close_stream(pool_type& pool, std::size_t index, void*& pending_result) noexcept {
     discard_stream(std::exchange(pending_result, nullptr));
     pool.close_slot(index);
-    co_return;
 }
 
 void postgresql_driver::discard_stream(void* pending_result) noexcept {

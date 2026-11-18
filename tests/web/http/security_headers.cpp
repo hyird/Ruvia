@@ -1150,7 +1150,7 @@ void exercise_client_connect(unsigned mode) {
             if (accepted.error_code()) {
                 throw std::system_error(accepted.error_code());
             }
-            auto socket = std::move(accepted.result());
+            auto socket = std::move(accepted).take_result();
             co_await serve_client_connect(socket, mode, received);
         };
         tasks.spawn(serve());
@@ -1296,7 +1296,7 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
                 if (accepted_socket.error_code()) {
                     throw std::system_error(accepted_socket.error_code());
                 }
-                auto socket = std::move(accepted_socket.result());
+                auto socket = std::move(accepted_socket).take_result();
                 ++accepted;
                 const auto head = co_await read_head(socket);
                 ruvia::http1_server_request_parser parsed;

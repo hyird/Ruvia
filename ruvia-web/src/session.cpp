@@ -41,14 +41,25 @@ void context_session_state::require_mutable() const {
     }
 }
 
-bool context_session_state::begin_commit() {
+bool context_session_state::try_commit_sync() {
     if (!available_ || phase_ == phase_type::committed) {
-        return false;
+        return true;
     }
     if (phase_ == phase_type::failed) {
         std::rethrow_exception(failure_);
     }
     require_mutable();
+    if (untouched() != nullptr || unrecognized() != nullptr || loaded() != nullptr) {
+        phase_ = phase_type::committed;
+        return true;
+    }
+    return false;
+}
+
+bool context_session_state::begin_commit() {
+    if (try_commit_sync()) {
+        return false;
+    }
     phase_ = phase_type::committing;
     return true;
 }
@@ -67,15 +78,66 @@ void context_session_state::observe_presented_id(std::string_view id) {
     value_.template emplace<session_unrecognized>(std::string(id));
 }
 
-void context_session_state::load_recognized(std::string_view payload) {
-    require_mutable();
-    auto* presented = std::get_if<session_unrecognized>(&value_);
+namespace {
+
+template <typename payload_type>
+void load_recognized_session(std::variant<session_untouched, session_unrecognized, session_loaded, session_persist_new, session_rotate, session_clear>& value, payload_type&& payload) {
+    auto* presented = std::get_if<session_unrecognized>(&value);
     if (presented == nullptr) {
         throw std::logic_error("recognized session requires a presented id");
     }
-    auto payload_copy = std::string(payload);
+    std::string owned_payload(std::forward<payload_type>(payload));
     auto id = std::move(presented->id_);
-    value_.template emplace<session_loaded>(std::move(id), std::move(payload_copy));
+    value.template emplace<session_loaded>(std::move(id), std::move(owned_payload));
+}
+
+template <typename payload_type>
+void assign_session_payload(std::variant<session_untouched, session_unrecognized, session_loaded, session_persist_new, session_rotate, session_clear>& value, payload_type&& payload) {
+    if (auto* loaded_state = std::get_if<session_loaded>(&value)) {
+        std::string owned_payload(std::forward<payload_type>(payload));
+        auto id = std::move(loaded_state->id_);
+        value.template emplace<session_rotate>(std::move(id), std::move(owned_payload));
+        return;
+    }
+    if (auto* rotated = std::get_if<session_rotate>(&value)) {
+        if constexpr (std::is_same_v<payload_type&&, std::string&&>) {
+            rotated->payload_ = std::move(payload);
+        } else {
+            rotated->payload_.assign(payload);
+        }
+        return;
+    }
+    if (auto* fresh = std::get_if<session_persist_new>(&value)) {
+        if constexpr (std::is_same_v<payload_type&&, std::string&&>) {
+            fresh->payload_ = std::move(payload);
+        } else {
+            fresh->payload_.assign(payload);
+        }
+        return;
+    }
+    if (auto* cleared = std::get_if<session_clear>(&value)) {
+        if (!cleared->old_id_.has_value()) {
+            value.template emplace<session_persist_new>(std::string(std::forward<payload_type>(payload)));
+            return;
+        }
+        std::string owned_payload(std::forward<payload_type>(payload));
+        auto old_id = std::move(*cleared->old_id_);
+        value.template emplace<session_rotate>(std::move(old_id), std::move(owned_payload));
+        return;
+    }
+    value.template emplace<session_persist_new>(std::string(std::forward<payload_type>(payload)));
+}
+
+}  // namespace
+
+void context_session_state::load_recognized(std::string_view payload) {
+    require_mutable();
+    load_recognized_session(value_, payload);
+}
+
+void context_session_state::load_recognized(std::string&& payload) {
+    require_mutable();
+    load_recognized_session(value_, std::move(payload));
 }
 
 void context_session_state::set(std::string_view payload) {
@@ -84,31 +146,16 @@ void context_session_state::set(std::string_view payload) {
         clear();
         return;
     }
-    if (auto* loaded_state = std::get_if<session_loaded>(&value_)) {
-        auto payload_copy = std::string(payload);
-        auto id = std::move(loaded_state->id_);
-        value_.template emplace<session_rotate>(std::move(id), std::move(payload_copy));
+    assign_session_payload(value_, payload);
+}
+
+void context_session_state::set(std::string&& payload) {
+    require_mutable();
+    if (payload.empty()) {
+        clear();
         return;
     }
-    if (auto* rotated = std::get_if<session_rotate>(&value_)) {
-        rotated->payload_.assign(payload);
-        return;
-    }
-    if (auto* fresh = std::get_if<session_persist_new>(&value_)) {
-        fresh->payload_.assign(payload);
-        return;
-    }
-    if (auto* cleared = std::get_if<session_clear>(&value_)) {
-        if (!cleared->old_id_.has_value()) {
-            value_.template emplace<session_persist_new>(std::string(payload));
-            return;
-        }
-        auto payload_copy = std::string(payload);
-        auto old_id = std::move(*cleared->old_id_);
-        value_.template emplace<session_rotate>(std::move(old_id), std::move(payload_copy));
-        return;
-    }
-    value_.template emplace<session_persist_new>(std::string(payload));
+    assign_session_payload(value_, std::move(payload));
 }
 
 void context_session_state::clear() {
@@ -167,6 +214,10 @@ void session::set(std::string_view payload) {
     state_->set(payload);
 }
 
+void session::set_owned(std::string&& payload) {
+    state_->set(std::move(payload));
+}
+
 void session::clear() {
     state_->clear();
 }
@@ -175,7 +226,7 @@ void session::regenerate() {
     state_->regenerate();
 }
 
-session context::session() {
+session context::session() & {
     if (!session_state().available()) {
         throw std::logic_error("session capability is not bound for this request");
     }
@@ -190,6 +241,13 @@ const detail::context_session_state& context::session_state() const noexcept {
     return request_storage().session_state_;
 }
 
+namespace {
+
+// "<key prefix><session id>", inline for typical key sizes.
+using session_key = detail::inline_text_concat<128>;
+
+}  // namespace
+
 task<void> detail::session_access::commit(context& context_value) {
     auto& state_value = context_value.session_state();
     if (!state_value.begin_commit()) {
@@ -197,7 +255,74 @@ task<void> detail::session_access::commit(context& context_value) {
     }
     try {
         if (const auto* owner = state_value.owner()) {
-            co_await owner->commit(context_value);
+            const auto connection = context_value.conn();
+            const bool secure = connection.scheme() == http_scheme::https;
+            // Session Cookie 属于明确的跨替换响应策略，只在最终交付/流提交时应用。
+            // Redis 成功后通过无分配移动发布完整字段，既有 commit guard 保证只持久化一次。
+            auto& response = detail::context_access::response_policy(context_value);
+            auto staged = response.headers().clone(1);
+            const auto publish = [&]() noexcept {
+                response.commit_headers(std::move(staged));
+            };
+            if (const auto* cleared = state_value.cleared()) {
+                detail::append_expired_session_cookie_header(staged, owner->cookie_name_, secure);
+                if (cleared->old_id_.has_value()) {
+                    auto del_task = [&] {
+                        const session_key key({owner->key_prefix_, *cleared->old_id_});
+                        return context_value.redis(owner->redis_alias_).del(key.view());
+                    }();
+                    (void)(co_await std::move(del_task));
+                }
+                publish();
+            } else {
+                std::string_view payload;
+                std::string_view old_id;
+                if (const auto* rotated = state_value.rotate()) {
+                    payload = rotated->payload_;
+                    old_id = rotated->old_id_;
+                } else {
+                    payload = state_value.persist_new()->payload_;
+                }
+
+                std::array<char, detail::secure_token_size> id_buffer;
+                const auto new_id = detail::generate_secure_token(id_buffer);
+                detail::append_session_cookie_header(staged, owner->cookie_name_, new_id, secure);
+
+                const session_key key({owner->key_prefix_, new_id});
+                bool applied = false;
+                if (!old_id.empty()) {
+                    static const redis_script rotation_script(detail::session_rotation_script);
+                    auto eval_task = [&] {
+                        const session_key old_key({owner->key_prefix_, old_id});
+                        // session_middleware::validate requires a positive TTL.
+                        std::array<char, max_decimal_size> ttl_buffer;
+                        const auto ttl = format_decimal(ttl_buffer, static_cast<std::uint64_t>(owner->ttl_.count()));
+                        const std::array<std::string_view, 2> keys{old_key.view(), key.view()};
+                        const std::array<std::string_view, 2> args{payload, ttl};
+                        // Redis executes the entire transition atomically. A stale request may
+                        // neither recreate a revoked identifier nor mint a successor from it.
+                        return context_value.redis(owner->redis_alias_).eval_cached(rotation_script, keys, args);
+                    }();
+                    const auto result_value = co_await std::move(eval_task);
+                    if (result_value.kind() == redis_value::kind_type::error) {
+                        throw redis_error(backend_error_code::command_failed, result_value.error());
+                    }
+                    applied = result_value.integer() == 1;
+                } else {
+                    auto set_task = [&] {
+                        redis_set_options options;
+                        options.condition_ = redis_set_condition::if_absent;
+                        options.expiration_ = redis_set_expiration::expires_after(owner->ttl_);
+                        return context_value.redis(owner->redis_alias_).set(key.view(), payload, std::move(options));
+                    }();
+                    const auto result_value = co_await std::move(set_task);
+                    applied = result_value.applied();
+                }
+                if (!applied) {
+                    throw http_error({.status_ = http_status::conflict, .code_ = "session_conflict", .message_ = "session expired or was revoked; retry with a new session"});
+                }
+                publish();
+            }
         }
         state_value.finish_commit();
     } catch (...) {
@@ -206,13 +331,6 @@ task<void> detail::session_access::commit(context& context_value) {
     }
     co_return;
 }
-
-namespace {
-
-// "<key prefix><session id>", inline for typical key sizes.
-using session_key = detail::inline_text_concat<128>;
-
-}  // namespace
 
 const session_config& session_middleware::validate(const session_config& source_value) {
     if (source_value.redis_alias_.empty()) {
@@ -256,88 +374,14 @@ task<void> session_middleware::invoke(context& c, next& next_value) {
             return c.redis(redis_alias_).get(key.view());
         }();
         if (auto stored = co_await std::move(get_task)) {
-            detail::session_access::load(c, *stored);
+            detail::session_access::load(c, std::move(*stored));
         }
     }
 
     co_await next_value();
-    co_await detail::session_access::commit(c);
-}
-
-task<void> session_middleware::commit(context& c) const {
-    const auto& state_value = detail::session_access::state(c);
-    if (state_value.untouched() != nullptr || state_value.unrecognized() != nullptr || state_value.loaded() != nullptr) {
-        co_return;
+    if (!detail::session_access::try_commit_sync(c)) {
+        co_await detail::session_access::commit(c);
     }
-
-    const auto connection = c.conn();
-    const bool secure = connection.scheme() == http_scheme::https;
-    // Session Cookie 属于明确的跨替换响应策略，只在最终交付/流提交时应用。
-    // Redis 成功后通过无分配移动发布完整字段，既有 commit guard 保证只持久化一次。
-    auto& response = detail::context_access::response_policy(c);
-    auto staged = response.headers().clone(1);
-    const auto publish = [&]() noexcept {
-        response.commit_headers(std::move(staged));
-    };
-    if (const auto* cleared = state_value.cleared()) {
-        detail::append_expired_session_cookie_header(staged, cookie_name_, secure);
-        if (cleared->old_id_.has_value()) {
-            auto del_task = [&] {
-                const session_key key({key_prefix_, *cleared->old_id_});
-                return c.redis(redis_alias_).del(key.view());
-            }();
-            (void)(co_await std::move(del_task));
-        }
-        publish();
-        co_return;
-    }
-
-    std::string_view payload;
-    std::string_view old_id;
-    if (const auto* rotated = state_value.rotate()) {
-        payload = rotated->payload_;
-        old_id = rotated->old_id_;
-    } else {
-        payload = state_value.persist_new()->payload_;
-    }
-
-    std::array<char, detail::secure_token_size> id_buffer;
-    const auto new_id = detail::generate_secure_token(id_buffer);
-    detail::append_session_cookie_header(staged, cookie_name_, new_id, secure);
-
-    const session_key key({key_prefix_, new_id});
-    bool applied = false;
-    if (!old_id.empty()) {
-        auto eval_task = [&] {
-            const session_key old_key({key_prefix_, old_id});
-            // session_middleware::validate requires a positive TTL.
-            std::array<char, max_decimal_size> ttl_buffer;
-            const auto ttl = format_decimal(ttl_buffer, static_cast<std::uint64_t>(ttl_.count()));
-            const std::array<std::string_view, 2> keys{old_key.view(), key.view()};
-            const std::array<std::string_view, 2> args{payload, ttl};
-            // Redis executes the entire transition atomically. A stale request may
-            // neither recreate a revoked identifier nor mint a successor from it.
-            return c.redis(redis_alias_).eval(detail::session_rotation_script, keys, args);
-        }();
-        const auto result_value = co_await std::move(eval_task);
-        if (result_value.kind() == redis_value::kind_type::error) {
-            throw redis_error(backend_error_code::command_failed, result_value.error());
-        }
-        applied = result_value.integer() == 1;
-    } else {
-        auto set_task = [&] {
-            redis_set_options options;
-            options.condition_ = redis_set_condition::if_absent;
-            options.expiration_ = redis_set_expiration::expires_after(ttl_);
-            return c.redis(redis_alias_).set(key.view(), payload, std::move(options));
-        }();
-        const auto result_value = co_await std::move(set_task);
-        applied = result_value.applied();
-    }
-    if (!applied) {
-        throw http_error({.status_ = http_status::conflict, .code_ = "session_conflict", .message_ = "session expired or was revoked; retry with a new session"});
-    }
-    publish();
 }
 
 }  // namespace ruvia

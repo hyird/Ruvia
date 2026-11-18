@@ -252,7 +252,7 @@ http_content_decoder::~http_content_decoder() {
     delete impl_;
 }
 
-http_content_decode_result http_content_decoder::decode(std::string_view input, std::span<char> output) {
+http_content_decode_result http_content_decoder::decode(std::string_view input, std::span<char> output) & {
     auto& stream = impl_->stream_;
     if (stream.state() == decoder_state::active) {
         const char* error = output.empty() ? "content decoding needs output space" : nullptr;
@@ -267,7 +267,7 @@ http_content_decode_result http_content_decoder::decode(std::string_view input, 
     return stream.decode(input, output);
 }
 
-http_content_decode_result http_content_decoder::finish_input() noexcept {
+http_content_decode_result http_content_decoder::finish_input() & noexcept {
     return impl_->stream_.finish_input();
 }
 

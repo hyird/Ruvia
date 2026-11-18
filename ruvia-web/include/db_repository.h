@@ -826,6 +826,14 @@ struct db_map_projection final {
         }
         return result_value;
     }
+    entity_rows<e_type> operator()(db_rows&& rows) const {
+        auto result_value = db_result_access::make_entity_rows<e_type>(rows.size());
+        db_entity_row_decoder<e_type> decoder(selected_columns_, wildcard_);
+        for (std::size_t row_index = 0; row_index < rows.size(); ++row_index) {
+            result_value.push_back(decoder.decode(rows, row_index));
+        }
+        return result_value;
+    }
 
     std::array<bool, std::tuple_size_v<typename e_type::columns_type>> selected_columns_{};
     bool wildcard_{false};
@@ -838,7 +846,7 @@ struct db_map_first_projection final {
             return std::nullopt;
         }
         db_entity_row_decoder<e_type> decoder(mapper_.selected_columns_, mapper_.wildcard_);
-        return decoder.decode(rows.front());
+        return decoder.decode(rows, 0);
     }
 };
 template <db_mapped_value scalar_type>
@@ -847,7 +855,10 @@ struct db_map_scalar final {
         if (rows.empty() || !rows.front()[std::size_t{0}].value()) {
             return std::nullopt;
         }
-        return ::ruvia::decode_db_field<scalar_type>(rows.front()[std::size_t{0}]);
+        auto row_fields = db_result_access::row_fields(rows, 0);
+        auto out = entity_value_slot<scalar_type>::make_value();
+        detail::decode_db_field(row_fields[std::size_t{0}], out);
+        return out;
     }
 };
 template <db_mapped_value scalar_type>
@@ -855,11 +866,14 @@ struct db_map_scalars final {
     std::vector<scalar_type> operator()(db_rows&& rows) const {
         std::vector<scalar_type> result;
         result.reserve(rows.size());
-        for (const auto& row : rows) {
-            if (!row[std::size_t{0}].value()) {
+        for (std::size_t row_index = 0; row_index < rows.size(); ++row_index) {
+            auto row_fields = db_result_access::row_fields(rows, row_index);
+            if (!row_fields[std::size_t{0}].value()) {
                 throw conversion_error(conversion_error::code_type::unexpected_null, "database scalar column is NULL");
             }
-            result.push_back(::ruvia::decode_db_field<scalar_type>(row[std::size_t{0}]));
+            auto out = entity_value_slot<scalar_type>::make_value();
+            detail::decode_db_field(row_fields[std::size_t{0}], out);
+            result.push_back(std::move(out));
         }
         return result;
     }
@@ -880,7 +894,7 @@ struct db_map_required_one final {
             throw conversion_error(conversion_error::code_type::unexpected_row_count, "database save did not return the saved row");
         }
         db_entity_row_decoder<e_type> decoder(mapper_.selected_columns_, mapper_.wildcard_);
-        return decoder.decode(rows.front());
+        return decoder.decode(rows, 0);
     }
 };
 struct db_projection final {

@@ -1638,3 +1638,47 @@ static_assert(!offers_rvalue_value<ruvia::model_parse_result<resource_parent>>);
 
 static_assert(!offers_rvalue_value<ruvia::json_field_lookup<ruvia::string>>);
 static_assert(!std::is_move_assignable_v<ruvia::json_field_lookup<ruvia::string>>);
+
+template <typename container_type, typename arg_type>
+concept offers_rvalue_assign_owned = requires(container_type c, arg_type arg) { std::move(c).assign_owned(std::move(arg)); };
+template <typename container_type>
+concept offers_rvalue_reserve = requires(container_type c) { std::move(c).reserve(1); };
+template <typename container_type>
+concept offers_rvalue_clear = requires(container_type c) { std::move(c).clear(); };
+template <typename container_type>
+concept offers_rvalue_resize = requires(container_type c) { std::move(c).resize(1); };
+
+TEST(Ruvia, model_value_containers_enforce_lvalue_mutation_and_zero_copy_take) {
+    static_assert(!offers_rvalue_assign_owned<ruvia::string, std::string>);
+    static_assert(!offers_rvalue_assign_owned<ruvia::string, std::string_view>);
+    static_assert(!offers_rvalue_assign_owned<ruvia::bytes, std::vector<std::uint8_t>>);
+    static_assert(!offers_rvalue_assign_owned<ruvia::bytes, std::span<const std::uint8_t>>);
+    static_assert(!offers_rvalue_reserve<ruvia::array<ruvia::int32>>);
+    static_assert(!offers_rvalue_clear<ruvia::array<ruvia::int32>>);
+    static_assert(!offers_rvalue_resize<ruvia::array<ruvia::int32>>);
+    static_assert(!offers_rvalue_reserve<ruvia::boxed_array<ruvia::int32>>);
+    static_assert(!offers_rvalue_clear<ruvia::boxed_array<ruvia::int32>>);
+    static_assert(!offers_rvalue_resize<ruvia::boxed_array<ruvia::int32>>);
+
+    std::string text(160, 's');
+    const char* const text_ptr = text.data();
+    ruvia::string owned_str(std::move(text));
+    const std::string taken_str = std::move(owned_str).take_string();
+    EXPECT_EQ(taken_str.data(), text_ptr);
+    EXPECT_TRUE(owned_str.empty());
+
+    std::vector<std::uint8_t> raw_bytes(128, std::uint8_t{0xAB});
+    const std::uint8_t* const bytes_ptr = raw_bytes.data();
+    ruvia::bytes owned_bytes(std::move(raw_bytes));
+    EXPECT_EQ(owned_bytes.data(), bytes_ptr);
+    const std::vector<std::uint8_t> taken_bytes = std::move(owned_bytes).take_bytes();
+    EXPECT_EQ(taken_bytes.data(), bytes_ptr);
+    EXPECT_TRUE(owned_bytes.empty());
+
+    ruvia::array<ruvia::int32> list;
+    list.push_back(ruvia::int32(42));
+    const auto taken_items = std::move(list).take_items();
+    ASSERT_EQ(taken_items.size(), std::size_t{1});
+    EXPECT_EQ(taken_items[0].value_, 42);
+    EXPECT_TRUE(list.empty());
+}

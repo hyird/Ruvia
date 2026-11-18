@@ -173,6 +173,9 @@ public:
         return subprotocol_;
     }
     std::string_view subprotocol() const&& = delete;
+    [[nodiscard]] std::string take_subprotocol() && noexcept {
+        return std::exchange(subprotocol_, {});
+    }
     [[nodiscard]] websocket_compression compression() const noexcept {
         return compression_;
     }
@@ -206,6 +209,9 @@ public:
         return subprotocol_;
     }
     std::string_view subprotocol() const&& = delete;
+    [[nodiscard]] std::string take_subprotocol() && noexcept {
+        return std::exchange(subprotocol_, {});
+    }
 
     [[nodiscard]] constexpr websocket_compression compression() const noexcept {
         return compression_;

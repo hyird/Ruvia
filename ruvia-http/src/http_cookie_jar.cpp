@@ -53,6 +53,10 @@ http_cookie_jar::http_cookie_jar(http_scheme scheme, std::string_view host, http
     scheme_(scheme),
     max_cookies_(options.max_cookies_),
     max_cookie_bytes_(options.max_cookie_bytes_) {
+    normalize_host();
+}
+
+void http_cookie_jar::normalize_host() noexcept {
     if (!host_.empty() && host_.front() == '[' && host_.back() == ']') {
         host_.erase(host_.size() - 1, 1);
         host_.erase(0, 1);
@@ -154,8 +158,31 @@ void http_cookie_jar::clear() noexcept {
 }
 
 void http_cookie_jar::add_configured_cookie(std::string_view name, std::string_view value) {
-    cookies_.emplace_back(name, value);
-    cookie_bytes_ += entry_storage_bytes(name, value, "/", {});
+    add_configured_cookie_impl(name, value, nullptr, nullptr);
+}
+
+void http_cookie_jar::add_configured_cookie_impl(std::string_view name, std::string_view value, std::string* owned_name, std::string* owned_value) {
+    if (!is_valid_http_header_name(name) || !is_valid_cookie_value(value)) {
+        throw std::invalid_argument("configured cookie requires valid name and value");
+    }
+    const auto replacement_bytes = entry_storage_bytes(name, value, "/", {});
+    const auto match = std::ranges::find_if(cookies_, [name](const stored_cookie& stored) noexcept {
+        return stored.configured_ && stored.name_ == name;
+    });
+    if (match != cookies_.end()) {
+        const auto replaced_bytes = entry_storage_bytes(match->name_, match->value_, match->path_, match->domain_);
+        if (owned_value != nullptr) {
+            match->value_ = std::move(*owned_value);
+        } else {
+            match->value_.assign(value);
+        }
+        cookie_bytes_ = saturating_add(cookie_bytes_ - replaced_bytes, replacement_bytes);
+        return;
+    }
+    std::string stored_name = owned_name != nullptr ? std::move(*owned_name) : std::string(name);
+    std::string stored_value = owned_value != nullptr ? std::move(*owned_value) : std::string(value);
+    cookies_.emplace_back(std::move(stored_name), std::move(stored_value));
+    cookie_bytes_ = saturating_add(cookie_bytes_, replacement_bytes);
 }
 
 std::optional<http_cookie_jar::received_cookie> http_cookie_jar::accept_set_cookie_view(std::string_view request_target, std::string_view set_cookie_value, std::chrono::system_clock::time_point now) const {
@@ -222,7 +249,7 @@ bool http_cookie_jar::store_received_cookie(const received_cookie& cookie) {
     }
 
     if (match == cookies_.end()) {
-        stored_cookie replacement(cookie.name_, cookie.value_, cookie.path_, cookie.domain_);
+        stored_cookie replacement(std::string(cookie.name_), std::string(cookie.value_), std::string(cookie.path_), std::string(cookie.domain_));
         replacement.expires_ = cookie.expires_;
         replacement.secure_ = cookie.secure_;
         replacement.partitioned_ = cookie.partitioned_;

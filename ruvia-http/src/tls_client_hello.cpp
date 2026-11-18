@@ -26,39 +26,105 @@ namespace {
     return (value >> shift) | (value << (32U - shift));
 }
 
-[[nodiscard]] std::array<char, 32> md5_hex_lower(std::string_view input) noexcept {
-    static constexpr std::array<std::uint32_t, 64> k_table = {0xd76aa478U, 0xe8c7b756U, 0x242070dbU, 0xc1bdceeeU, 0xf57c0fafU, 0x4787c62aU, 0xa8304613U, 0xfd469501U, 0x698098d8U, 0x8b44f7afU, 0xffff5bb1U, 0x895cd7beU, 0x6b901122U, 0xfd987193U, 0xa679438eU, 0x49b40821U, 0xf61e2562U, 0xc040b340U, 0x265e5a51U, 0xe9b6c7aaU, 0xd62f105dU, 0x02441453U, 0xd8a1e681U, 0xe7d3fbc8U, 0x21e1cde6U, 0xc33707d6U, 0xf4d50d87U, 0x455a14edU, 0xa9e3e905U, 0xfcefa3f8U, 0x676f02d9U, 0x8d2a4c8aU, 0xfffa3942U, 0x8771f681U, 0x6d9d6122U, 0xfde5380cU, 0xa4beea44U, 0x4bdecfa9U, 0xf6bb4b60U, 0xbebfbc70U, 0x289b7ec6U, 0xeaa127faU, 0xd4ef3085U, 0x04881d05U, 0xd9d4d039U, 0xe6db99e5U, 0x1fa27cf8U, 0xc4ac5665U, 0xf4292244U, 0x432aff97U, 0xab9423a7U, 0xfc93a039U, 0x655b59c3U, 0x8f0ccc92U, 0xffeff47dU, 0x85845dd1U, 0x6fa87e4fU, 0xfe2ce6e0U, 0xa3014314U, 0x4e0811a1U, 0xf7537e82U, 0xbd3af235U, 0x2ad7d2bbU, 0xeb86d391U};
-    static constexpr std::array<unsigned int, 64> s_table = {7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21};
-
-    std::uint32_t a0 = 0x67452301U;
-    std::uint32_t b0 = 0xefcdab89U;
-    std::uint32_t c0 = 0x98badcfeU;
-    std::uint32_t d0 = 0x10325476U;
-
-    const auto process_block = [&](const std::uint8_t* block) noexcept {
-        std::array<std::uint32_t, 16> m{};
-        for (std::size_t i = 0; i < 16; ++i) {
-            m[i] = static_cast<std::uint32_t>(block[i * 4]) | (static_cast<std::uint32_t>(block[i * 4 + 1]) << 8U) | (static_cast<std::uint32_t>(block[i * 4 + 2]) << 16U) | (static_cast<std::uint32_t>(block[i * 4 + 3]) << 24U);
+class md5_hasher final {
+public:
+    void update(std::string_view input) noexcept {
+        if (input.empty()) {
+            return;
         }
-        std::uint32_t a = a0;
-        std::uint32_t b = b0;
-        std::uint32_t c = c0;
-        std::uint32_t d = d0;
-        for (std::size_t i = 0; i < 64; ++i) {
+        total_bytes_ += input.size();
+        const auto* data = reinterpret_cast<const std::uint8_t*>(input.data());
+        std::size_t rem = input.size();
+        if (buffered_ != 0U) {
+            const std::size_t take = (std::min)(rem, 64U - buffered_);
+            std::memcpy(block_.data() + buffered_, data, take);
+            buffered_ += take;
+            data += take;
+            rem -= take;
+            if (buffered_ == 64U) {
+                process_block(block_.data());
+                buffered_ = 0;
+            }
+        }
+        while (rem >= 64U) {
+            process_block(data);
+            data += 64U;
+            rem -= 64U;
+        }
+        if (rem != 0U) {
+            std::memcpy(block_.data(), data, rem);
+            buffered_ = rem;
+        }
+    }
+
+    void update_char(char ch) noexcept {
+        ++total_bytes_;
+        block_[buffered_++] = static_cast<std::uint8_t>(ch);
+        if (buffered_ == 64U) {
+            process_block(block_.data());
+            buffered_ = 0;
+        }
+    }
+
+    [[nodiscard]] std::array<char, 32> finish_hex() noexcept {
+        block_[buffered_++] = 0x80U;
+        if (buffered_ > 56U) {
+            if (buffered_ < 64U) {
+                std::memset(block_.data() + buffered_, 0, 64U - buffered_);
+            }
+            process_block(block_.data());
+            buffered_ = 0;
+        }
+        if (buffered_ < 56U) {
+            std::memset(block_.data() + buffered_, 0, 56U - buffered_);
+        }
+        const std::uint64_t bit_len = total_bytes_ * 8U;
+        for (std::size_t i = 0; i < 8U; ++i) {
+            block_[56U + i] = static_cast<std::uint8_t>((bit_len >> (i * 8U)) & 0xffU);
+        }
+        process_block(block_.data());
+
+        std::array<std::uint8_t, 16> digest{};
+        const std::array<std::uint32_t, 4> words = {a0_, b0_, c0_, d0_};
+        for (std::size_t i = 0; i < 4U; ++i) {
+            digest[i * 4U] = static_cast<std::uint8_t>(words[i] & 0xffU);
+            digest[i * 4U + 1U] = static_cast<std::uint8_t>((words[i] >> 8U) & 0xffU);
+            digest[i * 4U + 2U] = static_cast<std::uint8_t>((words[i] >> 16U) & 0xffU);
+            digest[i * 4U + 3U] = static_cast<std::uint8_t>((words[i] >> 24U) & 0xffU);
+        }
+        std::array<char, 32> out{};
+        http_encode_lower_hex(out.data(), digest);
+        return out;
+    }
+
+private:
+    void process_block(const std::uint8_t* block) noexcept {
+        static constexpr std::array<std::uint32_t, 64> k_table = {0xd76aa478U, 0xe8c7b756U, 0x242070dbU, 0xc1bdceeeU, 0xf57c0fafU, 0x4787c62aU, 0xa8304613U, 0xfd469501U, 0x698098d8U, 0x8b44f7afU, 0xffff5bb1U, 0x895cd7beU, 0x6b901122U, 0xfd987193U, 0xa679438eU, 0x49b40821U, 0xf61e2562U, 0xc040b340U, 0x265e5a51U, 0xe9b6c7aaU, 0xd62f105dU, 0x02441453U, 0xd8a1e681U, 0xe7d3fbc8U, 0x21e1cde6U, 0xc33707d6U, 0xf4d50d87U, 0x455a14edU, 0xa9e3e905U, 0xfcefa3f8U, 0x676f02d9U, 0x8d2a4c8aU, 0xfffa3942U, 0x8771f681U, 0x6d9d6122U, 0xfde5380cU, 0xa4beea44U, 0x4bdecfa9U, 0xf6bb4b60U, 0xbebfbc70U, 0x289b7ec6U, 0xeaa127faU, 0xd4ef3085U, 0x04881d05U, 0xd9d4d039U, 0xe6db99e5U, 0x1fa27cf8U, 0xc4ac5665U, 0xf4292244U, 0x432aff97U, 0xab9423a7U, 0xfc93a039U, 0x655b59c3U, 0x8f0ccc92U, 0xffeff47dU, 0x85845dd1U, 0x6fa87e4fU, 0xfe2ce6e0U, 0xa3014314U, 0x4e0811a1U, 0xf7537e82U, 0xbd3af235U, 0x2ad7d2bbU, 0xeb86d391U};
+        static constexpr std::array<unsigned int, 64> s_table = {7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21};
+
+        std::array<std::uint32_t, 16> m{};
+        for (std::size_t i = 0; i < 16U; ++i) {
+            m[i] = static_cast<std::uint32_t>(block[i * 4U]) | (static_cast<std::uint32_t>(block[i * 4U + 1U]) << 8U) | (static_cast<std::uint32_t>(block[i * 4U + 2U]) << 16U) | (static_cast<std::uint32_t>(block[i * 4U + 3U]) << 24U);
+        }
+        std::uint32_t a = a0_;
+        std::uint32_t b = b0_;
+        std::uint32_t c = c0_;
+        std::uint32_t d = d0_;
+        for (std::size_t i = 0; i < 64U; ++i) {
             std::uint32_t f = 0;
             std::size_t g = 0;
-            if (i < 16) {
+            if (i < 16U) {
                 f = (b & c) | ((~b) & d);
                 g = i;
-            } else if (i < 32) {
+            } else if (i < 32U) {
                 f = (d & b) | ((~d) & c);
-                g = (5 * i + 1) % 16;
-            } else if (i < 48) {
+                g = (5U * i + 1U) % 16U;
+            } else if (i < 48U) {
                 f = b ^ c ^ d;
-                g = (3 * i + 5) % 16;
+                g = (3U * i + 5U) % 16U;
             } else {
                 f = c ^ (b | (~d));
-                g = (7 * i) % 16;
+                g = (7U * i) % 16U;
             }
             const std::uint32_t temp = d;
             d = c;
@@ -66,73 +132,112 @@ namespace {
             b = b + rotl32(a + f + k_table[i] + m[g], s_table[i]);
             a = temp;
         }
-        a0 += a;
-        b0 += b;
-        c0 += c;
-        d0 += d;
-    };
-
-    const auto* const bytes = reinterpret_cast<const std::uint8_t*>(input.data());
-    std::size_t offset = 0;
-    while (input.size() - offset >= 64) {
-        process_block(bytes + offset);
-        offset += 64;
+        a0_ += a;
+        b0_ += b;
+        c0_ += c;
+        d0_ += d;
     }
 
-    std::array<std::uint8_t, 128> tail{};
-    const std::size_t rem = input.size() - offset;
-    if (rem != 0) {
-        std::memcpy(tail.data(), bytes + offset, rem);
+    std::uint32_t a0_{0x67452301U};
+    std::uint32_t b0_{0xefcdab89U};
+    std::uint32_t c0_{0x98badcfeU};
+    std::uint32_t d0_{0x10325476U};
+    std::array<std::uint8_t, 64> block_{};
+    std::size_t buffered_{0};
+    std::uint64_t total_bytes_{0};
+};
+
+class sha256_hasher final {
+public:
+    void update(std::string_view input) noexcept {
+        if (input.empty()) {
+            return;
+        }
+        total_bytes_ += input.size();
+        const auto* data = reinterpret_cast<const std::uint8_t*>(input.data());
+        std::size_t rem = input.size();
+        if (buffered_ != 0U) {
+            const std::size_t take = (std::min)(rem, 64U - buffered_);
+            std::memcpy(block_.data() + buffered_, data, take);
+            buffered_ += take;
+            data += take;
+            rem -= take;
+            if (buffered_ == 64U) {
+                process_block(block_.data());
+                buffered_ = 0;
+            }
+        }
+        while (rem >= 64U) {
+            process_block(data);
+            data += 64U;
+            rem -= 64U;
+        }
+        if (rem != 0U) {
+            std::memcpy(block_.data(), data, rem);
+            buffered_ = rem;
+        }
     }
-    tail[rem] = 0x80U;
-    const std::size_t padded_len = rem < 56 ? 64 : 128;
-    const std::uint64_t bit_len = static_cast<std::uint64_t>(input.size()) * 8U;
-    for (std::size_t i = 0; i < 8; ++i) {
-        tail[padded_len - 8 + i] = static_cast<std::uint8_t>((bit_len >> (i * 8U)) & 0xffU);
-    }
-    process_block(tail.data());
-    if (padded_len == 128) {
-        process_block(tail.data() + 64);
-    }
 
-    std::array<std::uint8_t, 16> digest{};
-    const std::array<std::uint32_t, 4> words = {a0, b0, c0, d0};
-    for (std::size_t i = 0; i < 4; ++i) {
-        digest[i * 4] = static_cast<std::uint8_t>(words[i] & 0xffU);
-        digest[i * 4 + 1] = static_cast<std::uint8_t>((words[i] >> 8U) & 0xffU);
-        digest[i * 4 + 2] = static_cast<std::uint8_t>((words[i] >> 16U) & 0xffU);
-        digest[i * 4 + 3] = static_cast<std::uint8_t>((words[i] >> 24U) & 0xffU);
+    void update_char(char ch) noexcept {
+        ++total_bytes_;
+        block_[buffered_++] = static_cast<std::uint8_t>(ch);
+        if (buffered_ == 64U) {
+            process_block(block_.data());
+            buffered_ = 0;
+        }
     }
 
-    std::array<char, 32> out{};
-    http_encode_lower_hex(out.data(), digest);
-    return out;
-}
+    [[nodiscard]] std::array<char, 64> finish_hex() noexcept {
+        block_[buffered_++] = 0x80U;
+        if (buffered_ > 56U) {
+            if (buffered_ < 64U) {
+                std::memset(block_.data() + buffered_, 0, 64U - buffered_);
+            }
+            process_block(block_.data());
+            buffered_ = 0;
+        }
+        if (buffered_ < 56U) {
+            std::memset(block_.data() + buffered_, 0, 56U - buffered_);
+        }
+        const std::uint64_t bit_len = total_bytes_ * 8U;
+        for (std::size_t i = 0; i < 8U; ++i) {
+            block_[63U - i] = static_cast<std::uint8_t>((bit_len >> (i * 8U)) & 0xffU);
+        }
+        process_block(block_.data());
 
-[[nodiscard]] std::array<char, 64> sha256_hex_lower(std::string_view input) noexcept {
-    static constexpr std::array<std::uint32_t, 64> k_table = {0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U, 0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U, 0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U, 0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU, 0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU, 0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U, 0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U, 0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U, 0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U, 0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U, 0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U, 0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U, 0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU, 0x682e6ff3U, 0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U, 0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U};
+        std::array<std::uint8_t, 32> digest{};
+        for (std::size_t i = 0; i < 8U; ++i) {
+            for (std::size_t b = 0; b < 4U; ++b) {
+                digest[i * 4U + b] = static_cast<std::uint8_t>((state_[i] >> ((3U - b) * 8U)) & 0xffU);
+            }
+        }
+        std::array<char, 64> out{};
+        http_encode_lower_hex(out.data(), digest);
+        return out;
+    }
 
-    std::array<std::uint32_t, 8> state = {0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU, 0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U};
+private:
+    void process_block(const std::uint8_t* block) noexcept {
+        static constexpr std::array<std::uint32_t, 64> k_table = {0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U, 0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U, 0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U, 0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU, 0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU, 0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U, 0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U, 0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U, 0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U, 0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U, 0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U, 0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U, 0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU, 0x682e6ff3U, 0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U, 0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U};
 
-    const auto process_block = [&](const std::uint8_t* block) noexcept {
         std::array<std::uint32_t, 64> w{};
-        for (std::size_t i = 0; i < 16; ++i) {
-            w[i] = (static_cast<std::uint32_t>(block[i * 4]) << 24U) | (static_cast<std::uint32_t>(block[i * 4 + 1]) << 16U) | (static_cast<std::uint32_t>(block[i * 4 + 2]) << 8U) | static_cast<std::uint32_t>(block[i * 4 + 3]);
+        for (std::size_t i = 0; i < 16U; ++i) {
+            w[i] = (static_cast<std::uint32_t>(block[i * 4U]) << 24U) | (static_cast<std::uint32_t>(block[i * 4U + 1U]) << 16U) | (static_cast<std::uint32_t>(block[i * 4U + 2U]) << 8U) | static_cast<std::uint32_t>(block[i * 4U + 3U]);
         }
-        for (std::size_t i = 16; i < 64; ++i) {
-            const std::uint32_t s0 = rotr32(w[i - 15], 7) ^ rotr32(w[i - 15], 18) ^ (w[i - 15] >> 3U);
-            const std::uint32_t s1 = rotr32(w[i - 2], 17) ^ rotr32(w[i - 2], 19) ^ (w[i - 2] >> 10U);
-            w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+        for (std::size_t i = 16U; i < 64U; ++i) {
+            const std::uint32_t s0 = rotr32(w[i - 15U], 7) ^ rotr32(w[i - 15U], 18) ^ (w[i - 15U] >> 3U);
+            const std::uint32_t s1 = rotr32(w[i - 2U], 17) ^ rotr32(w[i - 2U], 19) ^ (w[i - 2U] >> 10U);
+            w[i] = w[i - 16U] + s0 + w[i - 7U] + s1;
         }
-        std::uint32_t a = state[0];
-        std::uint32_t b = state[1];
-        std::uint32_t c = state[2];
-        std::uint32_t d = state[3];
-        std::uint32_t e = state[4];
-        std::uint32_t f = state[5];
-        std::uint32_t g = state[6];
-        std::uint32_t h = state[7];
-        for (std::size_t i = 0; i < 64; ++i) {
+        std::uint32_t a = state_[0];
+        std::uint32_t b = state_[1];
+        std::uint32_t c = state_[2];
+        std::uint32_t d = state_[3];
+        std::uint32_t e = state_[4];
+        std::uint32_t f = state_[5];
+        std::uint32_t g = state_[6];
+        std::uint32_t h = state_[7];
+        for (std::size_t i = 0; i < 64U; ++i) {
             const std::uint32_t s1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25);
             const std::uint32_t ch = (e & f) ^ ((~e) & g);
             const std::uint32_t temp1 = h + s1 + ch + k_table[i] + w[i];
@@ -148,63 +253,121 @@ namespace {
             b = a;
             a = temp1 + temp2;
         }
-        state[0] += a;
-        state[1] += b;
-        state[2] += c;
-        state[3] += d;
-        state[4] += e;
-        state[5] += f;
-        state[6] += g;
-        state[7] += h;
-    };
-
-    const auto* const bytes = reinterpret_cast<const std::uint8_t*>(input.data());
-    std::size_t offset = 0;
-    while (input.size() - offset >= 64) {
-        process_block(bytes + offset);
-        offset += 64;
+        state_[0] += a;
+        state_[1] += b;
+        state_[2] += c;
+        state_[3] += d;
+        state_[4] += e;
+        state_[5] += f;
+        state_[6] += g;
+        state_[7] += h;
     }
 
-    std::array<std::uint8_t, 128> tail{};
-    const std::size_t rem = input.size() - offset;
-    if (rem != 0) {
-        std::memcpy(tail.data(), bytes + offset, rem);
-    }
-    tail[rem] = 0x80U;
-    const std::size_t padded_len = rem < 56 ? 64 : 128;
-    const std::uint64_t bit_len = static_cast<std::uint64_t>(input.size()) * 8U;
-    for (std::size_t i = 0; i < 8; ++i) {
-        tail[padded_len - 1 - i] = static_cast<std::uint8_t>((bit_len >> (i * 8U)) & 0xffU);
-    }
-    process_block(tail.data());
-    if (padded_len == 128) {
-        process_block(tail.data() + 64);
-    }
+    std::array<std::uint32_t, 8> state_{0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU, 0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U};
+    std::array<std::uint8_t, 64> block_{};
+    std::size_t buffered_{0};
+    std::uint64_t total_bytes_{0};
+};
 
-    std::array<std::uint8_t, 32> digest{};
-    for (std::size_t i = 0; i < 8; ++i) {
-        for (std::size_t b = 0; b < 4; ++b) {
-            digest[i * 4 + b] = static_cast<std::uint8_t>((state[i] >> ((3U - b) * 8U)) & 0xffU);
-        }
-    }
-    std::array<char, 64> out{};
-    http_encode_lower_hex(out.data(), digest);
-    return out;
+[[nodiscard]] std::array<char, 32> md5_hex_lower(std::string_view input) noexcept {
+    md5_hasher hasher;
+    hasher.update(input);
+    return hasher.finish_hex();
 }
 
-template <typename int_type>
-void append_decimal_list(std::string& out, std::span<const int_type> items) {
+void sink_push(std::string& out, char ch) {
+    out.push_back(ch);
+}
+
+void sink_push(md5_hasher& out, char ch) noexcept {
+    out.update_char(ch);
+}
+
+void sink_append(std::string& out, std::string_view sv) {
+    out.append(sv);
+}
+
+void sink_append(md5_hasher& out, std::string_view sv) noexcept {
+    out.update(sv);
+}
+
+template <typename sink_type>
+void sink_decimal(sink_type& out, std::uint64_t value) {
+    std::array<char, 20> buf{};
+    std::size_t pos = buf.size();
+    do {
+        buf[--pos] = static_cast<char>('0' + (value % 10U));
+        value /= 10U;
+    } while (value != 0U);
+    sink_append(out, std::string_view(buf.data() + pos, buf.size() - pos));
+}
+
+template <typename sink_type, typename int_type>
+void emit_decimal_list(sink_type& out, std::span<const int_type> items) {
     for (std::size_t index = 0; index < items.size(); ++index) {
         if (index != 0) {
-            out.push_back('-');
+            sink_push(out, '-');
         }
-        append_decimal(out, static_cast<std::uint64_t>(items[index]));
+        sink_decimal(out, static_cast<std::uint64_t>(items[index]));
     }
 }
 
-void append_hex_u16(std::string& out, std::uint16_t value) {
-    const char digits[]{http_lower_hex_digit(value >> 12U), http_lower_hex_digit(value >> 8U), http_lower_hex_digit(value >> 4U), http_lower_hex_digit(value)};
-    out.append(digits, sizeof(digits));
+template <typename sink_type>
+void emit_ja3_bytes(sink_type& out, std::uint16_t legacy_version, std::span<const std::uint16_t> cipher_suites, std::span<const std::uint16_t> extensions, std::span<const std::uint16_t> supported_groups, std::span<const std::uint8_t> ec_point_formats) {
+    sink_decimal(out, legacy_version);
+    sink_push(out, ',');
+    emit_decimal_list(out, cipher_suites);
+    sink_push(out, ',');
+    emit_decimal_list(out, extensions);
+    sink_push(out, ',');
+    emit_decimal_list(out, supported_groups);
+    sink_push(out, ',');
+    emit_decimal_list(out, ec_point_formats);
+}
+
+template <typename sink_type>
+void emit_peetprint_bytes(sink_type& out, std::uint16_t legacy_version, std::span<const std::uint16_t> supported_versions, std::span<const std::uint16_t> cipher_suites, std::span<const std::uint16_t> extensions, std::span<const std::uint16_t> supported_groups, std::span<const std::uint8_t> ec_point_formats, std::span<const std::string> alpn, std::span<const std::uint16_t> signature_algorithms) {
+    if (!supported_versions.empty()) {
+        emit_decimal_list(out, supported_versions);
+    } else {
+        sink_decimal(out, legacy_version);
+    }
+    sink_push(out, '|');
+    emit_decimal_list(out, cipher_suites);
+    sink_push(out, '|');
+    emit_decimal_list(out, extensions);
+    sink_push(out, '|');
+    emit_decimal_list(out, supported_groups);
+    sink_push(out, '|');
+    emit_decimal_list(out, ec_point_formats);
+    sink_push(out, '|');
+    for (std::size_t index = 0; index < alpn.size(); ++index) {
+        if (index != 0) {
+            sink_push(out, '-');
+        }
+        sink_append(out, alpn[index]);
+    }
+    sink_push(out, '|');
+    emit_decimal_list(out, signature_algorithms);
+}
+
+void hash_hex_u16(sha256_hasher& hasher, std::uint16_t value) noexcept {
+    const std::array<char, 4> digits = {
+        http_lower_hex_digit(value >> 12U),
+        http_lower_hex_digit(value >> 8U),
+        http_lower_hex_digit(value >> 4U),
+        http_lower_hex_digit(value)
+    };
+    hasher.update(std::string_view(digits.data(), digits.size()));
+}
+
+void append_sorted_u16_hex_list(sha256_hasher& hasher, std::span<const std::uint16_t> items) {
+    for (std::size_t index = 0; index < items.size(); ++index) {
+        if (index != 0) {
+            hasher.update_char(',');
+        }
+        hash_hex_u16(hasher, items[index]);
+    }
 }
 
 [[nodiscard]] std::string_view ja4_version_code(std::uint16_t version) noexcept {
@@ -253,21 +416,15 @@ std::uint16_t tls_client_hello_info::version() const noexcept {
 
 std::string tls_client_hello_info::ja3_raw() const {
     std::string out;
-    append_decimal(out, legacy_version_);
-    out.push_back(',');
-    append_decimal_list<std::uint16_t>(out, cipher_suites_);
-    out.push_back(',');
-    append_decimal_list<std::uint16_t>(out, extensions_);
-    out.push_back(',');
-    append_decimal_list<std::uint16_t>(out, supported_groups_);
-    out.push_back(',');
-    append_decimal_list<std::uint8_t>(out, ec_point_formats_);
+    out.reserve(16U + (cipher_suites_.size() + extensions_.size() + supported_groups_.size() + ec_point_formats_.size()) * 6U);
+    emit_ja3_bytes(out, legacy_version_, cipher_suites_, extensions_, supported_groups_, ec_point_formats_);
     return out;
 }
 
 std::string tls_client_hello_info::ja3() const {
-    const auto raw = ja3_raw();
-    const auto digest = md5_hex_lower(raw);
+    md5_hasher hasher;
+    emit_ja3_bytes(hasher, legacy_version_, cipher_suites_, extensions_, supported_groups_, ec_point_formats_);
+    const auto digest = hasher.finish_hex();
     return std::string(digest.data(), digest.size());
 }
 
@@ -307,50 +464,54 @@ std::string tls_client_hello_info::ja4(bool quic) const {
     if (cipher_suites_.empty()) {
         out.append("000000000000");
     } else {
-        std::vector<std::uint16_t> sorted_ciphers(cipher_suites_);
-        std::ranges::sort(sorted_ciphers);
-        std::string cipher_list;
-        cipher_list.reserve(sorted_ciphers.size() * 5U);
-        for (std::size_t index = 0; index < sorted_ciphers.size(); ++index) {
-            if (index != 0) {
-                cipher_list.push_back(',');
-            }
-            append_hex_u16(cipher_list, sorted_ciphers[index]);
+        std::array<std::uint16_t, 64> stack_ciphers{};
+        std::vector<std::uint16_t> heap_ciphers;
+        std::span<std::uint16_t> sorted_ciphers;
+        if (cipher_suites_.size() <= stack_ciphers.size()) {
+            std::ranges::copy(cipher_suites_, stack_ciphers.data());
+            sorted_ciphers = std::span<std::uint16_t>(stack_ciphers.data(), cipher_suites_.size());
+        } else {
+            heap_ciphers.assign(cipher_suites_.begin(), cipher_suites_.end());
+            sorted_ciphers = heap_ciphers;
         }
-        const auto hash_b = sha256_hex_lower(cipher_list);
+        std::ranges::sort(sorted_ciphers);
+        sha256_hasher hasher;
+        append_sorted_u16_hex_list(hasher, sorted_ciphers);
+        const auto hash_b = hasher.finish_hex();
         out.append(hash_b.data(), 12U);
     }
     out.push_back('_');
 
-    std::vector<std::uint16_t> filtered_exts;
-    filtered_exts.reserve(extensions_.size());
+    std::array<std::uint16_t, 64> stack_exts{};
+    std::vector<std::uint16_t> heap_exts;
+    std::size_t ext_count = 0;
     for (const auto ext : extensions_) {
-        if (ext != 0x0000U && ext != 0x0010U) {
-            filtered_exts.push_back(ext);
+        if (ext == 0x0000U || ext == 0x0010U) {
+            continue;
         }
+        if (heap_exts.empty()) {
+            if (ext_count < stack_exts.size()) {
+                stack_exts[ext_count++] = ext;
+                continue;
+            }
+            heap_exts.reserve(extensions_.size());
+            heap_exts.assign(stack_exts.begin(), stack_exts.end());
+        }
+        heap_exts.push_back(ext);
     }
+    std::span<std::uint16_t> filtered_exts = heap_exts.empty() ? std::span<std::uint16_t>(stack_exts.data(), ext_count) : std::span<std::uint16_t>(heap_exts);
     std::ranges::sort(filtered_exts);
 
     if (filtered_exts.empty() && signature_algorithms_.empty()) {
         out.append("000000000000");
     } else {
-        std::string ext_sig_list;
-        for (std::size_t index = 0; index < filtered_exts.size(); ++index) {
-            if (index != 0) {
-                ext_sig_list.push_back(',');
-            }
-            append_hex_u16(ext_sig_list, filtered_exts[index]);
-        }
+        sha256_hasher hasher;
+        append_sorted_u16_hex_list(hasher, filtered_exts);
         if (!signature_algorithms_.empty()) {
-            ext_sig_list.push_back('_');
-            for (std::size_t index = 0; index < signature_algorithms_.size(); ++index) {
-                if (index != 0) {
-                    ext_sig_list.push_back(',');
-                }
-                append_hex_u16(ext_sig_list, signature_algorithms_[index]);
-            }
+            hasher.update_char('_');
+            append_sorted_u16_hex_list(hasher, signature_algorithms_);
         }
-        const auto hash_c = sha256_hex_lower(ext_sig_list);
+        const auto hash_c = hasher.finish_hex();
         out.append(hash_c.data(), 12U);
     }
 
@@ -359,34 +520,15 @@ std::string tls_client_hello_info::ja4(bool quic) const {
 
 std::string tls_client_hello_info::peetprint() const {
     std::string out;
-    if (!supported_versions_.empty()) {
-        append_decimal_list<std::uint16_t>(out, supported_versions_);
-    } else {
-        append_decimal(out, legacy_version_);
-    }
-    out.push_back('|');
-    append_decimal_list<std::uint16_t>(out, cipher_suites_);
-    out.push_back('|');
-    append_decimal_list<std::uint16_t>(out, extensions_);
-    out.push_back('|');
-    append_decimal_list<std::uint16_t>(out, supported_groups_);
-    out.push_back('|');
-    append_decimal_list<std::uint8_t>(out, ec_point_formats_);
-    out.push_back('|');
-    for (std::size_t index = 0; index < alpn_.size(); ++index) {
-        if (index != 0) {
-            out.push_back('-');
-        }
-        out.append(alpn_[index]);
-    }
-    out.push_back('|');
-    append_decimal_list<std::uint16_t>(out, signature_algorithms_);
+    out.reserve(32U + (supported_versions_.size() + cipher_suites_.size() + extensions_.size() + supported_groups_.size() + ec_point_formats_.size() + signature_algorithms_.size()) * 6U);
+    emit_peetprint_bytes(out, legacy_version_, supported_versions_, cipher_suites_, extensions_, supported_groups_, ec_point_formats_, alpn_, signature_algorithms_);
     return out;
 }
 
 std::string tls_client_hello_info::peetprint_hash() const {
-    const auto raw = peetprint();
-    const auto digest = md5_hex_lower(raw);
+    md5_hasher hasher;
+    emit_peetprint_bytes(hasher, legacy_version_, supported_versions_, cipher_suites_, extensions_, supported_groups_, ec_point_formats_, alpn_, signature_algorithms_);
+    const auto digest = hasher.finish_hex();
     return std::string(digest.data(), digest.size());
 }
 

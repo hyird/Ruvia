@@ -31,7 +31,7 @@ namespace ruvia::test::blocking_pool_tests {
 
 template <typename value_type>
 concept separated_blocking_result_access = requires(blocking_result<value_type>& result, const blocking_result<value_type>& constant) {
-    { result.value() } -> std::same_as<std::add_lvalue_reference_t<value_type>>;
+    { result.value() } -> std::same_as<std::conditional_t<std::is_void_v<value_type>, void, std::add_lvalue_reference_t<const value_type>>>;
     { constant.value() } -> std::same_as<std::conditional_t<std::is_void_v<value_type>, void, std::add_lvalue_reference_t<const value_type>>>;
     { std::move(result).take_value() } -> std::same_as<value_type>;
 } && (!requires(blocking_result<value_type>& result) { result.take_value(); }) && (!requires(blocking_result<value_type>& result) { std::move(result).value(); }) && (!requires(const blocking_result<value_type>& result) { std::move(result).value(); }) && (!requires(const blocking_result<value_type>& result) { std::move(result).take_value(); });
@@ -1127,4 +1127,36 @@ TEST(Ruvia, blocking_pool_post_returns_rejected_callable) {
     pool.join();
     const auto stats = pool.stats();
     EXPECT_EQ(stats.rejected_, 1U);
+}
+
+namespace {
+
+template <typename result_type>
+concept blocking_result_allows_rvalue_value = requires(result_type r) { std::move(r).value(); };
+
+template <typename result_type>
+concept blocking_result_allows_rvalue_error = requires(result_type r) { std::move(r).error(); };
+
+template <typename result_type>
+concept blocking_result_allows_take_value = requires(result_type r) { std::move(r).take_value(); };
+
+}  // namespace
+
+TEST(Ruvia, blocking_result_zero_copy_extraction_and_rvalue_borrow_guards) {
+    static_assert(!blocking_result_allows_rvalue_value<const ruvia::blocking_result<std::string>>);
+    static_assert(!blocking_result_allows_rvalue_error<const ruvia::blocking_result<std::string>>);
+    static_assert(!blocking_result_allows_rvalue_value<ruvia::blocking_result<void>>);
+    static_assert(blocking_result_allows_take_value<ruvia::blocking_result<std::string>>);
+    static_assert(blocking_result_allows_take_value<ruvia::blocking_result<void>>);
+
+    std::string raw(200, 'b');
+    const char* const ptr = raw.data();
+    auto outcome = ruvia::blocking_result<std::string>::with_value(std::move(raw));
+    EXPECT_EQ(outcome.value().data(), ptr);
+    const std::string extracted = std::move(outcome).take_value();
+    EXPECT_EQ(extracted.data(), ptr);
+    EXPECT_EQ(extracted.size(), std::size_t{200});
+
+    auto void_outcome = ruvia::blocking_result<void>::with_value();
+    std::move(void_outcome).take_value();
 }

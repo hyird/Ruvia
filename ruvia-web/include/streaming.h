@@ -12,6 +12,7 @@
 #include <utility>
 #include <variant>
 
+#include "borrowed_text.h"
 #include "callback_ref.h"
 #include "http_header.h"
 #include "http_multipart.h"
@@ -121,8 +122,8 @@ public:
     [[nodiscard]] task<void> write(outbound_bytes chunk, operation_options operation = {}) &;
     task<void> write(outbound_bytes, operation_options = {}) && = delete;
 
-    [[nodiscard]] task<void> writeln(std::string_view chunk, operation_options operation = {}) &;
-    task<void> writeln(std::string_view, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> writeln(outbound_bytes chunk, operation_options operation = {}) &;
+    task<void> writeln(outbound_bytes, operation_options = {}) && = delete;
 
     /// 仅在正文阶段挂起生产者；正常超时返回 elapsed，context::stop_token()
     /// 或 `stop` 取消（含客户端断开）返回 stop_requested，与 sleep_for 相同：
@@ -147,8 +148,8 @@ public:
     /// 禁止 Trailer 的状态在未发送头之前拒绝非空部分。
     /// 已正常完成后空 finish() 幂等，预算内的非空 Trailer 抛 logic_error。
     /// 生产正文仍必须先显式 commit() 并检查结果。
-    [[nodiscard]] task<void> finish(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
-    task<void> finish(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(argument_list<http_header_view> trailers = {}, operation_options operation = {}) &;
+    task<void> finish(argument_list<http_header_view> = {}, operation_options = {}) && = delete;
 
 private:
     friend struct detail::streaming_access;
@@ -246,8 +247,8 @@ public:
         return writer().committed();
     }
 
-    [[nodiscard]] task<void> finish(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
-    task<void> finish(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(argument_list<http_header_view> trailers = {}, operation_options operation = {}) &;
+    task<void> finish(argument_list<http_header_view> = {}, operation_options = {}) && = delete;
 
 private:
     // request_exchange::stream_sse() is the only constructor of a first handle.

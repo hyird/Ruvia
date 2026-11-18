@@ -304,13 +304,13 @@ task<void> http_client_request_body_writer::write(outbound_bytes bytes_value, op
     }
     return state_->upload_->output_.output_scope_.attach(detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), std::move(bytes_value).into_string(), std::move(operation)}));
 }
-task<void> http_client_request_body_writer::finish(std::span<const http_header_view> fields_value, operation_options operation) & {
+task<void> http_client_request_body_writer::finish(argument_list<http_header_view> fields_value, operation_options operation) & {
     if (state_ == nullptr) {
         throw std::logic_error("HTTP request exchange is empty");
     }
     require_writable(*state_);
     http_request_trailers validation;
-    if (validation.append(fields_value).has_value()) {
+    if (validation.append(fields_value.span()).has_value()) {
         throw std::invalid_argument("invalid request trailer section");
     }
     return state_->upload_->output_.output_scope_.attach(detail::finish_client_output<upload_output_policy>(state_, detail::http_client_upload_end_input{http_client_response(state_), std::move(validation).take_fields()}, std::move(operation)));

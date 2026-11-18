@@ -76,7 +76,11 @@ public:
     // point: a typo in a deployment variable should stop startup, not silently
     // select the default.
     template <typename t_type>
+        requires std::same_as<std::remove_cvref_t<t_type>, std::string_view>
     [[nodiscard]] std::optional<std::remove_cvref_t<t_type>> get(std::string_view name) const& RUVIA_LIFETIMEBOUND;
+    template <typename t_type>
+        requires(!std::same_as<std::remove_cvref_t<t_type>, std::string_view>)
+    [[nodiscard]] std::optional<std::remove_cvref_t<t_type>> get(std::string_view name) const&;
     template <typename t_type>
     [[nodiscard]] std::optional<std::remove_cvref_t<t_type>> get(std::string_view) const&& = delete;
 
@@ -88,6 +92,9 @@ public:
 
 private:
     [[nodiscard]] static std::optional<bool> parse_bool_value(std::string_view value) noexcept;
+
+    template <typename t_type>
+    [[nodiscard]] std::optional<std::remove_cvref_t<t_type>> get_parsed(std::string_view name) const&;
 
     template <typename t_type>
     [[nodiscard]] static std::optional<std::remove_cvref_t<t_type>> parse_typed_value(std::string_view value) noexcept;
@@ -102,7 +109,19 @@ private:
 };
 
 template <typename t_type>
+    requires std::same_as<std::remove_cvref_t<t_type>, std::string_view>
 std::optional<std::remove_cvref_t<t_type>> env::get(std::string_view name) const& {
+    return get_parsed<t_type>(name);
+}
+
+template <typename t_type>
+    requires(!std::same_as<std::remove_cvref_t<t_type>, std::string_view>)
+std::optional<std::remove_cvref_t<t_type>> env::get(std::string_view name) const& {
+    return get_parsed<t_type>(name);
+}
+
+template <typename t_type>
+std::optional<std::remove_cvref_t<t_type>> env::get_parsed(std::string_view name) const& {
     const auto value = get(name);
     if (!value.has_value()) {
         return std::nullopt;

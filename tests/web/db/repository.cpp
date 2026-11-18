@@ -1978,4 +1978,59 @@ static_assert(!db_conflict_options_accepts_conflict_target<std::array<ruvia::bor
 static_assert(db_window_options_accepts_partition<const std::vector<ruvia::db_expr>&>);
 static_assert(!db_window_options_accepts_partition<std::vector<ruvia::db_expr>>);
 static_assert(!db_window_options_accepts_partition<std::array<ruvia::db_expr, 1>>);
+
+template <typename rows_type>
+concept entity_rows_allows_rvalue_reserve = requires(rows_type rows) { std::move(rows).reserve(1); };
+
+template <typename rows_type, typename row_type>
+concept entity_rows_allows_rvalue_push_back = requires(rows_type rows, row_type row) { std::move(rows).push_back(std::move(row)); };
+
+template <typename cache_type>
+concept db_cache_allows_const_clear = requires(const cache_type& cache) { cache.clear(); };
+
+template <typename exec_type, typename params_type>
+concept db_command_set_allows_query = requires(const exec_type& exec, std::string_view sql, params_type params) { exec.query(sql, params); };
+
+template <typename exec_type, typename params_type>
+concept db_command_set_allows_execute = requires(const exec_type& exec, std::string_view sql, params_type params) { exec.execute(sql, params); };
+
+static_assert(!entity_rows_allows_rvalue_reserve<ruvia::entity_rows<db_repository_test::entity_type>>);
+static_assert(!entity_rows_allows_rvalue_push_back<ruvia::entity_rows<db_repository_test::entity_type>, db_repository_test::entity_type>);
+static_assert(db_cache_allows_const_clear<ruvia::db_query_result_cache>);
+static_assert(db_command_set_allows_query<ruvia::db_command_set<ruvia::db_executor>, std::span<const ruvia::db_value>>);
+static_assert(!db_command_set_allows_query<ruvia::db_command_set<ruvia::db_executor>, std::initializer_list<ruvia::db_value>>);
+static_assert(!db_command_set_allows_execute<ruvia::db_command_set<ruvia::db_executor>, std::initializer_list<ruvia::db_value>>);
 }  // namespace
+
+TEST(Ruvia, db_entity_rows_and_statement_support_zero_copy_take) {
+    ruvia::entity_rows<db_repository_test::entity_type> rows;
+    rows.reserve(1);
+    db_repository_test::entity_type row;
+    std::string name(160, 'n');
+    const char* const name_ptr = name.data();
+    row.set<"id">(7).set<"name">(std::move(name));
+    rows.push_back(std::move(row));
+
+    const auto* const vec_ptr = &rows[0];
+    auto taken_rows = std::move(rows).take_rows();
+    EXPECT_TRUE(rows.empty());
+    ASSERT_EQ(taken_rows.size(), std::size_t{1});
+    EXPECT_EQ(&taken_rows[0], vec_ptr);
+
+    const std::string taken_name = std::move(taken_rows[0]).take<"name">();
+    EXPECT_EQ(taken_name.data(), name_ptr);
+    EXPECT_FALSE(taken_rows[0].is_set<"name">());
+
+    ruvia::db_query q;
+    const std::string long_param(160, 'p');
+    q.select(ruvia::db_expr::column("id")).from("items").where(ruvia::db_expr::column("name") == ruvia::db_expr::value(long_param));
+    auto compiled = q.compile(ruvia::db_driver::postgresql);
+    const char* const sql_ptr = compiled.sql().data();
+    const auto* const params_ptr = compiled.params().data();
+    const std::string taken_sql = std::move(compiled).take_sql();
+    const auto taken_params = std::move(compiled).take_params();
+    EXPECT_EQ(taken_sql.data(), sql_ptr);
+    EXPECT_EQ(taken_params.data(), params_ptr);
+    EXPECT_TRUE(compiled.sql().empty());
+    EXPECT_TRUE(compiled.params().empty());
+}

@@ -159,7 +159,7 @@ std::optional<permessage_deflate_params> parse_permessage_deflate_params(std::st
     return accepted.value_or((websocket_compression{}));
 }
 
-[[nodiscard]] inline websocket_compression websocket_negotiate_permessage_deflate(const http_request& request, websocket_server_deflate_options config) {
+[[nodiscard]] websocket_compression websocket_negotiate_permessage_deflate(const http_request& request, websocket_server_deflate_options config) {
     validate_websocket_zlib_options(config.deflater_);
     if (!config.enabled_) {
         return (websocket_compression{});
@@ -187,35 +187,7 @@ namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] std::vector<http_header> copy_websocket_response_headers(std::span<const http_header_view> headers, std::string_view subprotocol, std::string_view extension) {
-    // Account for the whole emitted head: the fixed 101 prefix, the accept
-    // key line, the negotiated and application fields, and the terminating
-    // empty line.
-    http_field_section_budget size;
-    (void)size.add(websocket_switching_protocols_head_prefix.size() + websocket_accept_key_type{}.size() + std::string_view("\r\n").size());
-    (void)size.add(std::string_view("\r\n").size());
-    if (!subprotocol.empty() && !size.add_field("sec-websocket-protocol", subprotocol)) {
-        throw std::length_error("WebSocket handshake response headers are too large");
-    }
-    if (!extension.empty() && !size.add_field("sec-websocket-extensions", extension)) {
-        throw std::length_error("WebSocket handshake response headers are too large");
-    }
-    static constexpr std::string_view sec_websocket_prefix = "sec-websocket-";
-    for (const auto& header : headers) {
-        const auto name = header.name();
-        if (!is_valid_http_header_name(name) || !is_valid_http_header_value(header.value())) {
-            throw std::invalid_argument("invalid WebSocket handshake response header");
-        }
-        // Every Sec-WebSocket-* name is handshake-owned, including ones this
-        // implementation does not know yet.
-        const auto kind = classify_http_field(name);
-        const bool is_sec_websocket = name.size() >= sec_websocket_prefix.size() && http_ascii_equals_ignore_case(name.substr(0, sec_websocket_prefix.size()), sec_websocket_prefix);
-        if ((kind != http_field_kind::host && kind != http_field_kind::expect && is_protocol_managed_request_field(kind, name)) || is_sec_websocket) {
-            throw std::invalid_argument("WebSocket handshake controls this response header");
-        }
-        if (!size.add_field(name, header.value())) {
-            throw std::length_error("WebSocket handshake response headers are too large");
-        }
-    }
+    validate_websocket_response_headers(headers, subprotocol, extension);
     std::vector<http_header> result;
     result.reserve(headers.size());
     for (const auto& header : headers) {
@@ -392,6 +364,38 @@ websocket_server_negotiation::websocket_server_negotiation(std::string_view subp
     compression_(compression),
     extensions_(compression),
     response_headers_(copy_websocket_response_headers(response_headers_value, subprotocol, extensions_.view())) {}
+
+void validate_websocket_response_headers(std::span<const http_header_view> headers, std::string_view subprotocol, std::string_view extension) {
+    // Account for the whole emitted head: the fixed 101 prefix, the accept
+    // key line, the negotiated and application fields, and the terminating
+    // empty line.
+    http_field_section_budget size;
+    (void)size.add(websocket_switching_protocols_head_prefix.size() + websocket_accept_key_type{}.size() + std::string_view("\r\n").size());
+    (void)size.add(std::string_view("\r\n").size());
+    if (!subprotocol.empty() && !size.add_field("sec-websocket-protocol", subprotocol)) {
+        throw std::length_error("WebSocket handshake response headers are too large");
+    }
+    if (!extension.empty() && !size.add_field("sec-websocket-extensions", extension)) {
+        throw std::length_error("WebSocket handshake response headers are too large");
+    }
+    static constexpr std::string_view sec_websocket_prefix = "sec-websocket-";
+    for (const auto& header : headers) {
+        const auto name = header.name();
+        if (!is_valid_http_header_name(name) || !is_valid_http_header_value(header.value())) {
+            throw std::invalid_argument("invalid WebSocket handshake response header");
+        }
+        // Every Sec-WebSocket-* name is handshake-owned, including ones this
+        // implementation does not know yet.
+        const auto kind = classify_http_field(name);
+        const bool is_sec_websocket = name.size() >= sec_websocket_prefix.size() && http_ascii_equals_ignore_case(name.substr(0, sec_websocket_prefix.size()), sec_websocket_prefix);
+        if ((kind != http_field_kind::host && kind != http_field_kind::expect && is_protocol_managed_request_field(kind, name)) || is_sec_websocket) {
+            throw std::invalid_argument("WebSocket handshake controls this response header");
+        }
+        if (!size.add_field(name, header.value())) {
+            throw std::length_error("WebSocket handshake response headers are too large");
+        }
+    }
+}
 
 websocket_server_negotiation make_websocket_server_negotiation(const http_request& request, const websocket_server_handshake_options& options) {
     return websocket_server_negotiation(choose_websocket_subprotocol(request, options.supported_subprotocols_), websocket_negotiate_permessage_deflate(request, options.deflate_), options.response_headers_);

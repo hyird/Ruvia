@@ -9,6 +9,7 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
+#include "byte_view.h"
 #include "suspend_race.h"
 
 // Build-only Asio glue shared by ruvia-core, ruvia-web, and the tests through
@@ -56,21 +57,14 @@ public:
         return static_cast<bool>(error_code_);
     }
 
-    [[nodiscard]] const result_storage_type& result() const& noexcept
+    [[nodiscard]] const result_storage_type& result() const& noexcept RUVIA_LIFETIMEBOUND
         requires(!std::is_void_v<result_type>)
     {
         return result_;
     }
     const result_storage_type& result() const&& = delete;
 
-    [[nodiscard]] result_storage_type& result() & noexcept
-        requires(!std::is_void_v<result_type>)
-    {
-        return result_;
-    }
-    result_storage_type& result() && = delete;
-
-    [[nodiscard]] result_storage_type take_result() &&
+    [[nodiscard]] result_storage_type take_result() && noexcept(std::is_nothrow_move_constructible_v<result_storage_type>)
         requires(!std::is_void_v<result_type>)
     {
         return std::move(result_);
@@ -97,6 +91,8 @@ public:
         initiate_(std::move(initiate)) {}
     asio_completion_awaiter(const asio_completion_awaiter&) = delete;
     asio_completion_awaiter& operator=(const asio_completion_awaiter&) = delete;
+    asio_completion_awaiter(asio_completion_awaiter&&) = delete;
+    asio_completion_awaiter& operator=(asio_completion_awaiter&&) = delete;
     void operator&() const = delete;
 
     [[nodiscard]] bool await_ready() const noexcept {

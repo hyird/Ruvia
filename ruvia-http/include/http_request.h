@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -70,7 +71,12 @@ public:
     // request trailers are discarded rather than retained (RFC 9110 section
     // 6.5.1, RFC 9112 section 7.1.2).
     [[nodiscard]] std::optional<http_request_trailer_error> append_received(std::span<const http_header> fields);
+    template <std::same_as<std::vector<http_header>> fields_type>
+    [[nodiscard]] std::optional<http_request_trailer_error> append_received(fields_type&& fields) {
+        return append_received_owned(std::move(fields));
+    }
     template <detail::http_temporary_owning_range<http_header> fields_type>
+        requires(!std::same_as<fields_type, std::vector<http_header>>)
     std::optional<http_request_trailer_error> append_received(fields_type&&) = delete;
     [[nodiscard]] std::vector<http_header> take_fields() && noexcept {
         budget_ = http_trailer_section_budget();
@@ -85,6 +91,8 @@ public:
     std::optional<std::string_view> field(std::string_view) const&& = delete;
 
 private:
+    [[nodiscard]] std::optional<http_request_trailer_error> append_received_owned(std::vector<http_header>&& fields);
+
     std::vector<http_header> fields_;
     http_field_section_budget budget_{http_trailer_section_budget()};
 };
@@ -241,9 +249,10 @@ public:
     http_request(http_request&&) noexcept = default;
     http_request& operator=(http_request&& other) noexcept;
 
-    [[nodiscard]] std::string_view method() const noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] std::string_view method() const& noexcept RUVIA_LIFETIMEBOUND {
         return method_;
     }
+    std::string_view method() const&& = delete;
 
     [[nodiscard]] http_known_method known_method() const noexcept {
         return known_method_;
@@ -255,35 +264,41 @@ public:
         *this = http_request();
     }
 
-    [[nodiscard]] std::string_view target() const noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] std::string_view target() const& noexcept RUVIA_LIFETIMEBOUND {
         return target_;
     }
+    std::string_view target() const&& = delete;
 
-    [[nodiscard]] std::string_view scheme() const noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] std::string_view scheme() const& noexcept RUVIA_LIFETIMEBOUND {
         return scheme_;
     }
+    std::string_view scheme() const&& = delete;
 
-    [[nodiscard]] std::string_view authority() const noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] std::string_view authority() const& noexcept RUVIA_LIFETIMEBOUND {
         return authority_;
     }
+    std::string_view authority() const&& = delete;
 
     // The HTTP/2 :protocol pseudo-field (RFC 8441 extended CONNECT). Empty for
     // HTTP/1 requests and for HTTP/2 requests that carry no :protocol.
-    [[nodiscard]] std::string_view protocol() const noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] std::string_view protocol() const& noexcept RUVIA_LIFETIMEBOUND {
         return protocol_;
     }
+    std::string_view protocol() const&& = delete;
 
     [[nodiscard]] http_request_target_form target_form() const noexcept {
         return target_form_;
     }
 
-    [[nodiscard]] std::string_view path() const noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] std::string_view path() const& noexcept RUVIA_LIFETIMEBOUND {
         return path_;
     }
+    std::string_view path() const&& = delete;
 
-    [[nodiscard]] std::string_view query_string() const noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] std::string_view query_string() const& noexcept RUVIA_LIFETIMEBOUND {
         return query_string_;
     }
+    std::string_view query_string() const&& = delete;
 
     [[nodiscard]] http_protocol_version protocol_version() const noexcept {
         return protocol_version_;
@@ -319,18 +334,22 @@ public:
 
     // Case-insensitive semantic lookup; the first field line wins. Use
     // unique_header() where a repeated field must not resolve to one line.
-    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
+    std::optional<std::string_view> header(std::string_view) const&& = delete;
     // Case-insensitive three-state lookup: repeated when two or more field
     // lines carry `name`, found with the single value otherwise. O(1) for
     // known field kinds. The value borrows the request's header text.
-    [[nodiscard]] http_unique_field_lookup unique_header(std::string_view name) const noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] http_unique_field_lookup unique_header(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
+    http_unique_field_lookup unique_header(std::string_view) const&& = delete;
     // Exact raw lookup over the encoded query string. Both `raw_name` and the
     // returned value retain their percent-encoded bytes; no application/x-www-
     // form-urlencoded `+` conversion is applied. Later duplicate fields win.
-    [[nodiscard]] std::optional<std::string_view> last_raw_query_value(std::string_view raw_name) const noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::optional<std::string_view> last_raw_query_value(std::string_view raw_name) const& noexcept RUVIA_LIFETIMEBOUND;
+    std::optional<std::string_view> last_raw_query_value(std::string_view) const&& = delete;
     // Case-sensitive Cookie lookup; the first matching pair across field lines
     // (in wire order) wins. The returned view borrows the header text.
-    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
+    std::optional<std::string_view> cookie(std::string_view) const&& = delete;
 
 private:
     friend struct detail::http_request_access;

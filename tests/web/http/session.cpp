@@ -100,6 +100,7 @@ public:
     RUVIA_ROUTES_BEGIN(stored_session_controller)
     RUVIA_GET("/session-ids/:space/read", read);
     RUVIA_GET("/session-ids/:space/set", set);
+    RUVIA_GET("/session-ids/:space/set-owned", set_owned);
     RUVIA_GET("/session-ids/:space/clear", clear);
     RUVIA_GET("/session-ids/:space/rotate", rotate);
     RUVIA_GET("/session-ids/b/stale", stale);
@@ -114,6 +115,17 @@ public:
     ruvia::task<ruvia::http_response> set(ruvia::context& c) {
         c.session().set("private");
         co_return c.text("set");
+    }
+
+    ruvia::task<ruvia::http_response> set_owned(ruvia::context& c) {
+        std::string owned_payload(200, 's');
+        const char* const ptr = owned_payload.data();
+        auto value = c.session();
+        value.set(std::move(owned_payload));
+        if (value.payload().data() != ptr) {
+            throw std::runtime_error("session::set(std::string&&) did not transfer buffer zero-copy");
+        }
+        co_return c.text("set-owned");
     }
 
     ruvia::task<ruvia::http_response> clear(ruvia::context& c) {
@@ -296,6 +308,11 @@ TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
         expect(std::string("/session-store?id=") + stored_id, {}, "existing");
     }
 
+    const auto owned_written = expect("/session-ids/a/set-owned", {}, "set-owned");
+    EXPECT_TRUE(owned_written.cookie_.starts_with("sid_a="));
+    EXPECT_EQ(owned_written.cookie_.size(), std::size_t{6 + 48});
+    expect("/session-ids/a/read", owned_written.cookie_, std::string(200, 's'));
+
     const auto created = expect("/session-ids/b/set", {}, "set");
     const auto stale = request("/session-ids/b/stale", created.cookie_);
     EXPECT_EQ(stale.status_, 409U);
@@ -362,3 +379,22 @@ TEST(Ruvia, csrf_rejects_repeated_token_cookie_or_header) {
     repeated_header.cookie("XSRF-TOKEN", token).header("X-XSRF-TOKEN", token).header("X-XSRF-TOKEN", token);
     EXPECT_EQ(run(repeated_header), ruvia::http_status::forbidden);
 }
+
+#ifdef RUVIA_ENABLE_REDIS
+
+namespace {
+
+template <typename session_type>
+concept session_allows_rvalue_payload = requires(session_type s) { std::move(s).payload(); };
+
+template <typename session_type>
+concept session_allows_lvalue_set_owned = requires(session_type& s, std::string payload) { s.set(std::move(payload)); };
+
+}  // namespace
+
+TEST(Ruvia, session_set_rvalue_string_and_rvalue_payload_borrow_guards) {
+    static_assert(!session_allows_rvalue_payload<ruvia::session>);
+    static_assert(session_allows_lvalue_set_owned<ruvia::session>);
+}
+
+#endif

@@ -189,10 +189,10 @@ static_assert(std::is_nothrow_move_assignable_v<conn_info>);
 // Cancellation combines `stop_token_` with the calling context's stop token;
 // subrequest handlers have no total execution timeout.
 struct dispatch_options final {
-    borrowed_text method_{};
-    borrowed_text target_{};
+    std::string_view method_{};
+    std::string_view target_{};
     borrowed_http_headers headers_{};
-    borrowed_text body_{};
+    outbound_bytes body_{};
     stop_token stop_token_{};
 };
 
@@ -216,6 +216,9 @@ public:
         return headers_;
     }
     const http_response_headers& headers() const&& = delete;
+    [[nodiscard]] http_response_headers take_headers() && noexcept {
+        return std::move(headers_);
+    }
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     std::optional<std::string_view> header(std::string_view) const&& = delete;
 
@@ -609,7 +612,7 @@ public:
     [[nodiscard]] bool push(http_request_head_view request);
     // Connection-scoped ORIGIN (HTTP/2 and HTTP/3, requires TLS) and ALTSVC
     // (HTTP/2) advertisements.
-    void advertise_origins(std::span<const std::string_view> origins);
+    void advertise_origins(argument_list<std::string_view> origins);
     void advertise_alternative_service(std::string_view value);
     [[nodiscard]] bool early_data() const noexcept;
 
@@ -706,8 +709,7 @@ public:
     template <typename t_type>
         requires detail::is_model_json_value<t_type>
     [[nodiscard]] http_response json(const t_type& value, response_options options = {}) const {
-        auto serialized = to_json(value);
-        return json_serialized(serialized, options);
+        return json_serialized(to_json(value), options);
     }
 
     [[nodiscard]] http_response html(outbound_bytes body, response_options options = {}) const;
@@ -751,7 +753,8 @@ public:
     // head.status_ is the status of a full-body answer (200 when unset);
     // conditional and range answers keep their own status. head is copied
     // before the task is returned.
-    [[nodiscard]] task<http_response> file(file_response_options options, response_options head = {});
+    [[nodiscard]] task<http_response> file(file_response_options options, response_options head = {}) &;
+    task<http_response> file(file_response_options, response_options = {}) && = delete;
 
     // relative_path_ is a decoded file path below the root, such as
     // req().param("*") of a wildcard route; it is never percent-decoded again.
@@ -759,7 +762,8 @@ public:
     // segment, an absolute path, or a NUL is 403 -- rejected, never resolved,
     // whichever parameter it came from -- and an unindexed name 404. A file
     // that is no longer the indexed one is 500 static_file_changed.
-    [[nodiscard]] task<http_response> static_file(const static_root& root, static_file_response_options options, response_options head = {});
+    [[nodiscard]] task<http_response> static_file(const static_root& root, static_file_response_options options, response_options head = {}) &;
+    task<http_response> static_file(const static_root&, static_file_response_options, response_options = {}) && = delete;
     // A temporary root would be destroyed before the returned task reads it.
     task<http_response> static_file(const static_root&&, static_file_response_options, response_options = {}) = delete;
 
@@ -772,7 +776,7 @@ private:
     [[nodiscard]] context& exchange() noexcept;
     [[nodiscard]] const context& exchange() const noexcept;
 
-    [[nodiscard]] static http_response json_serialized(std::string& body, const response_options& options);
+    [[nodiscard]] static http_response json_serialized(std::string&& body, const response_options& options);
 };
 
 // Worker resources (worker_state<T>(), run_blocking(), env(), client(), db(),
@@ -827,7 +831,8 @@ public:
 
 #ifdef RUVIA_ENABLE_REDIS
     // Present only while session_middleware is bound for this request.
-    [[nodiscard]] ruvia::session session();
+    [[nodiscard]] ruvia::session session() &;
+    ruvia::session session() && = delete;
 #endif
 
     // Request-scoped typed state: how a middleware hands a value it computed --
@@ -868,7 +873,8 @@ public:
 
     // Re-enter the immutable route table on this worker. Authentication,
     // validation and middleware run in a fresh request context.
-    [[nodiscard]] task<dispatch_response> dispatch(dispatch_options options);
+    [[nodiscard]] task<dispatch_response> dispatch(dispatch_options options) &;
+    task<dispatch_response> dispatch(dispatch_options) && = delete;
     [[nodiscard]] bool is_subrequest() const noexcept;
 
     // Builds a request path from a registered route pattern; the pattern is
@@ -886,24 +892,30 @@ public:
     // The session of a negotiated websocket or CONNECT route (controller or
     // router): the server already ran the handshake, so context never accepts
     // one itself; request_stream::accept_websocket()/accept_tunnel() do.
-    [[nodiscard]] ::ruvia::websocket& websocket() const;
-    [[nodiscard]] http_tunnel& tunnel() const;
+    [[nodiscard]] ::ruvia::websocket& websocket() const& RUVIA_LIFETIMEBOUND;
+    ::ruvia::websocket& websocket() const&& = delete;
+    [[nodiscard]] http_tunnel& tunnel() const& RUVIA_LIFETIMEBOUND;
+    http_tunnel& tunnel() const&& = delete;
 
     // 明确后处理已 respond 的缓冲响应；尚无响应或已提交时修改抛 logic_error。
     // 字段只属于当前响应，下一次替换不继承；跨替换字段显式写入 policy()。
-    [[nodiscard]] context_response_editor edit_response() noexcept {
+    [[nodiscard]] context_response_editor edit_response() & noexcept {
         return context_response_editor(*this, context_response_editor::target_type::selected);
     }
+    context_response_editor edit_response() && = delete;
 
     // 只读观察已选择的缓冲响应（不包含尚待应用的 policy）；没有响应则为 nullptr。
-    [[nodiscard]] const http_response* response() const noexcept;
+    [[nodiscard]] const http_response* response() const& noexcept RUVIA_LIFETIMEBOUND;
+    const http_response* response() const&& = delete;
 
     [[nodiscard]] bool committed() const noexcept;
     // 将独立响应移入 context；替换丢弃旧响应全部字段。
     // next() 在 respond() 后启动是控制流错误；已提交后不得替换。
-    void respond(http_response&& response);
+    void respond(http_response&& response) &;
+    void respond(http_response&&) && = delete;
 
-    [[nodiscard]] task<http_response> not_found();
+    [[nodiscard]] task<http_response> not_found() &;
+    task<http_response> not_found() && = delete;
 
 private:
     [[nodiscard]] context& exchange_context() noexcept {
@@ -1034,12 +1046,16 @@ inline std::optional<bool> context_request::param(std::string_view name) const {
 
 namespace detail {
 
+[[nodiscard]] std::optional<std::string_view> try_buffered_request_body_text(const context& context_value, const operation_options& operation);
+[[nodiscard]] task<std::string_view> read_unscoped_request_body_text(const context& context_value, operation_options operation);
+
 template <validation_target target, typename model_type>
 [[nodiscard]] task<std::optional<model_type>> parse_optional_request_model(const context& context_value, operation_options operation) {
     if (!request_has_body_media_type<target>(context_value.req().header("Content-Type"))) {
         co_return std::nullopt;
     }
-    const auto request_body = co_await context_value.req().body_text(std::move(operation));
+    const auto sync_body = try_buffered_request_body_text(context_value, operation);
+    const auto request_body = sync_body ? *sync_body : co_await read_unscoped_request_body_text(context_value, std::move(operation));
     co_return parse_and_validate_request_model<target, model_type>(request_body);
 }
 
@@ -1092,7 +1108,8 @@ task<void> model_validation_middleware<target, body_type, reject_unknown_fields>
         if (!request_has_body_media_type<target>(c.req().header("Content-Type"))) {
             throw_invalid_content_type<target>();
         }
-        const auto request_body = co_await c.req().body_text();
+        const auto sync_body = try_buffered_request_body_text(c, {});
+        const auto request_body = sync_body ? *sync_body : co_await read_unscoped_request_body_text(c, {});
         auto body = parse_and_validate_request_model<target, body_type>(request_body, {.reject_unknown_fields_ = reject_unknown_fields});
         auto binding = bind_validated_model(c, body);
         co_await next_value();

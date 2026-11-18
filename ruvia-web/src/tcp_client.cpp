@@ -113,40 +113,6 @@ public:
         return transport_.alpn();
     }
 
-    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options options) {
-        auto lease = claim_operation_lane(read_active_, "TCP client read already in progress");
-        operation_deadline timeout(override_operation_options({.timeout_ = read_timeout_}, options).timeout_);
-        worker_cancellation_registration cancellation(cancellation_, read_id_);
-        cancellation.arm(options.stop_token_);
-        if (transport_.abort_reason() != client_abort_reason::none) {
-            throw_transport_error({.status_ = client_transport_status::aborted, .abort_ = transport_.abort_reason()});
-        }
-        if (eof_) {
-            co_return std::nullopt;
-        }
-        const auto result = co_await transport_.read_some(buffer_, timeout);
-        if (result.status_ == client_transport_status::eof) {
-            eof_ = true;
-            co_return std::nullopt;
-        }
-        if (!result.ok()) {
-            throw_transport_error(result);
-        }
-        co_return as_bytes(std::string_view(buffer_.data(), result.bytes_));
-    }
-
-    // The enclosing owned operation keeps these bytes alive until completion.
-    [[nodiscard]] task<void> write(std::string_view bytes, operation_options options) {
-        auto lease = claim_operation_lane(write_active_, "TCP client write already in progress");
-        operation_deadline timeout(override_operation_options({.timeout_ = write_timeout_}, options).timeout_);
-        worker_cancellation_registration cancellation(cancellation_, write_id_);
-        cancellation.arm(options.stop_token_);
-        const auto result = co_await transport_.write(bytes, timeout);
-        if (!result.ok()) {
-            throw_transport_error(result);
-        }
-    }
-
     void close_now() noexcept {
         transport_.abort(client_abort_reason::closing);
         preparation_stop_.request_stop();
@@ -165,6 +131,7 @@ public:
     }
 
 private:
+    friend class tcp_client_state;
     [[nodiscard]] task<void> connect_transport(operation_options options) {
         operation_deadline timeout(override_operation_options({.timeout_ = connect_timeout_}, options).timeout_);
         worker_cancellation_registration cancellation(cancellation_, connect_id_);
@@ -253,8 +220,27 @@ private:
     [[nodiscard]] static task<std::optional<std::span<const std::byte>>> read_owned(std::shared_ptr<tcp_client_state> state, operation_options options) {
         state->lifecycle_.require_ready();
         // Lane admission errors are caller errors, not transport failures.
+        auto& backend = state->backend_;
+        auto lease = claim_operation_lane(backend.read_active_, "TCP client read already in progress");
         try {
-            co_return co_await state->backend_.read(std::move(options));
+            operation_deadline timeout(override_operation_options({.timeout_ = backend.read_timeout_}, options).timeout_);
+            worker_cancellation_registration cancellation(backend.cancellation_, backend.read_id_);
+            cancellation.arm(options.stop_token_);
+            if (backend.transport_.abort_reason() != client_abort_reason::none) {
+                throw_transport_error({.status_ = client_transport_status::aborted, .abort_ = backend.transport_.abort_reason()});
+            }
+            if (backend.eof_) {
+                co_return std::nullopt;
+            }
+            const auto result = co_await backend.transport_.read_some(backend.buffer_, timeout);
+            if (result.status_ == client_transport_status::eof) {
+                backend.eof_ = true;
+                co_return std::nullopt;
+            }
+            if (!result.ok()) {
+                throw_transport_error(result);
+            }
+            co_return as_bytes(std::string_view(backend.buffer_.data(), result.bytes_));
         } catch (const std::system_error&) {
             state->request_close();
             throw;
@@ -262,8 +248,16 @@ private:
     }
     [[nodiscard]] static task<void> write_owned(std::shared_ptr<tcp_client_state> state, std::string bytes, operation_options options) {
         state->lifecycle_.require_ready();
+        auto& backend = state->backend_;
+        auto lease = claim_operation_lane(backend.write_active_, "TCP client write already in progress");
         try {
-            co_await state->backend_.write(bytes, std::move(options));
+            operation_deadline timeout(override_operation_options({.timeout_ = backend.write_timeout_}, options).timeout_);
+            worker_cancellation_registration cancellation(backend.cancellation_, backend.write_id_);
+            cancellation.arm(options.stop_token_);
+            const auto result = co_await backend.transport_.write(bytes, timeout);
+            if (!result.ok()) {
+                throw_transport_error(result);
+            }
         } catch (const std::system_error&) {
             state->request_close();
             throw;

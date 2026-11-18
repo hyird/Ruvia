@@ -80,7 +80,7 @@ public:
     std::span<const http_header> request_fields() const&& = delete;
     // The server's Sec-WebSocket-Protocol and Sec-WebSocket-Extensions selection
     // in `fields` alone, without status or connection-specific field checks.
-    [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_fields(std::span<const http_header> fields) const;
+    [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_fields(std::span<const http_header> fields RUVIA_LIFETIMEBOUND) const;
     template <detail::http_temporary_owning_range<http_header> fields_type>
     std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_fields(fields_type&&) const = delete;
     template <typename element_type>
@@ -110,7 +110,7 @@ class http1_parsed_client_response_head;
 // before the HTTP version of the exchange is known.
 void validate_websocket_client_handshake_headers(std::span<const http_header_view> headers);
 
-[[nodiscard]] http1_client_request_prepare_result prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target, std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, borrowed_http_headers headers, std::span<char> head_buffer, http_request_field_source source = http_request_field_source::generated);
+[[nodiscard]] http1_client_request_prepare_result prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target, std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, borrowed_http_headers headers, std::span<char> head_buffer RUVIA_LIFETIMEBOUND, http_request_field_source source = http_request_field_source::generated);
 
 // Validates the 101 response against the key, then the server's selection
 // against the negotiation. The result view borrows the response head.
@@ -120,6 +120,6 @@ std::variant<websocket_client_negotiation_result_view, websocket_client_handshak
 // Extended CONNECT over HTTP/2 or HTTP/3: validates the server's 2xx final
 // head on a still-open stream, then its selection against the negotiation.
 // The result view borrows the response head.
-[[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_extended_connect_websocket_client_response(const websocket_client_negotiation& negotiation, const http_client_response_head& head, bool stream_open);
+[[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_extended_connect_websocket_client_response(const websocket_client_negotiation& negotiation, const http_client_response_head& head RUVIA_LIFETIMEBOUND, bool stream_open);
 std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_extended_connect_websocket_client_response(const websocket_client_negotiation&, const http_client_response_head&&, bool) = delete;
 }  // namespace ruvia

@@ -169,23 +169,17 @@ bool needs_tls_preparation(const std::vector<std::shared_ptr<owned_listen_config
 }
 
 template <typename function_type>
-task<std::invoke_result_t<function_type&>> prepare_work(worker_ref caller, bool blocking, function_type function) {
-    using result_type = std::invoke_result_t<function_type&>;
+task<std::invoke_result_t<function_type&>> prepare_blocking_work(worker_ref caller, function_type function) {
+    auto result = co_await run_blocking(caller, std::move(function));
+    if (!caller.accepting()) {
+        throw std::logic_error("HTTP server caller is stopping");
+    }
+    co_return std::move(result).take_value();
+}
+
+void require_caller_accepting(const worker_ref& caller) {
     if (!caller.is_current() || !caller.accepting()) {
         throw std::logic_error("HTTP server caller is not running");
-    }
-    if (blocking) {
-        auto result = co_await run_blocking(caller, std::move(function));
-        if (!caller.accepting()) {
-            throw std::logic_error("HTTP server caller is stopping");
-        }
-        co_return std::move(result).take_value();
-    }
-    if constexpr (std::is_void_v<result_type>) {
-        function();
-        co_return;
-    } else {
-        co_return function();
     }
 }
 
@@ -456,6 +450,7 @@ private:
         }
     }
 #endif
+#if defined(_WIN32)
     static task<void> prepare_range(std::shared_ptr<http_server_state> self, std::size_t first, sessions prepared) {
         for (std::size_t offset = 0; offset != prepared.size(); ++offset) {
             self->require_open();
@@ -469,7 +464,6 @@ private:
 #else
             self->connections_.prepare_listener(index, configured.http3_slot_, configured.definition_, configured.external_, std::move(prepared[offset]));
 #endif
-#if defined(_WIN32)
             if (!configured.external_ && self->worker_index_ == 0) {
                 co_await on_acceptor(self, [self, index] {
                     auto& entry = self->services_[index];
@@ -480,11 +474,28 @@ private:
 #endif
                 });
             }
-#endif
             configured.definition_.inherited_sockets_.reset();
         }
         co_return;
     }
+#else
+    static void prepare_range(http_server_state& self, std::size_t first, sessions prepared) {
+        for (std::size_t offset = 0; offset != prepared.size(); ++offset) {
+            self.require_open();
+            const auto index = first + offset;
+            auto& configured = self.services_[index];
+            if (!configured.active_) {
+                continue;
+            }
+#if defined(RUVIA_ENABLE_HTTP3)
+            self.connections_.prepare_listener(index, configured.http3_slot_, configured.definition_, configured.external_, std::move(prepared[offset]), self.directory_.get());
+#else
+            self.connections_.prepare_listener(index, configured.http3_slot_, configured.definition_, configured.external_, std::move(prepared[offset]));
+#endif
+            configured.definition_.inherited_sockets_.reset();
+        }
+    }
+#endif
     static task<void> discard_range(std::shared_ptr<http_server_state> self, std::size_t first) {
         runtime_control_completion retired(self->worker_);
         auto receipt = std::make_shared<runtime_control_completion::receipt>(retired.make_receipt());
@@ -517,7 +528,11 @@ private:
         try {
             self->io_started_.store(true, std::memory_order_release);
             self->connections_.prepare();
+#if defined(_WIN32)
             co_await prepare_range(self, 0, std::move(prepared));
+#else
+            prepare_range(*self, 0, std::move(prepared));
+#endif
             co_await self->capabilities_.start();
             self->require_open();
         } catch (...) {
@@ -1016,14 +1031,20 @@ private:
             const auto first = existing->definitions_.size();
             const auto& source = self->workers_.front();
             const bool blocking = needs_tls_preparation(inputs, existing->definitions_);
-            co_await prepare_work(caller, blocking, [inputs = std::move(inputs), existing, config = source->options_.server_, callbacks = source->callbacks_, count = self->workers_.size(), origin = source->key_origin_]() mutable {
+            auto prepare_fn = [inputs = std::move(inputs), existing, config = source->options_.server_, callbacks = source->callbacks_, count = self->workers_.size(), origin = source->key_origin_]() mutable {
                 auto loaded = load_candidate(inputs, false, config, callbacks, count, origin);
                 ensure_new_listener_endpoints(existing->definitions_, loaded.definitions_);
                 for (auto& definition : loaded.definitions_) {
                     existing->definitions_.push_back(std::move(definition));
                 }
                 prepare_sessions(*existing, count, static_cast<bool>(callbacks->tls_client_hello_));
-            });
+            };
+            require_caller_accepting(caller);
+            if (blocking) {
+                co_await prepare_blocking_work(caller, std::move(prepare_fn));
+            } else {
+                prepare_fn();
+            }
             self->require_open();
             auto added = std::make_shared<definitions>();
             for (auto index = first; index != existing->definitions_.size(); ++index) {
@@ -1073,13 +1094,15 @@ private:
         co_await self->build_callbacks(caller);
         const auto& source = self->workers_.front();
         const bool blocking = input->needs_tls_preparation();
-        auto prepared = co_await prepare_work(caller, blocking, [input = std::move(input), external, config = source->options_.server_, callbacks = source->callbacks_, count = self->workers_.size(), origin = source->key_origin_, running = self->started_] {
+        auto prepare_fn = [input = std::move(input), external, config = source->options_.server_, callbacks = source->callbacks_, count = self->workers_.size(), origin = source->key_origin_, running = self->started_] {
             auto candidate = load_candidate({input}, external, config, callbacks, count, origin);
             if (running) {
                 prepare_sessions(candidate, count, static_cast<bool>(callbacks->tls_client_hello_));
             }
             return candidate;
-        });
+        };
+        require_caller_accepting(caller);
+        auto prepared = blocking ? co_await prepare_blocking_work(caller, std::move(prepare_fn)) : prepare_fn();
         auto candidate = std::make_shared<listener_candidate>(std::move(prepared));
         self->require_open();
         for (const auto& worker : self->workers_) {
@@ -1122,9 +1145,15 @@ private:
                 co_return;
             }
             for (std::size_t index = 0; index != self->workers_.size(); ++index) {
+#if defined(_WIN32)
                 co_await async_control(caller, self->workers_[index], [first, prepared = std::move(candidate->sessions_[index])](auto owner) mutable {
                     return http_server_state::prepare_range(std::move(owner), first, std::move(prepared));
                 });
+#else
+                co_await control(caller, self->workers_[index], [first, prepared = std::move(candidate->sessions_[index])](http_server_state& state) mutable {
+                    http_server_state::prepare_range(state, first, std::move(prepared));
+                });
+#endif
             }
             if (!caller.accepting()) {
                 throw std::logic_error("HTTP server caller is stopping");
@@ -1216,7 +1245,8 @@ private:
                 targets.push_back({slot, policy->identities_});
             });
         }
-        auto identities = co_await prepare_work(caller, true, [input = std::move(input)] {
+        require_caller_accepting(caller);
+        auto identities = co_await prepare_blocking_work(caller, [input = std::move(input)] {
             return load_http_server_tls_identities(input.config_);
         });
         self->require_running();

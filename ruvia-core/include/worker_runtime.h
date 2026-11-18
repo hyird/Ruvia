@@ -12,6 +12,7 @@
 
 #include <asio/io_context.hpp>
 
+#include "byte_view.h"
 #include "move_only_function.h"
 #include "worker_ref.h"
 
@@ -155,9 +156,9 @@ public:
     // longer reports a failure taken here. Later calls return the same failure.
     [[nodiscard]] std::exception_ptr take_failure() noexcept;
     [[nodiscard]] worker_runtime_state state() const noexcept;
-    [[nodiscard]] asio::io_context& io_context() & noexcept;
+    [[nodiscard]] asio::io_context& io_context() & noexcept RUVIA_LIFETIMEBOUND;
     asio::io_context& io_context() && = delete;
-    [[nodiscard]] const worker_ref& worker() const& noexcept;
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND;
     const worker_ref& worker() const&& = delete;
     // The event loop over this runtime's worker, created on first use, for
     // try_start()/start(), on_stop(), defer_cleanup() and report_failure()
@@ -203,6 +204,8 @@ public:
 
     worker_group(const worker_group&) = delete;
     worker_group& operator=(const worker_group&) = delete;
+    worker_group(worker_group&&) = delete;
+    worker_group& operator=(worker_group&&) = delete;
 
     // Cold setup before start() or stop. Each member belongs to one group and
     // may be added once.

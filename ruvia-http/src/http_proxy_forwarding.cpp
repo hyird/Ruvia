@@ -18,13 +18,15 @@
 
 namespace ruvia {
 
-std::string normalize_http_proxy_request_target(http_known_method method, std::string_view target) {
+namespace {
+
+[[nodiscard]] std::string_view normalize_target_to_storage(http_known_method method, std::string_view target, std::string& storage) {
     if (target.empty() || target.front() == '/' || target == "*" || method == http_known_method::connect) {
-        return std::string(target);
+        return target;
     }
     const auto scheme_sep = target.find("://");
     if (scheme_sep == std::string_view::npos || !detail::is_valid_uri_scheme(target.substr(0, scheme_sep))) {
-        return std::string(target);
+        return target;
     }
     const auto remainder = target.substr(scheme_sep + 3U);
     const auto query_pos = remainder.find('?');
@@ -34,23 +36,84 @@ std::string normalize_http_proxy_request_target(http_known_method method, std::s
     const auto authority = slash_pos == std::string_view::npos ? authority_and_path : authority_and_path.substr(0, slash_pos);
     const auto path = slash_pos == std::string_view::npos ? std::string_view{} : authority_and_path.substr(slash_pos);
     if (authority.empty()) {
-        return std::string(target);
+        return target;
     }
     if (path.empty()) {
-        if (query_suffix.empty() && method == http_known_method::options) {
-            return std::string("*");
+        if (query_suffix.empty()) {
+            return method == http_known_method::options ? std::string_view("*") : std::string_view("/");
         }
-        std::string result;
-        result.reserve(1U + query_suffix.size());
-        result.push_back('/');
-        result.append(query_suffix);
-        return result;
+        if (detail::http_text_aliases_string(query_suffix, storage)) {
+            std::string aliased_copy;
+            aliased_copy.reserve(1U + query_suffix.size());
+            aliased_copy.push_back('/');
+            aliased_copy.append(query_suffix);
+            storage = std::move(aliased_copy);
+            return storage;
+        }
+        storage.clear();
+        storage.reserve(1U + query_suffix.size());
+        storage.push_back('/');
+        storage.append(query_suffix);
+        return storage;
     }
-    std::string result;
-    result.reserve(path.size() + query_suffix.size());
-    result.append(path);
-    result.append(query_suffix);
-    return result;
+    return remainder.substr(slash_pos);
+}
+
+[[nodiscard]] std::string_view normalize_request_to_storage(const http_request& request, std::string& storage) {
+    if (request.target_form() == http_request_target_form::authority) {
+        return request.authority();
+    }
+    const auto path = request.path();
+    const auto query = request.query_string();
+    if (query.empty()) {
+        return path;
+    }
+    const auto target = request.target();
+    if (request.target_form() == http_request_target_form::origin &&
+        target.size() == path.size() + 1U + query.size() &&
+        target.starts_with(path) &&
+        target[path.size()] == '?' &&
+        target.ends_with(query)) {
+        return target;
+    }
+    if (detail::http_text_aliases_string(path, storage) || detail::http_text_aliases_string(query, storage)) {
+        std::string aliased_copy;
+        aliased_copy.reserve(path.size() + 1U + query.size());
+        aliased_copy.append(path);
+        aliased_copy.push_back('?');
+        aliased_copy.append(query);
+        storage = std::move(aliased_copy);
+        return storage;
+    }
+    storage.clear();
+    storage.reserve(path.size() + 1U + query.size());
+    storage.append(path);
+    storage.push_back('?');
+    storage.append(query);
+    return storage;
+}
+
+}  // namespace
+
+std::string_view normalize_http_proxy_request_target(std::string_view method, borrowed_text target, std::string& storage) {
+    return normalize_target_to_storage(classify_http_method(method), target, storage);
+}
+
+std::string_view normalize_http_proxy_request_target(http_known_method method, borrowed_text target, std::string& storage) {
+    return normalize_target_to_storage(method, target, storage);
+}
+
+std::string_view normalize_http_proxy_request_target(const http_request& request, std::string& storage) {
+    return normalize_request_to_storage(request, storage);
+}
+
+std::string normalize_http_proxy_request_target(http_known_method method, std::string_view target) {
+    std::string storage;
+    const auto view = normalize_target_to_storage(method, target, storage);
+    if (!storage.empty() && view.data() == storage.data() && view.size() == storage.size()) {
+        return storage;
+    }
+    return std::string(view);
 }
 
 std::string normalize_http_proxy_request_target(std::string_view method, std::string_view target) {
@@ -58,20 +121,12 @@ std::string normalize_http_proxy_request_target(std::string_view method, std::st
 }
 
 std::string normalize_http_proxy_request_target(const http_request& request) {
-    if (request.target_form() == http_request_target_form::authority) {
-        return std::string(request.authority());
+    std::string storage;
+    const auto view = normalize_request_to_storage(request, storage);
+    if (!storage.empty() && view.data() == storage.data() && view.size() == storage.size()) {
+        return storage;
     }
-    const auto path = request.path();
-    const auto query = request.query_string();
-    if (query.empty()) {
-        return std::string(path);
-    }
-    std::string result;
-    result.reserve(path.size() + 1U + query.size());
-    result.append(path);
-    result.push_back('?');
-    result.append(query);
-    return result;
+    return std::string(view);
 }
 
 std::string http_max_forwards_result::format_decremented() const {

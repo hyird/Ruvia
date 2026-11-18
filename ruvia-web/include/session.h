@@ -3,9 +3,12 @@
 #ifdef RUVIA_ENABLE_REDIS
 
 #include <chrono>
+#include <concepts>
 #include <string>
 #include <string_view>
+#include <utility>
 
+#include "borrowed_text.h"
 #include "middleware.h"
 #include "task.h"
 
@@ -26,7 +29,7 @@ namespace ruvia {
 // remains readable.
 class session final {
 public:
-    [[nodiscard]] std::string_view payload() const& noexcept;
+    [[nodiscard]] std::string_view payload() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view payload() const&& = delete;
     [[nodiscard]] bool empty() const noexcept {
         return payload().empty();
@@ -34,6 +37,10 @@ public:
     // Every non-empty write replaces an existing session identity at commit.
     // Repeated writes in one request publish one new ID; reads keep the ID.
     void set(std::string_view payload);
+    template <std::same_as<std::string> string_type>
+    void set(string_type&& payload) {
+        set_owned(std::move(payload));
+    }
     void clear();
     // Rotate without changing the payload, for an authentication or privilege
     // transition that does not write the session. set() already requests rotation.
@@ -43,6 +50,8 @@ public:
 private:
     explicit session(detail::context_session_state& state_value) noexcept :
         state_(&state_value) {}
+
+    void set_owned(std::string&& payload);
 
     detail::context_session_state* state_;
     friend class context;
@@ -78,7 +87,6 @@ public:
 
 private:
     friend struct detail::session_access;
-    task<void> commit(context& c) const;
 
     [[nodiscard]] static const session_config& validate(const session_config& source);
 

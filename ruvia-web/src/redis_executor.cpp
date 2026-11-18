@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -26,11 +27,53 @@
 #include "stop_token.h"
 
 namespace ruvia::detail {
-task<redis_value> execute_redis_script(redis_pool& pool, redis_script script, std::vector<std::string> args, request_io_metrics* io_metrics, operation_options options) {
+
+redis_encoded_script_call make_redis_encoded_script_call(std::string_view sha1, std::span<const std::string_view> keys, std::span<const std::string_view> args) {
+    std::size_t arg_count = 3;
+    if (keys.size() > std::numeric_limits<std::size_t>::max() - arg_count) {
+        throw std::length_error("Redis script argument count is not representable");
+    }
+    arg_count += keys.size();
+    if (args.size() > std::numeric_limits<std::size_t>::max() - arg_count) {
+        throw std::length_error("Redis script argument count is not representable");
+    }
+    arg_count += args.size();
+
+    std::array<char, max_decimal_size> key_count_scratch{};
+    const auto key_count = format_decimal(key_count_scratch, keys.size());
+
+    std::size_t total_bytes = resp_header_serialized_size(arg_count);
+    add_resp_serialized_size(total_bytes, resp_bulk_serialized_size(7));
+    add_resp_serialized_size(total_bytes, resp_bulk_serialized_size(sha1.size()));
+    add_resp_serialized_size(total_bytes, resp_bulk_serialized_size(key_count.size()));
+    for (const auto key : keys) {
+        add_resp_serialized_size(total_bytes, resp_bulk_serialized_size(key.size()));
+    }
+    for (const auto arg : args) {
+        add_resp_serialized_size(total_bytes, resp_bulk_serialized_size(arg.size()));
+    }
+
+    redis_encoded_script_call call;
+    call.evalsha_wire_.reserve(total_bytes);
+    append_resp_header(call.evalsha_wire_, arg_count);
+    append_resp_bulk(call.evalsha_wire_, "EVALSHA");
+    append_resp_bulk(call.evalsha_wire_, sha1);
+    call.args_tail_offset_ = call.evalsha_wire_.size();
+    append_resp_bulk(call.evalsha_wire_, key_count);
+    for (const auto key : keys) {
+        append_resp_bulk(call.evalsha_wire_, key);
+    }
+    for (const auto arg : args) {
+        append_resp_bulk(call.evalsha_wire_, arg);
+    }
+    return call;
+}
+
+task<redis_value> execute_redis_script(redis_pool& pool, redis_script script, redis_encoded_script_call call, request_io_metrics* io_metrics, operation_options options) {
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     const operation_deadline deadline(options.timeout_);
     {
-        auto reply = co_await pool.execute_borrowed(redis_command_args_view{{"EVALSHA", script.sha1()}, args}, options, deadline);
+        auto reply = co_await pool.execute_borrowed_wire(call.evalsha_wire_, options, deadline);
         if (reply.kind() != redis_value::kind_type::error || (reply.error() != "NOSCRIPT" && !reply.error().starts_with("NOSCRIPT "))) {
             co_return reply;
         }
@@ -39,7 +82,26 @@ task<redis_value> execute_redis_script(redis_pool& pool, redis_script script, st
     }
     // The server's script cache was flushed or never loaded this script:
     // EVAL runs the body and caches it under the same digest for later calls.
-    co_return co_await pool.execute_borrowed(redis_command_args_view{{"EVAL", script.body()}, args}, std::move(options), deadline);
+    const auto header_end = call.evalsha_wire_.find('\n');
+    if (header_end == std::string::npos || call.args_tail_offset_ > call.evalsha_wire_.size()) {
+        throw std::invalid_argument("invalid encoded Redis script call");
+    }
+    const auto header = std::string_view(call.evalsha_wire_).substr(0, header_end + 1);
+    const auto tail = std::string_view(call.evalsha_wire_).substr(call.args_tail_offset_);
+    const auto body = script.body();
+    std::size_t wire_size = header.size();
+    add_resp_serialized_size(wire_size, resp_bulk_serialized_size(4));
+    add_resp_serialized_size(wire_size, resp_bulk_serialized_size(body.size()));
+    add_resp_serialized_size(wire_size, tail.size());
+
+    redis_owned_command eval_command{std::string()};
+    eval_command.wire_.reserve(wire_size);
+    eval_command.wire_.append(header);
+    append_resp_bulk(eval_command.wire_, "EVAL");
+    append_resp_bulk(eval_command.wire_, body);
+    eval_command.wire_.append(tail);
+    std::string{}.swap(call.evalsha_wire_);
+    co_return co_await pool.execute_owned(std::move(eval_command), std::move(options), std::nullopt, nullptr, deadline);
 }
 
 // Classifies a raw pooled command before it is encoded. Connection-stateful
@@ -377,29 +439,34 @@ task<redis_value> redis_executor::command_owned(std::vector<std::string>&& args)
     });
 }
 
-task<redis_value> redis_executor::script_owned(redis_script script, std::vector<std::string>&& args) const {
+task<redis_value> redis_executor::command_owned(detail::redis_owned_command&& command) const {
     registration_.require_active();
-    return detail::start_request_linked(operation_options_, request_stop_, [pool = &pool(), script = std::move(script), args = std::move(args), io_metrics = io_metrics_](const operation_options& options) mutable {
-        return detail::execute_redis_script(*pool, std::move(script), std::move(args), io_metrics, options);
+    return registration_.attach(execute(pool(), std::move(command)));
+}
+
+task<redis_value> redis_executor::script_owned(redis_script script, detail::redis_encoded_script_call&& call) const {
+    registration_.require_active();
+    return detail::start_request_linked(operation_options_, request_stop_, [pool = &pool(), script = std::move(script), call = std::move(call), io_metrics = io_metrics_](const operation_options& options) mutable {
+        return detail::execute_redis_script(*pool, std::move(script), std::move(call), io_metrics, options);
     });
 }
 
 task<redis_value> redis_executor::eval_cached(const redis_script& script, std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
     registration_.require_active();
-    std::vector<std::string> command;
-    if (keys.size() > command.max_size() - 1 || args.size() > command.max_size() - 1 - keys.size()) {
-        throw std::length_error("Redis script argument count is not representable");
-    }
-    command.reserve(1 + keys.size() + args.size());
-    std::array<char, max_decimal_size> key_count{};
-    command.emplace_back(format_decimal(key_count, keys.size()));
-    for (const auto key : keys) {
-        command.emplace_back(key);
-    }
-    for (const auto arg : args) {
-        command.emplace_back(arg);
-    }
-    return registration_.attach(script_owned(script, std::move(command)));
+    return registration_.attach(script_owned(script, detail::make_redis_encoded_script_call(script.sha1(), keys, args)));
+}
+
+template <typename result_type, typename mapper_type>
+task<result_type> redis_executor::execute_mapped(detail::redis_pool& pool_value, detail::redis_owned_command&& command, mapper_type mapper, std::optional<timeout_duration> reply_timeout) const {
+    return registration_.attach(detail::start_request_linked(operation_options_, request_stop_, [pool = &pool_value, command = std::move(command), mapper = std::move(mapper), reply_timeout, io_metrics = io_metrics_](const operation_options& options) mutable {
+        return pool->execute_decoded<result_type>(std::move(command), std::move(mapper), options, reply_timeout, io_metrics);
+    }));
+}
+
+template <typename result_type, typename decoder_type>
+task<result_type> redis_executor::issue(detail::redis_owned_command&& command, decoder_type decoder) const {
+    registration_.require_active();
+    return execute_mapped<result_type>(pool(), std::move(command), std::move(decoder));
 }
 
 task<std::optional<redis_key_value>> redis_executor::blpop(std::span<const std::string_view> keys, redis_block_wait wait) const {

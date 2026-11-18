@@ -195,6 +195,9 @@ task<http_response> detail::route_table::respond_through_chain(middleware_chain 
 }
 
 task<http_response> detail::route_table::run_unmatched_chain(context& context_value, route_handler terminal) const {
+    if (plan_->unmatched_middleware_count_ == 0) {
+        return terminal(context_value);
+    }
     return respond_through_chain(middleware_chain{.table_ = this, .frames_ = std::span<const route_middleware>(middleware_frames_).subspan(plan_->unmatched_middleware_offset_, plan_->unmatched_middleware_count_), .scopes_ = {}, .terminal_ = {}, .failure_ = &route_table::contain_failure}, context_value, terminal);
 }
 

@@ -61,7 +61,7 @@ public:
     [[nodiscard]] task<std::error_code> flush();
     [[nodiscard]] task<std::error_code> finish();
     void abort() noexcept;
-    [[nodiscard]] task<void> join();
+    [[nodiscard]] task_scope::join_operation join();
 
 private:
     static const std::unique_ptr<BIO_METHOD, decltype(&BIO_meth_free)> bio_method_;
@@ -309,11 +309,11 @@ public:
             receive_ended_ = !(co_await read_some());
         }
     }
-    [[nodiscard]] task<void> join() {
+    [[nodiscard]] operation_scope::join_operation join() {
         if (read_active_ || write_active_) {
             abort();
         }
-        co_await operations_.close_and_join();
+        return operations_.close_and_join();
     }
 
 private:
@@ -520,13 +520,6 @@ private:
     // Declared last so destruction unregisters before the state it reads.
     connection_scanner::periodic_check_registration idle_check_;
 };
-
-template <typename transport_type>
-[[nodiscard]] task<void> invoke_tunnel_handler(http_tunnel_session<transport_type>& session_value, connection_scanner::entry& entry_value, const route_stream_handler& handler, context& context_value) {
-    context_tunnel_binding binding(context_value, session_value.tunnel());
-    entry_value.enter_long_lived();
-    co_await handler(context_value);
-}
 
 template <typename transport_type>
 [[nodiscard]] task<void> finish_tunnel_session(http_tunnel_session<transport_type>& session_value, std::exception_ptr failure, const connection_failure_sink& sink_value, std::string_view remote, connection_scanner::entry& scanner, timeout_duration timeout) {

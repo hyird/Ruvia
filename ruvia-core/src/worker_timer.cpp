@@ -102,7 +102,7 @@ wait_bounds::wait_bounds(wait_bounds&& other) noexcept :
     }
 }
 
-void wait_bounds::start(const worker_ref& worker, const char* affinity_message) {
+void wait_bounds::start(const worker_ref& worker, const char* affinity_message) & {
     if (worker_ != nullptr) {
         throw std::logic_error("wait cannot be awaited twice");
     }
@@ -123,7 +123,7 @@ std::optional<wait_status> wait_bounds::ended() const noexcept {
     return std::nullopt;
 }
 
-bool wait_bounds::arm_deadline(void* owner, end_type end, bool watch_worker) {
+bool wait_bounds::arm_deadline(void* owner, end_type end, bool watch_worker) & {
     const auto deadline = deadline_.deadline();
     if (!deadline.has_value() && !watch_worker) {
         return true;

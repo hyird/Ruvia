@@ -156,9 +156,9 @@ private:
 class ip_endpoint final {
 public:
     constexpr ip_endpoint() noexcept = default;
-    constexpr ip_endpoint(ip_address address, std::uint16_t port) noexcept :
+    constexpr ip_endpoint(ip_address address, port_number port) noexcept :
         address_(address),
-        port_(port) {}
+        port_(port.value()) {}
 
     [[nodiscard]] constexpr ip_address address() const noexcept {
         return address_;

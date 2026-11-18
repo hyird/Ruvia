@@ -212,19 +212,19 @@ test_app::test_app() :
 
 test_app::~test_app() = default;
 
-test_app& test_app::server(server_config config) {
+test_app& test_app::server(server_config config) & {
     impl_->require_configurable();
     impl_->options_.set_server(config);
     return *this;
 }
 
-test_app& test_app::trusted_proxies(trusted_proxy_config config) {
+test_app& test_app::trusted_proxies(trusted_proxy_config config) & {
     impl_->require_configurable();
     impl_->options_.set_trusted_proxies(config);
     return *this;
 }
 
-test_app& test_app::trusted_proxies(std::nullptr_t) {
+test_app& test_app::trusted_proxies(std::nullptr_t) & {
     impl_->require_configurable();
     impl_->options_.clear_trusted_proxies();
     return *this;
@@ -235,13 +235,13 @@ void test_app::edit_configuration(detail::callback_ref<void(detail::app_configur
     edit(impl_->configuration_);
 }
 
-test_app& test_app::add_controllers(std::span<const detail::controller_registrar> registrars) {
+test_app& test_app::add_controllers(std::span<const detail::controller_registrar> registrars) & {
     impl_->require_configurable();
     impl_->registrars_.insert(impl_->registrars_.end(), registrars.begin(), registrars.end());
     return *this;
 }
 
-dispatch_response test_app::request(const test_request& request) {
+dispatch_response test_app::request(const test_request& request) & {
     impl_->finalize();
 
     return impl_->event_loop_.start(impl_->execute_request(request)).get();

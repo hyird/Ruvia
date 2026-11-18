@@ -127,6 +127,33 @@ task<std::optional<redis_pubsub_event>> redis_subscription_connection::read(oper
         throw redis_error(backend_error_code::cancelled, "redis subscription read cancelled");
     }
     const operation_deadline timeout_value(override_operation_options(options_, {.timeout_ = operation.timeout_}).timeout_);
+    try {
+        for (;;) {
+            // The previous event's views end here; its storage returns to the
+            // pool before the next reply is allocated.
+            current_reply_ = redis_types_access::null_value();
+            auto buffered = connection_.try_read_buffered_reply();
+            if (!buffered) {
+                break;
+            }
+            current_reply_ = std::move(*buffered);
+            if (pending_pings_ == 0 || !is_redis_subscription_pong(current_reply_)) {
+                if (current_reply_.kind() == redis_value::kind_type::error) {
+                    throw redis_error(backend_error_code::command_failed, current_reply_.error());
+                }
+                co_return parse_redis_pubsub_event(current_reply_);
+            }
+            --pending_pings_;
+        }
+    } catch (const redis_error& error) {
+        if (error.code() != backend_error_code::command_failed) {
+            fail();
+        }
+        throw;
+    } catch (...) {
+        fail();
+        throw;
+    }
     std::exception_ptr failure;
     task_scope ping_writes(owner_.worker_);
     begin_idle_probe(ping_writes, timeout_value);

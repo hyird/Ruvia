@@ -536,9 +536,8 @@ public:
 
     // Input may borrow the previous event payload; any required snapshot is
     // taken before reclaiming consumed input storage.
-    [[nodiscard]] websocket_feed_status feed(std::string_view input);
-    template <detail::http_temporary_owning_char_string input_type>
-    websocket_feed_status feed(input_type&&) = delete;
+    [[nodiscard]] websocket_feed_status feed(std::string_view input) &;
+    websocket_feed_status feed(std::string_view) && = delete;
     [[nodiscard]] std::optional<websocket_event> next_event() & RUVIA_LIFETIMEBOUND;
     std::optional<websocket_event> next_event() && = delete;
     [[nodiscard]] std::size_t needed_input_bytes() const noexcept;

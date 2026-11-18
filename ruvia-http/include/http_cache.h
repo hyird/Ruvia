@@ -187,6 +187,9 @@ private:
 class cache_control_field_parser final {
 public:
     void update(std::string_view field_value) noexcept;
+    void reset() noexcept {
+        *this = {};
+    }
 
     [[nodiscard]] cache_control finish() const noexcept {
         return value_;
@@ -222,7 +225,7 @@ struct targeted_cache_control_selection final {
 // RFC 9213 §2.2 target-list selection: evaluates `target_headers` in priority
 // order and returns the first present, valid non-empty targeted policy; falls
 // back to standard Cache-Control when no targeted header matches.
-[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control(const http_header_range_view& headers, std::span<const std::string_view> target_headers);
+[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control(const http_header_range_view& headers, std::span<const borrowed_text> target_headers);
 
 // RFC 9111 field-qualified stripping. Rejection (no-store, unqualified
 // private, or a nominated protected name) leaves the entire block unchanged.
@@ -249,6 +252,10 @@ public:
 
     void update(std::string_view field_value);
     void update_headers(const http_header_range_view& headers);
+    void reset() noexcept {
+        field_names_.clear();
+        wildcard_ = false;
+    }
 
     [[nodiscard]] constexpr bool is_wildcard() const noexcept {
         return wildcard_;
@@ -260,6 +267,10 @@ public:
         return field_names_;
     }
     std::span<const std::string> field_names() const&& = delete;
+    [[nodiscard]] std::vector<std::string> take_field_names() && noexcept {
+        wildcard_ = false;
+        return std::exchange(field_names_, {});
+    }
 
 private:
     std::vector<std::string> field_names_;

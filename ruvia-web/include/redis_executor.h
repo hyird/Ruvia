@@ -274,6 +274,9 @@ public:
         return previous_;
     }
     const std::optional<std::string>& previous() const&& = delete;
+    [[nodiscard]] std::optional<std::string> take_previous() && noexcept {
+        return std::exchange(previous_, std::nullopt);
+    }
 
 private:
     friend struct detail::redis_types_access;
@@ -347,11 +350,17 @@ public:
         return key_;
     }
     [[nodiscard]] std::string_view key() const&& = delete;
+    [[nodiscard]] std::string take_key() && noexcept {
+        return std::exchange(key_, {});
+    }
 
     [[nodiscard]] std::string_view value() const& noexcept RUVIA_LIFETIMEBOUND {
         return value_;
     }
     [[nodiscard]] std::string_view value() const&& = delete;
+    [[nodiscard]] std::string take_value() && noexcept {
+        return std::exchange(value_, {});
+    }
 
 private:
     friend struct detail::redis_types_access;
@@ -375,6 +384,9 @@ public:
         return value_;
     }
     [[nodiscard]] std::string_view value() const&& = delete;
+    [[nodiscard]] std::string take_value() && noexcept {
+        return std::exchange(value_, {});
+    }
 
     [[nodiscard]] double score() const noexcept {
         return score_;
@@ -413,6 +425,9 @@ public:
         return entries_;
     }
     [[nodiscard]] std::span<const entry_type> entries() const&& = delete;
+    [[nodiscard]] std::vector<entry_type> take_entries() && noexcept {
+        return std::exchange(entries_, {});
+    }
 
 private:
     friend struct detail::redis_types_access;
@@ -439,12 +454,18 @@ public:
         return id_;
     }
     [[nodiscard]] std::string_view id() const&& = delete;
+    [[nodiscard]] std::string take_id() && noexcept {
+        return std::exchange(id_, {});
+    }
 
     // XREADGROUP retains the ID of a deleted pending message with no fields.
     [[nodiscard]] std::span<const redis_key_value> fields() const& noexcept RUVIA_LIFETIMEBOUND {
         return fields_;
     }
     [[nodiscard]] std::span<const redis_key_value> fields() const&& = delete;
+    [[nodiscard]] std::vector<redis_key_value> take_fields() && noexcept {
+        return std::exchange(fields_, {});
+    }
 
 private:
     friend struct detail::redis_types_access;
@@ -467,11 +488,17 @@ public:
         return stream_;
     }
     [[nodiscard]] std::string_view stream() const&& = delete;
+    [[nodiscard]] std::string take_stream() && noexcept {
+        return std::exchange(stream_, {});
+    }
 
     [[nodiscard]] std::span<const redis_stream_entry> entries() const& noexcept RUVIA_LIFETIMEBOUND {
         return entries_;
     }
     [[nodiscard]] std::span<const redis_stream_entry> entries() const&& = delete;
+    [[nodiscard]] std::vector<redis_stream_entry> take_entries() && noexcept {
+        return std::exchange(entries_, {});
+    }
 
 private:
     friend struct detail::redis_types_access;
@@ -525,11 +552,14 @@ public:
     }
     [[nodiscard]] std::string_view string() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view string() const&& = delete;
+    [[nodiscard]] std::string take_string() &&;
     [[nodiscard]] std::string_view error() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view error() const&& = delete;
+    [[nodiscard]] std::string take_error() &&;
     [[nodiscard]] std::int64_t integer() const;
     [[nodiscard]] std::span<const redis_value> array() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const redis_value> array() const&& = delete;
+    [[nodiscard]] std::vector<redis_value> take_array() &&;
 
     template <detail::text_scalar t_type>
     [[nodiscard]] std::optional<t_type> as() const& {
@@ -621,8 +651,17 @@ struct redis_owned_command final {
     std::string wire_;
 };
 
+// Pre-encoded EVALSHA RESP wire payload plus the byte offset right after the
+// SHA-1 bulk string (`<numkeys>\r\n...`), so NOSCRIPT fallback builds EVAL
+// by concatenating a new EVAL header + body with the remaining tail view.
+struct redis_encoded_script_call final {
+    std::string evalsha_wire_;
+    std::size_t args_tail_offset_{0};
+};
+
 [[nodiscard]] redis_owned_command make_owned_redis_command(std::span<const std::string_view> args);
 [[nodiscard]] redis_owned_command make_owned_redis_command(std::string_view first, std::span<const std::string_view> rest = {});
+[[nodiscard]] redis_encoded_script_call make_redis_encoded_script_call(std::string_view sha1, std::span<const std::string_view> keys, std::span<const std::string_view> args);
 
 // Shared typed command layouts for direct execution, pipelines and transactions.
 [[nodiscard]] redis_owned_command make_redis_integer_command(std::string_view command, std::string_view key, std::int64_t value);
@@ -1247,6 +1286,7 @@ public:
     [[nodiscard]] task<redis_value> eval_cached(const redis_script& script, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {}) const;
     task<redis_value> eval_cached(const redis_script&, std::initializer_list<std::string_view>, std::span<const std::string_view> = {}) const = delete;
     task<redis_value> eval_cached(const redis_script&, std::span<const std::string_view>, std::initializer_list<std::string_view>) const = delete;
+    task<redis_value> eval_cached(const redis_script&, std::initializer_list<std::string_view>, std::initializer_list<std::string_view>) const = delete;
 
     // Every command owns its arguments before this call returns.
     template <typename... args_type>
@@ -1262,13 +1302,16 @@ public:
         return blpop(std::span<const std::string_view>(keys), wait);
     }
     [[nodiscard]] task<std::optional<redis_key_value>> blpop(std::span<const std::string_view> keys, redis_block_wait wait) const;
+    task<std::optional<redis_key_value>> blpop(std::initializer_list<std::string_view> keys, redis_block_wait wait) const = delete;
     [[nodiscard]] task<std::optional<redis_key_value>> brpop(std::string_view key, redis_block_wait wait) const {
         const std::string_view keys[]{key};
         return brpop(std::span<const std::string_view>(keys), wait);
     }
     [[nodiscard]] task<std::optional<redis_key_value>> brpop(std::span<const std::string_view> keys, redis_block_wait wait) const;
+    task<std::optional<redis_key_value>> brpop(std::initializer_list<std::string_view> keys, redis_block_wait wait) const = delete;
     // std::nullopt is the server's nil reply: no stream returned an entry.
     [[nodiscard]] task<std::optional<std::vector<redis_stream_read_result>>> xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_x_read_group_options options = {}) const;
+    task<std::optional<std::vector<redis_stream_read_result>>> xread_group(std::string_view group, std::string_view consumer, std::initializer_list<redis_stream_read_view> streams, redis_x_read_group_options options = {}) const = delete;
 
     // 每批命令共享一次租约及同一连接，WAIT/WAITAOF 只保护该批中位于
     // 屏障之前的写入，不保护此前通过独立 handle 调用完成的写入。
@@ -1314,12 +1357,13 @@ private:
     template <typename entity_type>
     friend class redis_repository;
 
-    // ORM commands are compiled straight into owned standard containers and
-    // moved into the operation; they are never stateful or blocking.
+    // ORM commands are compiled straight into owned standard containers or RESP
+    // wire buffers and moved into the operation; they are never stateful or blocking.
     [[nodiscard]] task<redis_value> command_owned(std::vector<std::string>&& args) const;
+    [[nodiscard]] task<redis_value> command_owned(detail::redis_owned_command&& command) const;
     // ORM scripts run as EVALSHA; a NOSCRIPT reply loads the body through
     // EVAL within the same operation.
-    [[nodiscard]] task<redis_value> script_owned(redis_script script, std::vector<std::string>&& args) const;
+    [[nodiscard]] task<redis_value> script_owned(redis_script script, detail::redis_encoded_script_call&& call) const;
 
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<result_type> command_mapped(std::vector<std::string>&& args, mapper_type mapper) const {
@@ -1328,9 +1372,15 @@ private:
     }
 
     template <typename result_type, typename mapper_type>
-    [[nodiscard]] task<result_type> script_mapped(const redis_script& script, std::vector<std::string>&& args, mapper_type mapper) const {
+    [[nodiscard]] task<result_type> command_mapped(detail::redis_owned_command&& command, mapper_type mapper) const {
         registration_.require_active();
-        return registration_.attach(detail::map_redis_command<result_type>(script_owned(script, std::move(args)), std::move(mapper)));
+        return registration_.attach(detail::map_redis_command<result_type>(command_owned(std::move(command)), std::move(mapper)));
+    }
+
+    template <typename result_type, typename mapper_type>
+    [[nodiscard]] task<result_type> script_mapped(const redis_script& script, detail::redis_encoded_script_call&& call, mapper_type mapper) const {
+        registration_.require_active();
+        return registration_.attach(detail::map_redis_command<result_type>(script_owned(script, std::move(call)), std::move(mapper)));
     }
 
     // `io_metrics` is the request's counter block, or null outside a request.
@@ -1341,19 +1391,14 @@ private:
     // `reply_timeout` starts when the command is written (see redis_pool).
     [[nodiscard]] task<redis_value> execute(detail::redis_pool& pool, detail::redis_owned_command&& command, std::optional<timeout_duration> reply_timeout = std::nullopt) const;
 
-    // One scoped pooled command whose mapper returns an owning decoded reply.
+    // One scoped pooled command whose decoder runs inside the pool task frame.
     template <typename result_type, typename mapper_type>
-    [[nodiscard]] task<result_type> execute_mapped(detail::redis_pool& pool, detail::redis_owned_command&& command, mapper_type mapper, std::optional<timeout_duration> reply_timeout = std::nullopt) const {
-        return registration_.attach(detail::map_redis_command<result_type>(execute(pool, std::move(command), reply_timeout), std::move(mapper)));
-    }
+    [[nodiscard]] task<result_type> execute_mapped(detail::redis_pool& pool, detail::redis_owned_command&& command, mapper_type mapper, std::optional<timeout_duration> reply_timeout = std::nullopt) const;
 
     // A typed command from redis_command_set: trusted, neither blocking nor
     // connection-stateful, so it runs on the ordinary pool.
     template <typename result_type, typename decoder_type>
-    [[nodiscard]] task<result_type> issue(detail::redis_owned_command&& command, decoder_type decoder) const {
-        registration_.require_active();
-        return execute_mapped<result_type>(pool(), std::move(command), std::move(decoder));
-    }
+    [[nodiscard]] task<result_type> issue(detail::redis_owned_command&& command, decoder_type decoder) const;
 
     friend class detail::worker_client_registry_view;
     [[nodiscard]] redis_executor bind_caller_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;

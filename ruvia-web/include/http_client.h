@@ -13,6 +13,7 @@
 #include <variant>
 #include <vector>
 
+#include "borrowed_text.h"
 #include "callback_ref.h"
 #include "event_loop.h"
 #include "http2_push.h"
@@ -277,6 +278,7 @@ private:
     [[nodiscard]] task<void> pipe_to_destination(context& output, response_stream_writer& writer, detail::operation_scope& destination, operation_options operation);
     [[nodiscard]] detail::operation_scope& body_scope() &;
     // Invokes parse synchronously on the read lane; it must not retain its input.
+    [[nodiscard]] static bool try_parse_ready_response_body(detail::http_client_response_state& state, std::size_t max_bytes, const operation_options& operation, detail::callback_ref<void(std::string_view)> parse);
     [[nodiscard]] static task<void> parse_response_body(detail::http_client_response_state& state, std::size_t max_bytes, operation_options operation, detail::callback_ref<void(std::string_view)> parse);
     template <typename value_type>
     static task<model_parse_result<value_type>> decode_json(detail::http_client_response_state& state, std::size_t max_bytes, operation_options operation) {
@@ -284,7 +286,10 @@ private:
         const auto parse = [&result](std::string_view text) {
             result.emplace(parse_json<value_type>(text));
         };
-        co_await parse_response_body(state, max_bytes, std::move(operation), detail::callback_access::bind<void(std::string_view)>(parse));
+        const auto callback = detail::callback_access::bind<void(std::string_view)>(parse);
+        if (!try_parse_ready_response_body(state, max_bytes, operation, callback)) {
+            co_await parse_response_body(state, max_bytes, std::move(operation), callback);
+        }
         co_return std::move(*result);
     }
     friend class body_reader;
@@ -335,6 +340,12 @@ public:
     [[nodiscard]] http_status_code status() const {
         return response_.status();
     }
+    [[nodiscard]] bool ok() const {
+        return response_.ok();
+    }
+    [[nodiscard]] http_received_status received_status() const {
+        return response_.received_status();
+    }
     [[nodiscard]] http_protocol_version protocol_version() const {
         return response_.protocol_version();
     }
@@ -356,6 +367,10 @@ public:
         return response_.header(name);
     }
     std::optional<std::string_view> header(std::string_view) const&& = delete;
+    [[nodiscard]] http_unique_field_lookup unique_header(std::string_view name) const& RUVIA_LIFETIMEBOUND {
+        return response_.unique_header(name);
+    }
+    http_unique_field_lookup unique_header(std::string_view) const&& = delete;
     [[nodiscard]] std::span<const http_client_informational_response> informational_responses() const& RUVIA_LIFETIMEBOUND {
         return response_.informational_responses();
     }
@@ -379,15 +394,35 @@ public:
     http_client_tunnel_result(const http_client_tunnel_result&) = delete;
     http_client_tunnel_result& operator=(const http_client_tunnel_result&) = delete;
     http_client_tunnel_result(http_client_tunnel_result&&) noexcept = default;
-    http_client_tunnel_result& operator=(http_client_tunnel_result&&) noexcept = default;
+    http_client_tunnel_result& operator=(http_client_tunnel_result&&) = delete;
     [[nodiscard]] http_client_tunnel* tunnel() & noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_client_tunnel>(&value_);
     }
+    [[nodiscard]] const http_client_tunnel* tunnel() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::get_if<http_client_tunnel>(&value_);
+    }
     http_client_tunnel* tunnel() && = delete;
+    const http_client_tunnel* tunnel() const&& = delete;
     [[nodiscard]] http_client_response* response() & noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_client_response>(&value_);
     }
+    [[nodiscard]] const http_client_response* response() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::get_if<http_client_response>(&value_);
+    }
     http_client_response* response() && = delete;
+    const http_client_response* response() const&& = delete;
+    [[nodiscard]] std::optional<http_client_tunnel> take_tunnel() && noexcept {
+        if (auto* value = std::get_if<http_client_tunnel>(&value_)) {
+            return std::move(*value);
+        }
+        return std::nullopt;
+    }
+    [[nodiscard]] std::optional<http_client_response> take_response() && noexcept {
+        if (auto* value = std::get_if<http_client_response>(&value_)) {
+            return std::move(*value);
+        }
+        return std::nullopt;
+    }
 
 private:
     friend class detail::http_client_pool;
@@ -469,8 +504,8 @@ public:
     // Owns `bytes` before returning; exact std::string rvalues move without copying.
     [[nodiscard]] task<void> write(outbound_bytes bytes, operation_options operation = {}) &;
     task<void> write(outbound_bytes, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> finish(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
-    task<void> finish(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(argument_list<http_header_view> trailers = {}, operation_options operation = {}) &;
+    task<void> finish(argument_list<http_header_view> = {}, operation_options = {}) && = delete;
     [[nodiscard]] bool complete() const noexcept;
     // Whether write() and finish() may still start: false once the content ended
     // or finish() started, after abandon(), and once the exchange stopped the
@@ -550,7 +585,7 @@ public:
     [[nodiscard]] task<void> migrate(std::string_view local_address, std::uint16_t port = 0) const;
     [[nodiscard]] http_client_stats stats() const;
     [[nodiscard]] std::vector<http_client_endpoint_address> dns_snapshot() const;
-    void update_dns(std::span<const http_client_endpoint_address> addresses);
+    void update_dns(argument_list<http_client_endpoint_address> addresses);
     [[nodiscard]] task<void> refresh_dns() const;
     // Non-destructive DNS resolution: resolves the client's dial host (or a
     // specified host) into a sorted, deduplicated IP address list without
@@ -603,9 +638,9 @@ public:
     http_client_request&& header(std::string_view name, std::string_view value) && {
         return std::move(header(name, value));
     }
-    http_client_request& headers(std::span<const http_header_view> fields) &;
-    http_client_request&& headers(std::span<const http_header_view> fields) && {
-        return std::move(headers(fields));
+    http_client_request& headers(argument_list<http_header_view> fields) &;
+    http_client_request&& headers(argument_list<http_header_view> fields) && {
+        return std::move(headers(fields.span()));
     }
     http_client_request& query(std::string_view name, std::string_view value) &;
     http_client_request&& query(std::string_view name, std::string_view value) && {
@@ -691,9 +726,9 @@ public:
     http_client_connect_request&& header(std::string_view name, std::string_view value) && {
         return std::move(header(name, value));
     }
-    http_client_connect_request& headers(std::span<const http_header_view> fields) &;
-    http_client_connect_request&& headers(std::span<const http_header_view> fields) && {
-        return std::move(headers(fields));
+    http_client_connect_request& headers(argument_list<http_header_view> fields) &;
+    http_client_connect_request&& headers(argument_list<http_header_view> fields) && {
+        return std::move(headers(fields.span()));
     }
     http_client_connect_request& configure(http_client_request_options options) &;
     http_client_connect_request&& configure(http_client_request_options options) && {
@@ -785,9 +820,9 @@ public:
     http_client_websocket_request& operator=(const http_client_websocket_request&) = delete;
     http_client_websocket_request(http_client_websocket_request&&) = default;
     http_client_websocket_request& operator=(http_client_websocket_request&&) = delete;
-    http_client_websocket_request& headers(std::span<const http_header_view> fields) &;
-    http_client_websocket_request&& headers(std::span<const http_header_view> fields) && {
-        return std::move(headers(fields));
+    http_client_websocket_request& headers(argument_list<http_header_view> fields) &;
+    http_client_websocket_request&& headers(argument_list<http_header_view> fields) && {
+        return std::move(headers(fields.span()));
     }
     http_client_websocket_request& header(std::string_view name, std::string_view value) &;
     http_client_websocket_request&& header(std::string_view name, std::string_view value) && {

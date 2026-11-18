@@ -401,6 +401,17 @@ public:
     }
     template <fixed_string name>
     const auto& get() const&& = delete;
+    template <fixed_string name>
+    [[nodiscard]] auto take() && {
+        auto& value = slot<name>();
+        if (value.state_ != decltype(value.state_)::value) {
+            throw std::logic_error("entity value is not set");
+        }
+        auto taken = std::move(value.value_);
+        value.clear();
+        value.state_ = decltype(value.state_)::unset;
+        return taken;
+    }
     template <fixed_string name, typename value_type>
     void set(value_type&& value) {
         auto& target = slot<name>();
@@ -477,6 +488,10 @@ public:                                                            \
     }                                                               \
     template <::ruvia::fixed_string name>                           \
     const auto& get() const&& = delete;                             \
+    template <::ruvia::fixed_string name>                           \
+    [[nodiscard]] auto take() && {                                  \
+        return std::move(member).template take<name>();             \
+    }                                                               \
     template <::ruvia::fixed_string name, typename value_type>      \
     auto& set(value_type&& value) & RUVIA_LIFETIMEBOUND {           \
         member.template set<name>(std::forward<value_type>(value)); \
@@ -608,11 +623,16 @@ public:
     }
     const entity_type* begin() const&& = delete;
     const entity_type* end() const&& = delete;
-    void reserve(std::size_t count) {
+    void reserve(std::size_t count) & {
         rows_.reserve(count);
     }
-    void push_back(entity_type&& entity) {
+    void reserve(std::size_t) && = delete;
+    void push_back(entity_type&& entity) & {
         rows_.push_back(std::move(entity));
+    }
+    void push_back(entity_type&&) && = delete;
+    [[nodiscard]] std::vector<entity_type> take_rows() && noexcept {
+        return std::exchange(rows_, {});
     }
 
 private:

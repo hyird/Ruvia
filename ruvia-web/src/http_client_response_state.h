@@ -593,6 +593,8 @@ public:
     [[nodiscard]] task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> consume_body(operation_options operation, std::conditional_t<std::is_void_v<view>, http_client_response_output, std::nullptr_t> output = {});
     template <typename result_type>
     [[nodiscard]] task<result_type> collect_body(std::size_t max_bytes, operation_options operation, callback_ref<void(std::string_view)> parse = {});
+    template <typename result_type>
+    [[nodiscard]] result_type finish_collection(std::size_t effective_limit, callback_ref<void(std::string_view)> parse = {});
     void retain_reference() noexcept;
     void release_reference() noexcept;
     [[nodiscard]] http_client_response_memory_domain& memory_domain() const noexcept {
@@ -645,6 +647,7 @@ public:
         }
     }
     void release_consumed_body_prefix();
+    void promote_pending_data();
     [[nodiscard]] bool exceeds_body_limit(std::size_t limit) const noexcept {
         return pending_.size() > limit || buffered_.size() - offset_ > limit - pending_.size();
     }
@@ -803,7 +806,6 @@ public:
     operation_scope body_operation_scope_;
 
 private:
-    void promote_pending_data();
     void detach_transport_bindings() noexcept;
 
     http_client_response_memory_domain& memory_domain_;

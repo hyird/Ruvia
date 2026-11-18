@@ -1058,3 +1058,63 @@ TEST(Ruvia, jwt_payload_audiences_and_move_assignment) {
     EXPECT_TRUE(assigned.expires_at() != nullptr && assigned.expires_at()->text() == "1700000000");
     EXPECT_EQ(assigned.claim("role"), std::optional<std::string_view>("admin"));
 }
+
+namespace {
+
+template <typename claim_type>
+concept jwt_claim_allows_rvalue_name = requires(claim_type c) { std::move(c).name(); };
+template <typename claim_type>
+concept jwt_claim_allows_rvalue_value = requires(claim_type c) { std::move(c).value(); };
+template <typename payload_type>
+concept jwt_payload_allows_rvalue_claims = requires(payload_type p) { std::move(p).claims(); };
+template <typename payload_type>
+concept jwt_payload_allows_rvalue_audiences = requires(payload_type p) { std::move(p).audiences(); };
+
+}  // namespace
+
+TEST(Ruvia, jwt_payload_and_claim_take_methods_transfer_buffers_and_clear_source) {
+    static_assert(!jwt_claim_allows_rvalue_name<ruvia::jwt_claim>);
+    static_assert(!jwt_claim_allows_rvalue_value<ruvia::jwt_claim>);
+    static_assert(!jwt_payload_allows_rvalue_claims<ruvia::jwt_payload>);
+    static_assert(!jwt_payload_allows_rvalue_audiences<ruvia::jwt_payload>);
+
+    const std::string long_iss(160, 'i');
+    const std::string long_sub(160, 's');
+    const std::string long_jti(160, 'j');
+    const std::string long_claim_key(64, 'k');
+    const std::string long_role(160, 'r');
+    const std::string payload_json = R"({"iss":")" + long_iss + R"(","sub":")" + long_sub + R"(","aud":[")" + std::string(160, 'a') + R"("],"jti":")" + long_jti + R"(",")" + long_claim_key + R"(":")" + long_role + R"("})";
+    const auto token = signed_token_with_payload(secret, payload_json);
+    auto decoded = decode_jwt_unverified(token).take_value();
+
+    const char* const iss_ptr = decoded.issuer().data();
+    const char* const sub_ptr = decoded.subject().data();
+    const char* const aud_ptr = decoded.audiences()[0].data();
+    const char* const jti_ptr = decoded.id().data();
+    const char* const role_name_ptr = decoded.claims()[0].name().data();
+    const char* const role_val_ptr = decoded.claims()[0].value().data();
+
+    const std::string taken_iss = std::move(decoded).take_issuer();
+    const std::string taken_sub = std::move(decoded).take_subject();
+    const auto taken_aud = std::move(decoded).take_audiences();
+    const std::string taken_jti = std::move(decoded).take_id();
+    auto taken_claims = std::move(decoded).take_claims();
+
+    EXPECT_EQ(taken_iss.data(), iss_ptr);
+    EXPECT_EQ(taken_sub.data(), sub_ptr);
+    ASSERT_EQ(taken_aud.size(), std::size_t{1});
+    EXPECT_EQ(taken_aud[0].data(), aud_ptr);
+    EXPECT_EQ(taken_jti.data(), jti_ptr);
+    ASSERT_EQ(taken_claims.size(), std::size_t{1});
+    const std::string claim_name = std::move(taken_claims[0]).take_name();
+    const std::string claim_value = std::move(taken_claims[0]).take_value();
+    EXPECT_EQ(claim_name.data(), role_name_ptr);
+    EXPECT_EQ(claim_value.data(), role_val_ptr);
+
+    EXPECT_TRUE(decoded.issuer().empty());
+    EXPECT_TRUE(decoded.subject().empty());
+    EXPECT_TRUE(decoded.audiences().empty());
+    EXPECT_TRUE(decoded.id().empty());
+    EXPECT_TRUE(decoded.claims().empty());
+    EXPECT_TRUE(taken_claims[0].value().empty());
+}

@@ -346,6 +346,22 @@ struct db_value_access final {
         return db_value(std::in_place_type<std::string>, std::move(value));
     }
 
+    [[nodiscard]] static db_value own(db_value&& value) {
+        if (const auto* borrowed = std::get_if<borrowed_text>(&value.storage_)) {
+            return owned_string(std::string(borrowed->view()));
+        }
+        return std::move(value);
+    }
+
+    [[nodiscard]] static std::string take_text(db_value&& value) {
+        if (auto* owned = std::get_if<std::string>(&value.storage_)) {
+            auto result_value = std::move(*owned);
+            value.storage_.template emplace<std::monostate>();
+            return result_value;
+        }
+        return std::string(std::get<borrowed_text>(value.storage_).view());
+    }
+
     // Prepared statement parameters own their text. Requiring that alternative
     // gives native text protocols a checked, NUL-terminated borrowing boundary.
     [[nodiscard]] static const std::string& owned_text(const db_value& value) {
@@ -370,13 +386,14 @@ concept db_parameter = std::constructible_from<db_value, param_type&&> || db_own
 template <typename... params_type>
 concept db_parameter_pack = sizeof...(params_type) > 0 && (db_parameter<params_type> && ...);
 
-// DB entry points clone each value into their own storage before returning.
-// Borrow owned db_value text and owning-string temporaries only across that
-// synchronous boundary; db_value itself still rejects retained string temporaries.
+// DB entry points clone each value into their own storage before returning,
+// moving rvalue std::string parameters directly into owned text storage.
 template <typename param_type>
     requires db_parameter<param_type>
 [[nodiscard]] db_value make_immediate_db_parameter(param_type&& param) {
-    if constexpr (std::same_as<std::remove_cvref_t<param_type>, db_value>) {
+    if constexpr (std::same_as<param_type&&, std::string&&>) {
+        return db_value_access::owned_string(std::move(param));
+    } else if constexpr (std::same_as<std::remove_cvref_t<param_type>, db_value>) {
         if (param.type() == db_value_type::string) {
             return db_value(param.text());
         }
@@ -887,6 +904,32 @@ struct db_result_access final {
         return db_field::borrowed(value);
     }
 
+    [[nodiscard]] static bool has_owned_string(const db_field& field) noexcept {
+        return std::holds_alternative<std::string>(field.storage_);
+    }
+
+    [[nodiscard]] static std::string take_string(db_field& field) {
+        if (auto* owned = std::get_if<std::string>(&field.storage_)) {
+            auto result = std::move(*owned);
+            field.storage_.template emplace<std::monostate>();
+            return result;
+        }
+        const auto view = field.value();
+        if (!view) {
+            throw conversion_error(conversion_error::code_type::unexpected_null, "database field is NULL");
+        }
+        return std::string(*view);
+    }
+
+    [[nodiscard]] static std::span<db_field> row_fields(db_rows& result_value, std::size_t row_index) noexcept {
+        const auto& row = result_value[row_index];
+        if (row.empty()) {
+            return {};
+        }
+        const auto offset = static_cast<std::size_t>(row.begin() - result_value.fields_.data());
+        return {result_value.fields_.data() + offset, row.size()};
+    }
+
     [[nodiscard]] static db_row borrowed_row(const db_field* fields_value, std::size_t size, const std::string* column_names, std::size_t column_count) noexcept {
         return db_row(fields_value, size, column_names, column_count);
     }
@@ -901,16 +944,38 @@ struct db_result_access final {
         result_value.rows_.push_back(borrowed_row(result_value.fields_.data() + row_start, field_count, result_value.column_names_.data(), result_value.column_names_.size()));
     }
 
+    static void assign_stream_field(db_field& target, std::optional<std::string_view> value) {
+        if (!value) {
+            target.storage_.template emplace<std::monostate>();
+            return;
+        }
+        if (auto* owned = std::get_if<std::string>(&target.storage_)) {
+            constexpr std::size_t max_retained_capacity = 64U * 1024U;
+            if (owned->capacity() > max_retained_capacity && value->size() <= max_retained_capacity / 2U) {
+                std::string replacement(*value);
+                owned->swap(replacement);
+            } else {
+                owned->assign(*value);
+            }
+        } else {
+            target.storage_.template emplace<std::string>(*value);
+        }
+    }
+
     template <typename field_at_type>
     [[nodiscard]] static db_row materialize_stream_row(std::vector<db_field>& fields_value, const std::vector<std::string>& column_names, std::size_t field_count, field_at_type&& field_at) {
-        fields_value.clear();
-        fields_value.reserve(field_count);
-        for (std::size_t field = 0; field < field_count; ++field) {
-            if (const auto value = field_at(field); value.has_value()) {
-                fields_value.push_back(owned_field(*value));
-            } else {
+        if (fields_value.size() < field_count) {
+            fields_value.reserve(field_count);
+            while (fields_value.size() < field_count) {
                 fields_value.push_back(null_field());
             }
+        } else if (fields_value.size() > field_count) {
+            while (fields_value.size() > field_count) {
+                fields_value.pop_back();
+            }
+        }
+        for (std::size_t field = 0; field < field_count; ++field) {
+            assign_stream_field(fields_value[field], field_at(field));
         }
         return borrowed_row(fields_value.data(), fields_value.size(), column_names.data(), column_names.size());
     }
@@ -939,6 +1004,9 @@ struct db_query_backend;
 struct db_query_plan;
 class worker_client_registry_view;
 
+template <bool with_count>
+using db_query_result = std::conditional_t<with_count, std::pair<db_rows, std::uint64_t>, db_rows>;
+
 // The outer scoped operation owns both the driver task and the mapped result.
 // Decoding finishes before db_rows releases its backend storage. Scalar and
 // column decoders enforce db_mapped_value and construct owning fields in the
@@ -961,10 +1029,9 @@ inline std::uint64_t db_count_value(const db_rows& rows) {
 }
 
 template <typename result_type, typename mapper_type>
-task<std::pair<result_type, std::uint64_t>> map_db_query_and_count(task<std::pair<db_rows, db_rows>> query, mapper_type mapper) {
+task<std::pair<result_type, std::uint64_t>> map_db_query_and_count(task<std::pair<db_rows, std::uint64_t>> query, mapper_type mapper) {
     auto rows = co_await std::move(query);
-    const auto count = db_count_value(rows.second);
-    co_return std::pair{mapper(std::move(rows.first)), count};
+    co_return std::pair{mapper(std::move(rows.first)), rows.second};
 }
 
 struct db_sql_parameter_count {
@@ -1109,12 +1176,12 @@ public:
     [[nodiscard]] task<std::pair<db_rows, std::uint64_t>> query_and_count(const db_query& query, const db_query& count) const&
         requires detail::db_copyable_surface<surface_type>
     {
-        return query_mapped_and_count<db_rows>(surface(), query, count, std::identity{});
+        return surface().registration_.attach(surface().query_and_count_task(query, count));
     }
     [[nodiscard]] task<std::pair<db_rows, std::uint64_t>> query_and_count(const db_query& query, const db_query& count) &
         requires(!detail::db_copyable_surface<surface_type>)
     {
-        return query_mapped_and_count<db_rows>(surface(), query, count, std::identity{});
+        return surface().registration_.attach(surface().query_and_count_task(query, count));
     }
 
     [[nodiscard]] task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) const&
@@ -1128,6 +1195,7 @@ public:
         return query_statement(surface(), sql, params);
     }
     task<db_rows> query(std::string_view sql, std::initializer_list<db_value> params) const& = delete;
+    task<db_rows> query(std::string_view sql, std::initializer_list<db_value> params) & = delete;
 
     [[nodiscard]] task<db_exec_result> execute(std::string_view sql, std::span<const db_value> params = {}) const&
         requires detail::db_copyable_surface<surface_type>
@@ -1140,6 +1208,7 @@ public:
         return execute_statement(surface(), sql, params);
     }
     task<db_exec_result> execute(std::string_view sql, std::initializer_list<db_value> params) const& = delete;
+    task<db_exec_result> execute(std::string_view sql, std::initializer_list<db_value> params) & = delete;
 
     // Bound parameters as ordinary arguments: query(sql, id, name). A caller
     // that already holds a contiguous parameter sequence passes it as a span
@@ -1147,27 +1216,27 @@ public:
     template <typename... params_type>
         requires detail::db_copyable_surface<surface_type> && detail::db_parameter_pack<params_type...>
     [[nodiscard]] task<db_rows> query(std::string_view sql, params_type&&... params) const& {
-        const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
-        return query_statement(surface(), sql, values);
+        db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
+        return query_statement(surface(), sql, std::span<db_value>(values));
     }
     template <typename... params_type>
         requires(!detail::db_copyable_surface<surface_type>) && detail::db_parameter_pack<params_type...>
     [[nodiscard]] task<db_rows> query(std::string_view sql, params_type&&... params) & {
-        const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
-        return query_statement(surface(), sql, values);
+        db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
+        return query_statement(surface(), sql, std::span<db_value>(values));
     }
 
     template <typename... params_type>
         requires detail::db_copyable_surface<surface_type> && detail::db_parameter_pack<params_type...>
     [[nodiscard]] task<db_exec_result> execute(std::string_view sql, params_type&&... params) const& {
-        const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
-        return execute_statement(surface(), sql, values);
+        db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
+        return execute_statement(surface(), sql, std::span<db_value>(values));
     }
     template <typename... params_type>
         requires(!detail::db_copyable_surface<surface_type>) && detail::db_parameter_pack<params_type...>
     [[nodiscard]] task<db_exec_result> execute(std::string_view sql, params_type&&... params) & {
-        const db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
-        return execute_statement(surface(), sql, values);
+        db_value values[]{detail::make_immediate_db_parameter(std::forward<params_type>(params))...};
+        return execute_statement(surface(), sql, std::span<db_value>(values));
     }
 
     // SQL literal checked at compile time: query<"SELECT ... WHERE id = ?">(id).
@@ -1233,7 +1302,9 @@ private:
         return static_cast<surface_reference>(*this);
     }
     [[nodiscard]] static task<db_rows> query_statement(surface_reference receiver, std::string_view sql, std::span<const db_value> params);
+    [[nodiscard]] static task<db_rows> query_statement(surface_reference receiver, std::string_view sql, std::span<db_value> params);
     [[nodiscard]] static task<db_exec_result> execute_statement(surface_reference receiver, std::string_view sql, std::span<const db_value> params);
+    [[nodiscard]] static task<db_exec_result> execute_statement(surface_reference receiver, std::string_view sql, std::span<db_value> params);
     // ORM plumbing: a compiled db_query that returns no rows, trusted SQL
     // without parameters, and row-returning queries decoded by a mapper.
     [[nodiscard]] static task<db_exec_result> execute_query(surface_reference receiver, const db_query& query);
@@ -1332,7 +1403,7 @@ private:
     [[nodiscard]] task<db_rows> start_query(std::string sql, std::vector<db_value> params, operation_options options = {});
     [[nodiscard]] task<db_exec_result> start_execute(std::string sql, std::vector<db_value> params, operation_options options = {});
     [[nodiscard]] task<db_rows> query_task(const db_query& query, operation_options options = {});
-    [[nodiscard]] task<std::pair<db_rows, db_rows>> query_and_count_task(const db_query& query, const db_query& count, operation_options options = {});
+    [[nodiscard]] task<std::pair<db_rows, std::uint64_t>> query_and_count_task(const db_query& query, const db_query& count, operation_options options = {});
     template <typename driver_type>
     friend class detail::db_pool;
 
@@ -1369,7 +1440,7 @@ private:
 
     [[nodiscard]] detail::db_query_backend query_backend(const lease_type& lease) const;
     template <bool with_count>
-    static task<std::conditional_t<with_count, std::pair<db_rows, db_rows>, db_rows>> query_plan_prepared(detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type operation, operation_options options, stop_token request_stop);
+    static task<detail::db_query_result<with_count>> query_plan_prepared(detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type operation, operation_options options, stop_token request_stop);
     // Declared before state_: the lease token links through it until state_ dies.
     std::unique_ptr<const linked_operation_options> request_link_;
     state_owner_type state_;
@@ -1428,7 +1499,7 @@ private:
     [[nodiscard]] task<db_rows> query_task(const db_query& query) const {
         return transaction_->query_task(query, options_);
     }
-    [[nodiscard]] task<std::pair<db_rows, db_rows>> query_and_count_task(const db_query& query, const db_query& count) const {
+    [[nodiscard]] task<std::pair<db_rows, std::uint64_t>> query_and_count_task(const db_query& query, const db_query& count) const {
         return transaction_->query_and_count_task(query, count, options_);
     }
 
@@ -1451,7 +1522,7 @@ public:
         const std::string_view views[]{std::string_view(ids)...};
         return remove(std::span<const std::string_view>(views));
     }
-    [[nodiscard]] task<void> clear();
+    [[nodiscard]] task<void> clear() const;
 
 private:
     friend class db_executor;
@@ -1519,7 +1590,7 @@ private:
     [[nodiscard]] task<db_rows> start_query(std::string sql, std::vector<db_value> params) const;
     [[nodiscard]] task<db_exec_result> start_execute(std::string sql, std::vector<db_value> params) const;
     [[nodiscard]] task<db_rows> query_task(const db_query& query) const;
-    [[nodiscard]] task<std::pair<db_rows, db_rows>> query_and_count_task(const db_query& query, const db_query& count) const;
+    [[nodiscard]] task<std::pair<db_rows, std::uint64_t>> query_and_count_task(const db_query& query, const db_query& count) const;
 
     // cache is nullptr when the alias has no query cache; without Redis
     // support it is always nullptr. `io_metrics` is the request's counter

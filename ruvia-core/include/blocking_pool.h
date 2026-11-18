@@ -38,6 +38,7 @@
 #include <utility>
 #include <variant>
 
+#include "byte_view.h"
 #include "delivery_result.h"
 #include "move_only_function.h"
 #include "one_shot.h"
@@ -48,9 +49,18 @@
 
 namespace ruvia {
 
+template <typename>
+class blocking_result;
+
 namespace detail {
 struct blocking_pool_access;
-}
+
+template <typename t_type>
+struct blocking_payload;
+
+template <typename t_type>
+[[nodiscard]] blocking_result<t_type> completed_blocking_result(blocking_payload<t_type>&& payload_value);
+}  // namespace detail
 
 struct blocking_pool_options final {
     // 0 selects half of std::thread::hardware_concurrency(), clamped to 2..8.
@@ -200,6 +210,9 @@ public:
     blocking_completion_guard& operator=(blocking_completion_guard&&) = delete;
 
     ~blocking_completion_guard() {
+        if (!completion_.valid()) {
+            return;
+        }
         blocking_payload<t_type> payload;
         payload.status_ = blocking_status::pool_stopped;
         // Nothing above this can receive a failure, and a rejected completion is
@@ -213,6 +226,7 @@ public:
             (void)completion.complete(std::move(payload_value));
         } catch (...) {
             blocking_payload<t_type> failure;
+            failure.status_ = blocking_status::failed;
             failure.error_ = std::current_exception();
             // An error-only payload has no result value to move, so it remains transportable
             // even when moving the callable's result was what failed above.
@@ -261,35 +275,44 @@ public:
         return status() == blocking_status::failed;
     }
 
-    [[nodiscard]] const std::exception_ptr& error() const& noexcept {
+    [[nodiscard]] const std::exception_ptr& error() const& noexcept RUVIA_LIFETIMEBOUND {
         return payload_.error_;
     }
     const std::exception_ptr& error() const&& = delete;
 
     // Rethrows the stored error, or throws blocking_operation_rejected if the
     // operation was rejected.
-    decltype(auto) value() const& {
+    template <typename self_type = t_type>
+        requires(!std::is_void_v<self_type>)
+    [[nodiscard]] const self_type& value() const& RUVIA_LIFETIMEBOUND {
         rethrow_if_not_completed();
-        if constexpr (!std::is_void_v<t_type>) {
-            return static_cast<const t_type&>(*payload_.value_);
-        }
+        return *payload_.value_;
     }
 
-    void value() && = delete;
-    void value() const&& = delete;
-
-    decltype(auto) value() & {
+    void value() const&
+        requires std::is_void_v<t_type>
+    {
         rethrow_if_not_completed();
-        if constexpr (!std::is_void_v<t_type>) {
-            return static_cast<t_type&>(*payload_.value_);
-        }
     }
 
-    t_type take_value() && {
+    template <typename self_type = t_type>
+        requires(!std::is_void_v<self_type>)
+    const self_type& value() const&& = delete;
+    void value() const&&
+        requires std::is_void_v<t_type>
+    = delete;
+
+    [[nodiscard]] t_type take_value() &&
+        requires(!std::is_void_v<t_type>)
+    {
         rethrow_if_not_completed();
-        if constexpr (!std::is_void_v<t_type>) {
-            return std::move(*payload_.value_);
-        }
+        return std::move(*payload_.value_);
+    }
+
+    void take_value() &&
+        requires std::is_void_v<t_type>
+    {
+        rethrow_if_not_completed();
     }
 
     // The callable completed with this value.
@@ -326,9 +349,14 @@ public:
     }
 
 private:
+    friend blocking_result detail::completed_blocking_result<t_type>(detail::blocking_payload<t_type>&&);
+
     explicit blocking_result(blocking_status status) noexcept {
         payload_.status_ = status;
     }
+
+    explicit blocking_result(detail::blocking_payload<t_type>&& payload_value) noexcept(std::is_nothrow_move_constructible_v<detail::blocking_payload<t_type>>) :
+        payload_(std::move(payload_value)) {}
 
     void rethrow_if_not_completed() const {
         if (payload_.error_ != nullptr) {
@@ -359,11 +387,7 @@ template <typename t_type>
     if (payload_value.error_ != nullptr) {
         return blocking_result<t_type>::with_error(std::move(payload_value.error_));
     }
-    if constexpr (std::is_void_v<t_type>) {
-        return blocking_result<t_type>::with_value();
-    } else {
-        return blocking_result<t_type>::with_value(std::move(*payload_value.value_));
-    }
+    return blocking_result<t_type>(std::move(payload_value));
 }
 
 }  // namespace detail
@@ -441,6 +465,7 @@ template <typename fn_type>
                     payload_value.value_.emplace(call());
                 }
             } catch (...) {
+                payload_value.status_ = blocking_status::failed;
                 payload_value.error_ = std::current_exception();
             }
             guard.answer(std::move(payload_value));
@@ -453,7 +478,10 @@ template <typename fn_type>
     try {
         auto waited = co_await receiver.wait({.timeout_ = deadline.timeout(), .stop_token_ = std::move(stop_token_value)});
         if (waited.has_value()) {
-            auto& payload_value = waited.value();
+            auto payload_value = std::move(waited).take_value();
+            if (payload_value.error_ != nullptr) {
+                co_return outcome_type::with_error(std::move(payload_value.error_));
+            }
             if (payload_value.status_ != blocking_status::completed) {
                 co_return outcome_type::with_status(payload_value.status_);
             }

@@ -311,34 +311,11 @@ private:
 enum class http1_connection_close_field_policy : std::uint8_t { close_only,
     preserve_upgrade };
 
-inline void http1_mark_connection_close(http_response& response, http1_connection_close_field_policy field_policy = http1_connection_close_field_policy::close_only) {
-    // A runtime close verdict dominates keep-alive. Collapse repeated fields
-    // after the socket lifecycle is decided, while preserving the Upgrade
-    // option required by any retained Upgrade field and any custom hop-by-hop
-    // field names declared in Connection (RFC 9110 section 7.6.1).
-    const std::string_view base = field_policy == http1_connection_close_field_policy::preserve_upgrade ? "close, Upgrade" : "close";
-    std::string merged;
-    for (const auto& header : response.headers()) {
-        if (!http_ascii_equals_ignore_case(header.name(), "Connection")) {
-            continue;
-        }
-        detail::http_visit_comma_separated_quoted(header.value(), [&merged, base](std::string_view option) {
-            if (!http_ascii_equals_ignore_case(option, "close") && !http_ascii_equals_ignore_case(option, "keep-alive") && !http_ascii_equals_ignore_case(option, "Upgrade")) {
-                if (merged.empty()) {
-                    merged.assign(base);
-                }
-                merged.append(", ");
-                merged.append(option);
-            }
-            return true;
-        });
-    }
-    if (merged.empty()) {
-        response.header("Connection", base);
-    } else {
-        response.header("Connection", std::move(merged));
-    }
-}
+// A runtime close verdict dominates keep-alive. Collapse repeated fields
+// after the socket lifecycle is decided, while preserving the Upgrade
+// option required by any retained Upgrade field and any custom hop-by-hop
+// field names declared in Connection (RFC 9110 section 7.6.1).
+void http1_mark_connection_close(http_response& response, http1_connection_close_field_policy field_policy = http1_connection_close_field_policy::close_only);
 
 class prepared_http1_response_stream;
 
@@ -366,6 +343,9 @@ public:
         return response_;
     }
     [[nodiscard]] const http_response& response() const&& = delete;
+    [[nodiscard]] http_response take_response() && noexcept {
+        return std::move(response_);
+    }
 
     [[nodiscard]] const http1_response_head_plan& response_head_plan() const& noexcept RUVIA_LIFETIMEBOUND {
         return response_head_plan_;

@@ -512,8 +512,16 @@ std::span<const std::string> db_migration_report::applied() const& noexcept {
     return applied_;
 }
 
+std::vector<std::string> db_migration_report::take_applied() && noexcept {
+    return std::exchange(applied_, {});
+}
+
 std::span<const std::string> db_migration_report::skipped() const& noexcept {
     return skipped_;
+}
+
+std::vector<std::string> db_migration_report::take_skipped() && noexcept {
+    return std::exchange(skipped_, {});
 }
 
 bool db_migration_report::changed() const noexcept {

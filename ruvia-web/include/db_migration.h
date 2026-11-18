@@ -106,8 +106,10 @@ public:
 
     [[nodiscard]] std::span<const std::string> applied() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const std::string> applied() const&& = delete;
+    [[nodiscard]] std::vector<std::string> take_applied() && noexcept;
     [[nodiscard]] std::span<const std::string> skipped() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const std::string> skipped() const&& = delete;
+    [[nodiscard]] std::vector<std::string> take_skipped() && noexcept;
     [[nodiscard]] bool changed() const noexcept;
 
 private:

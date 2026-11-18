@@ -8,6 +8,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "byte_view.h"
 #include "operation_options.h"
 #include "stop_token.h"
 #include "suspend_race.h"
@@ -162,34 +163,37 @@ public:
 
     // The first step of every domain await_ready: a wait starts once, on the
     // worker its state is bound to. A moved-from awaiter has no state.
-    void start(const char* affinity_message) {
+    void start(const char* affinity_message) & {
         if (!state_) {
             throw std::logic_error("worker wait cannot be awaited");
         }
         bounds_.start(state_->worker(), affinity_message);
     }
+    void start(const char*) && = delete;
 
     // The awaiter may be the last owner of the domain state.
-    [[nodiscard]] state_type& state() const& noexcept {
+    [[nodiscard]] state_type& state() const& noexcept RUVIA_LIFETIMEBOUND {
         return *state_;
     }
     state_type& state() const&& = delete;
 
     // Completes a started wait from await_ready, before it can suspend, with
     // an outcome the domain already holds.
-    void complete_ready(wait_result<t_type>&& result_value) {
+    void complete_ready(wait_result<t_type>&& result_value) & {
         (void)complete_result(std::move(result_value));
     }
+    void complete_ready(wait_result<t_type>&&) && = delete;
 
-    void complete_ready(wait_status status) {
+    void complete_ready(wait_status status) & {
         (void)complete_result(wait_result<t_type>::with_status(status));
     }
+    void complete_ready(wait_status) && = delete;
 
     // The pending-receiver step shared by every domain awaiter, called with the
     // state's lock held once the domain found nothing to deliver: completes an
     // already stopped or expired wait, otherwise publishes it as the single
     // pending receiver. Returns true when the wait completed without pending.
-    [[nodiscard]] bool complete_or_publish(const char* occupied_message) {
+    [[nodiscard]] bool complete_or_publish(const char* occupied_message) & {
         if (const auto ended = bounds_.ended()) {
             complete_ready(*ended);
             return true;
@@ -200,8 +204,9 @@ public:
         state().wait_slot().publish(*this);
         return false;
     }
+    bool complete_or_publish(const char*) && = delete;
 
-    [[nodiscard]] bool suspend(std::coroutine_handle<> continuation) {
+    [[nodiscard]] bool suspend(std::coroutine_handle<> continuation) & {
         auto& owner_value = state();
         auto* waiter = this;
         bool suspended = false;
@@ -240,10 +245,12 @@ public:
         }
         return suspended;
     }
+    bool suspend(std::coroutine_handle<>) && = delete;
 
-    [[nodiscard]] wait_result<t_type> take_result() {
+    [[nodiscard]] wait_result<t_type> take_result() & {
         return completion_.take_value();
     }
+    wait_result<t_type> take_result() && = delete;
 
 private:
     friend class worker_wait_slot<t_type, state_type>;

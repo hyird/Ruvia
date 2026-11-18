@@ -345,16 +345,22 @@ void worker_dispatcher::when_shutdown_notifications_complete(move_only_function<
     if (!callback_value) {
         throw std::invalid_argument("shutdown notification callback requires a callable");
     }
-    auto node = std::make_unique<waiter_node_type>(std::move(callback_value));
+    bool ready_now = false;
     {
         std::lock_guard lock(mutex_);
-        if (shutdown_notification_thread_ != std::thread::id{}) {
-            shutdown_notification_waiters_.push_back(node.release());
-            return;
-        }
+        ready_now = shutdown_notification_thread_ == std::thread::id{};
     }
-    callback_value = std::move(node->callback_);
-    node.reset();
+    if (!ready_now) {
+        auto node = std::make_unique<waiter_node_type>(std::move(callback_value));
+        {
+            std::lock_guard lock(mutex_);
+            if (shutdown_notification_thread_ != std::thread::id{}) {
+                shutdown_notification_waiters_.push_back(node.release());
+                return;
+            }
+        }
+        callback_value = std::move(node->callback_);
+    }
     callback_value();
 }
 
@@ -362,19 +368,29 @@ void worker_dispatcher::when_idle(move_only_function<void()> callback_value) {
     if (!callback_value) {
         throw std::invalid_argument("worker idle callback requires a callable");
     }
-    auto node = std::make_unique<waiter_node_type>(std::move(callback_value));
     bool detached = false;
+    bool need_wait = false;
     {
         std::lock_guard lock(mutex_);
         if (!context_attached_) {
             detached = true;
         } else if (pending_count_ != 0 || active_count_ != 0) {
-            idle_waiters_.push_back(node.release());
-            return;
+            need_wait = true;
         }
     }
-    callback_value = std::move(node->callback_);
-    node.reset();
+    if (need_wait) {
+        auto node = std::make_unique<waiter_node_type>(std::move(callback_value));
+        {
+            std::lock_guard lock(mutex_);
+            if (!context_attached_) {
+                detached = true;
+            } else if (pending_count_ != 0 || active_count_ != 0) {
+                idle_waiters_.push_back(node.release());
+                return;
+            }
+        }
+        callback_value = std::move(node->callback_);
+    }
     if (detached) {
         throw std::runtime_error("worker execution context is detached");
     }
@@ -846,10 +862,10 @@ bool detail::worker_ref_access::link_shutdown(const worker_ref& worker_value, wo
     return dispatcher->register_shutdown(registration, std::move(owner), operations);
 }
 
-bool worker_timer_registration::schedule(const worker_ref& worker_value, std::chrono::steady_clock::time_point deadline_value, move_only_function<void(worker_timer_outcome)> completion) {
+bool worker_timer_registration::schedule(const worker_ref& worker_value, std::chrono::steady_clock::time_point deadline_value, move_only_function<void(worker_timer_outcome)> completion) & {
     auto* const dispatcher = detail::worker_dispatcher::of(worker_value);
     if (dispatcher == nullptr) {
-        throw std::runtime_error("cannot schedule a timer on a stopped worker");
+        throw std::invalid_argument("worker timer requires a valid worker");
     }
     return dispatcher->schedule_timer(*this, deadline_value, std::move(completion));
 }

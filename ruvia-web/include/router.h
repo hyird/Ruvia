@@ -61,12 +61,16 @@ public:
         const std::array<detail::controller_middleware_descriptor, sizeof...(modifiers)> descriptors{detail::make_route_modifier_descriptor<modifiers>()...};
         return add_buffered(method, path, std::move(handler), descriptors);
     }
+    template <route_modifier... modifiers>
+    router& add(std::string_view, std::string_view, router_handler) && = delete;
 
     template <route_modifier... modifiers>
     router& stream(std::string_view method, std::string_view path, router_stream_handler handler) & {
         const std::array<detail::controller_middleware_descriptor, sizeof...(modifiers)> descriptors{detail::make_route_modifier_descriptor<modifiers>()...};
         return add_stream(method, path, std::move(handler), descriptors);
     }
+    template <route_modifier... modifiers>
+    router& stream(std::string_view, std::string_view, router_stream_handler) && = delete;
 
     // The WebSocket route of `path`: an HTTP/1.1 Upgrade GET or an extended
     // CONNECT (RFC 8441, RFC 9220). The terminal after the route's middleware
@@ -78,6 +82,8 @@ public:
         const std::array<detail::controller_middleware_descriptor, sizeof...(modifiers)> descriptors{detail::make_route_modifier_descriptor<modifiers>()...};
         return add_websocket(path, std::move(handler), std::move(config), descriptors);
     }
+    template <route_modifier... modifiers>
+    router& websocket(std::string_view, router_stream_handler, websocket_route_config = {}) && = delete;
 
     // CONNECT to an exact host:port authority, or "*" for any (RFC 9110
     // §9.3.6). The terminal establishes the tunnel with 200 through
@@ -88,6 +94,8 @@ public:
         const std::array<detail::controller_middleware_descriptor, sizeof...(modifiers)> descriptors{detail::make_route_modifier_descriptor<modifiers>()...};
         return add_tunnel({}, authority, std::move(handler), config, descriptors);
     }
+    template <route_modifier... modifiers>
+    router& connect(std::string_view, router_stream_handler, http_tunnel_route_config = {}) && = delete;
 
     // An extended CONNECT protocol on `path`; "connect-udp" (RFC 9298) also
     // accepts its HTTP/1.1 Upgrade (with 101) and implies HTTP Datagrams.
@@ -96,6 +104,8 @@ public:
         const std::array<detail::controller_middleware_descriptor, sizeof...(modifiers)> descriptors{detail::make_route_modifier_descriptor<modifiers>()...};
         return add_tunnel(protocol, path, std::move(handler), config, descriptors);
     }
+    template <route_modifier... modifiers>
+    router& connect_protocol(std::string_view, std::string_view, router_stream_handler, http_tunnel_route_config = {}) && = delete;
 
     // use(), use_at(), use_worker_state(), on_error(), on_not_found() and
     // rate_limit() are the dispatch_configuration members application shares.
@@ -115,21 +125,26 @@ public:
     // unique per kind; "default" is what alias-less lookups name.
 #ifdef RUVIA_ENABLE_REDIS
     router& bind_redis(std::string_view alias, const redis_client& client) &;
-    router& bind_redis(std::string_view, const redis_client&&) & = delete;
+    router& bind_redis(std::string_view, const redis_client&) && = delete;
+    router& bind_redis(std::string_view, const redis_client&&) = delete;
 #endif
 #ifdef RUVIA_ENABLE_DATABASE
     router& bind_db(std::string_view alias, const db_client& client) &;
-    router& bind_db(std::string_view, const db_client&&) & = delete;
+    router& bind_db(std::string_view, const db_client&) && = delete;
+    router& bind_db(std::string_view, const db_client&&) = delete;
 #endif
     // alias names this client's default configuration in this router.
     router& bind_http_client(std::string_view alias, const http_client& client) &;
-    router& bind_http_client(std::string_view, const http_client&&) & = delete;
+    router& bind_http_client(std::string_view, const http_client&) && = delete;
+    router& bind_http_client(std::string_view, const http_client&&) = delete;
     // One caller-owned instance per type; the router never destroys it. The
     // lending counterpart of use_worker_state(), whose instance it owns.
     template <typename state_type>
     router& bind_worker_state(state_type& state) & {
         return add_worker_state(detail::worker_state_definition::borrow(state));
     }
+    template <typename state_type>
+    router& bind_worker_state(state_type&) && = delete;
 
     // Compiles the shared route/method/parameter/middleware engine and creates
     // this worker's middleware once. Failure leaves configuration editable;

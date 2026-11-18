@@ -92,10 +92,10 @@ void http_capsule_decoder::reset() noexcept {
     payload_ = false;
     state_ = decoder_state::active;
 }
-http_capsule_feed_result http_capsule_decoder::feed(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, http_capsule_retention retention) {
+http_capsule_feed_result http_capsule_decoder::feed(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, http_capsule_retention retention) & {
     return feed_impl(input, fin, callback_value, context_value, false, retention);
 }
-http_capsule_feed_result http_capsule_decoder::feed_one(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, http_capsule_retention retention) {
+http_capsule_feed_result http_capsule_decoder::feed_one(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, http_capsule_retention retention) & {
     return feed_impl(input, fin, callback_value, context_value, true, retention);
 }
 http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, bool one, http_capsule_retention retention) {

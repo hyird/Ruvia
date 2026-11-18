@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "byte_view.h"
 #include "worker_ref.h"
 
 namespace ruvia {
@@ -106,6 +107,8 @@ public:
 
     worker_signal(const worker_signal&) = delete;
     worker_signal& operator=(const worker_signal&) = delete;
+    worker_signal(worker_signal&&) = delete;
+    worker_signal& operator=(worker_signal&&) = delete;
 
     // A cold single-use awaiter reserves the signal until completion or destruction.
     // Creation and starting the wait both require the bound worker.
@@ -115,7 +118,7 @@ public:
     }
     wait_operation wait() && = delete;
 
-    [[nodiscard]] const worker_ref& worker() const& noexcept {
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND {
         return worker_;
     }
     const worker_ref& worker() const&& = delete;
@@ -124,7 +127,8 @@ public:
     // wait(), it must run on the bound worker and throws std::logic_error
     // elsewhere. A failed resume dispatch after waiters were detached has no
     // recoverable owner and terminates.
-    void notify();
+    void notify() &;
+    void notify() && = delete;
 
 private:
     [[nodiscard]] static const worker_ref& require_worker(const worker_ref& worker_value) {
@@ -151,7 +155,7 @@ private:
     bool pending_{false};
 };
 
-inline void worker_signal::notify() {
+inline void worker_signal::notify() & {
     require_current_worker();
 
     auto* waiter = std::exchange(waiters_, nullptr);

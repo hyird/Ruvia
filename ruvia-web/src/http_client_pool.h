@@ -262,7 +262,7 @@ public:
     [[nodiscard]] http_client_stats stats() const noexcept;
     [[nodiscard]] std::vector<http_client_endpoint_address> dns_snapshot() const;
     void update_dns(std::span<const http_client_endpoint_address> addresses);
-    [[nodiscard]] task<void> refresh_dns(operation_options options);
+    [[nodiscard]] static task<void> refresh_dns(std::shared_ptr<http_client_pool> self, operation_options options, stop_token host_stop);
     [[nodiscard]] bool close_connection(std::uint64_t id) noexcept;
     [[nodiscard]] std::uint64_t next_connection_id() noexcept;
     [[nodiscard]] task<client_resolve_result> resolve_addresses(std::string_view host, std::uint16_t port, client_host_resolver& resolver, const operation_deadline& timeout);
@@ -290,7 +290,7 @@ public:
     // TLS-authenticated responses of `route` update its entries in this pool's
     // bounded Alt-Svc cache.
     void observe_alt_svc(const http_client_route& route, const http_header_range_view& fields);
-    [[nodiscard]] task<void> migrate_http3(std::string local_address, std::uint16_t port, operation_options options, stop_token host_stop);
+    [[nodiscard]] static task<void> migrate_http3(std::shared_ptr<http_client_pool> self, std::string local_address, std::uint16_t port, operation_options options, stop_token host_stop);
 #ifdef RUVIA_ENABLE_HTTP3
     // `operation` follows the client's per-operation contract: an interrupted
     // read keeps queued input, an interrupted send abandons the tunnel.

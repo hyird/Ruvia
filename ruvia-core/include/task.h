@@ -22,6 +22,8 @@ class task_scope;
 
 namespace detail {
 class operation_scope;
+template <typename t_type>
+class root_task_state;
 
 // Internal registration composed by ruvia::task and operation_scope::drain_guard.
 // Unscoped tasks never touch a scope list; scoped tasks relink in O(1) on move.
@@ -270,6 +272,8 @@ private:
     friend class ruvia::task_awaiter;
     template <typename, typename>
     friend class task_completion_state;
+    template <typename>
+    friend class root_task_state;
     friend class ruvia::task_scope;
     friend struct task_final_awaiter;
 
@@ -335,6 +339,8 @@ private:
     friend class task_awaiter;
     template <typename, typename>
     friend class detail::task_completion_state;
+    template <typename>
+    friend class detail::root_task_state;
     template <typename u_type, typename completion_token_type>
         requires detail::asio_task_result<u_type>
     friend auto async_start(task<u_type>&&, completion_token_type&&);

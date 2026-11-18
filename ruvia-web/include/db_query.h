@@ -256,6 +256,7 @@ public:
         star,
         column,
         excluded,
+        string_value,
         signed_value,
         unsigned_value,
         double_,
@@ -285,6 +286,7 @@ public:
     [[nodiscard]] static db_owned_expression make_excluded(std::string_view name);
     [[nodiscard]] static db_owned_expression make_static_excluded(std::string_view name) noexcept;
     [[nodiscard]] static db_owned_expression make_value(const db_value& value);
+    [[nodiscard]] static db_owned_expression make_value(db_value&& value);
     [[nodiscard]] static db_owned_expression make_raw_sql(std::span<const std::string_view> parts, std::span<const db_expr> args);
     [[nodiscard]] static db_owned_expression make_call(std::string_view function, std::span<const db_expr> args, std::span<const db_named_argument> named);
     [[nodiscard]] static db_owned_expression make_coalesce(std::span<const db_expr> args);
@@ -357,6 +359,7 @@ private:
         double double_value_;
         bool bool_value_;
     } scalar_{};
+    std::string string_value_;
     tree_owner_type tree_;
 };
 }  // namespace detail
@@ -1020,10 +1023,16 @@ public:
         return sql_;
     }
     std::string_view sql() const&& = delete;
+    [[nodiscard]] std::string take_sql() && noexcept {
+        return std::exchange(sql_, {});
+    }
     [[nodiscard]] std::span<const db_value> params() const& noexcept RUVIA_LIFETIMEBOUND {
         return params_;
     }
     std::span<const db_value> params() const&& = delete;
+    [[nodiscard]] std::vector<db_value> take_params() && noexcept {
+        return std::exchange(params_, {});
+    }
     [[nodiscard]] bool returns_rows() const noexcept {
         return returns_rows_;
     }

@@ -94,7 +94,8 @@ bool is_valid_uri_port(std::string_view value) noexcept {
 
 namespace ruvia {
 
-bool split_uri_host_port(std::string_view value, std::string_view& host, std::string_view& port, bool& has_port) noexcept {
+bool split_uri_host_port(borrowed_text value_text, std::string_view& host, std::string_view& port, bool& has_port) noexcept {
+    const auto value = value_text.view();
     port = {};
     has_port = false;
     if (!value.empty() && value.front() == '[') {

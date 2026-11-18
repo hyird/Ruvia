@@ -886,12 +886,15 @@ public:
     }
     // The first commit freezes all mutation before any asynchronous storage I/O.
     // A failed commit is terminal: its external writes cannot safely be replayed.
+    [[nodiscard]] bool try_commit_sync();
     [[nodiscard]] bool begin_commit();
     void finish_commit() noexcept;
     void fail_commit(std::exception_ptr exception) noexcept;
     void observe_presented_id(std::string_view id);
     void load_recognized(std::string_view payload);
+    void load_recognized(std::string&& payload);
     void set(std::string_view payload);
+    void set(std::string&& payload);
     void clear();
     void regenerate();
 
@@ -955,6 +958,9 @@ struct session_access final {
 
     // No callback chain: the bound session_middleware owns this capability's
     // single response-commit stage for both buffered and long-lived routes.
+    [[nodiscard]] static bool try_commit_sync(context& context_value) {
+        return context_value.session_state().try_commit_sync();
+    }
     [[nodiscard]] static task<void> commit(context& context);
 
     static void observe_presented_id(context& context_value, std::string_view id) {
@@ -963,6 +969,9 @@ struct session_access final {
 
     static void load(context& context_value, std::string_view data) {
         context_value.session_state().load_recognized(data);
+    }
+    static void load(context& context_value, std::string&& data) {
+        context_value.session_state().load_recognized(std::move(data));
     }
 
     [[nodiscard]] static const context_session_state& state(const context& context_value) noexcept {
@@ -1197,9 +1206,13 @@ namespace ruvia::detail {
 class http_interim_response_output final {
 public:
     using write_type = task<void> (*)(void*, const http_interim_response_head&);
+    using sync_write_type = void (*)(void*, const http_interim_response_head&);
     http_interim_response_output(void* target, write_type write) noexcept :
         target_(target),
         write_(write) {}
+    http_interim_response_output(void* target, sync_write_type write_sync) noexcept :
+        target_(target),
+        write_sync_(write_sync) {}
 
     // An interrupted inform() resets the request of `context_value`.
     [[nodiscard]] task<void> inform(const http_interim_response_head& response, operation_options operation, context& context_value);
@@ -1207,6 +1220,17 @@ public:
     // lane as inform() so the two heads never interleave. A final response
     // that has started already answered the expectation, and RFC 9110 §15.2
     // forbids any 1xx after it, so then nothing is written.
+    [[nodiscard]] bool try_send_continue_sync() {
+        if (write_sync_ == nullptr) {
+            return false;
+        }
+        if (final_committed_) {
+            return true;
+        }
+        auto lease = claim_operation_lane(output_active_, "interim response output is already active");
+        write_sync_(target_, http_interim_response_head(http_status::continue_));
+        return true;
+    }
     task<void> send_continue();
     void commit_final() {
         if (output_active_) {
@@ -1218,7 +1242,8 @@ public:
 private:
     [[nodiscard]] task<void> write_owned(http_status_code status, std::vector<http_header> fields, operation_options operation, context& context_value);
     void* target_;
-    write_type write_;
+    write_type write_{nullptr};
+    sync_write_type write_sync_{nullptr};
     bool final_committed_{};
     bool output_active_{};
     operation_interrupt_source interrupts_;

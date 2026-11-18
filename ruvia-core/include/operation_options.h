@@ -11,6 +11,7 @@
 #include <utility>
 #include <variant>
 
+#include "byte_view.h"
 #include "stop_token.h"
 #include "timeout_duration.h"
 
@@ -155,7 +156,7 @@ public:
     linked_operation_options(linked_operation_options&&) = delete;
     linked_operation_options& operator=(linked_operation_options&&) = delete;
 
-    [[nodiscard]] const operation_options& options() const& noexcept {
+    [[nodiscard]] const operation_options& options() const& noexcept RUVIA_LIFETIMEBOUND {
         return options_;
     }
     const operation_options& options() const&& = delete;
@@ -260,7 +261,7 @@ public:
         return std::holds_alternative<expired_state>(state_);
     }
 
-    [[nodiscard]] const kind_type* kind() const& noexcept {
+    [[nodiscard]] const kind_type* kind() const& noexcept RUVIA_LIFETIMEBOUND {
         if (const auto* armed = std::get_if<active>(&state_)) {
             return &armed->kind_;
         }

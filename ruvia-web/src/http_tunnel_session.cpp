@@ -188,10 +188,10 @@ task<std::error_code> tls_tunnel_output::flush(http_stream_end end) {
     }
     co_return error_;
 }
-task<void> tls_tunnel_output::join() {
+task_scope::join_operation tls_tunnel_output::join() {
     stopping_ = true;
     available_.notify();
-    co_await tasks_.join();
+    return tasks_.join();
 }
 
 }  // namespace ruvia::detail

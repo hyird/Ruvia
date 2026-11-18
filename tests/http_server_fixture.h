@@ -71,6 +71,9 @@
 #include <optional>
 
 #include "http2_connection.h"
+#ifdef RUVIA_ENABLE_REDIS
+#include "redis_executor.h"
+#endif
 
 namespace ruvia::test {
 
@@ -606,16 +609,30 @@ private:
         if (args.size() == 2 && args[0] == "DEL") {
             return std::move(std::string(":").append(std::to_string(store_.erase(args[1])))) + "\r\n";
         }
-        if (args.size() == 7 && args[0] == "EVAL" && args[2] == "2") {
-            // Atomic compare-and-replace of an existing identity, not a canned
-            // script response: missing sources and occupied targets cannot rotate.
-            if (!store_.contains(args[3]) || !store_.emplace(args[4], args[5]).second) {
-                return std::string(":0\r\n");
+        if (args.size() == 7 && args[0] == "EVALSHA" && args[2] == "2") {
+            if (cached_script_sha1_ != args[1]) {
+                return std::string("-NOSCRIPT No matching script. Please use EVAL.\r\n");
             }
-            store_.erase(args[3]);
-            return std::string(":1\r\n");
+            return rotate_session(args);
+        }
+        if (args.size() == 7 && args[0] == "EVAL" && args[2] == "2") {
+#ifdef RUVIA_ENABLE_REDIS
+            const ruvia::redis_script script(args[1]);
+            cached_script_sha1_ = std::string(script.sha1());
+#endif
+            return rotate_session(args);
         }
         throw std::runtime_error("unsupported session store command");
+    }
+
+    std::string rotate_session(const std::vector<std::string>& args) {
+        // Atomic compare-and-replace of an existing identity, not a canned
+        // script response: missing sources and occupied targets cannot rotate.
+        if (!store_.contains(args[3]) || !store_.emplace(args[4], args[5]).second) {
+            return std::string(":0\r\n");
+        }
+        store_.erase(args[3]);
+        return std::string(":1\r\n");
     }
 
     asio::awaitable<void> serve(std::shared_ptr<socket_type> socket) {
@@ -637,6 +654,7 @@ private:
     asio::ip::tcp::acceptor acceptor_;
     asio::executor_work_guard<asio::io_context::executor_type> work_;
     std::map<std::string, std::string> store_;
+    std::optional<std::string> cached_script_sha1_;
     std::vector<std::shared_ptr<socket_type>> sockets_{};
     std::exception_ptr failure_;
     bool closing_{false};

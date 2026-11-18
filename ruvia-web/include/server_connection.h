@@ -108,9 +108,9 @@ public:
 private:
     template <typename stream_type>
     friend class detail::server_connection_session;
-    using read_type = task<std::optional<std::span<const std::byte>>> (*)(void*, operation_options);
-    using write_type = task<void> (*)(void*, std::string_view, operation_options);
-    using finish_type = task<void> (*)(void*, operation_options);
+    using read_type = task<std::optional<std::span<const std::byte>>> (*)(void*, bool&, operation_options);
+    using write_type = task<void> (*)(void*, std::string, bool&, const bool&, operation_options);
+    using finish_type = task<void> (*)(void*, bool&, bool&, operation_options);
     using abort_type = void (*)(void*) noexcept;
 
     server_connection(const detail::server_connection_fields& fields, const ::ruvia::stop_token& stop_token_value, const worker_ref& worker_value, void* target, read_type read, write_type write, finish_type finish_value, abort_type abort_value) noexcept;

@@ -101,9 +101,12 @@ public:
     // 终结当前请求；HTTP/2、HTTP/3 只重置本流，HTTP/1 关闭连接。
     // 默认分别使用 CANCEL / H3_REQUEST_CANCELLED。正常返回不再自动生成响应；
     // 后续异常仍上报。显式协议错误码与当前协议不匹配时抛 invalid_argument。
-    void reset();
-    void reset(http2_error_code error);
-    void reset(http3_error_code error);
+    void reset() &;
+    void reset() && = delete;
+    void reset(http2_error_code error) &;
+    void reset(http2_error_code) && = delete;
+    void reset(http3_error_code error) &;
+    void reset(http3_error_code) && = delete;
 
     [[nodiscard]] request_body_state body_state() const noexcept;
 
@@ -118,7 +121,8 @@ public:
     // ranges after the callback returns. Throws logic_error once any response
     // is selected or output committed. Failure before wire commitment still
     // replaces it with an error response, releasing its file/body resources.
-    void respond(http_response&& response);
+    void respond(http_response&& response) &;
+    void respond(http_response&&) && = delete;
 
     // Whether accept_tunnel() can establish a tunnel: a CONNECT or extended
     // CONNECT (RFC 9110 §9.3.6, RFC 8441, RFC 9220), or an HTTP/1.1 request
@@ -176,8 +180,6 @@ private:
 
     [[nodiscard]] task<std::reference_wrapper<http_tunnel>> accept_tunnel_impl(http_status_code status, http_tunnel_route_config config);
     [[nodiscard]] task<websocket_accept_result> accept_websocket_impl(websocket_route_config config);
-    // A router's WebSocket route reuses its frozen endpoint.
-    [[nodiscard]] task<websocket_accept_result> accept_websocket_endpoint(const detail::websocket_route_endpoint& endpoint);
     [[nodiscard]] detail::operation_lane_lease claim_websocket_accept();
     void require_unselected_response() const;
 

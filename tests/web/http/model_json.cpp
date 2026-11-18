@@ -2234,3 +2234,25 @@ TEST(Ruvia, model_email_rule_rejects_empty_domain_labels_and_multiple_at_signs) 
         EXPECT_EQ(rejected.error().issues()[0].code(), std::string_view("email"));
     }
 }
+
+TEST(Ruvia, parse_json_and_model_take_transfer_owned_buffers_zero_copy) {
+    std::string raw = R"({"mail":")" + std::string(160, 'm') + R"("})";
+    const char* const raw_ptr = raw.data();
+    auto parsed_token = ruvia::parse_json<ruvia::json_object>(std::move(raw));
+    ASSERT_TRUE(parsed_token.has_value());
+    auto token = std::move(parsed_token).take_value();
+    EXPECT_EQ(token.view().data(), raw_ptr);
+    const std::string extracted_json = std::move(token).take_text();
+    EXPECT_EQ(extracted_json.data(), raw_ptr);
+    EXPECT_EQ(token.view(), std::string_view("{}"));
+
+    email_rule_model model;
+    std::string address(160, 'a');
+    address += "@example.com";
+    const char* const addr_ptr = address.data();
+    model.set<"mail">(std::move(address));
+    const ruvia::string moved_mail = std::move(model).take<"mail">();
+    EXPECT_EQ(moved_mail.data(), addr_ptr);
+    EXPECT_FALSE(model.has_value<"mail">());
+    EXPECT_THROW((void)std::move(model).take<"mail">(), std::logic_error);
+}

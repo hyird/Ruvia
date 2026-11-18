@@ -332,7 +332,7 @@ private:
     void on_request_head(http3_request_head_event& event);
     void on_data(http3_data_event& event);
     void on_datagram(const http3_datagram_event& event);
-    void on_message_end(const http3_message_end_event& event);
+    void on_message_end(http3_message_end_event& event);
     void on_stream_end(std::int64_t stream_id);
     void on_stream_abort(const http3_transport_action_event& event) noexcept;
     void on_stream_close(const http3_stream_closed_event& event) noexcept;

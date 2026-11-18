@@ -204,7 +204,8 @@ TEST(Ruvia, http2_public_semantically_invalid_expectations_preserve_upload_bound
             continue;
         }
         EXPECT_EQ(request->stream_id(), std::uint32_t{1});
-        EXPECT_TRUE(request->build_request().header("Expect") == expectation);
+        const auto built_req = request->build_request();
+        EXPECT_TRUE(built_req.header("Expect") == expectation);
         EXPECT_TRUE(request->snapshot().body_open_);
         EXPECT_TRUE(request->snapshot().content_ == ruvia::http_request_content_indication::will_follow);
         const auto rejected = request->expectation_plan(ruvia::http_unsupported_expectation_policy::reject);
@@ -369,7 +370,8 @@ TEST(Ruvia, http2_public_streaming_known_length_keeps_upload_open_for_trailers) 
         std::optional<ruvia::http2_request_head_event> lease;
         while (auto event = server.next_event()) {
             if (auto* request = event->request_head()) {
-                EXPECT_EQ(request->build_request().header("content-length").value_or(""), length == 0 ? "0" : "3");
+                const auto built_req = request->build_request();
+                EXPECT_EQ(built_req.header("content-length").value_or(""), length == 0 ? "0" : "3");
                 lease.emplace(std::move(*request));
             }
             saw_end |= event->message_end() != nullptr;

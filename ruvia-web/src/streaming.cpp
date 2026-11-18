@@ -89,7 +89,7 @@ void sse_writer::expire_capability() noexcept {
     writer_ = nullptr;
 }
 
-http_tunnel& context::tunnel() const {
+http_tunnel& context::tunnel() const& {
     const auto* output = response_output().tunnel();
     if (output == nullptr) {
         throw std::logic_error("HTTP tunnel is available only in an established CONNECT route");
@@ -97,7 +97,7 @@ http_tunnel& context::tunnel() const {
     return output->tunnel();
 }
 
-websocket& context::websocket() const {
+websocket& context::websocket() const& {
     const auto* output = response_output().get_websocket();
     if (output == nullptr) {
         throw std::logic_error("websocket is not available");
@@ -184,11 +184,9 @@ task<void> detail::streaming_access::write_borrowed(response_stream_writer& writ
     }));
 }
 
-task<void> response_stream_writer::writeln(std::string_view chunk, operation_options operation) & {
+task<void> response_stream_writer::writeln(outbound_bytes chunk, operation_options operation) & {
     require_active();
-    std::string owned;
-    owned.reserve(chunk.size() + 1U);
-    owned.append(chunk);
+    auto owned = std::move(chunk).into_string();
     owned.push_back('\n');
     return write(std::move(owned), std::move(operation));
 }
@@ -201,17 +199,18 @@ task<timer_sleep_result> response_stream_writer::sleep(timeout_duration duration
     return operation_scope_.attach(sleep_stopped_by_either(target_, sleep_, duration, stop_token_, std::move(stop)));
 }
 
-task<void> response_stream_writer::finish(std::span<const http_header_view> trailers, operation_options operation) & {
+task<void> response_stream_writer::finish(argument_list<http_header_view> trailers, operation_options operation) & {
     require_output();
+    const auto trailer_span = trailers.span();
     auto budget = http_trailer_section_budget();
-    for (const auto& trailer : trailers) {
+    for (const auto& trailer : trailer_span) {
         if (!budget.add_field(trailer.name(), trailer.value())) {
             throw std::invalid_argument("HTTP response trailer section exceeds its budget");
         }
     }
     std::vector<http_header> owned_trailers_value;
-    owned_trailers_value.reserve(trailers.size());
-    for (const auto& header : trailers) {
+    owned_trailers_value.reserve(trailer_span.size());
+    for (const auto& header : trailer_span) {
         owned_trailers_value.emplace_back(header.name(), header.value());
     }
     return operation_scope_.attach(end_owned({target_, output_active_, *interrupts_, *worker_, context_}, end_, std::move(owned_trailers_value), std::move(operation)));
@@ -221,8 +220,8 @@ task<timer_sleep_result> sse_writer::sleep(timeout_duration duration, stop_token
     return writer().sleep(duration, std::move(stop));
 }
 
-task<void> sse_writer::finish(std::span<const http_header_view> trailers, operation_options operation) & {
-    return writer().finish(trailers, std::move(operation));
+task<void> sse_writer::finish(argument_list<http_header_view> trailers, operation_options operation) & {
+    return writer().finish(trailers.span(), std::move(operation));
 }
 
 task<void> sse_writer::write(const sse_message& message, operation_options operation) & {

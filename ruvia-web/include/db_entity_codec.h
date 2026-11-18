@@ -170,8 +170,9 @@ template <db_mapped_value t_type>
     }
 }
 
-template <db_mapped_value t_type>
-void decode_db_field(const db_field& field, t_type& out) {
+template <db_mapped_value t_type, typename field_type>
+    requires std::same_as<std::remove_const_t<field_type>, db_field>
+void decode_db_field(field_type& field, t_type& out) {
     using u_type = std::remove_cv_t<t_type>;
     if constexpr (is_optional<u_type>::value) {
         using v_type = typename is_optional<u_type>::value_type;
@@ -202,19 +203,31 @@ void decode_db_field(const db_field& field, t_type& out) {
             out.reserve(count);
         });
     } else if constexpr (std::is_same_v<u_type, std::string>) {
-        if (auto value = field.as<std::string_view>()) {
+        if constexpr (!std::is_const_v<field_type>) {
+            if (db_result_access::has_owned_string(field)) {
+                out = db_result_access::take_string(field);
+                return;
+            }
+        }
+        if (auto value = field.template as<std::string_view>()) {
             out.assign(*value);
         } else {
             throw conversion_error(conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
         }
     } else if constexpr (std::is_same_v<u_type, string>) {
-        if (auto value = field.as<std::string_view>()) {
+        if constexpr (!std::is_const_v<field_type>) {
+            if (db_result_access::has_owned_string(field)) {
+                out.assign_owned(db_result_access::take_string(field));
+                return;
+            }
+        }
+        if (auto value = field.template as<std::string_view>()) {
             out.assign_owned(*value);
         } else {
             throw conversion_error(conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
         }
     } else {
-        if (auto value = field.as<u_type>()) {
+        if (auto value = field.template as<u_type>()) {
             out = *value;
         } else {
             throw conversion_error(conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
@@ -222,8 +235,8 @@ void decode_db_field(const db_field& field, t_type& out) {
     }
 }
 
-template <typename e_type, typename c_type>
-void decode_entity_field(e_type& entity, const db_field& field) {
+template <typename e_type, typename c_type, typename field_type>
+void decode_entity_field(e_type& entity, field_type& field) {
     const auto raw = field.value();
     if (!raw) {
         if constexpr (c_type::options.nullable_) {
@@ -235,6 +248,12 @@ void decode_entity_field(e_type& entity, const db_field& field) {
     }
     using value_type = typename c_type::value_type;
     if constexpr (std::is_same_v<value_type, std::string> || std::is_same_v<value_type, string>) {
+        if constexpr (!std::is_const_v<field_type>) {
+            if (db_result_access::has_owned_string(field)) {
+                entity.template set<c_type::name>(db_result_access::take_string(field));
+                return;
+            }
+        }
         entity.template set<c_type::name>(*raw);
     } else {
         auto value = entity_value_slot<value_type>::make_value();
@@ -255,6 +274,16 @@ public:
         wildcard_(wildcard) {}
 
     e_type decode(const db_row& row) {
+        return decode_row(row, row);
+    }
+
+    e_type decode(db_rows& rows, std::size_t row_index) {
+        return decode_row(rows[row_index], db_result_access::row_fields(rows, row_index));
+    }
+
+private:
+    template <typename fields_container>
+    e_type decode_row(const db_row& row, fields_container&& fields) {
         const auto names = row.column_names();
         if (!schema_ || schema_->data() != names.data() || schema_->size() != names.size()) {
             // Entity column names are unique, so a result naming exactly the
@@ -289,7 +318,7 @@ public:
             if (indices_[i] == missing_column) {
                 throw conversion_error(conversion_error::code_type::missing_column, "database result has no such column");
             }
-            decode_entity_field<e_type, column_type>(result, row[indices_[i]]);
+            decode_entity_field<e_type, column_type>(result, fields[indices_[i]]);
         });
         return result;
     }

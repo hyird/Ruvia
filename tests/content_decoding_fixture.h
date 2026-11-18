@@ -336,12 +336,14 @@ inline http1_client_response_parse_result parse_wire(std::string_view method, st
     const http1_client_request_wire_policy policy{.close_policy_ = close_policy};
     if (method == "CONNECT") {
         std::array<char, 2048> request_head;
-        return exchange_parser(ruvia::prepare_http1_client_request(origin, {.method_ = "CONNECT", .authority_ = "example.test:443", .headers_ = request_headers}, request_head, policy)).parse(wire);
+        auto parser = exchange_parser(ruvia::prepare_http1_client_request(origin, {.method_ = "CONNECT", .authority_ = "example.test:443", .headers_ = request_headers}, request_head, policy));
+        return parser.parse(wire);
     }
     ruvia::http_request_head_view request;
     request.method_ = method;
     request.headers_ = request_headers;
-    return exchange_parser(origin, request, policy).parse(wire);
+    auto parser = exchange_parser(origin, request, policy);
+    return parser.parse(wire);
 }
 
 inline http1_client_response_parse_result parse_result(std::string_view method, std::string_view header_section, http1_close_policy close_policy = http1_close_policy::allow_reuse, std::span<const ruvia::http_header_view> request_headers = {}) {

@@ -442,6 +442,20 @@ public:
     }
     template <fixed_string name>
     const auto& get() const&& = delete;
+    template <fixed_string name>
+    [[nodiscard]] auto take() && {
+        if constexpr (is_relation<name>()) {
+            auto& s = relation_slot<name>();
+            if (s.state_ != decltype(s.state_)::value) {
+                throw std::logic_error("database entity relation is not loaded");
+            }
+            auto taken = std::move(*s.value_);
+            s.reset();
+            return taken;
+        } else {
+            return std::move(columns_).template take<name>();
+        }
+    }
     template <fixed_string name, typename v_type>
     void set(v_type&& value) {
         static_assert(!is_relation<name>(), "relations cannot be assigned; use relation loading access");

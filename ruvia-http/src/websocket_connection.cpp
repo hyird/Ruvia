@@ -426,7 +426,7 @@ websocket_connection::~websocket_connection() = default;
 websocket_connection::websocket_connection(websocket_connection&&) noexcept = default;
 websocket_connection& websocket_connection::operator=(websocket_connection&&) noexcept = default;
 
-websocket_feed_status websocket_connection::feed(std::string_view input) {
+websocket_feed_status websocket_connection::feed(std::string_view input) & {
     const auto liveness = impl_->liveness_mode();
     if (liveness == websocket_liveness_mode::inactive) {
         return websocket_feed_status::inactive;

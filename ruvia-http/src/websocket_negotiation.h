@@ -28,6 +28,8 @@ void encode_websocket_accept(websocket_accept_key_type& output, std::string_view
 [[nodiscard]] bool append_websocket_extension_list(std::string_view value, bool& has_extension) noexcept;
 [[nodiscard]] std::string_view choose_websocket_subprotocol(const websocket_subprotocol_set& offered, std::span<const std::string_view> supported) noexcept;
 [[nodiscard]] std::string_view choose_websocket_subprotocol(const http_request& request, std::span<const std::string_view> supported) noexcept;
+void validate_websocket_response_headers(std::span<const http_header_view> headers, std::string_view subprotocol, std::string_view extension);
+[[nodiscard]] websocket_compression websocket_negotiate_permessage_deflate(const http_request& request, websocket_server_deflate_options config);
 
 // RFC 7692 section 7.1 parameters of one permessage-deflate extension element.
 // client_max_window_bits may appear without a value; whether that is

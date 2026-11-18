@@ -642,7 +642,8 @@ template <typename driver_type>
 task<void> db_pool<driver_type>::retire_failed_transaction_slot(std::size_t index, const operation_deadline& timeout, const std::exception_ptr& failure) {
     if (slot(index).connected_ && db_slot_reusable_after(failure)) {
         try {
-            co_await execute_control(index, "ROLLBACK", timeout);
+            leases_.throw_if_aborted(index);
+            (void)co_await driver_type::execute(*this, index, "ROLLBACK", {}, timeout.constrained_by(config_.command_timeout_));
             co_return;
         } catch (...) {
         }
@@ -705,15 +706,6 @@ task<db_exec_result> db_pool<driver_type>::execute_on_transaction_slot(std::size
     return run_on_transaction_slot<db_exec_result>(slot, std::move(sql), std::move(params), options, &driver_type::execute);
 }
 
-template <typename driver_type>
-task<void> db_pool<driver_type>::execute_control(std::size_t index, std::string_view sql, const operation_deadline& timeout) {
-    leases_.throw_if_aborted(index);
-    if (!slot(index).connected_) {
-        co_await connect_slot(index, timeout);
-    }
-    (void)co_await driver_type::execute(*this, index, sql, {}, timeout.constrained_by(config_.command_timeout_));
-}
-
 // Starting a transaction transfers the acquired lease to the transaction
 // object; any failure before that closes the connection and gives it back.
 // The lease deadline starts once the lease is held, so it bounds connecting
@@ -727,10 +719,15 @@ task<db_transaction> db_pool<driver_type>::begin_transaction(operation_options o
     try {
         start_lease(index);
         const auto start_timeout = lease_operation_timeout(index, timeout);
-        if (!plan.configure_.empty()) {
-            co_await execute_control(index, plan.configure_, start_timeout);
+        leases_.throw_if_aborted(index);
+        if (!slot(index).connected_) {
+            co_await connect_slot(index, start_timeout);
         }
-        co_await execute_control(index, plan.begin_, start_timeout);
+        const auto command_timeout = start_timeout.constrained_by(config_.command_timeout_);
+        if (!plan.configure_.empty()) {
+            (void)co_await driver_type::execute(*this, index, plan.configure_, {}, command_timeout);
+        }
+        (void)co_await driver_type::execute(*this, index, plan.begin_, {}, command_timeout);
         leave_lease_operation(index);
         co_return db_transaction(db_pool_ref_type{this}, index, std::move(operation_options_value));
     } catch (...) {
@@ -755,7 +752,11 @@ task<void> db_pool<driver_type>::finish_transaction(std::size_t index, std::stri
     std::exception_ptr failure;
     try {
         enter_lease_operation(index);
-        co_await execute_control(index, command, timeout);
+        leases_.throw_if_aborted(index);
+        if (!slot(index).connected_) {
+            co_await connect_slot(index, timeout);
+        }
+        (void)co_await driver_type::execute(*this, index, command, {}, timeout.constrained_by(config_.command_timeout_));
     } catch (...) {
         failure = std::current_exception();
     }
@@ -878,7 +879,11 @@ task<void> db_pool<driver_type>::close_stream(std::size_t index, const operation
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
     try {
         enter_lease_operation(index);
-        co_await driver_type::close_stream(*this, index, slot(index).stream_result_, timeout.constrained_by(config_.command_timeout_));
+        if constexpr (driver_type::driver == db_driver::postgresql) {
+            driver_type::close_stream(*this, index, slot(index).stream_result_);
+        } else {
+            co_await driver_type::close_stream(*this, index, slot(index).stream_result_, timeout.constrained_by(config_.command_timeout_));
+        }
     } catch (...) {
         fail_stream(index, cancellation);
         throw;

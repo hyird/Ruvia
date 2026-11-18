@@ -102,11 +102,15 @@ public:
         return model_text_storage(std::string(view()));
     }
 
-    [[nodiscard]] model_text_storage rebind() && {
+    [[nodiscard]] std::string take() && {
         own_borrowed_in_place();
-        model_text_storage rebound(std::move(std::get<std::string>(value_)));
+        std::string taken(std::move(std::get<std::string>(value_)));
         assign_borrowed({});
-        return rebound;
+        return taken;
+    }
+
+    [[nodiscard]] model_text_storage rebind() && {
+        return model_text_storage(std::move(*this).take());
     }
 
     void assign_owned_from(model_text_storage&& source_value) {
@@ -148,9 +152,7 @@ template <typename bytes_type = ::ruvia::bytes>
         return std::nullopt;
     }
     decoded.resize(*decoded_size);
-    bytes_type result_value;
-    result_value.assign_owned(std::move(decoded));
-    return result_value;
+    return bytes_type(std::move(decoded));
 }
 
 }  // namespace ruvia::detail
@@ -360,12 +362,20 @@ public:
         return left.view() == right.view();
     }
 
-    void assign_owned(std::string_view value) {
+    void assign_owned(std::string_view value) & {
         storage_.assign_owned(value);
     }
+    void assign_owned(std::string_view) && = delete;
 
-    void assign_owned(std::string&& value) noexcept {
+    template <std::same_as<std::string> string_type>
+    void assign_owned(string_type&& value) & noexcept {
         storage_.assign_owned(std::move(value));
+    }
+    template <std::same_as<std::string> string_type>
+    void assign_owned(string_type&&) && = delete;
+
+    [[nodiscard]] std::string take_string() && {
+        return std::move(storage_).take();
     }
 
 private:
@@ -475,6 +485,10 @@ public:
     bytes(std::span<const std::uint8_t> value) :
         items_(value.begin(), value.end()) {}
 
+    template <std::same_as<std::vector<std::uint8_t>> vector_type>
+    bytes(vector_type&& value) noexcept :
+        items_(std::move(value)) {}
+
     bytes(const bytes&) = delete;
     bytes& operator=(const bytes&) = delete;
 
@@ -510,13 +524,23 @@ public:
         return items_.empty();
     }
 
-    void assign_owned(std::span<const std::uint8_t> value) {
+    void assign_owned(std::span<const std::uint8_t> value) & {
         std::vector<std::uint8_t> owned(value.begin(), value.end());
         items_ = std::move(owned);
     }
+    void assign_owned(std::span<const std::uint8_t>) && = delete;
 
-    void assign_owned(std::vector<std::uint8_t>&& value) noexcept {
+    template <std::same_as<std::vector<std::uint8_t>> vector_type>
+    void assign_owned(vector_type&& value) & noexcept {
         items_ = std::move(value);
+    }
+    template <std::same_as<std::vector<std::uint8_t>> vector_type>
+    void assign_owned(vector_type&&) && = delete;
+
+    [[nodiscard]] std::vector<std::uint8_t> take_bytes() && noexcept {
+        std::vector<std::uint8_t> taken(std::move(items_));
+        items_.clear();
+        return taken;
     }
 
     friend bool operator==(const bytes& left, const bytes& right) noexcept {
@@ -635,15 +659,17 @@ public:
     }
     iterator end() const&& = delete;
 
-    void reserve(size_type count) {
+    void reserve(size_type count) & {
         items_.reserve(count);
     }
+    void reserve(size_type) && = delete;
 
-    void clear() noexcept {
+    void clear() & noexcept {
         items_.clear();
     }
+    void clear() && = delete;
 
-    void resize(size_type count) {
+    void resize(size_type count) & {
         const auto old_size = size();
         if (count < old_size) {
             items_.resize(count);
@@ -659,8 +685,9 @@ public:
             throw;
         }
     }
+    void resize(size_type) && = delete;
 
-    void resize(size_type count, const t_type& value) {
+    void resize(size_type count, const t_type& value) & {
         const auto old_size = size();
         if (count <= old_size) {
             if (count < old_size) {
@@ -678,6 +705,12 @@ public:
             items_.resize(old_size);
             throw;
         }
+    }
+    void resize(size_type, const t_type&) && = delete;
+
+    [[nodiscard]] std::vector<t_type> take_items() && {
+        own_for_model();
+        return std::exchange(items_, {});
     }
 
     template <typename... args_type>
@@ -836,18 +869,20 @@ public:
     }
     void end() const&& = delete;
 
-    void clear() noexcept {
+    void clear() & noexcept {
         for (auto* value : items_) {
             delete value;
         }
         items_.clear();
     }
+    void clear() && = delete;
 
-    void reserve(std::size_t count) {
+    void reserve(std::size_t count) & {
         items_.reserve(count);
     }
+    void reserve(std::size_t) && = delete;
 
-    void resize(std::size_t count) {
+    void resize(std::size_t count) & {
         const auto old_size = size();
         if (count < old_size) {
             while (size() > count) {
@@ -871,6 +906,7 @@ public:
             throw;
         }
     }
+    void resize(std::size_t) && = delete;
 
     template <typename... args_type>
     t_type& emplace_back(args_type&&... args) & RUVIA_LIFETIMEBOUND {

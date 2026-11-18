@@ -78,7 +78,8 @@ public:
         return http_target_origin(http_target_origin_action::misdirected);
     }
 
-    [[nodiscard]] static constexpr http_target_origin dns_name(std::string_view host) noexcept {
+    [[nodiscard]] static constexpr http_target_origin dns_name(borrowed_text host_text) noexcept {
+        const auto host = host_text.view();
         if (host.empty() || host.size() > max_dns_name_size) {
             return misdirected();
         }
@@ -86,9 +87,6 @@ public:
         origin.host_ = host;
         return origin;
     }
-
-    template <detail::http_temporary_owning_char_string host_type>
-    static void dns_name(host_type&&) = delete;
 
     [[nodiscard]] static constexpr http_target_origin decoded_dns_name(std::string_view host) noexcept {
         if (host.empty() || host.size() > max_dns_name_size) {
@@ -151,6 +149,7 @@ private:
 //   empty authority, which RFC 9112 §3.3 completes with the server's
 //   configured default rather than a client-chosen name.
 // The port is not compared: certificates name hosts, not ports. Allocation free.
-[[nodiscard]] http_target_origin plan_http_target_origin(const http_request& request, http_target_origin_connection connection) noexcept;
+[[nodiscard]] http_target_origin plan_http_target_origin(const http_request& request RUVIA_LIFETIMEBOUND, http_target_origin_connection connection) noexcept;
+http_target_origin plan_http_target_origin(const http_request&&, http_target_origin_connection) = delete;
 
 }  // namespace ruvia

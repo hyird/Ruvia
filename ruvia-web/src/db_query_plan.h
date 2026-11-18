@@ -35,6 +35,7 @@ struct prepared_db_statement final {
 void validate_db_sql_text(std::string_view sql);
 
 [[nodiscard]] prepared_db_statement prepare_db_statement(std::string_view sql, std::span<const db_value> params);
+[[nodiscard]] prepared_db_statement prepare_db_statement(std::string_view sql, std::span<db_value> params);
 
 // PostgreSQL NOTIFY as a pg_notify() call, so channel and payload travel as
 // bound parameters rather than as SQL text.
@@ -82,9 +83,6 @@ struct db_query_plan final {
     std::optional<db_query_step> second_;
     [[nodiscard]] static db_query_plan prepare(const db_query& query, const db_query* count, const db_query_backend& backend);
 };
-
-template <bool with_count>
-using db_query_result = std::conditional_t<with_count, std::pair<db_rows, db_rows>, db_rows>;
 
 template <bool with_count>
 [[nodiscard]] task<db_query_result<with_count>> execute_db_query_plan(db_query_plan plan, db_query_backend backend, operation_options options);

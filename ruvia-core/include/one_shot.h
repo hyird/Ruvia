@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <concepts>
 #include <coroutine>
 #include <cstdint>
 #include <exception>
@@ -11,6 +12,7 @@
 #include <utility>
 #include <variant>
 
+#include "byte_view.h"
 #include "delivery_result.h"
 #include "operation_options.h"
 #include "wait_result.h"
@@ -113,11 +115,25 @@ public:
     // Keep this completion handle alive through the call, including payload
     // moves and destruction. Concurrent attempts report in_progress while the
     // first value is being constructed.
-    [[nodiscard]] one_shot_complete_result<t_type> complete(t_type value) const {
+    [[nodiscard]] one_shot_complete_result<t_type> complete(t_type&& value) const {
+        return complete_impl(std::move(value));
+    }
+    [[nodiscard]] one_shot_complete_result<t_type> complete(const t_type& value) const
+        requires std::copy_constructible<t_type>
+    {
+        return complete_impl(value);
+    }
+
+private:
+    explicit one_shot_completion(std::shared_ptr<detail::one_shot_state<t_type>> state_value) :
+        state_(std::move(state_value)) {}
+
+    template <typename arg_type>
+    [[nodiscard]] one_shot_complete_result<t_type> complete_impl(arg_type&& value) const {
         // Payload code may synchronously rebind this handle while the call is active.
         const auto state = state_;
         if (state == nullptr) {
-            return detail::delivery_access::reject<one_shot_complete_result<t_type>>(one_shot_complete_status::receiver_closed, std::move(value));
+            return detail::delivery_access::reject<one_shot_complete_result<t_type>>(one_shot_complete_status::receiver_closed, std::forward<arg_type>(value));
         }
         std::optional<one_shot_complete_status> rejection;
         {
@@ -138,10 +154,10 @@ public:
             }
         }
         if (rejection) {
-            return detail::delivery_access::reject<one_shot_complete_result<t_type>>(*rejection, std::move(value));
+            return detail::delivery_access::reject<one_shot_complete_result<t_type>>(*rejection, std::forward<arg_type>(value));
         }
         try {
-            state->ready_value_.emplace(std::move(value));
+            state->ready_value_.emplace(std::forward<arg_type>(value));
         } catch (...) {
             std::lock_guard lock(state->mutex_);
             if (std::holds_alternative<detail::one_shot_completing>(state->lifecycle_)) {
@@ -171,10 +187,6 @@ public:
         }
         return detail::delivery_access::accept<one_shot_complete_result<t_type>>();
     }
-
-private:
-    explicit one_shot_completion(std::shared_ptr<detail::one_shot_state<t_type>> state_value) :
-        state_(std::move(state_value)) {}
     std::shared_ptr<detail::one_shot_state<t_type>> state_;
     template <typename u_type>
     friend auto make_one_shot(worker_ref);
@@ -264,7 +276,7 @@ public:
     // The worker every wait must run on. Makes the receive-side affinity
     // contract queryable instead of only failing at await time. A moved-from
     // receiver has no bound worker and cannot answer this query.
-    [[nodiscard]] const worker_ref& worker() const& noexcept {
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND {
         if (!state_) {
             std::terminate();
         }

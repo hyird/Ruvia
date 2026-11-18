@@ -1422,6 +1422,27 @@ public:
         requires(!detail::is_ruvia_json_value<field_value_type>)
     = delete;
 
+    [[nodiscard]] field_value_type take_required_value() &&
+        requires required
+    {
+        if (!value_) {
+            throw std::logic_error("required model field has no value");
+        }
+        auto taken = detail::model_value_rebind_access::own(std::move(*value_));
+        reset();
+        return taken;
+    }
+
+    [[nodiscard]] std::optional<field_value_type> take_value() && {
+        if (!value_) {
+            reset();
+            return std::nullopt;
+        }
+        std::optional<field_value_type> taken(detail::model_value_rebind_access::own(std::move(*value_)));
+        reset();
+        return taken;
+    }
+
     template <typename input_type>
     void assign(input_type&& input) {
         if constexpr (std::is_null_pointer_v<std::remove_cvref_t<input_type>>) {
@@ -2448,6 +2469,18 @@ public:
     template <fixed_string field>
     [[nodiscard]] decltype(auto) get() const&& = delete;
 
+    template <fixed_string field>
+    [[nodiscard]] decltype(auto) take() && {
+        constexpr auto index = model_field_index<field, descriptor_types...>();
+        using descriptor_type = std::tuple_element_t<index, std::tuple<descriptor_types...>>;
+        auto& slot = std::get<index>(fields_);
+        if constexpr (descriptor_type::required && !descriptor_type::nullable) {
+            return std::move(slot).take_required_value();
+        } else {
+            return std::move(slot).take_value();
+        }
+    }
+
     // Whether the original parsed input contained this field. Defaults and
     // set/ensure/reset do not rewrite input provenance; unparsed models have
     // no input presence. Use get()/is_null() for the current value state.
@@ -2618,6 +2651,10 @@ private:
         template <::ruvia::fixed_string field>                                                             \
         [[nodiscard]] decltype(auto) get() const&& = delete;                                               \
         template <::ruvia::fixed_string field>                                                             \
+        [[nodiscard]] decltype(auto) take() && {                                                           \
+            return std::move(fields_).template take<field>();                                              \
+        }                                                                                                  \
+        template <::ruvia::fixed_string field>                                                             \
         [[nodiscard]] bool is_present() const noexcept {                                                   \
             return fields_.template is_present<field>();                                                   \
         }                                                                                                  \
@@ -2630,7 +2667,7 @@ private:
             return fields_.template has_value<field>();                                                    \
         }                                                                                                  \
         template <::ruvia::fixed_string field, typename value_type>                                        \
-        t_type& set(value_type&& value) & {                                                                \
+        t_type& set(value_type&& value) & RUVIA_LIFETIMEBOUND {                                            \
             fields_.template set<field>(std::forward<value_type>(value));                                  \
             return *this;                                                                                  \
         }                                                                                                  \
@@ -2638,7 +2675,7 @@ private:
         t_type& set(value_type&&) && = delete;                                                             \
         template <::ruvia::fixed_string field>                                                             \
             requires requires(storage_type& storage) { storage.template set_null<field>(); }               \
-        t_type& set_null() & noexcept {                                                                    \
+        t_type& set_null() & noexcept RUVIA_LIFETIMEBOUND {                                                \
             fields_.template set_null<field>();                                                            \
             return *this;                                                                                  \
         }                                                                                                  \
@@ -2655,7 +2692,7 @@ private:
         [[nodiscard]] decltype(auto) ensure() && = delete;                                                 \
         template <::ruvia::fixed_string field>                                                             \
             requires requires(storage_type& storage) { storage.template reset<field>(); }                  \
-        t_type& reset() & noexcept {                                                                       \
+        t_type& reset() & noexcept RUVIA_LIFETIMEBOUND {                                                   \
             fields_.template reset<field>();                                                               \
             return *this;                                                                                  \
         }                                                                                                  \
@@ -2685,7 +2722,7 @@ namespace ruvia {
 template <typename t_type>
 class json_field_lookup final {
 public:
-    json_field_lookup(const json_field_lookup&) = default;
+    json_field_lookup(const json_field_lookup&) = delete;
     json_field_lookup(json_field_lookup&&) = default;
     json_field_lookup& operator=(const json_field_lookup&) = delete;
     json_field_lookup& operator=(json_field_lookup&&) = delete;
@@ -2702,7 +2739,7 @@ public:
         return std::move(value_);
     }
 
-    std::optional<t_type> value() const&& = delete;
+    const std::optional<t_type>& value() const&& = delete;
 
 private:
     friend class json_object;
@@ -2761,6 +2798,13 @@ public:
     [[nodiscard]] derived_type into_owned() && {
         storage_.own_borrowed_in_place();
         return std::move(static_cast<derived_type&>(*this));
+    }
+
+    // Consume owned text or copy borrowed bytes, then reset to default token.
+    [[nodiscard]] std::string take_text() && {
+        auto taken = std::move(storage_).take();
+        storage_.assign_borrowed(default_token.view());
+        return taken;
     }
 
     // The callback receives a field name and json_value borrowing this object's
@@ -3390,6 +3434,12 @@ template <typename t_type>
         return model_parse_result<t_type>(model_parse_error(model_parse_error::code_type::invalid_format, "invalid JSON value", std::move(issues)));
     }
     return detail::finish_model_parse(std::move(*parsed_value));
+}
+
+template <typename t_type, std::same_as<std::string> string_type>
+    requires(detail::is_ruvia_json_value<t_type> || detail::is_ruvia_json_object<t_type>)
+[[nodiscard]] model_parse_result<t_type> parse_json(string_type&& body, model_parse_options options = {}) {
+    return t_type::parse(std::move(body), options);
 }
 
 // Consume the retained token directly through the typed model parser. The

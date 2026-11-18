@@ -55,7 +55,7 @@ struct http_conditional_headers final {
 // Repeated If-Modified-Since and If-Unmodified-Since lines are ignored as
 // invalid date conditions (RFC 9110 sections 13.1.3 and 13.1.4); their views
 // are empty here rather than exposing the last line as an effective condition.
-[[nodiscard]] http_conditional_headers get_http_conditional_headers(const http_request& request) noexcept;
+[[nodiscard]] http_conditional_headers get_http_conditional_headers(const http_request& request RUVIA_LIFETIMEBOUND) noexcept;
 http_conditional_headers get_http_conditional_headers(const http_request&&) = delete;
 
 // One entity-tag precondition field's outcome, accumulated across every field
@@ -120,7 +120,7 @@ struct http_selected_representation_metadata final {
     bool content_coded_{false};
 };
 
-enum class http_range_request_policy {
+enum class http_range_request_policy : std::uint8_t {
     ignore,
     honor_byte_ranges,
 };
@@ -135,6 +135,11 @@ struct http_representation_response_options final {
 // response body permission and wire framing are decided at write submission.
 class http_representation_response_plan final {
 public:
+    http_representation_response_plan(const http_representation_response_plan&) = default;
+    http_representation_response_plan& operator=(const http_representation_response_plan&) = delete;
+    http_representation_response_plan(http_representation_response_plan&&) noexcept = default;
+    http_representation_response_plan& operator=(http_representation_response_plan&&) = delete;
+
     struct full_type final {
         http_status_code status_;
     };
@@ -144,17 +149,17 @@ public:
     using partial_type = http_byte_range;
     using multipart_type = http_byte_range_set;
 
-    [[nodiscard]] const full_type* full() const& noexcept;
+    [[nodiscard]] const full_type* full() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const full_type* full() const&& = delete;
-    [[nodiscard]] const not_modified_type* not_modified() const& noexcept;
+    [[nodiscard]] const not_modified_type* not_modified() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const not_modified_type* not_modified() const&& = delete;
-    [[nodiscard]] const precondition_failed_type* precondition_failed() const& noexcept;
+    [[nodiscard]] const precondition_failed_type* precondition_failed() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const precondition_failed_type* precondition_failed() const&& = delete;
-    [[nodiscard]] const range_unsatisfiable_type* range_unsatisfiable() const& noexcept;
+    [[nodiscard]] const range_unsatisfiable_type* range_unsatisfiable() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const range_unsatisfiable_type* range_unsatisfiable() const&& = delete;
-    [[nodiscard]] const partial_type* partial() const& noexcept;
+    [[nodiscard]] const partial_type* partial() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const partial_type* partial() const&& = delete;
-    [[nodiscard]] const multipart_type* multipart_ranges() const& noexcept;
+    [[nodiscard]] const multipart_type* multipart_ranges() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const multipart_type* multipart_ranges() const&& = delete;
     [[nodiscard]] http_status_code status() const noexcept;
     // True when a partial() or multipart_ranges() outcome answers a request

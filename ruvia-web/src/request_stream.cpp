@@ -29,7 +29,7 @@ struct request_stream_access final {
         return request_stream(context_value, response, accept_tunnel, accept_websocket);
     }
 
-    [[nodiscard]] static task<void> close(request_stream& stream) {
+    [[nodiscard]] static detail::operation_scope::join_operation close(request_stream& stream) noexcept {
         return stream.operation_scope_.close_and_join();
     }
 };
@@ -134,18 +134,18 @@ request_body_state request_stream::body_state() const noexcept {
     return detail::context_access::services(context_).body_state();
 }
 
-void request_stream::reset() {
+void request_stream::reset() & {
     detail::context_access::services(context_).reset_request({});
 }
 
-void request_stream::reset(http2_error_code error) {
+void request_stream::reset(http2_error_code error) & {
     if (request().protocol_version() != http_protocol_version::http2) {
         throw std::invalid_argument("HTTP/2 reset code requires HTTP/2");
     }
     detail::context_access::services(context_).reset_request(error);
 }
 
-void request_stream::reset(http3_error_code error) {
+void request_stream::reset(http3_error_code error) & {
     if (request().protocol_version() != http_protocol_version::http3) {
         throw std::invalid_argument("HTTP/3 reset code requires HTTP/3");
     }
@@ -159,7 +159,7 @@ body_reader& request_stream::request_body() & {
     return context_.request_body();
 }
 
-void request_stream::respond(http_response&& response) {
+void request_stream::respond(http_response&& response) & {
     auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_), "response stream output operation is already in progress");
     require_unselected_response();
     if (tunnel_requested() && request().known_method() == http_known_method::connect && response.status().is_successful()) {
@@ -206,11 +206,6 @@ task<websocket_accept_result> request_stream::accept_websocket_impl(websocket_ro
     std::vector<std::string>().swap(config.subprotocols_);
     auto lease = claim_websocket_accept();
     co_return co_await (*accept_websocket_)(*endpoint.websocket());
-}
-
-task<websocket_accept_result> request_stream::accept_websocket_endpoint(const detail::websocket_route_endpoint& endpoint) {
-    auto lease = claim_websocket_accept();
-    co_return co_await (*accept_websocket_)(endpoint);
 }
 
 detail::operation_lane_lease request_stream::claim_websocket_accept() {

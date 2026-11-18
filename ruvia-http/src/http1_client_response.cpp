@@ -174,7 +174,7 @@ void http1_client_response_parser::reset(http1_client_exchange_state exchange_st
     status_line_end_ = 0;
 }
 
-http1_client_response_parse_result http1_client_response_parser::parse(std::string_view buffer) {
+http1_client_response_parse_result http1_client_response_parser::parse(std::string_view buffer) & {
     if (state_ != decoder_state::active) {
         throw std::logic_error("HTTP/1 client response parser is already terminal");
     }

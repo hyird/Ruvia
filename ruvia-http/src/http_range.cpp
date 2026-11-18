@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <span>
@@ -354,55 +355,100 @@ std::optional<std::uint64_t> compute_http_byte_range_content_length(const http_b
     return compute_http_byte_range_content_length(ranges.ranges(), representation_length, media_type, boundary);
 }
 
+http_byte_range_slicer::http_byte_range_slicer(http_byte_range_slicer&& other) noexcept :
+    single_range_(other.single_range_),
+    ranges_(std::move(other.ranges_)),
+    media_type_(std::move(other.media_type_)),
+    boundary_(std::move(other.boundary_)),
+    content_type_(std::move(other.content_type_)),
+    content_range_(other.content_range_),
+    content_range_size_(std::exchange(other.content_range_size_, 0)),
+    single_mode_(std::exchange(other.single_mode_, false)),
+    representation_length_(std::exchange(other.representation_length_, 0)),
+    content_length_(std::exchange(other.content_length_, 0)),
+    current_offset_(std::exchange(other.current_offset_, 0)),
+    range_progress_(std::exchange(other.range_progress_, 0)),
+    range_index_(std::exchange(other.range_index_, 0)) {}
+
+http_byte_range_slicer& http_byte_range_slicer::operator=(http_byte_range_slicer&& other) noexcept {
+    if (this != &other) {
+        single_range_ = other.single_range_;
+        ranges_ = std::move(other.ranges_);
+        media_type_ = std::move(other.media_type_);
+        boundary_ = std::move(other.boundary_);
+        content_type_ = std::move(other.content_type_);
+        content_range_ = other.content_range_;
+        content_range_size_ = std::exchange(other.content_range_size_, 0);
+        single_mode_ = std::exchange(other.single_mode_, false);
+        representation_length_ = std::exchange(other.representation_length_, 0);
+        content_length_ = std::exchange(other.content_length_, 0);
+        current_offset_ = std::exchange(other.current_offset_, 0);
+        range_progress_ = std::exchange(other.range_progress_, 0);
+        range_index_ = std::exchange(other.range_index_, 0);
+    }
+    return *this;
+}
+
 http_byte_range_slicer::http_byte_range_slicer(const http_byte_range_set& ranges, http_content_length representation_length, std::string_view media_type, std::string_view boundary) :
     http_byte_range_slicer(ranges.ignored() ? std::span<const http_byte_range>{} : ranges.ranges(), representation_length, media_type, boundary) {}
 
 http_byte_range_slicer::http_byte_range_slicer(std::span<const http_byte_range> ranges, http_content_length representation_length_value, std::string_view media_type, std::string_view boundary) :
-    ranges_(ranges.begin(), ranges.end()),
-    media_type_(media_type),
-    boundary_(boundary),
-    content_type_(),
-    content_range_(),
     representation_length_(representation_length_value.value()) {
-    if (ranges_.empty() || representation_length_ == 0) {
+    if (ranges.empty() || representation_length_ == 0) {
         throw std::invalid_argument("HTTP byte-range slicer requires at least one range");
     }
-    for (std::size_t index = 0; index < ranges_.size(); ++index) {
-        const auto range = ranges_[index];
+    for (std::size_t index = 0; index < ranges.size(); ++index) {
+        const auto range = ranges[index];
         if (range.length_ == 0 || range.offset_ > representation_length_ || range.length_ > representation_length_ - range.offset_) {
             throw std::invalid_argument("HTTP byte range is outside representation");
         }
         if (index > 0) {
-            const auto prev = ranges_[index - 1];
+            const auto prev = ranges[index - 1];
             if (range.offset_ < prev.offset_ + prev.length_) {
                 throw std::invalid_argument("HTTP byte-range slicer requires ascending non-overlapping ranges");
             }
         }
     }
-    if (ranges_.size() == 1) {
+    if (ranges.size() == 1) {
         if (!media_type.empty() && !is_valid_http_content_type_field_value(media_type)) {
             throw std::invalid_argument("invalid HTTP media type for byte-range slicer");
         }
-        content_type_.assign(media_type);
-        const auto single = ranges_.front();
-        content_range_.append("bytes ");
-        append_decimal(content_range_, single.offset_);
-        content_range_.push_back('-');
-        append_decimal(content_range_, single.offset_ + single.length_ - 1);
-        content_range_.push_back('/');
-        append_decimal(content_range_, representation_length_);
-        content_length_ = single.length_;
+        single_mode_ = true;
+        single_range_ = ranges.front();
+        if (!media_type.empty()) {
+            content_type_.assign(media_type);
+        }
+        std::size_t pos = 0;
+        const auto append_sv = [&](std::string_view sv) noexcept {
+            std::memcpy(content_range_.data() + pos, sv.data(), sv.size());
+            pos += sv.size();
+        };
+        const auto append_u64 = [&](std::uint64_t val) noexcept {
+            std::array<char, max_decimal_size> dec{};
+            append_sv(format_decimal(dec, val));
+        };
+        append_sv("bytes ");
+        append_u64(single_range_.offset_);
+        content_range_[pos++] = '-';
+        append_u64(single_range_.offset_ + single_range_.length_ - 1);
+        content_range_[pos++] = '/';
+        append_u64(representation_length_);
+        content_range_size_ = static_cast<std::uint8_t>(pos);
+        content_length_ = single_range_.length_;
         return;
     }
     if (!is_valid_http_content_type_field_value(media_type) || !multipart_boundary::try_from_value(boundary).has_value()) {
         throw std::invalid_argument("invalid multipart media type or boundary for byte-range slicer");
     }
     multipart_range_size size(boundary.size(), representation_length_);
-    if (!size.add_all(ranges_, media_type.size())) {
+    if (!size.add_all(ranges, media_type.size())) {
         throw std::length_error("multipart byte-range response content length overflows uint64_t");
     }
     content_length_ = size.total_;
     write_multipart_range_type(content_type_, boundary);
+    ranges_.assign(ranges.begin(), ranges.end());
+    media_type_.assign(media_type);
+    boundary_.assign(boundary);
 }
 
 void http_byte_range_slicer::write(std::string_view chunk, std::string& output) {
@@ -410,17 +456,18 @@ void http_byte_range_slicer::write(std::string_view chunk, std::string& output) 
 }
 
 void http_byte_range_slicer::write(std::uint64_t chunk_offset, std::string_view chunk, std::string& output) {
-    if (ranges_.empty()) {
+    const std::size_t total_ranges = range_count();
+    if (total_ranges == 0) {
         throw std::logic_error("HTTP byte-range slicer has no ranges");
     }
     if (chunk_offset < current_offset_ || chunk_offset > representation_length_ || chunk.size() > representation_length_ - chunk_offset) {
         throw std::invalid_argument("HTTP byte-range slicer chunk offset is out of bounds");
     }
-    if (range_index_ == ranges_.size()) {
+    if (range_index_ == total_ranges) {
         current_offset_ = chunk_offset + chunk.size();
         return;
     }
-    const auto needed_offset = ranges_[range_index_].offset_ + range_progress_;
+    const auto needed_offset = range_at(range_index_).offset_ + range_progress_;
     if (chunk_offset > needed_offset) {
         throw std::invalid_argument("HTTP byte-range slicer chunk skipped over required range bytes");
     }
@@ -441,8 +488,8 @@ void http_byte_range_slicer::write(std::uint64_t chunk_offset, std::string_view 
     auto index = range_index_;
     auto progress = range_progress_;
     try {
-        while (index < ranges_.size()) {
-            const auto range = ranges_[index];
+        while (index < total_ranges) {
+            const auto range = range_at(index);
             const std::uint64_t next_needed = range.offset_ + progress;
             if (chunk_end <= next_needed) {
                 break;
@@ -463,7 +510,7 @@ void http_byte_range_slicer::write(std::uint64_t chunk_offset, std::string_view 
             ++index;
             progress = 0;
         }
-        if (index == ranges_.size() && multipart()) {
+        if (index == total_ranges && multipart()) {
             append_multipart_range_end(output, boundary_);
         }
     } catch (...) {

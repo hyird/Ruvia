@@ -150,6 +150,9 @@ public:
         return response_;
     }
     [[nodiscard]] const http_response& response() const&& = delete;
+    [[nodiscard]] http_response take_response() && noexcept {
+        return std::move(response_);
+    }
 
     [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const& noexcept RUVIA_LIFETIMEBOUND {
         return commit_plan_;

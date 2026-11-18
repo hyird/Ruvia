@@ -1075,14 +1075,15 @@ ruvia::task<void> adopt_read_prefix(ruvia::http_server& server, asio::ip::tcp::a
     if (accepted.error_code()) {
         throw std::system_error(accepted.error_code());
     }
+    auto socket = std::move(accepted).take_result();
     std::vector<std::byte> prefix(bytes);
     const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
-        asio::async_read(accepted.result(), asio::buffer(prefix), std::move(handler));
+        asio::async_read(socket, asio::buffer(prefix), std::move(handler));
     });
     if (read.error_code()) {
         throw std::system_error(read.error_code());
     }
-    server.adopt({.address_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port()}, accepted.result().release(), {.prefix_ = prefix, .remote_ = remote});
+    server.adopt({.address_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port()}, socket.release(), {.prefix_ = prefix, .remote_ = remote});
     // The prefix owner dies before the session starts reading it.
 }
 }  // namespace proxy_listener_test

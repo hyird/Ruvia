@@ -555,6 +555,10 @@ public:
     // Submitting to a stream whose content is not open (no head, a head that
     // ended the stream, or content already finished) throws std::logic_error.
     [[nodiscard]] http_data_submit_result submit_data(std::int64_t stream_id, std::string_view bytes);
+    template <std::same_as<std::string> string_type>
+    [[nodiscard]] http_data_submit_result submit_data(std::int64_t stream_id, string_type&& bytes) {
+        return submit_data_owned(stream_id, std::move(bytes));
+    }
     // DATA payload submit_data() accepted on the stream that the peer has
     // not acknowledged yet (acknowledge_output()); it stays charged to
     // max_stream_output_bytes_ until then, whether or not QUIC already sent it.
@@ -659,6 +663,8 @@ public:
 
 private:
     friend class http3_quic_connection;
+    [[nodiscard]] http_data_submit_result submit_data_owned(std::int64_t stream_id, std::string&& bytes);
+    [[nodiscard]] http_data_submit_result submit_data_impl(std::int64_t stream_id, std::string_view bytes, std::string* owned_bytes);
     void begin_packet_input() noexcept;
     void end_packet_input() noexcept;
     void mark_early_data(std::int64_t stream_id);
@@ -698,6 +704,9 @@ public:
         return phase_ == phase::complete ? std::string_view(fingerprint_) : std::string_view{};
     }
     std::string_view fingerprint() const&& = delete;
+    [[nodiscard]] std::string take_fingerprint() && noexcept {
+        return phase_ == phase::complete ? std::exchange(fingerprint_, {}) : std::string{};
+    }
 
 private:
     enum class phase : std::uint8_t {

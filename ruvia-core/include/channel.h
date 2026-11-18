@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <chrono>
+#include <concepts>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
@@ -16,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include "byte_view.h"
 #include "operation_options.h"
 #include "stop_token.h"
 #include "suspend_race.h"
@@ -433,6 +435,13 @@ private:
         value_(std::move(value)),
         bounds_(std::move(options)) {}
 
+    channel_send_operation(std::shared_ptr<state_type> state_value, const t_type& value, operation_options options)
+        requires std::copy_constructible<t_type>
+        :
+        state_(std::move(state_value)),
+        value_(value),
+        bounds_(std::move(options)) {}
+
     [[nodiscard]] static channel_send_status send_status(wait_status status) noexcept {
         switch (status) {
             case wait_status::timed_out:
@@ -524,11 +533,55 @@ public:
     // moves and destruction. Concurrent sends are delivered in publication
     // order; closure during a payload move returns that value as rejected.
     // Never reports timed_out or cancelled.
-    [[nodiscard]] channel_send_result<t_type> send(t_type value) const {
+    [[nodiscard]] channel_send_result<t_type> send(t_type&& value) const {
+        return send_impl(std::move(value));
+    }
+    [[nodiscard]] channel_send_result<t_type> send(const t_type& value) const
+        requires std::copy_constructible<t_type>
+    {
+        return send_impl(value);
+    }
+
+    // The waiting form of send(): a cold operation that, once awaited, takes a
+    // free slot at once or suspends until the receiver releases one. Waiting
+    // senders are served in FIFO order. It must be awaited on a worker thread,
+    // which is where it resumes (std::logic_error elsewhere); the channel's
+    // worker need not be that worker. A value that is not delivered -- the
+    // channel closed or its worker stopped, the awaiting worker stopped
+    // (worker_stopping), options.timeout_ elapsed (timed_out), or
+    // options.stop_token_ fired (cancelled) -- returns in the result. Without
+    // a timeout or stop token, the wait lasts until a slot frees, the channel
+    // closes, or either worker stops.
+    [[nodiscard]] channel_send_operation<t_type> send_wait(t_type&& value, operation_options options = {}) const& {
+        return channel_send_operation<t_type>(state_, std::move(value), std::move(options));
+    }
+    [[nodiscard]] channel_send_operation<t_type> send_wait(const t_type& value, operation_options options = {}) const&
+        requires std::copy_constructible<t_type>
+    {
+        return channel_send_operation<t_type>(state_, value, std::move(options));
+    }
+    channel_send_operation<t_type> send_wait(t_type&&, operation_options = {}) const&& = delete;
+    channel_send_operation<t_type> send_wait(const t_type&, operation_options = {}) const&&
+        requires std::copy_constructible<t_type>
+    = delete;
+
+    // Stop sending while allowing the receiver to drain buffered values.
+    void close() const {
+        if (state_) {
+            state_->close(false);
+        }
+    }
+
+private:
+    explicit channel_sender(std::shared_ptr<detail::channel_state<t_type>> state_value) :
+        state_(std::move(state_value)) {}
+
+    template <typename arg_type>
+    [[nodiscard]] channel_send_result<t_type> send_impl(arg_type&& value) const {
         // Payload code may synchronously rebind this handle while the call is active.
         const auto state = state_;
         if (state == nullptr) {
-            return detail::delivery_access::reject<channel_send_result<t_type>>(channel_send_status::closed, std::move(value));
+            return detail::delivery_access::reject<channel_send_result<t_type>>(channel_send_status::closed, std::forward<arg_type>(value));
         }
         using state_type = detail::channel_state<t_type>;
         typename state_type::node* slot = nullptr;
@@ -541,12 +594,12 @@ public:
             }
         }
         if (rejection) {
-            return detail::delivery_access::reject<channel_send_result<t_type>>(*rejection, std::move(value));
+            return detail::delivery_access::reject<channel_send_result<t_type>>(*rejection, std::forward<arg_type>(value));
         }
 
         typename state_type::node_guard guard(*state, slot);
         try {
-            slot->value_.emplace(std::move(value));
+            slot->value_.emplace(std::forward<arg_type>(value));
         } catch (...) {
             auto lock = state->lock_state();
             state->release_reserved(slot);
@@ -565,32 +618,6 @@ public:
         }
         return detail::delivery_access::accept<channel_send_result<t_type>>();
     }
-
-    // The waiting form of send(): a cold operation that, once awaited, takes a
-    // free slot at once or suspends until the receiver releases one. Waiting
-    // senders are served in FIFO order. It must be awaited on a worker thread,
-    // which is where it resumes (std::logic_error elsewhere); the channel's
-    // worker need not be that worker. A value that is not delivered -- the
-    // channel closed or its worker stopped, the awaiting worker stopped
-    // (worker_stopping), options.timeout_ elapsed (timed_out), or
-    // options.stop_token_ fired (cancelled) -- returns in the result. Without
-    // a timeout or stop token, the wait lasts until a slot frees, the channel
-    // closes, or either worker stops.
-    [[nodiscard]] channel_send_operation<t_type> send_wait(t_type value, operation_options options = {}) const& {
-        return channel_send_operation<t_type>(state_, std::move(value), std::move(options));
-    }
-    channel_send_operation<t_type> send_wait(t_type, operation_options = {}) const&& = delete;
-
-    // Stop sending while allowing the receiver to drain buffered values.
-    void close() const {
-        if (state_) {
-            state_->close(false);
-        }
-    }
-
-private:
-    explicit channel_sender(std::shared_ptr<detail::channel_state<t_type>> state_value) :
-        state_(std::move(state_value)) {}
 
     std::shared_ptr<detail::channel_state<t_type>> state_;
     template <typename u_type>
@@ -686,7 +713,7 @@ public:
     // The worker every receive must run on. Makes the receive-side affinity
     // contract queryable instead of only failing at await time. A moved-from
     // receiver has no bound worker and cannot answer this query.
-    [[nodiscard]] const worker_ref& worker() const& noexcept {
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND {
         if (!state_) {
             std::terminate();
         }

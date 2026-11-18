@@ -25,6 +25,18 @@ class http_request;
 // absolute-form targets to origin-form (with "/" when the path is empty and
 // preserving any query), converts an OPTIONS target with an empty path and no
 // query to "*", and preserves all other forms verbatim.
+[[nodiscard]] std::string_view normalize_http_proxy_request_target(
+    std::string_view method,
+    borrowed_text target RUVIA_LIFETIMEBOUND,
+    std::string& storage RUVIA_LIFETIMEBOUND);
+[[nodiscard]] std::string_view normalize_http_proxy_request_target(
+    http_known_method method,
+    borrowed_text target RUVIA_LIFETIMEBOUND,
+    std::string& storage RUVIA_LIFETIMEBOUND);
+[[nodiscard]] std::string_view normalize_http_proxy_request_target(
+    const http_request& request RUVIA_LIFETIMEBOUND,
+    std::string& storage RUVIA_LIFETIMEBOUND);
+void normalize_http_proxy_request_target(const http_request&& request, std::string& storage) = delete;
 [[nodiscard]] std::string normalize_http_proxy_request_target(std::string_view method, std::string_view target);
 [[nodiscard]] std::string normalize_http_proxy_request_target(http_known_method method, std::string_view target);
 [[nodiscard]] std::string normalize_http_proxy_request_target(const http_request& request);

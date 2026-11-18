@@ -82,12 +82,14 @@ public:
     http_content_decoder(http_content_decoder&&) = delete;
     http_content_decoder& operator=(http_content_decoder&&) = delete;
 
-    [[nodiscard]] http_content_decode_result decode(std::string_view input RUVIA_LIFETIMEBOUND, std::span<char> output RUVIA_LIFETIMEBOUND);
+    [[nodiscard]] http_content_decode_result decode(std::string_view input RUVIA_LIFETIMEBOUND, std::span<char> output RUVIA_LIFETIMEBOUND) &;
+    http_content_decode_result decode(std::string_view, std::span<char>) && = delete;
     template <detail::http_temporary_owning_char_string input_type>
-    http_content_decode_result decode(input_type&&, std::span<char>) = delete;
+    http_content_decode_result decode(input_type&&, std::span<char>) & = delete;
     template <std::same_as<char> element_type>
-    http_content_decode_result decode(std::initializer_list<element_type>, std::span<char>) = delete;
-    [[nodiscard]] http_content_decode_result finish_input() noexcept;
+    http_content_decode_result decode(std::initializer_list<element_type>, std::span<char>) & = delete;
+    [[nodiscard]] http_content_decode_result finish_input() & noexcept;
+    http_content_decode_result finish_input() && = delete;
     [[nodiscard]] decoder_state state() const noexcept;
     void reset();
 

@@ -255,6 +255,52 @@ void visit_offered_upgrade_protocols(const http_request& request, visitor_type&&
 
 }  // namespace
 
+void http1_mark_connection_close(http_response& response, http1_connection_close_field_policy field_policy) {
+    const std::string_view base = field_policy == http1_connection_close_field_policy::preserve_upgrade ? "close, Upgrade" : "close";
+    std::array<char, 256> inline_buffer{};
+    std::size_t inline_size = 0;
+    std::string overflow;
+    const auto append_chunk = [&](std::string_view chunk) {
+        if (!overflow.empty()) {
+            overflow.append(chunk);
+            return;
+        }
+        if (chunk.size() <= inline_buffer.size() - inline_size) {
+            std::memcpy(inline_buffer.data() + inline_size, chunk.data(), chunk.size());
+            inline_size += chunk.size();
+            return;
+        }
+        overflow.reserve(inline_size + chunk.size() + 64);
+        overflow.append(inline_buffer.data(), inline_size);
+        overflow.append(chunk);
+    };
+    const auto append_option = [&](std::string_view option) {
+        if (inline_size == 0 && overflow.empty()) {
+            append_chunk(base);
+        }
+        append_chunk(", ");
+        append_chunk(option);
+    };
+    for (const auto& header : response.headers()) {
+        if (!http_ascii_equals_ignore_case(header.name(), "Connection")) {
+            continue;
+        }
+        detail::http_visit_comma_separated_quoted(header.value(), [&append_option](std::string_view option) {
+            if (!http_ascii_equals_ignore_case(option, "close") && !http_ascii_equals_ignore_case(option, "keep-alive") && !http_ascii_equals_ignore_case(option, "Upgrade")) {
+                append_option(option);
+            }
+            return true;
+        });
+    }
+    if (inline_size == 0 && overflow.empty()) {
+        response.header("Connection", base);
+    } else if (!overflow.empty()) {
+        response.header("Connection", overflow);
+    } else {
+        response.header("Connection", std::string_view(inline_buffer.data(), inline_size));
+    }
+}
+
 http1_request_connection_plan http1_commit_final_response(http_response& response, http1_request_connection_plan plan) {
     const auto http1_control = detail::http1_final_response_control_plan(response);
     const auto response_options = http1_control.connection_options();
@@ -309,7 +355,7 @@ prepared_http1_response_stream prepare_http1_response_stream_head(http_response 
     const auto connection_plan = http1_commit_final_response(response, planned_connection);
     auto head = prepare_http_response_stream_head(std::move(response), commit_plan);
     const auto response_head_plan = plan_http1_response_stream_head(head.commit_plan().body_plan(), connection_plan, framing);
-    return prepared_http1_response_stream(std::move(head.response()), head.commit_plan(), response_head_plan, connection_plan);
+    return prepared_http1_response_stream(std::move(head).take_response(), head.commit_plan(), response_head_plan, connection_plan);
 }
 
 bool http1_request_offers_upgrade(const http_request& request) noexcept {

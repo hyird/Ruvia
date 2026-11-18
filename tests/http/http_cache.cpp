@@ -171,7 +171,7 @@ TEST(RuviaHttpPublicApi, targeted_cache_control_selects_first_valid_targeted_fie
         {"CDN-Cache-Control", "max-age=600, public"},
         {"Cloudflare-CDN-Cache-Control", "invalid=\"unterminated"},
     }};
-    const std::array<std::string_view, 2> target_list{{
+    const std::array<ruvia::borrowed_text, 2> target_list{{
         "Cloudflare-CDN-Cache-Control",
         "CDN-Cache-Control",
     }};
@@ -585,4 +585,22 @@ TEST(RuviaHttpPublicApi, cache_validators_compare_multiline_coding_stacks_withou
     EXPECT_EQ(repeated[0].value(), "\"v1\"");
     EXPECT_EQ(repeated[1].value(), "\"v1\"");
     EXPECT_EQ(ruvia::match_http_cache_validators(repeated, same), ruvia::http_cache_validator_match::none);
+}
+
+namespace {
+
+template <typename vary_type>
+concept http_vary_allows_rvalue_field_names = requires(vary_type spec) { std::move(spec).field_names(); };
+
+}  // namespace
+
+TEST(RuviaHttpPublicApi, vary_spec_take_field_names_moves_without_copy_and_resets) {
+    static_assert(!http_vary_allows_rvalue_field_names<ruvia::http_vary_spec>);
+    auto vary = ruvia::parse_http_vary("Accept-Encoding, User-Agent");
+    ASSERT_FALSE(vary.empty());
+    const auto* const names_ptr = vary.field_names().data();
+    const auto taken = std::move(vary).take_field_names();
+    EXPECT_EQ(taken.data(), names_ptr);
+    EXPECT_EQ(taken.size(), std::size_t{2});
+    EXPECT_TRUE(vary.empty());
 }

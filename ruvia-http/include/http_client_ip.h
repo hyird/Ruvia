@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -32,6 +33,11 @@ struct http_forwarded_header_spec final {
 
     http_forwarded_header_spec(const std::string& name, http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect) :
         name_(name),
+        kind_(kind) {}
+
+    template <std::same_as<std::string> string_type>
+    http_forwarded_header_spec(string_type&& name, http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect) noexcept :
+        name_(std::move(name)),
         kind_(kind) {}
 
     std::string name_;
@@ -77,6 +83,7 @@ public:
         enabled_(false) {}
 
     explicit http_client_ip_extractor(const http_client_ip_options& config);
+    explicit http_client_ip_extractor(http_client_ip_options&& config);
 
     [[nodiscard]] constexpr bool enabled() const noexcept {
         return enabled_;
@@ -100,6 +107,9 @@ private:
         std::string name_;
         http_forwarded_header_kind kind_{http_forwarded_header_kind::comma_separated_list};
     };
+
+    template <typename config_type>
+    void initialize(config_type&& config);
 
     std::vector<ip_cidr> trusted_cidrs_;
     std::vector<compiled_header> headers_;

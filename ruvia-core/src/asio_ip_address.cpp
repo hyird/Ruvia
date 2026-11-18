@@ -6,7 +6,6 @@
 #include <cstring>
 #include <limits>
 #include <optional>
-#include <string>
 #include <string_view>
 #include <system_error>
 
@@ -116,10 +115,10 @@ namespace {
 
 }  // namespace
 
-// Consumes the complete view, including checking for embedded NUL. Common
-// address text uses stack storage; unusually long scope names use temporary heap
-// storage that is released before returning the independent address value.
-std::optional<asio::ip::address> parse_ip_address(std::string_view text) {
+// Consumes the complete view, including checking for embedded NUL. IPv6
+// literals with reasonable scope identifiers fit in the stack buffer; longer
+// strings are rejected without heap allocation.
+std::optional<asio::ip::address> parse_ip_address(std::string_view text) noexcept {
     if (text.find('\0') != std::string_view::npos) {
         return std::nullopt;
     }
@@ -129,17 +128,14 @@ std::optional<asio::ip::address> parse_ip_address(std::string_view text) {
     if (!is_ipv6_literal_shape(text)) {
         return std::nullopt;
     }
+    std::array<char, 128> terminated;
+    if (text.size() >= terminated.size()) {
+        return std::nullopt;
+    }
+    std::memcpy(terminated.data(), text.data(), text.size());
+    terminated[text.size()] = '\0';
     std::error_code error;
-    std::array<char, 64> terminated;
-    const auto address = [&] {
-        if (text.size() < terminated.size()) {
-            std::memcpy(terminated.data(), text.data(), text.size());
-            terminated[text.size()] = '\0';
-            return asio::ip::make_address_v6(terminated.data(), error);
-        }
-        const std::string owned(text);
-        return asio::ip::make_address_v6(owned.c_str(), error);
-    }();
+    const auto address = asio::ip::make_address_v6(terminated.data(), error);
     if (error || (text.find('%') != std::string_view::npos && address.scope_id() == 0)) {
         return std::nullopt;
     }

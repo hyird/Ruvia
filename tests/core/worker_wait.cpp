@@ -1305,8 +1305,9 @@ bool test_scheduler_owns_timeout_for_lazy_acquires() {
             std::optional<ruvia::pool_lease_acquire> pending;
             {
                 std::optional<ruvia::timeout_duration> timeout = std::chrono::milliseconds(1);
+                ruvia::stop_source unused_stop;
                 if (with_stop_token) {
-                    pending.emplace(scheduler.acquire({.timeout_ = timeout, .stop_token_ = ruvia::stop_source{}.token()}));
+                    pending.emplace(scheduler.acquire({.timeout_ = timeout, .stop_token_ = unused_stop.token()}));
                 } else {
                     pending.emplace(scheduler.acquire({.timeout_ = timeout}));
                 }
@@ -1349,7 +1350,8 @@ bool test_scheduler_retains_worker_binding_for_lazy_acquires() {
         // The scheduler needs a live worker, so this runs before the loop retires.
         {
             ruvia::pool_lease_scheduler temporary_scheduler(1, worker_value);
-            auto discarded = temporary_scheduler.acquire({.stop_token_ = ruvia::stop_source{}.token()});
+            ruvia::stop_source discarded_stop;
+            auto discarded = temporary_scheduler.acquire({.stop_token_ = discarded_stop.token()});
             static_cast<void>(discarded);
         }
         bool cancelled = false;

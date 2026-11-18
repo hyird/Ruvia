@@ -87,6 +87,10 @@ public:
         return host_;
     }
     std::string_view host() const&& = delete;
+    // Transfers the host string, leaving the stored host empty.
+    [[nodiscard]] std::string take_host() && noexcept {
+        return std::exchange(host_, {});
+    }
 
     [[nodiscard]] std::uint16_t port() const noexcept {
         return port_;

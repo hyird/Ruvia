@@ -720,7 +720,8 @@ db_owned_expression::db_owned_expression(const db_owned_expression& other) :
     borrowed_(other.borrowed_),
     text_(other.text_),
     table_(other.table_),
-    scalar_(other.scalar_) {
+    scalar_(other.scalar_),
+    string_value_(other.string_value_) {
     if (other.tree_) {
         tree_ = std::make_unique<db_expr_tree>(*other.tree_);
     }
@@ -740,6 +741,7 @@ db_owned_expression::db_owned_expression(db_owned_expression&& other) noexcept :
     text_(std::exchange(other.text_, std::string_view{})),
     table_(std::exchange(other.table_, std::string_view{})),
     scalar_(other.scalar_),
+    string_value_(std::exchange(other.string_value_, std::string{})),
     tree_(std::move(other.tree_)) {}
 
 db_owned_expression& db_owned_expression::operator=(db_owned_expression&& other) noexcept {
@@ -750,6 +752,7 @@ db_owned_expression& db_owned_expression::operator=(db_owned_expression&& other)
         text_ = std::exchange(other.text_, std::string_view{});
         table_ = std::exchange(other.table_, std::string_view{});
         scalar_ = other.scalar_;
+        string_value_ = std::exchange(other.string_value_, std::string{});
         tree_ = std::move(other.tree_);
     }
     return *this;
@@ -780,6 +783,8 @@ db_expression db_owned_expression::import_into(db_query& target, std::string_vie
         }
         case leaf_kind::excluded:
             return target.excluded(text_);
+        case leaf_kind::string_value:
+            return target.value(db_value(std::string_view(string_value_)));
         case leaf_kind::signed_value:
             return target.value(db_value(scalar_.signed_value_));
         case leaf_kind::unsigned_value:
@@ -855,6 +860,8 @@ std::size_t db_owned_expression::append_to_tree(db_expr_tree& target) const {
         case leaf_kind::excluded: {
             return push_tree_node(target, expression_nodes(target).named(db_node_kind::excluded, text_));
         }
+        case leaf_kind::string_value:
+            return push_tree_value(target, db_value(std::string_view(string_value_)));
         case leaf_kind::signed_value:
             return push_tree_value(target, db_value(scalar_.signed_value_));
         case leaf_kind::unsigned_value:
@@ -975,6 +982,16 @@ db_owned_expression db_owned_expression::make_static_excluded(std::string_view n
 }
 
 db_owned_expression db_owned_expression::make_value(const db_value& value) {
+    if (value.type() == db_value_type::string) {
+        db_owned_expression result;
+        result.kind_ = leaf_kind::string_value;
+        result.string_value_.assign(value.text());
+        return result;
+    }
+    return make_value(db_value(value));
+}
+
+db_owned_expression db_owned_expression::make_value(db_value&& value) {
     db_owned_expression result;
     switch (value.type()) {
         case db_value_type::null:
@@ -996,11 +1013,10 @@ db_owned_expression db_owned_expression::make_value(const db_value& value) {
             result.kind_ = leaf_kind::bool_;
             result.scalar_.bool_value_ = value.bool_value();
             return result;
-        case db_value_type::string: {
-            auto tree = allocate_tree();
-            tree->root_ = push_tree_value(*tree, value);
-            return from_tree(std::move(tree));
-        }
+        case db_value_type::string:
+            result.kind_ = leaf_kind::string_value;
+            result.string_value_ = db_value_access::take_text(std::move(value));
+            return result;
     }
     return result;
 }

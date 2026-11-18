@@ -365,9 +365,10 @@ public:
         return state_->stop_requested();
     }
 
-    [[nodiscard]] stop_token token() const noexcept {
+    [[nodiscard]] stop_token token() const& noexcept {
         return stop_token(state_);
     }
+    stop_token token() const&& = delete;
 
 private:
     detail::stop_state_ref state_;
@@ -392,9 +393,10 @@ public:
     stop_group(stop_group&&) = delete;
     stop_group& operator=(stop_group&&) = delete;
 
-    [[nodiscard]] stop_token token() const noexcept {
+    [[nodiscard]] stop_token token() const& noexcept {
         return output_;
     }
+    stop_token token() const&& = delete;
 
 private:
     std::optional<stop_source> source_;

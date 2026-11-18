@@ -158,9 +158,8 @@ struct postgresql_driver final {
     static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline);
     static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql, std::span<const db_value> params, const operation_deadline& deadline);
     static task<db_stream_step> read_stream_row(pool_type& pool, std::size_t slot, void*& result, std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_deadline& deadline);
-    // Ends a stream before its rows ran out; on return the connection is idle
-    // or closed.
-    static task<void> close_stream(pool_type& pool, std::size_t slot, void*& result, const operation_deadline& deadline);
+    // Ends a stream before its rows ran out; on return the connection is closed.
+    static void close_stream(pool_type& pool, std::size_t slot, void*& result) noexcept;
     static void discard_stream(void* result) noexcept;
 };
 
@@ -470,7 +469,6 @@ private:
 
     template <typename result_type>
     task<result_type> run_on_transaction_slot(std::size_t index, std::string sql, std::vector<db_value> params, const operation_options& options, statement_hook_type<result_type> statement);
-    task<void> execute_control(std::size_t index, std::string_view sql, const operation_deadline& timeout);
     task<void> finish_transaction(std::size_t index, std::string_view command, const operation_options& options);
     task<void> retire_failed_transaction_slot(std::size_t index, const operation_deadline& timeout, const std::exception_ptr& failure);
     task<void> open_slot(std::size_t index, const operation_deadline& timeout);

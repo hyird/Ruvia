@@ -50,6 +50,10 @@ struct http_cors_preflight_input final {
 class http_cors_preflight_result final {
 public:
     http_cors_preflight_result() noexcept = default;
+    http_cors_preflight_result(const http_cors_preflight_result&) = default;
+    http_cors_preflight_result& operator=(const http_cors_preflight_result&) = delete;
+    http_cors_preflight_result(http_cors_preflight_result&&) noexcept = default;
+    http_cors_preflight_result& operator=(http_cors_preflight_result&&) = delete;
 
     http_cors_preflight_result(bool accepted, std::vector<http_header> headers) noexcept :
         headers_(std::move(headers)),
@@ -83,6 +87,7 @@ private:
 class http_cors_policy final {
 public:
     explicit http_cors_policy(const http_cors_policy_options& config);
+    explicit http_cors_policy(http_cors_policy_options&& config);
 
     [[nodiscard]] bool allow_any_origin() const noexcept {
         return allow_any_origin_;
@@ -112,6 +117,8 @@ public:
     bool apply_response_headers(const http_request& request, http_response& response) const;
 
 private:
+    template <typename config_type>
+    void initialize(config_type&& config);
     [[nodiscard]] bool collect_requested_headers(const http_header_range_view& fields, std::size_t maximum, std::string* reflected) const;
 
     struct suffix_rule final {

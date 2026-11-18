@@ -49,6 +49,8 @@ namespace ruvia::detail {
 // and an error reply throws redis_error(command_failed).
 [[nodiscard]] std::string_view redis_value_string(const redis_value& value);
 [[nodiscard]] std::span<const redis_value> redis_value_array(const redis_value& value);
+[[nodiscard]] std::span<redis_value> redis_value_array(redis_value& value);
+[[nodiscard]] std::vector<redis_value> take_redis_value_array(redis_value&& value);
 
 // Redis hash fields support owning scalar values and one string/integer key.
 // Character types are text units, not numbers, so they are not Redis numbers.
@@ -166,6 +168,20 @@ template <typename t_type>
         return convert_text<scalar_type>(value);
     } else {
         static_assert(always_false<scalar_type>, "unsupported Redis scalar type");
+    }
+}
+
+template <typename t_type>
+[[nodiscard]] t_type decode_redis_scalar(std::string&& value) {
+    using scalar_type = std::remove_cvref_t<t_type>;
+    if constexpr (std::is_same_v<scalar_type, string>) {
+        string result_value;
+        result_value.assign_owned(std::move(value));
+        return result_value;
+    } else if constexpr (std::is_same_v<scalar_type, std::string>) {
+        return std::move(value);
+    } else {
+        return decode_redis_scalar<t_type>(std::string_view(value));
     }
 }
 
@@ -361,14 +377,22 @@ struct redis_predicate_storage final {
     }
 };
 
-using redis_orm_arguments_type = std::vector<std::string>;
-
 [[nodiscard]] const redis_script& redis_orm_write_script();
 [[nodiscard]] const redis_script& redis_orm_delete_script();
 
-// Both argument lists start with the key count; the executor supplies the script prefix.
-[[nodiscard]] redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_prefix, std::string_view id, std::string_view mode, redis_write_options options, std::size_t extra_arguments);
-[[nodiscard]] redis_orm_arguments_type redis_orm_delete_arguments(std::string_view storage_prefix, std::string_view id);
+class redis_orm_write_builder final {
+public:
+    redis_orm_write_builder(std::string_view storage_prefix, std::string_view id, std::string_view mode, redis_write_options options, std::size_t required_count, std::size_t mutation_arguments);
+    void append_arg(std::string_view value);
+    void append_field(std::string_view field, std::optional<std::string_view> value, bool numeric_index, bool tag_shadow);
+    [[nodiscard]] redis_encoded_script_call finish() &&;
+
+private:
+    redis_encoded_script_call call_;
+    std::size_t remaining_args_{0};
+};
+
+[[nodiscard]] redis_encoded_script_call make_redis_orm_delete_call(std::string_view storage_prefix, std::string_view id);
 [[nodiscard]] redis_write_result redis_orm_exec_result(redis_value&& reply);
 [[nodiscard]] redis_write_result redis_orm_delete_result(redis_value&& reply);
 void redis_orm_status_result(redis_value&& reply);
@@ -439,17 +463,12 @@ struct redis_mapping final {
 // The canonical ID when the predicate is exactly `primary key == literal`.
 [[nodiscard]] std::optional<std::string_view> redis_primary_key(const redis_mapping& mapping, const redis_predicate& predicate, std::span<char, redis_scalar_scratch_size> scratch);
 
-// Appends the write-script triples for one entity field: the value (or its
-// deletion when absent), its presence marker and, for TAG-encodable columns,
-// its TAG shadow. A value in a NUMERIC index must be exactly representable.
-void append_redis_entity_field(redis_orm_arguments_type& args, std::string_view field, std::optional<std::string_view> value, bool numeric_index, bool tag_shadow);
-
 template <typename entity_type>
-entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::string_view key, std::string_view storage_prefix) {
+entity_type decode_redis_entity(std::span<redis_value> fields_value, std::string_view key, std::string_view storage_prefix) {
     if (fields_value.size() % 2 != 0) {
         throw redis_error(backend_error_code::protocol_error, "invalid entity hash reply");
     }
-    std::array<std::optional<std::string_view>, std::tuple_size_v<typename entity_type::columns_type>> values{};
+    std::array<std::optional<std::size_t>, std::tuple_size_v<typename entity_type::columns_type>> value_indices{};
     bool marker = false;
     for (std::size_t i = 0; i < fields_value.size(); i += 2) {
         const auto name = redis_value_string(fields_value[i]);
@@ -466,10 +485,10 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
         bool matched = false;
         for_each_descriptor<typename entity_type::columns_type>([&]<typename field_type, std::size_t index> {
             if (!matched && name == field_type::name.view()) {
-                if (values[index].has_value()) {
+                if (value_indices[index].has_value()) {
                     throw redis_error(backend_error_code::protocol_error, "duplicate entity field");
                 }
-                values[index] = value;
+                value_indices[index] = i + 1;
                 matched = true;
             }
         });
@@ -479,8 +498,14 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
     }
     entity_type entity;
     for_each_descriptor<typename entity_type::columns_type>([&]<typename field_type, std::size_t index> {
-        if (values[index].has_value()) {
-            entity.template set<field_type::name>(decode_redis_scalar<typename field_type::value_type>(*values[index]));
+        if (value_indices[index].has_value()) {
+            using column_value_type = std::remove_cvref_t<typename field_type::value_type>;
+            auto& raw_value = fields_value[*value_indices[index]];
+            if constexpr (std::is_same_v<column_value_type, string> || std::is_same_v<column_value_type, std::string>) {
+                entity.template set<field_type::name>(decode_redis_scalar<column_value_type>(std::move(raw_value).take_string()));
+            } else {
+                entity.template set<field_type::name>(decode_redis_scalar<column_value_type>(raw_value.string()));
+            }
         } else if constexpr (field_type::options.nullable_) {
             entity.template set_null<field_type::name>();
         } else {
@@ -499,7 +524,7 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
 }
 
 template <typename entity_type>
-entity_type decode_redis_entity(const redis_value& reply, std::string_view key, std::string_view storage_prefix) {
+entity_type decode_redis_entity(redis_value& reply, std::string_view key, std::string_view storage_prefix) {
     return decode_redis_entity<entity_type>(redis_value_array(reply), key, storage_prefix);
 }
 
@@ -508,18 +533,18 @@ struct redis_map_one final {
     std::string key_;
     std::size_t storage_prefix_size_{0};
     std::optional<entity_type> operator()(redis_value&& reply) const {
-        const auto fields_value = redis_value_array(reply);
+        auto fields_value = take_redis_value_array(std::move(reply));
         if (fields_value.empty()) {
             return std::nullopt;
         }
-        return decode_redis_entity<entity_type>(fields_value, key_, std::string_view(key_).substr(0, storage_prefix_size_));
+        return decode_redis_entity<entity_type>(std::span<redis_value>(fields_value), key_, std::string_view(key_).substr(0, storage_prefix_size_));
     }
 };
 
 template <typename entity_type>
 struct redis_map_search final {
     std::string_view storage_prefix_;
-    std::pair<entity_rows<entity_type>, std::uint64_t> decode(std::span<const redis_value> values) const {
+    std::pair<entity_rows<entity_type>, std::uint64_t> decode(std::span<redis_value> values) const {
         if (values.empty() || values.size() % 2 != 1) {
             throw redis_error(backend_error_code::protocol_error, "invalid entity search reply");
         }
@@ -541,7 +566,8 @@ struct redis_map_search final {
         return {std::move(rows), count};
     }
     std::pair<entity_rows<entity_type>, std::uint64_t> operator()(redis_value&& reply) const {
-        return decode(redis_value_array(reply));
+        auto values = take_redis_value_array(std::move(reply));
+        return decode(std::span<redis_value>(values));
     }
 };
 
@@ -1018,12 +1044,10 @@ public:
             detail::redis_scalar_scratch_type id_scratch;
             if (const auto id = detail::redis_primary_key(mapping(), options.where_, id_scratch)) {
                 auto key = detail::redis_entity_key(mapping().storage_prefix_, *id);
-                detail::redis_orm_arguments_type args;
-                args.reserve(2);
-                args.emplace_back("HGETALL");
-                args.emplace_back(key);
+                const std::array<std::string_view, 2> command_args{"HGETALL", key};
+                auto command = detail::make_owned_redis_command(command_args);
                 detail::redis_map_one<entity_type> mapper{std::move(key), mapping().storage_prefix_.size()};
-                return executor_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
+                return executor_.template command_mapped<std::optional<entity_type>>(std::move(command), std::move(mapper));
             }
         }
         auto args = search_mapping().compile_find(options, redis_search_mode::first).take_arguments();
@@ -1045,7 +1069,7 @@ public:
             detail::redis_scalar_scratch_type id_scratch;
             if (const auto id = detail::redis_primary_key(mapping(), options.where_, id_scratch)) {
                 const auto key = detail::redis_entity_key(mapping().storage_prefix_, *id);
-                return executor().exists(key);
+                return executor_.exists(key);
             }
         }
         return executor_.template command_mapped<bool>(search_mapping().compile_find(options, redis_search_mode::count).take_arguments(), detail::redis_orm_exists_result);
@@ -1066,14 +1090,14 @@ public:
         detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
         const auto key = detail::redis_entity_key(mapping().storage_prefix_, id);
-        return executor().expire(key, ttl);
+        return executor_.expire(key, ttl);
     }
 
     [[nodiscard]] task<redis_ttl> ttl(const redis_predicate& predicate) const {
         detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
         const auto key = detail::redis_entity_key(mapping().storage_prefix_, id);
-        return executor().pttl(key);
+        return executor_.pttl(key);
     }
 
     // Explicit schema management. Repository acquisition never creates an
@@ -1110,12 +1134,6 @@ private:
         return search_mapping().mapping_;
     }
 
-    // Typed executor commands are non-const; each call runs on a copy of the
-    // repository's executor view.
-    [[nodiscard]] redis_executor executor() const {
-        return executor_;
-    }
-
     void expire_capability() noexcept {
         mapping_ = nullptr;
     }
@@ -1129,7 +1147,7 @@ private:
     }
 
     [[nodiscard]] task<redis_write_result> delete_by_id(std::string_view id) const {
-        return executor_.template script_mapped<redis_write_result>(detail::redis_orm_delete_script(), detail::redis_orm_delete_arguments(mapping().storage_prefix_, id), detail::redis_orm_delete_result);
+        return executor_.template script_mapped<redis_write_result>(detail::redis_orm_delete_script(), detail::make_redis_orm_delete_call(mapping().storage_prefix_, id), detail::redis_orm_delete_result);
     }
 
     enum class write_mode : std::uint8_t {
@@ -1161,21 +1179,24 @@ private:
             });
             return count;
         }();
-        static constexpr std::size_t max_mutation_arguments = [] {
-            std::size_t count = 0;
-            detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
-                constexpr auto value_kind = detail::redis_column_value_kind<typename column_type::value_type>();
-                constexpr bool tag_shadow = value_kind == detail::redis_column_kind::text || value_kind == detail::redis_column_kind::bool_;
-                count += tag_shadow ? 9U : 6U;
-            });
-            return count;
-        }();
-        auto args = detail::redis_orm_write_arguments(mapping().storage_prefix_, id, write_mode_token(mode), options, 1 + required + max_mutation_arguments);
+        std::size_t mutation_arguments = 0;
+        detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
+            if constexpr (!column_type::options.primary_key_) {
+                if (!entity.template is_set<column_type::name>()) {
+                    return;
+                }
+            }
+            constexpr auto value_kind = detail::redis_column_value_kind<typename column_type::value_type>();
+            constexpr bool tag_shadow = value_kind == detail::redis_column_kind::text || value_kind == detail::redis_column_kind::bool_;
+            mutation_arguments += tag_shadow ? 9U : 6U;
+        });
+
+        detail::redis_orm_write_builder builder(mapping().storage_prefix_, id, write_mode_token(mode), options, required, mutation_arguments);
         detail::redis_scalar_scratch_type scalar_scratch;
-        args.emplace_back(detail::encode_redis_scalar(required, scalar_scratch));
+        builder.append_arg(detail::encode_redis_scalar(required, scalar_scratch));
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
             if constexpr (!column_type::options.nullable_) {
-                args.emplace_back(column_type::name.view());
+                builder.append_arg(column_type::name.view());
             }
         });
 
@@ -1189,18 +1210,18 @@ private:
                 if (mode == write_mode::update && entity.template is_set<column_type::name>() && detail::encode_redis_scalar(entity.template get<column_type::name>(), scalar_scratch) != id) {
                     throw std::invalid_argument("an entity update cannot change its ID");
                 }
-                detail::append_redis_entity_field(args, field, id, numeric_index, tag_shadow);
+                builder.append_field(field, id, numeric_index, tag_shadow);
             } else if (entity.template is_set<column_type::name>()) {
                 if (entity.template is_null<column_type::name>()) {
-                    detail::append_redis_entity_field(args, field, std::nullopt, false, tag_shadow);
+                    builder.append_field(field, std::nullopt, false, tag_shadow);
                 } else {
                     const auto value = detail::encode_redis_scalar(entity.template get<column_type::name>(), scalar_scratch);
-                    detail::append_redis_entity_field(args, field, value, numeric_index, tag_shadow);
+                    builder.append_field(field, value, numeric_index, tag_shadow);
                 }
             }
         });
 
-        return executor_.template script_mapped<redis_write_result>(detail::redis_orm_write_script(), std::move(args), detail::redis_orm_exec_result);
+        return executor_.template script_mapped<redis_write_result>(detail::redis_orm_write_script(), std::move(builder).finish(), detail::redis_orm_exec_result);
     }
 
     redis_executor executor_;

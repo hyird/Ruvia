@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <memory>
@@ -76,6 +77,35 @@ private:
 // One database alias's Redis-backed query-result cache (Redis builds only).
 // Worker-local: concurrent misses of one key on this worker share one fill.
 #ifdef RUVIA_ENABLE_REDIS
+struct shared_cache_bytes final {
+    explicit shared_cache_bytes(std::string bytes) noexcept :
+        bytes_(std::move(bytes)) {}
+
+    static void release(void* raw) noexcept {
+        auto* self = static_cast<shared_cache_bytes*>(raw);
+        if (self->refs_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            delete self;
+        }
+    }
+
+    void* retain() noexcept {
+        refs_.fetch_add(1, std::memory_order_relaxed);
+        return this;
+    }
+
+    std::string bytes_;
+    std::atomic<std::size_t> refs_{1};
+};
+
+struct shared_cache_bytes_deleter final {
+    void operator()(shared_cache_bytes* ptr) const noexcept {
+        if (ptr != nullptr) {
+            shared_cache_bytes::release(ptr);
+        }
+    }
+};
+using shared_cache_bytes_ptr = std::unique_ptr<shared_cache_bytes, shared_cache_bytes_deleter>;
+
 class db_query_cache_state final {
 public:
     // `prefix` is the alias's db_cache_prefix().
@@ -102,7 +132,7 @@ private:
         std::string key_;
         // Requested once the fill ends, with or without a result.
         stop_source done_;
-        std::optional<std::string> result_;
+        shared_cache_bytes_ptr result_;
         // A waiter joined, so the leader publishes its result in memory.
         bool awaited_{false};
     };

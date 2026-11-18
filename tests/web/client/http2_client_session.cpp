@@ -443,7 +443,8 @@ TEST(Ruvia, http2_client_uses_available_stream_capacity_across_connections) {
         auto saturated = co_await read_request(0);
         auto available = co_await read_request(1);
         auto rerouted = co_await read_request(1);
-        if (rerouted.build_request().target() != "/probe") {
+        const auto rerouted_request = rerouted.build_request();
+        if (rerouted_request.target() != "/probe") {
             throw std::runtime_error("HTTP/2 request was not routed to available stream capacity");
         }
         respond(0, std::move(saturated));

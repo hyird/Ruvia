@@ -1612,10 +1612,8 @@ public:
         return peer_monitor_.has_value();
     }
 
-    task<void> finish_peer_monitor() {
-        if (peer_monitor_) {
-            co_await peer_monitor_->join();
-        }
+    [[nodiscard]] task<void> join_peer_monitor() {
+        return peer_monitor_->join();
     }
 
     [[nodiscard]] std::string_view monitored_pipeline() const noexcept {
@@ -2012,7 +2010,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     response_sink.retire_peer_monitor();
     if (response_sink.peer_eof_monitoring()) {
         try {
-            co_await response_sink.finish_peer_monitor();
+            co_await response_sink.join_peer_monitor();
         } catch (...) {
             const auto monitor_failure = std::current_exception();
             const auto* reported_failure = dispatched ? dispatched->failed_after_commit() : nullptr;
@@ -2433,11 +2431,13 @@ template <typename stream_type>
         failure = std::current_exception();
     }
     refusal_sink.retire_peer_monitor();
-    try {
-        co_await refusal_sink.finish_peer_monitor();
-    } catch (...) {
-        if (!failure) {
-            failure = std::current_exception();
+    if (refusal_sink.peer_eof_monitoring()) {
+        try {
+            co_await refusal_sink.join_peer_monitor();
+        } catch (...) {
+            if (!failure) {
+                failure = std::current_exception();
+            }
         }
     }
     if (tls_output) {

@@ -150,11 +150,12 @@ std::string encode_db_cache_rows(const db_rows& rows) {
     }
     return out;
 }
-db_rows decode_db_cache_rows(std::string bytes_value) {
-    if (!bytes_value.starts_with(db_cache_entry_magic)) {
+template <typename attach_storage_type>
+db_rows decode_db_cache_rows_impl(std::string_view raw_bytes, attach_storage_type&& attach_storage) {
+    if (!raw_bytes.starts_with(db_cache_entry_magic)) {
         invalid_cache();
     }
-    reader reader_value{std::string_view(bytes_value).substr(db_cache_entry_magic.size())};
+    reader reader_value{raw_bytes.substr(db_cache_entry_magic.size())};
     const auto count = reader_value.number();
     const auto columns = reader_value.number();
     if (columns > reader_value.bytes_.size() / 8) {
@@ -174,12 +175,8 @@ db_rows decode_db_cache_rows(std::string bytes_value) {
     // Only fields can borrow the encoded storage. Empty results and
     // zero-column rows need no backing allocation after decoding.
     if (count != 0 && columns != 0) {
-        // Rebind to the result's resource when Redis and the database use
-        // different worker pools.
-        const auto consumed = bytes_value.size() - reader_value.bytes_.size();
-        auto storage = std::make_unique<std::string>(std::move(bytes_value));
-        reader_value.bytes_ = std::string_view(*storage).substr(consumed);
-        db_result_access::own_raw_result(result_value, storage.release(), &release_cache_storage);
+        const auto consumed = raw_bytes.size() - reader_value.bytes_.size();
+        reader_value.bytes_ = attach_storage(result_value, consumed);
     }
     auto& fields_value = db_result_access::fields(result_value);
     auto& rows = db_result_access::rows(result_value);
@@ -212,6 +209,24 @@ db_rows decode_db_cache_rows(std::string bytes_value) {
         invalid_cache();
     }
     return result_value;
+}
+
+db_rows decode_db_cache_rows(std::string bytes_value) {
+    return decode_db_cache_rows_impl(bytes_value, [&](db_rows& result_value, std::size_t consumed) {
+        // Rebind to the result's resource when Redis and the database use
+        // different worker pools.
+        auto storage = std::make_unique<std::string>(std::move(bytes_value));
+        const auto remaining = std::string_view(*storage).substr(consumed);
+        db_result_access::own_raw_result(result_value, storage.release(), &release_cache_storage);
+        return remaining;
+    });
+}
+
+db_rows decode_db_cache_rows_shared(shared_cache_bytes& shared) {
+    return decode_db_cache_rows_impl(shared.bytes_, [&](db_rows& result_value, std::size_t consumed) {
+        db_result_access::own_raw_result(result_value, shared.retain(), &shared_cache_bytes::release);
+        return std::string_view(shared.bytes_).substr(consumed);
+    });
 }
 std::string db_cache_prefix(std::string_view name_space, std::string_view alias, const db_config_storage& config) {
     const auto server_name = config.tls_.server_name_ ? std::string_view(*config.tls_.server_name_) : std::string_view{};
@@ -313,10 +328,15 @@ void rethrow_or_timeout_redis_cache_error(const redis_error& error, const operat
 
 // Rows of a cached entry, or nullopt for a corrupt entry the cache ignores.
 // The bytes are released before the caller goes on to the database.
-[[nodiscard]] std::optional<db_rows> decode_cached_rows(std::string bytes_value, const operation_deadline& deadline, bool ignore_errors) {
+template <typename source_type>
+[[nodiscard]] std::optional<db_rows> decode_cached_rows(source_type&& source_value, const operation_deadline& deadline, bool ignore_errors) {
     std::optional<db_rows> rows;
     try {
-        rows.emplace(decode_db_cache_rows(std::move(bytes_value)));
+        if constexpr (std::is_same_v<std::remove_cvref_t<source_type>, shared_cache_bytes>) {
+            rows.emplace(decode_db_cache_rows_shared(source_value));
+        } else {
+            rows.emplace(decode_db_cache_rows(std::forward<source_type>(source_value)));
+        }
     } catch (const conversion_error&) {
         if (deadline.expired()) {
             throw_db_cache_timeout();
@@ -332,23 +352,9 @@ void rethrow_or_timeout_redis_cache_error(const redis_error& error, const operat
     return rows;
 }
 
-task<void> finish_delete_key_batch(std::optional<task<std::int64_t>> deletion, const operation_deadline& deadline_value) {
-    if (!deletion) {
-        co_return;
-    }
-    try {
-        (void)co_await std::move(*deletion);
-    } catch (const redis_error& error) {
-        rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
-    }
-    if (deadline_value.expired()) {
-        throw_db_cache_timeout();
-    }
-}
-
-task<void> delete_key_batch(const redis_executor& redis, std::span<const std::string> keys, const operation_options& options, const operation_deadline& deadline_value) {
+[[nodiscard]] std::optional<task<std::int64_t>> start_delete_key_batch(const redis_executor& redis, std::span<const std::string> keys, const operation_options& options, const operation_deadline& deadline_value) {
     if (keys.empty()) {
-        return finish_delete_key_batch(std::nullopt, deadline_value);
+        return std::nullopt;
     }
     try {
         static constexpr std::size_t inline_capacity = 64;
@@ -358,16 +364,14 @@ task<void> delete_key_batch(const redis_executor& redis, std::span<const std::st
                 inline_views[i] = keys[i];
             }
             // DEL owns its arguments before returning its cold operation.
-            auto deletion = redis.with_options(remaining_cache_options(options, deadline_value)).del(std::span<const std::string_view>(inline_views.data(), keys.size()));
-            return finish_delete_key_batch(std::move(deletion), deadline_value);
+            return redis.with_options(remaining_cache_options(options, deadline_value)).del(std::span<const std::string_view>(inline_views.data(), keys.size()));
         }
         std::vector<std::string_view> heap_views;
         heap_views.reserve(keys.size());
         for (const auto& key : keys) {
             heap_views.emplace_back(key);
         }
-        auto deletion = redis.with_options(remaining_cache_options(options, deadline_value)).del(heap_views);
-        return finish_delete_key_batch(std::move(deletion), deadline_value);
+        return redis.with_options(remaining_cache_options(options, deadline_value)).del(heap_views);
     } catch (const redis_error& error) {
         rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
         throw;
@@ -379,10 +383,19 @@ task<void> remove_keys(redis_executor redis, std::vector<std::string> keys, requ
     const operation_options& options = linked.options();
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     const operation_deadline deadline_value(options.timeout_);
-    auto deletion = delete_key_batch(redis, keys, options, deadline_value);
+    auto deletion = start_delete_key_batch(redis, keys, options, deadline_value);
     // The command owns the keys; release their source before network IO.
     std::vector<std::string>().swap(keys);
-    co_await std::move(deletion);
+    if (deletion) {
+        try {
+            (void)co_await std::move(*deletion);
+        } catch (const redis_error& error) {
+            rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
+        }
+        if (deadline_value.expired()) {
+            throw_db_cache_timeout();
+        }
+    }
 }
 
 task<void> clear_keys(redis_executor redis, std::string pattern, request_io_metrics* io_metrics, operation_options caller_options, stop_token shutdown, stop_token request_stop) {
@@ -402,10 +415,19 @@ task<void> clear_keys(redis_executor redis, std::string pattern, request_io_metr
             throw_db_cache_timeout();
         }
         cursor = result->next_cursor();
-        auto deletion = delete_key_batch(redis, result->entries(), options, deadline_value);
+        auto deletion = start_delete_key_batch(redis, result->entries(), options, deadline_value);
         // Preserve only the cursor while the owned DEL waits for its reply.
         result.reset();
-        co_await std::move(deletion);
+        if (deletion) {
+            try {
+                (void)co_await std::move(*deletion);
+            } catch (const redis_error& error) {
+                rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
+            }
+            if (deadline_value.expired()) {
+                throw_db_cache_timeout();
+            }
+        }
     } while (cursor);
 }
 
@@ -536,8 +558,8 @@ task<db_rows> db_query_cache_state::query(std::string key, std::chrono::millisec
             require_open();
             throw db_error(backend_error_code::cancelled, std::nullopt, "database query cache operation cancelled");
         }
-        if (joined->result_.has_value()) {
-            if (auto rows = decode_cached_rows(std::string(*joined->result_), deadline, ignore_errors_)) {
+        if (joined->result_ != nullptr) {
+            if (auto rows = decode_cached_rows(*joined->result_, deadline, ignore_errors_)) {
                 co_return std::move(*rows);
             }
         }
@@ -583,7 +605,7 @@ task<db_rows> db_query_cache_state::query(std::string key, std::chrono::millisec
     // Waiters take the result from memory; neither the key nor the serialized
     // rows are retained here while the SET waits on IO.
     if (filled.awaited_) {
-        filled.result_ = std::move(encoded_bytes);
+        filled.result_.reset(new shared_cache_bytes(std::move(encoded_bytes)));
     }
     std::string().swap(encoded_bytes);
     std::string().swap(key);
@@ -654,7 +676,7 @@ task<void> db_query_result_cache::remove(std::span<const std::string_view> ids) 
     registration_.require_active();
     return registration_.attach(state_->remove(ids, io_metrics_, options_, request_stop_));
 }
-task<void> db_query_result_cache::clear() {
+task<void> db_query_result_cache::clear() const {
     registration_.require_active();
     return registration_.attach(state_->clear(io_metrics_, options_, request_stop_));
 }

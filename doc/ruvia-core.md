@@ -234,7 +234,7 @@ flowchart LR
 | `event_loop::worker() const&` | 返回循环内部端点的引用 | 右值 `worker() const&&` 改为返回副本 |
 | `linked_operation_options::options()` | 返回内部选项的引用 | `options() const&&` |
 | `worker_cancellation_registration` | `shared_ptr` 所指目标 | 以 `shared_ptr&&` / `const shared_ptr&&` 构造 |
-| `as_bytes` / `as_chars` | 底层字符或字节存储 | 临时拥有型字符串 / 连续字节容器 |
+| `as_bytes` / `as_chars` | 底层字符或字节存储 | 临时拥有型字符/字节连续范围与非空 `std::initializer_list` |
 
 - **左值限定宿主**：`task_scope`、`worker_runtime`、`delivery_result`、`wait_result`、`blocking_result`、`root_task` 等以 `&` / `const&` 暴露借用访问，并删除右值重载；右值只经 `take_*()` / `get() &&` 提取。各节“已删除重载”列出完整清单。
 
@@ -430,7 +430,7 @@ flowchart LR
 | `void wait() const;` | 阻塞到完成；空句柄或在所属循环线程调用抛 `std::logic_error` |
 | `[[nodiscard]] bool wait_for(operation_timeout timeout) const;` | 有界等待，返回是否完成；相对上限自调用时计时，已过的绝对截止期只报告当前状态 |
 | `decltype(auto) get() &&;` | 等待并消费结果：返回 `T` 或重抛失败；空句柄、已消费、在所属循环线程调用抛 `std::logic_error` |
-| `void get() & = delete;` | 只允许 `std::move(root).get()` |
+| `void get() & = delete;`、`void get() const& = delete;`、`void get() const&& = delete;` | 只允许非常量右值 `std::move(root).get()` |
 
 - **`get()` 重入**：用户结果移动在状态锁外执行，可重入本句柄；调用期间句柄对象必须存活，移动期间替换其状态受支持。
 
@@ -504,8 +504,10 @@ flowchart LR
 | `event_loop_attachment(event_loop_attachment&& other) noexcept;` | 转移挂载，不触碰 context |
 | `event_loop_attachment& operator=(event_loop_attachment&& other) = delete;` | 移动赋值会隐式停止目标挂载，故删除 |
 | `[[nodiscard]] bool valid() const noexcept;` | 退役完成后为 `false` |
-| `[[nodiscard]] event_loop loop() const noexcept;` | 挂载的循环句柄 |
-| `void run();` | 在当前线程运行 context 并安装 Worker 身份；无效或已分离时抛 `std::logic_error`；回调可在 `run()` 期间销毁挂载，context 须存活到返回 |
+| `[[nodiscard]] event_loop loop() const& noexcept;` | 挂载的循环句柄 |
+| `event_loop loop() const&& = delete;` | 拒绝从临时挂载取句柄 |
+| `void run() &;` | 在当前线程运行 context 并安装 Worker 身份；无效或已分离时抛 `std::logic_error`；回调可在 `run()` 期间销毁挂载，context 须存活到返回 |
+| `void run() && = delete;` | 拒绝在临时挂载上运行 |
 | `void request_stop() noexcept;` | 任意线程立即关闭准入，并开始退役 |
 
 **`[[nodiscard]] event_loop_attachment attach_event_loop(asio::io_context& io_context, event_loop_attachment_options options = {});`**
@@ -710,13 +712,11 @@ flowchart LR
 | `delivery_result& operator=(delivery_result&&) = delete;` | 不可重新赋值；替换时用新局部变量或 `std::optional::emplace()` |
 | `[[nodiscard]] status_type status() const noexcept;` | 投递状态 |
 | `[[nodiscard]] bool accepted() const noexcept;` | `status() == accepted_status` |
-| `template <typename self_type = accepted_type> requires(!std::is_void_v<self_type>) [[nodiscard]] self_type& value() &;` | 借出接受值；未接受或已提取抛 `std::logic_error` |
-| `template <typename self_type = accepted_type> requires(!std::is_void_v<self_type>) [[nodiscard]] const self_type& value() const&;` | 同上 |
-| `template <typename self_type = accepted_type> requires(!std::is_void_v<self_type>) self_type& value() && = delete;` | 右值只能提取 |
-| `template <typename self_type = accepted_type> requires(!std::is_void_v<self_type>) const self_type& value() const&& = delete;` | 同上 |
+| `template <typename self_type = accepted_type> requires(!std::is_void_v<self_type>) [[nodiscard]] const self_type& value() const& RUVIA_LIFETIMEBOUND;` | 借出接受值；未接受或已提取抛 `std::logic_error` |
+| `template <typename self_type = accepted_type> requires(!std::is_void_v<self_type>) const self_type& value() const&& = delete;` | 右值只能提取 |
 | `template <typename self_type = accepted_type> requires(!std::is_void_v<self_type>) [[nodiscard]] self_type take_value() &&;` | 提取接受值并清空；未接受或已提取抛 `std::logic_error` |
-| `[[nodiscard]] T* rejected() & noexcept;`、`[[nodiscard]] const T* rejected() const& noexcept;` | 被拒负载指针；无负载时为 `nullptr` |
-| `T* rejected() && = delete;`、`const T* rejected() const&& = delete;` | 右值只能提取 |
+| `[[nodiscard]] const t_type* rejected() const& noexcept RUVIA_LIFETIMEBOUND;` | 被拒负载指针；无负载时为 `nullptr` |
+| `const t_type* rejected() const&& = delete;` | 右值只能提取 |
 | `[[nodiscard]] T take_rejected() &&;` | 提取被拒负载；已接受或无负载抛 `std::logic_error` |
 | `friend bool operator==(const delivery_result& outcome, status_type status) noexcept;`、`friend bool operator==(status_type status, const delivery_result& outcome) noexcept;` | 与状态值直接比较（ADL） |
 
@@ -1061,8 +1061,8 @@ flowchart LR
 | `wait_result& operator=(const wait_result&) = delete;`、`wait_result& operator=(wait_result&&) = delete;` | 不可重新赋值；替换时用新局部变量或 `std::optional::emplace()` |
 | `[[nodiscard]] wait_status status() const noexcept;` | 总是可用于穷举处理 |
 | `[[nodiscard]] bool has_value() const noexcept;` | `status() == wait_status::value` |
-| `[[nodiscard]] const T& value() const&;`、`[[nodiscard]] T& value() &;` | 无值抛 `std::logic_error`；可修改负载 |
-| `const T& value() const&& = delete;`、`T& value() && = delete;` | 右值只能提取 |
+| `[[nodiscard]] const T& value() const& RUVIA_LIFETIMEBOUND;` | 借出负载（`RUVIA_LIFETIMEBOUND`）；无值抛 `std::logic_error` |
+| `const T& value() const&& = delete;` | 右值只能提取 |
 | `[[nodiscard]] T take_value() &&;` | 提取负载；无值抛 `std::logic_error`；不改变源的类别 |
 | `template <typename u_type> requires std::constructible_from<T, u_type&&> [[nodiscard]] static wait_result with_value(u_type&& value) noexcept(std::is_nothrow_constructible_v<T, u_type&&>);` | 供组合等待产生同类结果 |
 | `[[nodiscard]] static wait_result with_status(wait_status status);` | `status == wait_status::value` 抛 `std::invalid_argument` |
@@ -1328,7 +1328,7 @@ flowchart LR
 | `void complete_ready(wait_result<T>&& result_value);`、`void complete_ready(wait_status status);` | 在挂起前以领域已有结果完成 |
 | `[[nodiscard]] bool complete_or_publish(const char* occupied_message);` | 持锁调用：已取消或已过期时完成并返回 `true`；槽位已占用抛 `std::logic_error(occupied_message)`；否则发布为挂起等待者并返回 `false` |
 | `[[nodiscard]] bool suspend(std::coroutine_handle<> continuation);` | 先布置截止期再发布续体；定时器队列已停止时以 `worker_stopping` 完成；确实挂起后才注册停止回调 |
-| `[[nodiscard]] wait_result<T> take_result();` | 取得结果 |
+| `[[nodiscard]] wait_result<T> take_result() &;` | 从左值等待物取得结果；右值重载已删除（`wait_result<T> take_result() && = delete`） |
 
 - **唤醒**：结果经状态 Worker 的 `defer_resume` 恢复（见 [2.3](#23-同线程延迟唤醒)），截止期与 Worker 停止由定时器回调直接恢复。
 - **取消顺序**：自 `await_ready` 以来已请求的停止在注册时内联运行，持锁提交 `cancelled`；因此同一调用栈随后发送的值会入队，而不会交给已取消的接收者。
@@ -1422,9 +1422,9 @@ flowchart LR
 | `[[nodiscard]] bool failed() const noexcept;` | 执行或交付失败 |
 | `[[nodiscard]] const std::exception_ptr& error() const& noexcept;` | 保存的异常 |
 | `const std::exception_ptr& error() const&& = delete;` | 拒绝从临时结果借出 |
-| `decltype(auto) value() const&;`、`decltype(auto) value() &;` | 返回 `const T&` / `T&`（`void` 时无返回值）；失败时重抛保存的异常，拒绝时抛 `blocking_operation_rejected` |
-| `void value() && = delete;`、`void value() const&& = delete;` | 右值统一使用 `take_value()` |
-| `T take_value() &&;` | 提取值（含 `blocking_result<void>`）；异常规则同 `value()` |
+| `value() const&` | 返回 `const T&`（`void` 时为 `void`）；失败时重抛保存的异常，拒绝时抛 `blocking_operation_rejected` |
+| `value() const&& = delete;` | 右值统一使用 `take_value()` |
+| `take_value() &&;` | 提取值（`void` 时为 `void`）；异常规则同 `value()` |
 | `template <typename u_type> requires(!std::is_void_v<T> && std::constructible_from<T, u_type&&>) [[nodiscard]] static blocking_result with_value(u_type&& value);` | 构造成功结果 |
 | `[[nodiscard]] static blocking_result with_value() noexcept requires std::is_void_v<T>;` | 仅 `void` |
 | `[[nodiscard]] static blocking_result with_error(std::exception_ptr error);` | 空异常抛 `std::invalid_argument` |
@@ -1455,7 +1455,8 @@ flowchart LR
 | 声明 | 契约 |
 | --- | --- |
 | `[[nodiscard]] inline std::span<const std::byte> as_bytes(std::string_view text) noexcept;` | 字符视图转字节视图 |
-| `template <typename string_type> std::span<const std::byte> as_bytes(string_type&&) = delete;` | 拒绝右值 `std::basic_string<char, ...>` 临时拥有型字符串 |
+| `template <typename range_type> std::span<const std::byte> as_bytes(range_type&&) = delete;` | 拒绝元素为 `char` 的右值连续非借用范围（含 `std::string&&`、`std::vector<char>&&`） |
+| `template <typename element_type> std::span<const std::byte> as_bytes(std::initializer_list<element_type>) = delete;` | 拒绝 `std::initializer_list<char>`；`as_bytes({})` 仍表示空视图 |
 | `[[nodiscard]] inline std::string_view as_chars(std::span<const std::byte> bytes_value) noexcept;` | 字节视图转字符视图 |
 | `template <typename range_type> std::string_view as_chars(range_type&&) = delete;` | 拒绝元素为 `std::byte` 的右值连续非借用范围（如 `std::vector<std::byte>&&`） |
 | `template <typename element_type> std::string_view as_chars(std::initializer_list<element_type>) = delete;` | 拒绝具名 `std::byte` 初始化列表和非空字节花括号列表；`as_chars({})` 仍表示空 span |

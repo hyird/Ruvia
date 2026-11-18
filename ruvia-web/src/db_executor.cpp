@@ -125,8 +125,10 @@ task<db_rows> db_executor::query_task(const db_query& query) const {
     auto plan = detail::db_query_plan::prepare(query, nullptr, backend);
 #ifdef RUVIA_ENABLE_REDIS
     if (backend.cache_ != nullptr && plan.first_.cache_key_.has_value()) {
-        return detail::start_request_linked(options_, request_stop_, [plan = std::move(plan), backend](const operation_options& options) mutable {
-            return detail::execute_db_query_plan<false>(std::move(plan), backend, options);
+        return detail::start_request_linked(options_, request_stop_, [step = std::move(plan.first_), backend](const operation_options& options) mutable {
+            const operation_deadline deadline_value(options.timeout_);
+            auto step_options = detail::db_remaining_options(options, deadline_value);
+            return backend.cache_->wrap(step.cache_duration_, std::move(*step.cache_key_), detail::db_cache_query(backend, std::move(step.sql_), std::move(step.params_)), std::move(step_options), deadline_value);
         });
     }
 #endif
@@ -136,7 +138,7 @@ task<db_rows> db_executor::query_task(const db_query& query) const {
     });
 }
 
-task<std::pair<db_rows, db_rows>> db_executor::query_and_count_task(const db_query& query, const db_query& count) const {
+task<std::pair<db_rows, std::uint64_t>> db_executor::query_and_count_task(const db_query& query, const db_query& count) const {
     registration_.require_active();
     const auto backend = query_backend();
     auto plan = detail::db_query_plan::prepare(query, &count, backend);
@@ -218,7 +220,21 @@ task<db_rows> db_command_set<surface_type>::query_statement(surface_reference re
 }
 
 template <typename surface_type>
+task<db_rows> db_command_set<surface_type>::query_statement(surface_reference receiver, std::string_view sql, std::span<db_value> params) {
+    receiver.registration_.require_active();
+    auto statement = prepare_db_statement(sql, params);
+    return receiver.start_query(std::move(statement.sql_), std::move(statement.params_));
+}
+
+template <typename surface_type>
 task<db_exec_result> db_command_set<surface_type>::execute_statement(surface_reference receiver, std::string_view sql, std::span<const db_value> params) {
+    receiver.registration_.require_active();
+    auto statement = prepare_db_statement(sql, params);
+    return receiver.start_execute(std::move(statement.sql_), std::move(statement.params_));
+}
+
+template <typename surface_type>
+task<db_exec_result> db_command_set<surface_type>::execute_statement(surface_reference receiver, std::string_view sql, std::span<db_value> params) {
     receiver.registration_.require_active();
     auto statement = prepare_db_statement(sql, params);
     return receiver.start_execute(std::move(statement.sql_), std::move(statement.params_));
@@ -259,6 +275,16 @@ void validate_db_sql_text(std::string_view sql) {
 prepared_db_statement prepare_db_statement(std::string_view sql, std::span<const db_value> params) {
     validate_db_sql_text(sql);
     return prepared_db_statement{std::string(sql), detail::clone_db_values(params)};
+}
+
+prepared_db_statement prepare_db_statement(std::string_view sql, std::span<db_value> params) {
+    validate_db_sql_text(sql);
+    std::vector<db_value> owned;
+    owned.reserve(params.size());
+    for (auto& value : params) {
+        owned.push_back(detail::db_value_access::own(std::move(value)));
+    }
+    return prepared_db_statement{std::string(sql), std::move(owned)};
 }
 
 prepared_db_statement prepare_db_notify(std::string_view channel, std::string_view payload) {
@@ -347,7 +373,8 @@ task<db_query_result<with_count>> execute_db_query_plan(db_query_plan plan, db_q
         }
     }
     if constexpr (with_count) {
-        co_return std::pair{std::move(*results[0]), std::move(*results[1])};
+        const auto count_value = db_count_value(*results[1]);
+        co_return std::pair{std::move(*results[0]), count_value};
     } else {
         co_return std::move(*results[0]);
     }

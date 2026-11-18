@@ -433,6 +433,9 @@ public:
     }
     const http2_received_priority* received_priority() const&& = delete;
 
+    [[nodiscard]] http2_push_promise_event* push_promise() & noexcept RUVIA_LIFETIMEBOUND {
+        return std::get_if<http2_push_promise_event>(&value_);
+    }
     [[nodiscard]] const http2_push_promise_event* push_promise() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_push_promise_event>(&value_);
     }
@@ -570,9 +573,8 @@ public:
     // inactivity clocks only when it changes, so frames the non-progress budget
     // counts cannot keep an otherwise idle connection open.
     [[nodiscard]] std::uint64_t received_stream_progress() const noexcept;
-    [[nodiscard]] http2_feed_status feed(std::string_view input);
-    template <detail::http_temporary_owning_char_string input_type>
-    http2_feed_status feed(input_type&&) = delete;
+    [[nodiscard]] http2_feed_status feed(borrowed_text input) &;
+    http2_feed_status feed(borrowed_text) && = delete;
     // Transfers the event and its lease or credit; DATA views still borrow feed() input.
     [[nodiscard]] std::optional<http2_event> next_event() &;
     std::optional<http2_event> next_event() && = delete;
@@ -804,6 +806,9 @@ public:
         return phase_ == phase::complete ? std::string_view(fingerprint_) : std::string_view{};
     }
     std::string_view fingerprint() const&& = delete;
+    [[nodiscard]] std::string take_fingerprint() && noexcept {
+        return phase_ == phase::complete ? std::exchange(fingerprint_, {}) : std::string{};
+    }
 
 private:
     enum class phase : std::uint8_t {

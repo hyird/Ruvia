@@ -120,7 +120,7 @@ task<db_rows> db_transaction::query_task(const db_query& query, operation_option
     return query_plan_prepared<false>(std::move(plan), backend, std::move(operation), std::move(options), request_stop_);
 }
 
-task<std::pair<db_rows, db_rows>> db_transaction::query_and_count_task(const db_query& query, const db_query& count, operation_options options) {
+task<std::pair<db_rows, std::uint64_t>> db_transaction::query_and_count_task(const db_query& query, const db_query& count, operation_options options) {
     registration_.require_active();
     const auto backend = query_backend(state_->preparation_payload());
     auto plan = detail::db_query_plan::prepare(query, &count, backend);

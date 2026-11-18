@@ -4,6 +4,7 @@
 #include <exception>
 #include <utility>
 
+#include "byte_view.h"
 #include "task.h"
 
 namespace ruvia {
@@ -41,10 +42,32 @@ public:
     operation_scope(operation_scope&&) = delete;
     operation_scope& operator=(operation_scope&&) = delete;
 
+    class join_operation final {
+    public:
+        join_operation(const join_operation&) = delete;
+        join_operation& operator=(const join_operation&) = delete;
+        join_operation(join_operation&& other) noexcept;
+        join_operation& operator=(join_operation&&) = delete;
+        void operator&() const = delete;
+
+        [[nodiscard]] bool await_ready();
+        bool await_suspend(std::coroutine_handle<> continuation) noexcept;
+        void await_resume() const noexcept {}
+
+    private:
+        friend class operation_scope;
+
+        explicit join_operation(operation_scope& scope) noexcept :
+            scope_(&scope) {}
+
+        operation_scope* scope_;
+        bool started_{false};
+    };
+
     void close() noexcept;
     void seal() noexcept;
-    [[nodiscard]] task<void> close_and_join() &;
-    task<void> close_and_join() && = delete;
+    [[nodiscard]] join_operation close_and_join() & noexcept;
+    join_operation close_and_join() && = delete;
     [[nodiscard]] bool active() const noexcept {
         return active_;
     }
@@ -69,12 +92,13 @@ public:
         task_value.bind_scope(*this);
         return task_value;
     }
+    template <typename t_type>
+    task<t_type> attach(task<t_type>) && = delete;
 
 private:
     friend class scoped_operation_registration;
     friend class capability_link;
     struct drain_guard;
-    struct join_awaiter;
     void check_worker() const noexcept;
     void retire_cold_operations() noexcept;
     void expire_for_join() noexcept;
@@ -108,7 +132,8 @@ public:
     capability_link& operator=(capability_link&&) = delete;
 
     void require_active() const;
-    [[nodiscard]] operation_scope& scope() const;
+    [[nodiscard]] operation_scope& scope() const& RUVIA_LIFETIMEBOUND;
+    operation_scope& scope() const&& = delete;
     void bind(operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept;
 
 private:
@@ -158,14 +183,17 @@ public:
     void require_active() const {
         link_.require_active();
     }
-    [[nodiscard]] operation_scope& scope() const {
+    [[nodiscard]] operation_scope& scope() const& RUVIA_LIFETIMEBOUND {
         return link_.scope();
     }
+    operation_scope& scope() const&& = delete;
     // require_active(), then attaches the cold task to the scope.
     template <typename t_type>
-    [[nodiscard]] task<t_type> attach(task<t_type> task_value) const {
+    [[nodiscard]] task<t_type> attach(task<t_type> task_value) const& {
         return link_.scope().attach(std::move(task_value));
     }
+    template <typename t_type>
+    task<t_type> attach(task<t_type>) const&& = delete;
 
 private:
     static void expire_owner(void* owner) noexcept {

@@ -20,6 +20,7 @@ struct redisReader;
 #include <asio/ssl/context.hpp>
 
 #include "http_client_pool.h"
+#include "io_operation.h"
 #include "redis_executor.h"
 #include "redis_orm.h"
 #include "slot_pool.h"
@@ -157,9 +158,24 @@ public:
     redis_connection(const redis_connection&) = delete;
     redis_connection& operator=(const redis_connection&) = delete;
 
+    class request_buffer_guard final {
+    public:
+        request_buffer_guard(std::string& buffer, redis_request_content content) noexcept :
+            buffer_(buffer),
+            content_(content) {}
+        request_buffer_guard(const request_buffer_guard&) = delete;
+        request_buffer_guard& operator=(const request_buffer_guard&) = delete;
+        ~request_buffer_guard() noexcept;
+
+    private:
+        std::string& buffer_;
+        redis_request_content content_;
+    };
+
     [[nodiscard]] bool connected() const noexcept {
         return connected_;
     }
+    [[nodiscard]] bool reusable_idle() noexcept;
 
     // Connects when closed. A connected connection whose peer closed it or
     // sent unsolicited bytes would desynchronize the next reply, so it is
@@ -170,9 +186,16 @@ public:
     [[nodiscard]] std::string& write_buffer() noexcept {
         return write_buffer_;
     }
+    [[nodiscard]] task<client_transport_result> start_transport_write(const operation_deadline& timeout) {
+        return transport_.write(write_buffer_, timeout);
+    }
+    void finish_transport_write(const client_transport_result& written) const;
     // Sends and then releases the serialized request, wiping it first when it
     // carries a credential, whether or not the write succeeded.
     task<void> write_request(const operation_deadline& timeout, redis_request_content content = redis_request_content::ordinary);
+    // Consumes one already-buffered complete reply without suspending, or
+    // returns std::nullopt when more socket bytes are needed.
+    [[nodiscard]] std::optional<redis_value> try_read_buffered_reply();
     // Reads one complete reply into owned nodes. Throws
     // redis_error(io_error) when the connection is or becomes closed. A
     // non-null `input_time` receives the time of every socket read that
@@ -201,12 +224,8 @@ private:
     std::unique_ptr<redis_reply_builder> reply_builder_;
     std::unique_ptr<redisReader, redis_reader_deleter> reader_;
     std::size_t reply_bytes_{0};
+    bool reply_in_progress_{false};
     bool connected_{false};
-};
-
-struct redis_command_args_view final {
-    std::array<std::string_view, 2> prefix_;
-    std::span<const std::string> args_;
 };
 
 class redis_pool final {
@@ -228,14 +247,19 @@ public:
     // `reply_timeout` starts when the command is written, so a server-side
     // block window is not consumed by slot acquisition or a lazy connect.
     // `io_metrics` is the request's counter block, or null outside a request.
+    template <typename result_type, typename source_type, typename decoder_type>
+    [[nodiscard]] task<result_type> execute_decoded(source_type source, decoder_type decoder, operation_options options = {}, std::optional<timeout_duration> reply_timeout = std::nullopt, request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
     task<redis_value> execute_owned(redis_owned_command command, operation_options options = {}, std::optional<timeout_duration> reply_timeout = std::nullopt, request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
     task<redis_value> execute_owned(std::vector<std::string> args, operation_options options = {}, std::optional<timeout_duration> reply_timeout = std::nullopt, request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
-    // The caller keeps the prefix and remaining arguments alive until completion.
-    // `deadline` is copied, so repeated commands share the operation's absolute bound.
-    task<redis_value> execute_borrowed(redis_command_args_view args, operation_options options, operation_deadline deadline);
+    // The caller keeps `wire` alive until completion; `deadline` is copied so
+    // script fallback shares the operation's absolute bound.
+    task<redis_value> execute_borrowed_wire(std::string_view wire, operation_options options, operation_deadline deadline);
     task<std::vector<redis_value>> execute_pipeline(std::vector<redis_owned_command> commands, operation_options options, request_io_metrics* io_metrics, bool wrap_transaction = false);
 
 private:
+    static void prepare_write_buffer(std::string& write_buffer, redis_owned_command& source);
+    static void prepare_write_buffer(std::string& write_buffer, std::vector<std::string>& source);
+    static void prepare_write_buffer(std::string& write_buffer, std::string_view wire);
     // Every deadline belongs to a connection's transport; the slot pool only
     // leases slots and routes cancellation.
     struct slot_policy final {
@@ -250,9 +274,6 @@ private:
     using slot_pool_type = slot_pool<slot_policy>;
     using connection_owner_type = std::unique_ptr<redis_connection>;
 
-    template <typename result_type, typename command_source_type>
-    task<result_type> execute_commands(command_source_type source, operation_options options, std::optional<timeout_duration> reply_timeout, std::optional<operation_deadline> deadline, request_io_metrics* io_metrics = nullptr, bool wrap_transaction = false);
-
     const redis_config_storage& config_;
     std::optional<timeout_duration> command_timeout_;
     client_wire_counters wire_counters_;
@@ -260,6 +281,51 @@ private:
     // Declared after the slot pool, whose worker every transport borrows.
     std::vector<connection_owner_type> connections_;
 };
+
+template <typename result_type, typename source_type, typename decoder_type>
+task<result_type> redis_pool::execute_decoded(source_type source, decoder_type decoder, operation_options options, std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics, std::optional<operation_deadline> deadline) {
+    scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
+    const operation_deadline operation_timeout_value = deadline ? *deadline : operation_deadline(options.timeout_);
+    redis_value reply;
+    {
+        const auto slot = co_await slots_.acquire(operation_timeout_value, config_.acquire_timeout_, options.stop_token_);
+        const slot_pool_type::lease_guard lease(slots_, slot);
+        slot_pool_type::cancellation_guard cancellation(slots_, slot, options.stop_token_);
+        auto& connection = *connections_[slot];
+        try {
+            if (!connection.reusable_idle()) {
+                co_await connection.connect(&operation_timeout_value, command_timeout_);
+            }
+            slots_.throw_if_aborted(slot);
+
+            auto& write_buffer = connection.write_buffer();
+            write_buffer.clear();
+            prepare_write_buffer(write_buffer, source);
+
+            const auto deadline_value = operation_timeout_value.constrained_by(command_timeout_).constrained_by(reply_timeout);
+            {
+                const redis_connection::request_buffer_guard release(write_buffer, redis_request_content::ordinary);
+                const auto written = co_await connection.start_transport_write(deadline_value);
+                connection.finish_transport_write(written);
+            }
+            if (auto buffered = connection.try_read_buffered_reply()) {
+                reply = std::move(*buffered);
+            } else {
+                reply = co_await connection.read_reply(deadline_value);
+            }
+            slots_.throw_if_aborted(slot);
+        } catch (...) {
+            cancellation.finish();
+            connection.close();
+            throw;
+        }
+    }
+    if constexpr (std::is_void_v<result_type>) {
+        decoder(std::move(reply));
+    } else {
+        co_return decoder(std::move(reply));
+    }
+}
 
 class redis_subscription_set;
 
@@ -458,9 +524,9 @@ private:
     stop_source preparation_stop_;
 };
 
-// `args` owns the arguments starting at <numkeys>. The command and script
-// prefix are borrowed during encoding. `io_metrics` is null outside a request.
-[[nodiscard]] task<redis_value> execute_redis_script(redis_pool& pool, redis_script script, std::vector<std::string> args, request_io_metrics* io_metrics, operation_options options);
+// Pre-encoded EVALSHA call plus its trailing argument offset (see
+// redis_encoded_script_call). `io_metrics` is null outside a request.
+[[nodiscard]] task<redis_value> execute_redis_script(redis_pool& pool, redis_script script, redis_encoded_script_call call, request_io_metrics* io_metrics, operation_options options);
 
 }  // namespace ruvia::detail
 

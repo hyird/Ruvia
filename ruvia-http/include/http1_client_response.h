@@ -62,6 +62,11 @@ enum class http1_client_request_content_completion_status : std::uint8_t {
 // carry content (HEAD, 204, 304), while a zero known_length still has framing.
 class http1_client_response_plan final {
 public:
+    http1_client_response_plan(const http1_client_response_plan&) noexcept = default;
+    http1_client_response_plan& operator=(const http1_client_response_plan&) = delete;
+    http1_client_response_plan(http1_client_response_plan&&) noexcept = default;
+    http1_client_response_plan& operator=(http1_client_response_plan&&) = delete;
+
     [[nodiscard]] constexpr bool informational() const noexcept {
         return std::holds_alternative<informational_type>(state_);
     }
@@ -247,7 +252,8 @@ public:
     // remove consumed_bytes() before supplying the following response.
     // Allocation failures propagate without completing or failing the exchange;
     // after reclaiming resources, retry with the same response prefix.
-    [[nodiscard]] http1_client_response_parse_result parse(std::string_view buffer);
+    [[nodiscard]] http1_client_response_parse_result parse(std::string_view buffer) &;
+    http1_client_response_parse_result parse(std::string_view) && = delete;
 
     // Active while a response head is awaited (informational heads keep it
     // active); finished once the final response, tunnel or upgrade head was

@@ -2112,7 +2112,9 @@ public:
     std::optional<http_request_trailer_error> append(fields_type&&) = delete;
 
     [[nodiscard]] std::optional<http_request_trailer_error> append_received(std::span<const http_header> fields);
-    template </* 临时拥有型 http_header 范围 */ fields_type>
+    template <std::same_as<std::vector<http_header>> fields_type>
+    [[nodiscard]] std::optional<http_request_trailer_error> append_received(fields_type&& fields);
+    template </* 非 std::vector<http_header> 的临时拥有型 http_header 范围 */ fields_type>
     std::optional<http_request_trailer_error> append_received(fields_type&&) = delete;
 
     [[nodiscard]] std::vector<http_header> take_fields() && noexcept;
@@ -2138,7 +2140,7 @@ public:
 | `append(name, value)` / `append(span<const http_header_view>)` / `append(span<const http_header>)` | 生成方追加，全有或全无：先对全部字段计预算并校验，任何一个失败则返回对应错误且对象不变；成功后以小写名复制保存并返回 `std::nullopt`。不允许出现在请求 Trailer 中的名称报告 `forbidden_field`。分配失败抛 `std::bad_alloc`，对象不变。 |
 | `append(fields_type&&) = delete`（两个模板） | 拒绝临时拥有型字段容器（如 `std::vector<http_header>` 右值）与 `initializer_list`，避免以将要销毁的存储作为参数来源的写法；传左值或 span。 |
 | `append_received(span<const http_header>)` | 吸收任意协议版本解码得到的接收 Trailer 段（HTTP/1 [`http1_chunked_body_decoder`](#api-http1-chunked-body-h)、HTTP/2 / HTTP/3 消息结束事件产出同一视图），全有或全无：每个字段必须是名称小写的合法普通字段，伪首部字段使整个段畸形并报告 `invalid_field`；所有接收字段（包括被丢弃的）都计入字节预算，超限报告 `section_too_large`；不允许出现在请求 Trailer 中的字段被丢弃而不保留（RFC 9110 §6.5.1、RFC 9112 §7.1.2），不报告 `forbidden_field`。 |
-| `append_received(fields_type&&) = delete` | 同上，拒绝临时拥有型容器。 |
+| `append_received(fields_type&&) = delete` | 同上，拒绝除 `std::vector<http_header>&&` 外其他临时拥有型容器（右值 `std::vector<http_header>&&` 重载可零复制接管字段，已包含于上行契约）。 |
 | `take_fields() &&` | 移出已保存字段并把预算重置为 `http_trailer_section_budget()`；仅限右值调用。 |
 | `fields() const&` | 借用已保存字段，有效至下一次追加、`take_fields()` 或对象销毁；右值重载删除。 |
 | `field(name) const&` | 不区分大小写，第一条匹配行优先（见 [接收字段单值查找统一规则](#api-http-header-h)）；右值重载删除。 |
@@ -2166,16 +2168,23 @@ public:
     http_request(http_request&&) noexcept = default;
     http_request& operator=(http_request&& other) noexcept;
 
-    [[nodiscard]] std::string_view method() const noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::string_view method() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view method() const&& = delete;
     [[nodiscard]] http_known_method known_method() const noexcept;
     void reset() noexcept;
-    [[nodiscard]] std::string_view target() const noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] std::string_view scheme() const noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] std::string_view authority() const noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] std::string_view protocol() const noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::string_view target() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view target() const&& = delete;
+    [[nodiscard]] std::string_view scheme() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view scheme() const&& = delete;
+    [[nodiscard]] std::string_view authority() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view authority() const&& = delete;
+    [[nodiscard]] std::string_view protocol() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view protocol() const&& = delete;
     [[nodiscard]] http_request_target_form target_form() const noexcept;
-    [[nodiscard]] std::string_view path() const noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] std::string_view query_string() const noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::string_view path() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view path() const&& = delete;
+    [[nodiscard]] std::string_view query_string() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view query_string() const&& = delete;
     [[nodiscard]] http_protocol_version protocol_version() const noexcept;
 
     [[nodiscard]] std::span<const http_header_view> headers() const& noexcept RUVIA_LIFETIMEBOUND;
@@ -2185,10 +2194,14 @@ public:
     [[nodiscard]] std::span<const std::byte> body_bytes() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const std::byte> body_bytes() const&& = delete;
 
-    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] http_unique_field_lookup unique_header(std::string_view name) const noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] std::optional<std::string_view> last_raw_query_value(std::string_view raw_name) const noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
+    std::optional<std::string_view> header(std::string_view) const&& = delete;
+    [[nodiscard]] http_unique_field_lookup unique_header(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
+    http_unique_field_lookup unique_header(std::string_view) const&& = delete;
+    [[nodiscard]] std::optional<std::string_view> last_raw_query_value(std::string_view raw_name) const& noexcept RUVIA_LIFETIMEBOUND;
+    std::optional<std::string_view> last_raw_query_value(std::string_view) const&& = delete;
+    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
+    std::optional<std::string_view> cookie(std::string_view) const&& = delete;
 };
 
 }  // namespace ruvia
@@ -3092,6 +3105,7 @@ public:
     [[nodiscard]] http_response& response() && = delete;
     [[nodiscard]] const http_response& response() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const http_response& response() const&& = delete;
+    [[nodiscard]] http_response take_response() && noexcept;
     [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const&& = delete;
 };
@@ -3102,7 +3116,7 @@ public:
 
 `prepare_http_response_stream_head` 接管 `response`，把初始响应元数据规范化为与 `commit_plan` 一致，返回持有二者的 `http_response_stream_head`（只能由该函数构造）。应用设置的 `Transfer-Encoding` 必须恰好是 `chunked` coding（忽略 OWS 与 ASCII 大小写），它只是提示，由框架写出器替换为自身分帧；其他值在响应变更之前抛异常：HTTP/1 分帧抛 `http1_response_head_error`（见 [`"http1_server_response.h"`](#api-http1-server-response-h)），HTTP/2 / HTTP/3 抛 `std::invalid_argument`。
 
-`response()` / `commit_plan()` 借用本对象，右值重载删除。之后再修改 `response()` 可能破坏与计划的一致性：本对象不是对可变响应的永久证明。
+`response()` / `commit_plan()` 借用本对象，右值重载删除；`take_response() &&` 零复制移出规范化后的 `http_response`。之后再修改 `response()` 可能破坏与计划的一致性：本对象不是对可变响应的永久证明。
 
 ## 7. 内容编码、Multipart 与 SSE
 
@@ -3390,8 +3404,10 @@ public:
     http_content_decoder& operator=(const http_content_decoder&) = delete;
     http_content_decoder(http_content_decoder&&) = delete;
     http_content_decoder& operator=(http_content_decoder&&) = delete;
-    [[nodiscard]] http_content_decode_result decode(std::string_view input RUVIA_LIFETIMEBOUND, std::span<char> output RUVIA_LIFETIMEBOUND);
-    [[nodiscard]] http_content_decode_result finish_input() noexcept;
+    [[nodiscard]] http_content_decode_result decode(std::string_view input RUVIA_LIFETIMEBOUND, std::span<char> output RUVIA_LIFETIMEBOUND) &;
+    http_content_decode_result decode(std::string_view, std::span<char>) && = delete;
+    [[nodiscard]] http_content_decode_result finish_input() & noexcept;
+    http_content_decode_result finish_input() && = delete;
     [[nodiscard]] decoder_state state() const noexcept;
     void reset();
 };
@@ -3432,8 +3448,10 @@ public:
     http_transfer_coding_stack_decoder& operator=(const http_transfer_coding_stack_decoder&) = delete;
     http_transfer_coding_stack_decoder(http_transfer_coding_stack_decoder&&) = delete;
     http_transfer_coding_stack_decoder& operator=(http_transfer_coding_stack_decoder&&) = delete;
-    [[nodiscard]] http_transfer_coding_decode_result decode(std::string_view input, std::span<char> output RUVIA_LIFETIMEBOUND);
-    [[nodiscard]] http_transfer_coding_decode_result finish_input() noexcept;
+    [[nodiscard]] http_transfer_coding_decode_result decode(std::string_view input, std::span<char> output RUVIA_LIFETIMEBOUND) &;
+    http_transfer_coding_decode_result decode(std::string_view, std::span<char>) && = delete;
+    [[nodiscard]] http_transfer_coding_decode_result finish_input() & noexcept;
+    http_transfer_coding_decode_result finish_input() && = delete;
     [[nodiscard]] decoder_state state() const noexcept;
     void reset();
 };
@@ -3507,11 +3525,14 @@ public:
     multipart_part& operator=(multipart_part&&) noexcept = default;
     [[nodiscard]] std::string_view name() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view name() const&& = delete;
+    [[nodiscard]] std::string take_name() &&;
     [[nodiscard]] std::string_view filename() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view filename() const&& = delete;
+    [[nodiscard]] std::string take_filename() &&;
     [[nodiscard]] bool has_filename() const noexcept;
     [[nodiscard]] std::string_view content_type() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view content_type() const&& = delete;
+    [[nodiscard]] std::string take_content_type() &&;
     [[nodiscard]] std::string_view body() const noexcept;
 };
 
@@ -3553,7 +3574,7 @@ using multipart_body_parse_result = std::variant<std::vector<multipart_part>, mu
 
 `multipart_parse_options`：`boundary_` 无默认值（必须提供）；`max_parts_` 默认 `1024`；`max_metadata_bytes_` 默认 `1024 * 1024`（1 MiB），按累计线上 part 首部字节限制解码后的名称、文件名与元数据。
 
-`multipart_part`（一次性解析结果，不能由用户构造）：`name()` 为 `Content-Disposition` 的 `name`，`filename()` 为 `filename`（`has_filename()` 区分“无 filename 参数”与空 filename），`content_type()` 为 part 的 `Content-Type`（未给出时为空），`body()` 为 part 正文。借用规则：未改写的名称、文件名、`Content-Type` 与正文借用调用方拥有的请求体；折叠续行的首部块与转义名称由对象自身拥有字符串存储。`name` / `filename` / `content_type` 的右值重载删除（可能指向对象内部存储）；`body()` 始终借用原始输入，因此无右值限制。复制赋值先准备全部元数据再提交，失败时两端保持原值；移动不分配。
+`multipart_part`（一次性解析结果，不能由用户构造）：`name()` 为 `Content-Disposition` 的 `name`，`filename()` 为 `filename`（`has_filename()` 区分“无 filename 参数”与空 filename），`content_type()` 为 part 的 `Content-Type`（未给出时为空），`body()` 为 part 正文。借用规则：未改写的名称、文件名、`Content-Type` 与正文借用调用方拥有的请求体；折叠续行的首部块与转义名称由对象自身拥有字符串存储。`name` / `filename` / `content_type` 的右值重载删除（可能指向对象内部存储）；右值可通过 `take_name() &&` / `take_filename() &&` / `take_content_type() &&` 提取为 `std::string`（内部已拥有存储时零复制移出，且 `take_filename()` 复位 `has_filename()`）。`body()` 始终借用原始输入，因此无右值限制。复制赋值先准备全部元数据再提交，失败时两端保持原值；移动不分配。
 
 `multipart_stream_part`（流式 `poll()` 产出，不能由用户构造）：同名访问器语义同上，但所有视图仅在下一次 `feed()`、`finish_input()`、`poll()` 或 `reset()` 之前有效。`phase()`：
 
@@ -4129,6 +4150,8 @@ struct http_forwarded_header_spec final {
     http_forwarded_header_spec(std::string_view name, http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect);
     http_forwarded_header_spec(const char* name, http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect);
     http_forwarded_header_spec(const std::string& name, http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect);
+    template <std::same_as<std::string> string_type>
+    http_forwarded_header_spec(string_type&& name, http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect) noexcept;
 
     std::string name_;
     http_forwarded_header_kind kind_{http_forwarded_header_kind::auto_detect};
@@ -4163,7 +4186,7 @@ struct http_client_ip_result final {
 | `http_forwarded_header_kind::rfc7239_forwarded` | RFC 7239 元素列表，读取每个元素的 `for=` 与 `proto=`（同一元素内重复参数使该参数失效）。 |
 | `http_forwarded_header_kind::comma_separated_list` | 逗号分隔的节点地址列表（`X-Forwarded-For` 形态）。 |
 | `http_forwarded_header_kind::single_ip` | 必须恰好一行、不含逗号的单个地址；地址属于受信代理时不采用。 |
-| `http_forwarded_header_spec` | 一个转发头名称与种类；三个转换构造函数均复制名称。 |
+| `http_forwarded_header_spec` | 一个转发头名称与种类；接受视图、`const char*`、`const std::string&`（复制名称）或右值 `std::string&&`（零复制移入）。 |
 | `http_client_ip_options::enabled_` | 关闭时 `resolve` 始终返回对端地址。 |
 | `trusted_proxies_` | 按 [`ip_cidr::parse`](#api-ip-address-h) 解析受信代理地址或 CIDR。要求主机位为零，不接受 IPv6 zone；不自动扩大受信网段。 |
 | `forwarding_headers_` | 按优先级排列的转发头；为空时默认 `{"X-Forwarded-For", "Forwarded"}`。 |
@@ -4515,6 +4538,7 @@ public:
     [[nodiscard]] http_scheme scheme() const noexcept;
     [[nodiscard]] std::string_view host() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view host() const&& = delete;
+    [[nodiscard]] std::string take_host() && noexcept;
     [[nodiscard]] std::uint16_t port() const noexcept;
     [[nodiscard]] bool cross_origin() const noexcept;
     [[nodiscard]] http_origin_view origin() const& RUVIA_LIFETIMEBOUND;
@@ -4533,7 +4557,7 @@ public:
 | `current_target_` / `location_` | 当前请求的 origin-form 目标与 `Location` 字段值（借用）。 |
 | `target()` | 目标源站上的 origin-form 目标（拥有，借用视图）。 |
 | `take_target() && noexcept` | 移交目标字符串，不复制堆上字节；源目标为空，源站与跨源判定不变。 |
-| `scheme()` / `host()` / `port()` | 目标源站；`host()` 为 `uri-host`，IP-literal 保留方括号，与 `http_origin_view` 工厂契约一致。 |
+| `scheme()` / `host()` / `port()` | 目标源站；`host()` 为 `uri-host`，IP-literal 保留方括号，与 `http_origin_view` 工厂契约一致；`take_host() && noexcept` 移出主机字符串，不复制。 |
 | `cross_origin()` | scheme/host/port 三元组任一与请求源站不同即为 `true`；按 RFC 9110 §15.4 与 Fetch 规范，I/O 所有者跟随前须丢弃凭据（`Authorization`、`Proxy-Authorization`、不属于新源站的 Cookie）。 |
 | `origin()` | 由 `host()` 构造的 `http_origin_view`，借用本对象存储，仅在本对象存活期间有效；右值重载删除。 |
 | `resolve_http_client_redirect_target(origin, options)` | 去除 `Location` 首尾 OWS 并剥离片段后，按 RFC 3986 相对 `origin` 与 `current_target_` 解析；不同 http/https 源站是成功分支，由 `cross_origin()` 分类，I/O 所有者在其上实施跨源策略（剥离凭据、拒绝 TLS 降级）。可因分配抛出。 |
@@ -4913,11 +4937,13 @@ public:
 
     void update(std::string_view field_value);
     void update_headers(const http_header_range_view& headers);
+    void reset() noexcept;
 
     [[nodiscard]] constexpr bool is_wildcard() const noexcept;
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] std::span<const std::string> field_names() const& noexcept RUVIA_LIFETIMEBOUND;
     std::span<const std::string> field_names() const&& = delete;
+    [[nodiscard]] std::vector<std::string> take_field_names() && noexcept;
 };
 
 [[nodiscard]] http_vary_spec parse_http_vary(std::string_view field_value);
@@ -4935,7 +4961,7 @@ public:
 | `update_headers(headers)` | 对块中每个 `Vary` 行调用 `update` |
 | `is_wildcard()` | 是否出现 `Vary: *`（响应不可由缓存满足后续请求） |
 | `empty()` | 既非通配也没有字段名 |
-| `field_names()` | 排序后的小写字段名；视图借用 `*this`，在下一次 `update` / `update_headers` 或对象销毁前有效；右值重载 `= delete` |
+| `field_names()` / `take_field_names() &&` | 排序后的小写字段名；`field_names()` 借用 `*this` 至下一次 `update` / `update_headers` / `reset` 或对象销毁，右值重载 `= delete`；`take_field_names() &&` 移出列表并清空通配标记 |
 | `parse_http_vary(...)` | 构造并 `update` / `update_headers` 一次的便捷函数 |
 | `format_http_vary_cache_key(vary, request_headers)` | 通配时返回 `std::nullopt`；否则按 `field_names()` 顺序为每个字段生成一行：请求含该字段时为 `name:1:value`（多行以 `", "` 连接，每个值去除首尾 OWS 并把内部连续 SP/HTAB 折叠为单个空格，直接追加到最终键），缺失时为 `name:0`，每行以 `\n` 结尾。缺失与空值因此可区分 |
 | `http_vary_requests_match(vary, a, b)` | 两个请求的缓存键均存在且相等时返回 `true`；通配时恒为 `false` |
@@ -5667,8 +5693,11 @@ class http_cookie_jar final {
 public:
     explicit http_cookie_jar(const http_origin_view& origin, http_cookie_jar_options options = {});
     http_cookie_jar(http_scheme scheme, std::string_view host, http_cookie_jar_options options = {});
+    template <std::same_as<std::string> string_type>
+    http_cookie_jar(http_scheme scheme, string_type&& host, http_cookie_jar_options options = {});
 
     void add_configured_cookie(std::string_view name, std::string_view value);
+    // 以及接受 std::same_as<std::string> auto&& 名称和/或值的零复制重载
 
     bool absorb_set_cookie(std::string_view request_target, std::string_view set_cookie_value, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
 
@@ -5691,7 +5720,7 @@ public:
 };
 ```
 
-容器拥有全部存储（复制名称、值、路径、域），可拷贝、可移动；内部无同步，同一实例的并发调用需由调用方串行化。`request_target` 为 origin-form 请求目标（路径加可选查询）。
+容器对视图参数复制存储，对右值 `std::string&&`（构造函数的 `host` 与 `add_configured_cookie` 的 `name` / `value`）零复制接管；可拷贝、可移动，内部无同步，同一实例的并发调用需由调用方串行化。`request_target` 为 origin-form 请求目标（路径加可选查询）。
 
 | 成员 | 语义 |
 | --- | --- |
@@ -6053,6 +6082,7 @@ struct http_structured_item {
 
     [[nodiscard]] std::string_view text() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view text() const&& = delete;
+    [[nodiscard]] std::string take_text() &&;
 };
 
 template <typename input_type>
@@ -6872,6 +6902,7 @@ public:
 
     [[nodiscard]] const http_response& response() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const http_response& response() const&& = delete;
+    [[nodiscard]] http_response take_response() && noexcept;
 
     [[nodiscard]] const http1_response_head_plan& response_head_plan() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const http1_response_head_plan& response_head_plan() const&& = delete;
@@ -7621,9 +7652,12 @@ public:
     http_stream_data_event(http_stream_data_event&& other) noexcept;
     http_stream_data_event& operator=(http_stream_data_event&& other) noexcept;
     [[nodiscard]] stream_id_type stream_id() const noexcept;
+    [[nodiscard]] bool owns_bytes() const noexcept;
     [[nodiscard]] std::string_view bytes() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view bytes() const&& = delete;
+    [[nodiscard]] std::string take_bytes() &&;
     [[nodiscard]] http_received_data_credit take_credit() & noexcept;
+    [[nodiscard]] http_received_data_credit take_credit() && noexcept;
 };
 
 enum class http_message_content_semantics : std::uint8_t {
@@ -7670,7 +7704,7 @@ public:
 | --- | --- |
 | `http_stream_informational_head_event` | 客户端：一个 1xx 响应头。`head()` 借用事件；`take_head() &&` 移出 [`http_client_response_head`](#api-http-client-response-head-h)。`request_content_signal()` 在以 `Expect: 100-continue` 提交的请求收到首个 `100 (Continue)` 时为 `continue_`，否则为空 |
 | `http_stream_response_head_event` | 客户端：最终响应头。字段为已校验的常规字段；头内保留原始三位状态码（`received_status()`），`status()` 按 RFC 9110 §15 处理（600..999 视作 500）。`request_content_signal()` 在请求内容仍等待 `100 (Continue)` 时到达最终头则为 `exchange_complete`。`stream_ended()`：HEADERS 帧本身结束了流，之后没有内容或隧道 DATA；该值在发布时固定，之后结束流的帧不会设置它 |
-| `http_stream_data_event` | 一条流的 DATA 载荷。`kind` 是类型的一部分，事件 variant 因而可区分正文与隧道。`bytes()` 默认借用产生该事件的引擎输入（即 `feed()` 的输入存储），除非引擎被要求把字节复制进事件（`http3_connection_options::own_data_events_`）。凭证随事件保存，直到 `take_credit() &` 交给消费者；移动赋值会归还目标对象中未取走的凭证 |
+| `http_stream_data_event` | 一条流的 DATA 载荷。`kind` 是类型的一部分，事件 variant 因而可区分正文与隧道。`bytes()` 默认借用产生该事件的引擎输入（即 `feed()` 的输入存储），除非引擎被要求把字节复制进事件（`http3_connection_options::own_data_events_`）；`owns_bytes()` 报告是否已拥有字节，`take_bytes() &&` 在已拥有时零复制移出 `std::string`。凭证随事件保存，直到 `take_credit() &` 或 `take_credit() &&` 交给消费者；移动赋值会归还目标对象中未取走的凭证 |
 | `http_stream_message_end_event` | 对端正常结束发送半边：请求或响应内容完整（HTTP/3 中也可是隧道接收方向结束）。`trailers()` 是结束前的 Trailer 节，无则为空，字段名小写（RFC 9113 §8.2.2、RFC 9114 §4.2）。客户端收到的是已校验字段，且 RFC 9110 §6.5.1 禁止出现在响应 Trailer 中的字段已被丢弃；服务端应交给 `http_request_trailers::append_received()`（见 [`"http_request.h"`](#api-http-request-h)）。span 借用事件，事件移动、销毁或 `take_trailers()` 移出后失效。`content_semantics()` 见下表 |
 | `http_stream_closed_event` | 流以非“消息交换完成”的方式结束。`error()` 是结束它的复位所带协议错误码；`source()` 是放弃该流的端点（引擎知道时）。HTTP/2 只为被放弃的流发布此事件，且两值恒有（错误码可为 `NO_ERROR`）；HTTP/3 为 QUIC 回收的每条流在两个方向均关闭后发布，正常关闭时 `error()` 为空，`source()` 恒空（由前一个传输动作事件的 `origin()` 给出端点）。此后不再有事件指名该流；已报告为 request-unprocessed 的流不发布关闭 |
 | `http_stream_request_unprocessed_event` | 仅客户端：本端打开的请求流未被服务端处理，可重试（RFC 9113 §8.7，RFC 9114 §4.1.1 与 §5.2）。在 GOAWAY 事件之后，为该 GOAWAY 排除的每条打开请求流发布；也为服务端在最终响应头之前拒绝的流发布（`RST_STREAM(REFUSED_STREAM)`、`H3_REQUEST_REJECTED`），后者连接仍可用。此后不再有消息事件或关闭事件指名该流 |
@@ -8463,6 +8497,7 @@ public:
     [[nodiscard]] constexpr bool failed() const noexcept;
     [[nodiscard]] std::string_view fingerprint() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view fingerprint() const&& = delete;
+    [[nodiscard]] std::string take_fingerprint() && noexcept;
 };
 ```
 
@@ -8471,7 +8506,7 @@ public:
 - 接入：把 `on_frame` / `on_header` 作为 `http2_connection_options::frame_observer_` / `header_observer_`，`observer_context_` 指向采集器（采集器须比连接存活更久）。
 - 状态：初始为收集中；第一个请求字段块 `end` 时变为完成（`complete()`），超出 [`http_fingerprint_options`](#api-http-multiplexed-stream-h) 预算、SETTINGS 不完整或位于非零流、在流 0 上观察到字段、首个请求没有伪首部，或内部分配失败时变为失败（`failed()`）。完成或失败后忽略后续观察；`reset()` 清空回到收集中。
 - 各段：SETTINGS 为各非 ACK SETTINGS 条目 `id:value` 以 `;` 连接；WINDOW_UPDATE 为最后一个流 0 增量，无则 `00`；PRIORITY 为独立 PRIORITY 帧及首个请求流 HEADERS 优先级的 `stream:exclusive:dependency:weight` 以 `,` 连接，无则 `0`；PSEUDO_HEADER_ORDER 为首个常规字段之前伪首部的首字母（`m`、`a`、`s`、`p`，其他取名称第二字符）以 `,` 连接。
-- `fingerprint()`：完成时返回借用采集器内部字符串的视图，否则为空视图；右值采集器上被删除。
+- `fingerprint()` / `take_fingerprint() &&`：完成时返回或移出采集器指纹，否则为空；`fingerprint()` 在右值采集器上被删除。
 
 ### 11.5 `"http2_hpack.h"`
 <a id="api-http2-hpack-h"></a>
@@ -8974,6 +9009,8 @@ public:
     [[nodiscard]] http_submit_status submit_request_head(std::int64_t stream_id, const http_request_head_view& request);
     [[nodiscard]] http_submit_status submit_websocket_request_head(std::int64_t stream_id, const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority, std::string_view target, borrowed_http_headers headers = {}, http_request_field_source source = http_request_field_source::generated);
     [[nodiscard]] http_data_submit_result submit_data(std::int64_t stream_id, std::string_view bytes);
+    template <std::same_as<std::string> string_type>
+    [[nodiscard]] http_data_submit_result submit_data(std::int64_t stream_id, string_type&& bytes);
     [[nodiscard]] std::size_t unacknowledged_data_bytes(std::int64_t stream_id) const noexcept;
     [[nodiscard]] bool output_flushed(std::int64_t stream_id) const noexcept;
     [[nodiscard]] std::size_t available_output_bytes(std::int64_t stream_id) const noexcept;
@@ -9054,7 +9091,7 @@ public:
 
 | 成员 | 说明 |
 | --- | --- |
-| `submit_data(stream_id, bytes)` | 复制放得进该流输出预算的前缀；空输入视为完成且无效果。若头部声明了内容长度，超出部分返回 `invalid_message` 且不复制任何字节。流内容未开启（无头、头已结束流、内容已结束）时抛 `std::logic_error`。 |
+| `submit_data(stream_id, bytes)` | 接管放得进该流输出预算的前缀（右值 `std::string&&` 重载可零复制接管完整缓冲区）；空输入视为完成且无效果。若头部声明了内容长度，超出部分返回 `invalid_message` 且不消费任何字节。流内容未开启（无头、头已结束流、内容已结束）时抛 `std::logic_error`。 |
 | `unacknowledged_data_bytes(stream_id)` | 已被 `submit_data()` 接受、尚未经 `acknowledge_output()` 确认的 DATA 载荷字节；无论 QUIC 是否已发送，均计入 `max_stream_output_bytes_`。 |
 | `output_flushed(stream_id)` | 当前排队的 HEADERS/DATA/trailer 是否已全部交给 QUIC；不表示对端已确认，也不禁止继续提交正文。已移除的流返回 `true`。 |
 | `available_output_bytes(stream_id)` | 剩余 DATA 容量，是该值的唯一权威；不可用或已结束的流返回 0。 |
@@ -9117,6 +9154,7 @@ public:
     [[nodiscard]] constexpr bool failed() const noexcept;
     [[nodiscard]] std::string_view fingerprint() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view fingerprint() const&& = delete;
+    [[nodiscard]] std::string take_fingerprint() && noexcept;
 };
 
 }  // namespace ruvia
@@ -9132,7 +9170,7 @@ public:
 | `reset()` | 清空全部状态，回到收集态（保留预算）。 |
 | `on_frame` / `on_field` | 可直接用作 `http3_connection_options::frame_observer_` / `field_observer_` 的静态适配函数，`context` 必须指向该收集器（设为 `observer_context_`）。 |
 | `complete()` / `failed()` | 是否已生成指纹 / 是否因预算或格式失败（失败后不再收集，直到 `reset()`）。内部分配失败也转为失败态，从不抛出。 |
-| `fingerprint()` | 完成时返回借用收集器的指纹，否则为空；`const&&` 删除以拒绝临时收集器。 |
+| `fingerprint()` / `take_fingerprint() &&` | 完成时返回借用或移出收集器指纹，否则为空；`const&&` 删除以拒绝临时收集器。 |
 
 ```cpp
 ruvia::http3_fingerprint_collector collector;
@@ -9646,6 +9684,7 @@ class websocket_extended_connect_negotiation final {
 public:
     [[nodiscard]] std::string_view subprotocol() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view subprotocol() const&& = delete;
+    [[nodiscard]] std::string take_subprotocol() && noexcept;
     [[nodiscard]] websocket_compression compression() const noexcept;
 };
 }
@@ -9653,7 +9692,7 @@ public:
 
 RFC 8441（HTTP/2）或 RFC 9220（HTTP/3）Extended CONNECT 的 2xx 响应在线上实际提交的协商结果。只能由 [`http2_connection`](#api-http2-connection-h) / [`http3_connection`](#api-http3-connection-h) 的 WebSocket 握手成员构造，无公开构造函数；对象拥有选中子协议的副本。运行时应据此值配置 [`websocket_connection_options`](#api-websocket-connection-h)，不要另行重算压缩/子协议组合。
 
-- `subprotocol()`：选中的子协议，未选中时为空视图；视图借用本对象，只允许左值调用（右值重载 `= delete`，防止借用即将销毁的临时对象）。
+- `subprotocol()` / `take_subprotocol() &&`：选中的子协议，未选中时为空；`subprotocol()` 借用本对象并删除右值重载，`take_subprotocol() &&` 移出内部字符串。
 - `compression()`：协商得到的 [`websocket_compression`](#api-websocket-connection-h)。
 
 #### 13.1.4 HTTP/1.1 校验与 `class http1_websocket_handshake_plan`
@@ -9671,6 +9710,7 @@ public:
 
     [[nodiscard]] std::string_view subprotocol() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view subprotocol() const&& = delete;
+    [[nodiscard]] std::string take_subprotocol() && noexcept;
     [[nodiscard]] constexpr websocket_compression compression() const noexcept;
 
     template <typename visitor_type>

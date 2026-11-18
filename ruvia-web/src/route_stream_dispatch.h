@@ -695,7 +695,9 @@ struct tunnel_upgrade_session_operation final {
             co_return;
         }
         co_await establish(context_value);
-        co_await invoke_tunnel_handler(*session_, scanner_entry_, resolved_.stream_handler(), context_value);
+        context_tunnel_binding binding(context_value, session_->tunnel());
+        scanner_entry_.enter_long_lived();
+        co_await resolved_.stream_handler()(context_value);
     }
 
     [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
@@ -752,7 +754,10 @@ struct websocket_upgrade_session_operation final {
             committed->abort();
             throw;
         }
-        co_await invoke_websocket_handler(*session_, scanner_entry_, resolved_.stream_handler(), context_value);
+        auto websocket_value = make_websocket_facade(*session_);
+        context_websocket_binding websocket_binding(context_value, websocket_value);
+        scanner_entry_.enter_long_lived();
+        co_await resolved_.stream_handler()(context_value);
     }
 
     [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {

@@ -85,7 +85,7 @@ ruvia::task<void> adopt_one(ruvia::http_server& server, asio::ip::tcp::acceptor&
     if (accepted.error_code()) {
         throw std::system_error(accepted.error_code());
     }
-    server.adopt({.address_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port()}, accepted.result().release());
+    server.adopt({.address_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port()}, std::move(accepted).take_result().release());
 }
 
 ruvia::task<void> echo(ruvia::server_connection& connection) {

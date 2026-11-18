@@ -18,6 +18,7 @@
 
 #include "binary_text_encoding.h"
 #include "byte_view.h"
+#include "checked_integer.h"
 #include "connection_scanner.h"
 #include "crypto.h"
 #include "failure_report.h"
@@ -99,11 +100,21 @@ public:
         }
         check();
         try {
-            const auto chunk = co_await tunnel_.stream().read();
-            if (!chunk) {
+            response_.release_consumed_body_prefix();
+            response_.promote_pending_data();
+            if (response_.offset_ == response_.buffered_.size()) {
+                response_.rethrow_response_failure();
+                if (response_.pool_closed_) {
+                    throw http_client_error(make_error_code(http_client_errc::closing), "HTTP response body read failed", std::nullopt, response_.connection_info_.id_ != 0 ? &response_.connection_info_ : nullptr, response_.request_written_);
+                }
+                response_.discard_response_body();
                 co_return false;
             }
-            bytes.append(as_chars(*chunk));
+            const auto unread = std::string_view(response_.buffered_).substr(response_.offset_);
+            bytes.append(unread);
+            response_.offset_ = response_.buffered_.size();
+            response_.consumed_body_bytes_ = saturating_add(response_.consumed_body_bytes_, static_cast<std::uint64_t>(unread.size()));
+            response_.release_consumed_body_prefix();
             co_return true;
         } catch (const http_client_error& error) {
             throw inbound_transport_error(transport_error(error), "WebSocket tunnel read");
@@ -111,11 +122,47 @@ public:
     }
     task<std::error_code> write_bytes(std::string_view bytes, http_stream_end end) {
         try {
-            while (!bytes.empty()) {
-                const auto chunk = bytes.substr(0, 16384);
-                co_await tunnel_.stream().write(chunk);
-                activity_.note_write_progress();
-                bytes.remove_prefix(chunk.size());
+            if (!bytes.empty()) {
+                auto& output = response_.tunnel_->output_;
+                const auto require_open = [&] {
+                    if (!response_.tunnel_ || response_.pool_ == nullptr || output.stopped_ || output.end_requested_ || output.ended_ || !response_.tunnel_->accepted_ || response_.abandoned_ || response_.failure_ || response_.pool_closed_) {
+                        if (response_.failure_) {
+                            std::rethrow_exception(response_.failure_);
+                        }
+                        if (response_.pool_closed_) {
+                            throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client tunnel failed");
+                        }
+                        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP client tunnel output stopped");
+                    }
+                };
+                require_open();
+                auto lane = claim_operation_lane(output.operation_active_, "HTTP client output operation is already active");
+                struct borrowed_reset final {
+                    http_client_output_queue& output_;
+                    ~borrowed_reset() {
+                        output_.borrowed_chunk_.reset();
+                    }
+                };
+                const auto max_chunk = response_.tunnel_->config_.max_chunk_bytes_;
+                while (!bytes.empty()) {
+                    require_open();
+                    if (output.chunk_ready_) {
+                        throw std::logic_error("HTTP client output queue still owns a chunk");
+                    }
+                    const auto chunk = bytes.substr(0, max_chunk);
+                    output.borrowed_chunk_ = chunk;
+                    output.chunk_ready_ = true;
+                    const borrowed_reset guard{output};
+                    output.notify_data();
+                    while (output.chunk_ready_ && (!output.stopped_ || output.chunk_in_flight_)) {
+                        co_await output.space_.wait();
+                    }
+                    if (output.chunk_ready_) {
+                        require_open();
+                    }
+                    activity_.note_write_progress();
+                    bytes.remove_prefix(chunk.size());
+                }
             }
             if (end == http_stream_end::end) {
                 co_await tunnel_.stream().finish();
@@ -124,6 +171,9 @@ public:
         } catch (const http_client_error& error) {
             co_return transport_error(error);
         }
+    }
+    void on_eof_before_close() const {
+        throw http_client_error(make_error_code(http_client_errc::websocket_eof_before_close), "WebSocket EOF before Close");
     }
     void abort() noexcept {
         response_.tunnel_->stream_.abort();
@@ -177,21 +227,6 @@ public:
         co_await self->connection_.detach_and_drain_writes();
         if (const auto failure = self->connection_.take_background_failure()) {
             report_unhandled_failure("WebSocket client session", failure);
-        }
-    }
-    static task<std::optional<websocket_message>> read(void* target, operation_options options) {
-        auto& connection = *static_cast<websocket_session_connection<http_client_websocket_transport>*>(target);
-        auto message = co_await connection.read(std::move(options));
-        if (!message && connection.protocol().termination() == websocket_termination::eof) {
-            throw http_client_error(make_error_code(http_client_errc::websocket_eof_before_close), "WebSocket EOF before Close");
-        }
-        co_return message;
-    }
-    static task<void> close(void* target, websocket_close_options options, operation_options operation) {
-        auto& connection = *static_cast<websocket_session_connection<http_client_websocket_transport>*>(target);
-        co_await connection.close(options, std::move(operation));
-        if (connection.protocol().termination() == websocket_termination::eof) {
-            throw http_client_error(make_error_code(http_client_errc::websocket_eof_before_close), "WebSocket EOF before Close");
         }
     }
 
@@ -254,12 +289,13 @@ http_client_websocket_request& http_client_websocket_request::header(std::string
     headers_.emplace_back(name, value);
     return *this;
 }
-http_client_websocket_request& http_client_websocket_request::headers(std::span<const http_header_view> fields) & {
+http_client_websocket_request& http_client_websocket_request::headers(argument_list<http_header_view> fields) & {
     require_worker();
+    const auto field_span = fields.span();
     const auto old_size = headers_.size();
-    headers_.reserve(old_size + fields.size());
+    headers_.reserve(old_size + field_span.size());
     try {
-        for (const auto& field : fields) {
+        for (const auto& field : field_span) {
             headers_.emplace_back(field.name(), field.value());
         }
     } catch (...) {
@@ -368,8 +404,6 @@ task<websocket> http_client_websocket_request::connect_owned(http_client_websock
     }
     auto owner = std::make_shared<detail::client_websocket_session>(pool, std::move(*tunnel), std::move(*handshake), request.deflate_, request.lifecycle_, request.max_message_bytes_);
     auto result = detail::make_websocket_facade(owner->connection_);
-    result.state_->read_ = &detail::client_websocket_session::read;
-    result.state_->close_ = &detail::client_websocket_session::close;
     pool.tasks().spawn(detail::client_websocket_session::run(owner, pool.pool_stop_token()));
     result.state_->owner_ = owner;
     result.state_->retire_ = &detail::client_websocket_session::retire;

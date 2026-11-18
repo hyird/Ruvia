@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -9,6 +10,7 @@
 #include <utility>
 #include <variant>
 
+#include "byte_view.h"
 #include "move_only_function.h"
 
 namespace ruvia::detail {
@@ -48,17 +50,9 @@ public:
 
     template <typename self_type = accepted_type>
         requires(!std::is_void_v<self_type>)
-    [[nodiscard]] self_type& value() & {
+    [[nodiscard]] const self_type& value() const& RUVIA_LIFETIMEBOUND {
         return require_accepted();
     }
-    template <typename self_type = accepted_type>
-        requires(!std::is_void_v<self_type>)
-    [[nodiscard]] const self_type& value() const& {
-        return const_cast<delivery_result&>(*this).require_accepted();
-    }
-    template <typename self_type = accepted_type>
-        requires(!std::is_void_v<self_type>)
-    self_type& value() && = delete;
     template <typename self_type = accepted_type>
         requires(!std::is_void_v<self_type>)
     const self_type& value() const&& = delete;
@@ -69,22 +63,22 @@ public:
         auto& accepted_value = require_accepted();
         struct clear_accepted final {
             std::optional<accepted_storage_type>& accepted_;
+            const int exceptions_{std::is_nothrow_move_constructible_v<accepted_storage_type> ? 0 : std::uncaught_exceptions()};
             ~clear_accepted() {
-                accepted_.reset();
+                if constexpr (std::is_nothrow_move_constructible_v<accepted_storage_type>) {
+                    accepted_.reset();
+                } else if (std::uncaught_exceptions() == exceptions_) {
+                    accepted_.reset();
+                }
             }
         } clear{accepted_};
         return std::move(accepted_value);
     }
 
-    [[nodiscard]] t_type* rejected() & noexcept {
+    [[nodiscard]] const t_type* rejected() const& noexcept RUVIA_LIFETIMEBOUND {
         return rejected_ ? std::addressof(*rejected_) : nullptr;
     }
 
-    [[nodiscard]] const t_type* rejected() const& noexcept {
-        return rejected_ ? std::addressof(*rejected_) : nullptr;
-    }
-
-    t_type* rejected() && = delete;
     const t_type* rejected() const&& = delete;
 
     // A failed extraction retains the payload, in the state its move left it.
@@ -124,9 +118,18 @@ private:
         status_(status),
         accepted_(std::move(accepted_value)) {}
 
-    delivery_result(status_type status, t_type&& rejected) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
+    template <typename rejected_value_type>
+        requires std::constructible_from<t_type, rejected_value_type&&>
+    delivery_result(status_type status, rejected_value_type&& rejected) noexcept(std::is_nothrow_constructible_v<t_type, rejected_value_type&&>) :
         status_(status),
-        rejected_(std::move(rejected)) {}
+        rejected_(std::in_place, std::forward<rejected_value_type>(rejected)) {}
+
+    [[nodiscard]] const accepted_storage_type& require_accepted() const {
+        if (status_ != accepted_status || !accepted_) {
+            throw std::logic_error("delivery result has no accepted value");
+        }
+        return *accepted_;
+    }
 
     [[nodiscard]] accepted_storage_type& require_accepted() {
         if (status_ != accepted_status || !accepted_) {

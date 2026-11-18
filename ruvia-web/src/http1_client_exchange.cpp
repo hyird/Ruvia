@@ -580,9 +580,13 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
                 });
             }
             const auto ending = output.end_requested_ && !output.chunk_ready_ ? http_stream_end::end : http_stream_end::keep_open;
-            const auto bytes_value = output.chunk_ready_ ? std::string_view(output.chunk_) : std::string_view{};
             std::size_t completed_bytes = 0;
-            const auto error = tls_transport.has_value() ? co_await tls_transport->write_bytes(bytes_value, ending, &completed_bytes) : co_await plain_transport.write_bytes(bytes_value, ending, &completed_bytes);
+            std::error_code error;
+            {
+                const http_client_output_queue::chunk_lease chunk(output);
+                const auto bytes_value = output.chunk_ready_ ? chunk.view() : std::string_view{};
+                error = tls_transport.has_value() ? co_await tls_transport->write_bytes(bytes_value, ending, &completed_bytes) : co_await plain_transport.write_bytes(bytes_value, ending, &completed_bytes);
+            }
             pool_.wire_counters().sent_ += completed_bytes;
             write_timer.cancel();
             restart_inactivity();

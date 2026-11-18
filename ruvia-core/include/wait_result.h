@@ -7,6 +7,8 @@
 #include <utility>
 #include <variant>
 
+#include "byte_view.h"
+
 namespace ruvia::detail {
 template <typename t_type>
 class wait_value final {
@@ -55,7 +57,7 @@ public:
         return std::holds_alternative<detail::wait_value<t_type>>(result_);
     }
 
-    [[nodiscard]] const t_type& value() const& {
+    [[nodiscard]] const t_type& value() const& RUVIA_LIFETIMEBOUND {
         const auto* result_value = std::get_if<detail::wait_value<t_type>>(&result_);
         if (result_value == nullptr) {
             throw std::logic_error("worker wait result has no value");
@@ -63,15 +65,6 @@ public:
         return result_value->value_;
     }
     const t_type& value() const&& = delete;
-
-    [[nodiscard]] t_type& value() & {
-        auto* result_value = std::get_if<detail::wait_value<t_type>>(&result_);
-        if (result_value == nullptr) {
-            throw std::logic_error("worker wait result has no value");
-        }
-        return result_value->value_;
-    }
-    t_type& value() && = delete;
 
     [[nodiscard]] t_type take_value() && {
         auto* result_value = std::get_if<detail::wait_value<t_type>>(&result_);

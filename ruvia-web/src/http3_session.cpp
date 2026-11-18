@@ -622,7 +622,7 @@ void http3_session::dispatch_events() {
             on_data(*data);
         } else if (const auto* datagram = event->datagram()) {
             on_datagram(*datagram);
-        } else if (const auto* end = event->message_end()) {
+        } else if (auto* end = event->message_end()) {
             on_message_end(*end);
         } else if (const auto* action = event->transport_action()) {
             // Either origin abandons the request: a peer RESET_STREAM or
@@ -779,10 +779,10 @@ void http3_session::on_data(http3_data_event& event) {
     });
 }
 
-void http3_session::on_message_end(const http3_message_end_event& event) {
+void http3_session::on_message_end(http3_message_end_event& event) {
     const auto stream_id = event.stream_id();
     auto* stream = find_stream(stream_id);
-    if (stream != nullptr && !stream->aborted() && !stream->handler_done() && !event.trailers().empty() && stream->trailers().append_received(event.trailers()).has_value()) {
+    if (stream != nullptr && !stream->aborted() && !stream->handler_done() && !event.trailers().empty() && stream->trailers().append_received(std::move(event).take_trailers()).has_value()) {
         // RFC 9114 §4.1.2: a malformed trailer section makes the request
         // malformed.
         reset_stream(stream_id, http3_error_code::message_error);
@@ -984,14 +984,13 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
         http_request request = head.build_request(stream->body_mode() == request_body_mode::buffered ? stream->buffered_body() : std::string_view{});
         http_response response;
         interim_target target{*this, stream_id};
-        http_interim_response_output interim_output(&target, [](void* raw, const http_interim_response_head& interim) -> task<void> {
+        http_interim_response_output interim_output(&target, [](void* raw, const http_interim_response_head& interim) {
             auto& output = *static_cast<interim_target*>(raw);
             // RFC 9114 §4.1: any number of 1xx heads may precede the final one.
             if (output.session_.codec().submit_interim_response_head(output.stream_id_, interim) != http_submit_status::accepted) {
                 throw std::invalid_argument("HTTP/3 interim response rejected");
             }
             output.session_.wake_writer();
-            co_return;
         });
         http_connection_advertisement_output advertisements(this, [](void* raw, std::span<const std::string_view> origins) {
             auto& session = *static_cast<http3_session*>(raw);

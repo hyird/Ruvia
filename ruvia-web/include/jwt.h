@@ -56,11 +56,17 @@ public:
         return name_;
     }
     [[nodiscard]] std::string_view name() const&& = delete;
+    [[nodiscard]] std::string take_name() && noexcept {
+        return std::exchange(name_, {});
+    }
 
     [[nodiscard]] std::string_view value() const& noexcept RUVIA_LIFETIMEBOUND {
         return value_;
     }
     [[nodiscard]] std::string_view value() const&& = delete;
+    [[nodiscard]] std::string take_value() && noexcept {
+        return std::exchange(value_, {});
+    }
 
 private:
     friend struct detail::jwt_payload_access;
@@ -135,17 +141,29 @@ public:
     jwt_payload& operator=(jwt_payload&& other) noexcept;
     [[nodiscard]] std::string_view issuer() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view issuer() const&& = delete;
+    [[nodiscard]] std::string take_issuer() && noexcept {
+        return std::exchange(issuer_, {});
+    }
     [[nodiscard]] std::string_view subject() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view subject() const&& = delete;
+    [[nodiscard]] std::string take_subject() && noexcept {
+        return std::exchange(subject_, {});
+    }
     // The first "aud" value, or empty if none. A JWT may carry multiple audiences
     // (RFC 7519 §4.1.3); use has_audience to test membership across all of them.
     [[nodiscard]] std::string_view audience() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view audience() const&& = delete;
     [[nodiscard]] std::span<const std::string> audiences() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const std::string> audiences() const&& = delete;
+    [[nodiscard]] std::vector<std::string> take_audiences() && noexcept {
+        return std::exchange(audiences_, {});
+    }
     [[nodiscard]] bool has_audience(std::string_view audience) const noexcept;
     [[nodiscard]] std::string_view id() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view id() const&& = delete;
+    [[nodiscard]] std::string take_id() && noexcept {
+        return std::exchange(id_, {});
+    }
     // nullptr 表示声明缺失。返回值及 text() 是借用，payload 移动或销毁前须结束使用。
     [[nodiscard]] const jwt_numeric_date* expires_at() const& noexcept RUVIA_LIFETIMEBOUND;
     const jwt_numeric_date* expires_at() const&& = delete;
@@ -159,6 +177,9 @@ public:
     // uniqueness-checked with the rest of the payload, then not exposed here.
     [[nodiscard]] std::span<const jwt_claim> claims() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const jwt_claim> claims() const&& = delete;
+    [[nodiscard]] std::vector<jwt_claim> take_claims() && noexcept {
+        return std::exchange(claims_, {});
+    }
     [[nodiscard]] std::optional<std::string_view> claim(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> claim(std::string_view name) const&& = delete;
 

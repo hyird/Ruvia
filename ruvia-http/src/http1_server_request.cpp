@@ -199,7 +199,8 @@ http1_server_request_parse_result http1_server_request_parser::fail(http_parse_e
     return http1_server_request_parse_result(0, http1_server_request_parse_failure(error));
 }
 
-http1_server_request_parse_result http1_server_request_parser::parse(std::string_view buffer) {
+http1_server_request_parse_result http1_server_request_parser::parse(borrowed_text buffer_text) & {
+    const auto buffer = buffer_text.view();
     if (state_ != decoder_state::active) {
         throw std::logic_error("HTTP/1 request parser is not active");
     }

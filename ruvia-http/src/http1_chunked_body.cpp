@@ -386,14 +386,15 @@ bool http1_chunked_body_decoder::publish_trailers(std::string_view trailers) {
     const auto discarded = [message = trailer_message_](std::string_view name) noexcept {
         return message == http1_trailer_message::request ? detail::is_forbidden_http_request_trailer_name(name) : detail::is_forbidden_response_trailer_name(name);
     };
-    const auto publish = [this, &discarded](std::string_view name, std::string_view value) {
+    std::string unfolded;
+    const auto publish = [this, &discarded, &unfolded](std::string_view name, std::string_view value) {
         if (discarded(name)) {
             return;
         }
         // RFC 9112 section 5.2: each accepted obs-fold becomes SP before the
         // value is interpreted.
         if (const auto fold = detail::find_field_line_fold(value); fold != std::string_view::npos) {
-            std::string unfolded;
+            unfolded.clear();
             detail::copy_unfolded_field_lines(value, fold, detail::field_line_folding_policy::http, unfolded);
             trailers_.push_back(http_header::copy_with_lowercase_name(name, unfolded));
             return;

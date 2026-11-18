@@ -1954,21 +1954,21 @@ auto sub = co_await c.dispatch({.method_ = "GET", .target_ = "/api/internal/prof
 | `body_reader& request_body() &` | `stream_body` 路由的流式正文；缓冲路由抛 `std::logic_error`（[`streaming.h`](#api-streaming-h)） |
 | `body_reader& request_body() && = delete` | 拒绝从右值 context 取读取器引用（读取器属于 context） |
 | `std::exception_ptr exception() const noexcept` | 使当前中间件/处理器分发失败的异常，无则空；与构造错误响应的 `error()` 无关 |
-| `ruvia::session session()` | 仅 `RUVIA_ENABLE_REDIS`：本请求绑定的会话（[`session.h`](#api-session-h)）；未绑定 `session_middleware` 抛 `std::logic_error` |
+| `ruvia::session session() &` | 仅 `RUVIA_ENABLE_REDIS`：本请求绑定的会话（[`session.h`](#api-session-h)）；未绑定 `session_middleware` 抛 `std::logic_error`；右值重载已删除 |
 | `template <typename t_type> request_state_binding<t_type> bind_request_state(const t_type& value)` | 按地址绑定请求级状态，作用于下游动态 `next()` 作用域 |
 | `template <typename t_type> requires(!std::is_lvalue_reference_v<t_type>) request_state_binding<std::remove_cvref_t<t_type>> bind_request_state(t_type&&) = delete` | 拒绝绑定临时对象 |
 | `template <typename t_type> const std::remove_cvref_t<t_type>& request_state() const` | 读取绑定状态；未绑定抛 `std::logic_error` |
 | `template <typename t_type> const std::remove_cvref_t<t_type>* try_request_state() const noexcept` | 读取绑定状态；未绑定为 `nullptr` |
-| `task<dispatch_response> dispatch(dispatch_options options)` | 进程内子请求 |
+| `task<dispatch_response> dispatch(dispatch_options options) &` | 进程内子请求（右值 `context` 重载已删除） |
 | `bool is_subrequest() const noexcept` | 当前是否为子请求 |
 | `std::string url_for(std::string_view pattern, argument_list<std::string_view> values = {}) const` | 按已注册模式生成路径：`c.url_for("/users/:id", {"42"})` → `"/users/42"`；`:name` 值作为百分号编码段且非空；尾部 `*` 值保留斜杠、可为空；结果不以 `//` 开头、不含 `.`/`..` 段；未注册模式、值数量不符、`.`/`..` 段、以空段开头的模式、或路由无法回捕的 `*` 值（含 `\`，或在根处以 `/` 开头）抛 `std::invalid_argument`；无路由表（手工构造的测试 context）抛 `std::logic_error` |
-| `::ruvia::websocket& websocket() const` | 已协商 WebSocket 路由的会话（[`websocket.h`](#api-websocket-h)）；context 自身从不执行握手 |
-| `http_tunnel& tunnel() const` | 已协商 CONNECT 路由的隧道（[`http_tunnel.h`](#api-http-tunnel-h)） |
-| `context_response_editor edit_response() noexcept` | 编辑已 `respond` 的缓冲响应；无响应或已提交时修改抛 `std::logic_error`；字段不被下一次替换继承 |
-| `const http_response* response() const noexcept` | 只读观察已选缓冲响应（不含待应用策略）；无响应为 `nullptr` |
+| `::ruvia::websocket& websocket() const&` | 已协商 WebSocket 路由的会话（[`websocket.h`](#api-websocket-h)）；context 自身从不执行握手；`const&&` 已删除 |
+| `http_tunnel& tunnel() const&` | 已协商 CONNECT 路由的隧道（[`http_tunnel.h`](#api-http-tunnel-h)）；`const&&` 已删除 |
+| `context_response_editor edit_response() & noexcept` | 编辑已 `respond` 的缓冲响应；无响应或已提交时修改抛 `std::logic_error`；字段不被下一次替换继承；右值重载已删除 |
+| `const http_response* response() const& noexcept` | 只读观察已选缓冲响应（不含待应用策略）；无响应为 `nullptr`；`const&&` 已删除 |
 | `bool committed() const noexcept` | 响应头或流/升级是否已提交 |
-| `void respond(http_response&& response)` | 将独立响应移入 context，替换丢弃旧响应全部字段；`respond()` 后再启动 `next()` 是控制流错误；提交后不得替换 |
-| `task<http_response> not_found()` | 调用当前匹配的未命中处理器生成响应 |
+| `void respond(http_response&& response) &` | 将独立响应移入 context，替换丢弃旧响应全部字段；`respond()` 后再启动 `next()` 是控制流错误；提交后不得替换；右值重载已删除 |
+| `task<http_response> not_found() &` | 调用当前匹配的未命中处理器生成响应；右值重载已删除 |
 
 #### 7.1.8 健康与就绪探针
 
@@ -2443,7 +2443,7 @@ ruvia::task<ruvia::http_response> login(ruvia::context& c) {
 | `std::string_view payload() const& noexcept` | 当前会话 blob |
 | `std::string_view payload() const&& = delete` | 拒绝从临时 `session` 借用视图 |
 | `bool empty() const noexcept` | `payload().empty()` |
-| `void set(std::string_view payload)` | 写入；每次非空写入在提交时替换现有会话身份；同一请求多次写入只发布一个新 ID；只读不改变 ID |
+| `void set(std::string_view payload)` / `template <std::same_as<std::string> string_type> void set(string_type&& payload)` | 写入（精确非 const `std::string` 右值直接接管缓冲）；每次非空写入在提交时替换现有会话身份；同一请求多次写入只发布一个新 ID；只读不改变 ID |
 | `void clear()` | 清空并在提交时删除会话 |
 | `void regenerate()` | 不改变数据而轮换 ID（认证/提权且不写会话时使用）；只重新安排已加载会话：非空数据轮换 ID，空数据清除旧 ID；未加载会话或已有待提交动作时保持原计划；`set()` 已隐含轮换 |
 
@@ -3870,10 +3870,10 @@ co_return c.text(body.text());
 | `http_client_tunnel_result& operator=(const http_client_tunnel_result&) = delete` | 禁止复制赋值：持有唯一的隧道或拒绝响应，只能转移 |
 | `http_client_tunnel_result(http_client_tunnel_result&&) noexcept = default` | 移动构造 |
 | `http_client_tunnel_result& operator=(http_client_tunnel_result&&) noexcept = default` | 移动赋值 |
-| `http_client_tunnel* tunnel() & noexcept` | 已建立的隧道，被拒时为 `nullptr` |
-| `http_client_tunnel* tunnel() && = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
-| `http_client_response* response() & noexcept` | 拒绝响应，成功时为 `nullptr` |
-| `http_client_response* response() && = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
+| `http_client_tunnel* tunnel() & noexcept` / `const http_client_tunnel* tunnel() const& noexcept` | 已建立的隧道，被拒时为 `nullptr`（右值重载已删除） |
+| `std::optional<http_client_tunnel> take_tunnel() && noexcept` | 右值提取已建立隧道（否则 `std::nullopt`） |
+| `http_client_response* response() & noexcept` / `const http_client_response* response() const& noexcept` | 拒绝响应，成功时为 `nullptr`（右值重载已删除） |
+| `std::optional<http_client_response> take_response() && noexcept` | 右值提取拒绝响应（否则 `std::nullopt`） |
 
 #### 11.3.14 连接通告与 Server Push
 
@@ -4073,8 +4073,9 @@ UTF-8 文本字段（JSON 字符串）。内容可为任意字节，序列化时
 | `operator std::string_view() const& noexcept` | 等价 `view()` |
 | `operator std::string_view() const&& = delete` | 禁止右值隐式转换 |
 | `friend bool operator==(const string& left, const string& right) noexcept` | 按字节比较 |
-| `void assign_owned(std::string_view value)` | 复制并拥有 `value` |
-| `void assign_owned(std::string&& value) noexcept` | 接管 `value` 的缓冲 |
+| `void assign_owned(std::string_view value) &` | 复制并拥有 `value`（右值重载 `= delete`） |
+| `void assign_owned(std::string&& value) & noexcept` | 接管 `value` 的缓冲（右值重载 `= delete`） |
+| `std::string take_string() &&` | 移出自有缓冲（借用态时复制为独立 `std::string`）并清空源 |
 
 #### 12.2.2 标量包装 `bool_value` / `float_value` / `double_value`
 
@@ -4136,6 +4137,7 @@ UTF-8 文本字段（JSON 字符串）。内容可为任意字节，序列化时
 | --- | --- |
 | `bytes() noexcept = default` | 空 |
 | `bytes(std::span<const std::uint8_t> value)` | 复制并拥有（隐式） |
+| `template <std::same_as<std::vector<std::uint8_t>> vector_type> bytes(vector_type&& value) noexcept` | 接管 `vector` 缓冲，零复制 |
 | `bytes(const bytes&) = delete` | 禁止拷贝 |
 | `bytes& operator=(const bytes&) = delete` | 禁止拷贝赋值 |
 | `bytes(bytes&& other) noexcept` | 接管；源清空 |
@@ -4148,8 +4150,9 @@ UTF-8 文本字段（JSON 字符串）。内容可为任意字节，序列化时
 | `operator std::span<const std::uint8_t>() const&& = delete` | 禁止右值隐式转换 |
 | `std::size_t size() const noexcept` | 字节数 |
 | `bool empty() const noexcept` | 是否为空 |
-| `void assign_owned(std::span<const std::uint8_t> value)` | 复制并替换（强异常保证） |
-| `void assign_owned(std::vector<std::uint8_t>&& value) noexcept` | 接管缓冲 |
+| `void assign_owned(std::span<const std::uint8_t> value) &` | 复制并替换（强异常保证；右值重载 `= delete`） |
+| `void assign_owned(std::vector<std::uint8_t>&& value) & noexcept` | 接管缓冲（右值重载 `= delete`） |
+| `std::vector<std::uint8_t> take_bytes() && noexcept` | 移出字节数组并清空源 |
 | `friend bool operator==(const bytes& left, const bytes& right) noexcept` | 逐字节比较 |
 
 #### 12.2.5 `ruvia::array<t_type>`
@@ -4192,10 +4195,8 @@ UTF-8 文本字段（JSON 字符串）。内容可为任意字节，序列化时
 | `iterator end() & noexcept` | 可变结束迭代器 |
 | `const_iterator end() const& noexcept` | 只读结束迭代器 |
 | `iterator end() const&& = delete` | 同 `begin() const&&` |
-| `void reserve(size_type count)` | 预留容量 |
-| `void clear() noexcept` | 清空 |
-| `void resize(size_type count)` | 缩小直接截断；扩大逐个默认构造，失败回滚到原长度 |
-| `void resize(size_type count, const t_type& value)` | 扩大时先把 `value` 重绑定为拥有型副本再逐个追加；失败回滚 |
+| `void reserve(size_type count) &` / `void clear() & noexcept` / `void resize(...) &` | 容量调整与清空仅限左值调用（右值重载均 `= delete`）；`resize` 扩大失败回滚到原长度 |
+| `std::vector<t_type> take_items() &&` | 移出元素（借用元素重绑定为拥有），源恢复为空 |
 | `template <typename... args_type> t_type& emplace_back(args_type&&... args) &` | 追加并返回新元素引用；单个同类型参数按拷贝（重绑定为拥有）或移动处理；字符串/模型等先取得存储再构造 |
 | `template <typename... args_type> t_type& emplace_back(args_type&&...) && = delete` | 禁止向右值数组插入 |
 | `void push_back(const t_type& value) &` | 追加拥有型副本（即使元素类型不可拷贝，也经重绑定复制） |
@@ -4237,9 +4238,7 @@ UTF-8 文本字段（JSON 字符串）。内容可为任意字节，序列化时
 | `auto end() & noexcept` | 可变结束迭代器 |
 | `auto end() const& noexcept` | 只读结束迭代器 |
 | `void end() const&& = delete` | 同 `begin() const&&` |
-| `void clear() noexcept` | 释放全部元素 |
-| `void reserve(std::size_t count)` | 预留指针槽 |
-| `void resize(std::size_t count)` | 缩小释放尾部；扩大逐个默认构造，失败回滚 |
+| `void clear() & noexcept` / `void reserve(std::size_t count) &` / `void resize(std::size_t count) &` | 容量调整与释放仅限左值调用（右值重载均 `= delete`）；`resize` 扩大失败回滚 |
 | `template <typename... args_type> t_type& emplace_back(args_type&&... args) &` | 先预留指针槽再构造盒子；语义同 `array::emplace_back`；超过 `max_size()` 抛 `std::length_error` |
 | `template <typename... args_type> t_type& emplace_back(args_type&&...) && = delete` | 禁止向右值数组插入 |
 | `void push_back(const t_type& value) &` | 追加拥有型副本 |
@@ -4537,6 +4536,7 @@ JSON 解析的整文档资源预算（含嵌套数组），用于 `parse_json`�
 | `friend bool operator==(const t_type&, const t_type&) = default` | 逐字段比较：状态相同且（已解析时）值相等；不比较 `is_present` |
 | `template <fixed_string field> decltype(auto) get() const&` | 必填且非可空字段返回 `const type&`（无值时抛 `std::logic_error("required model field has no value")`，如默认构造后未赋值）；其他字段返回 `const std::optional<type>&` |
 | `template <fixed_string field> decltype(auto) get() const&& = delete` | 禁止从右值模型取引用 |
+| `template <fixed_string field> decltype(auto) take() &&` | 移出字段值并将字段重置为缺失：必填非可空无值抛 `std::logic_error("required model field has no value")`，其余返回 `std::optional<type>`；`string`/`bytes`/子模型/数组零复制移出（若仍处于借用态则复制为自有值） |
 | `template <fixed_string field> bool is_present() const noexcept` | 原始输入是否出现该字段（含出现为 `null`、类型错误、重复） |
 | `template <fixed_string field> bool is_null() const noexcept` | 当前是否为 `null` |
 | `template <fixed_string field> bool has_value() const noexcept` | 当前是否持有非空值 |
@@ -4657,6 +4657,7 @@ JSON 解析的整文档资源预算（含嵌套数组），用于 `parse_json`�
 | --- | --- |
 | `template <typename t_type> requires detail::is_model_json_value<t_type> std::string to_json(const t_type& value)` | `t_type` 为模型、标量、`string`、`bytes` 或它们的（嵌套）数组；序列化当前值，不执行规则或初始化器；输出总是良构 UTF-8；非有限浮点输出 `null`；`bytes` 输出 Base64 |
 | `template <typename t_type> requires detail::is_model_json_value<t_type> model_parse_result<t_type> parse_json(std::string_view body, model_parse_options options = {})` | 类型约束同 `to_json`；解析恰好一个 JSON 值（允许前后空白）；成功值拥有全部字符串与动态 token；类型含模型时执行结构与字段规则；错误见 12.4.2 |
+| `template <typename t_type, std::same_as<std::string> string_type> requires detail::is_model_json_value<t_type> model_parse_result<t_type> parse_json(string_type&& body, model_parse_options options = {})` | 精确非 const `std::string` 右值重载：`t_type` 为顶层 `json_value` / `json_object` 时零复制接管 `body` |
 | `template <typename t_type> requires detail::is_model<t_type> model_parse_result<t_type> parse_form(std::string_view body)` | `t_type` 为 `RUVIA_MODEL`；解析 URL 编码表单；成功值拥有字符串；只绑定字符串与标量字段；错误见 12.4.2 |
 | `template <typename model_type> requires detail::is_model<model_type> void validate_model(const model_type& model, validator& out)` | 把模型的结构问题（`required`/`invalid_type`/`duplicate`）与字段规则问题追加到 `out`，不因输入问题抛出；分配与自定义规则异常仍传播 |
 | `template <typename model_type> requires detail::is_model<model_type> json_value to_json_value(const model_type& value)` | 返回 `json_value(value)`：模型 writer 直接把 JSON 写入 token 自有存储，不再解析生成文本；字段省略、`null` 与编码规则同 `to_json`；结果总是对象 token |
@@ -4676,6 +4677,7 @@ JSON 解析的整文档资源预算（含嵌套数组），用于 `parse_json`�
 | --- | --- |
 | `std::string_view view() const& noexcept` | 原始 token 字节 |
 | `std::string_view view() const&& = delete` | 禁止从右值取视图 |
+| `std::string take_text() &&` | 提取文本并复位为默认 token（自身拥有时零复制移出，借用时复制） |
 | `clone() const` | 复制为独立拥有的 token，不修改源 |
 | `into_owned() &&` | 接管自有存储，只有借用时才复制；成功后源恢复为默认 token |
 | `template <typename visitor_type> bool for_each_field(visitor_type&& visitor) const` | 按出现顺序以 `(std::string_view key, const json_value& value)` 调用；`key` 已解码，二者只在回调期间有效；回调返回可转为 `bool` 的值，`false` 中止。完整遍历返回 `true`，中止或 token 不是对象（`json_value` 时）返回 `false` |
@@ -4916,8 +4918,9 @@ ruvia::task<void> list_page(ruvia::db_executor db) {
 | --- | --- |
 | `std::size_t size() const noexcept` | 元素个数 |
 | `bool empty() const noexcept` | 是否为空 |
-| `void reserve(std::size_t count)` | 预留容量 |
-| `void push_back(entity_type&& entity)` | 移入一个实体（实体只可移动，不接受左值） |
+| `void reserve(std::size_t count) &` | 预留容量（右值重载 `= delete`） |
+| `void push_back(entity_type&& entity) &` | 移入一个实体（实体只可移动，不接受左值；右值容器 `= delete`） |
+| `std::vector<entity_type> take_rows() && noexcept` | 移出内部实体数组，源变为空 |
 
 **元素访问与迭代**（返回值借用集合，`RUVIA_LIFETIMEBOUND`）
 
@@ -5355,7 +5358,7 @@ ruvia::task<void> handler(ruvia::db_executor db, std::int64_t id) {
 | `db_query_result_cache& operator=(const db_query_result_cache&) = delete` | 不可赋值 |
 | `task<void> remove(std::span<const std::string_view> ids) const` | 删除以这些 `db_cache_options::id_` 缓存的条目，含仓储 Builder 由其派生的 `get_first` / `get_exists` / `get_count` 结果 |
 | `template <typename... ids_type> requires (sizeof...(ids_type) > 0 && (std::convertible_to<ids_type&&, std::string_view> && ...)) task<void> remove(ids_type&&... ids) const` | 变参形式；键视图在删除命令取得自有参数后即可释放 |
-| `task<void> clear()` | 清空本别名（`key_prefix_` 下）的全部缓存条目 |
+| `task<void> clear() const` | 清空本别名（`key_prefix_` 下）的全部缓存条目 |
 
 #### 14.2.11 `db_client`（`RUVIA_ENABLE_DATABASE`）
 
@@ -5473,8 +5476,10 @@ auto report = ruvia::db_migrator::run(config, migrations);
 | `db_migration_report& operator=(db_migration_report&& other)` | 移动赋值 |
 | `std::span<const std::string> applied() const& noexcept` | 本次应用的 id |
 | `std::span<const std::string> applied() const&& = delete` | 禁止从临时报告取出悬垂的 id 视图 |
+| `std::vector<std::string> take_applied() && noexcept` | 移出本次应用的 id 列表，源置空 |
 | `std::span<const std::string> skipped() const& noexcept` | 已应用而跳过的 id |
 | `std::span<const std::string> skipped() const&& = delete` | 禁止从临时报告取出悬垂的 id 视图 |
+| `std::vector<std::string> take_skipped() && noexcept` | 移出已应用而跳过的 id 列表，源置空 |
 | `bool changed() const noexcept` | 本次是否应用了迁移 |
 
 **`class db_migrator final`**
@@ -5835,8 +5840,10 @@ ORM 仓储的 `upsert` / `on_conflict` 也消费 `db_conflict_options`，空 Pos
 | `db_statement& operator=(db_statement&& other)` | 移动赋值 |
 | `std::string_view sql() const& noexcept` | SQL 文本 |
 | `std::string_view sql() const&& = delete` | 禁止从临时语句取视图：SQL 视图不得超过语句寿命 |
+| `std::string take_sql() && noexcept` | 移出 SQL 文本，源置空 |
 | `std::span<const db_value> params() const& noexcept` | 参数 |
 | `std::span<const db_value> params() const&& = delete` | 禁止从临时语句取视图：参数视图不得超过语句寿命 |
+| `std::vector<db_value> take_params() && noexcept` | 移出参数列表，源置空 |
 | `bool returns_rows() const noexcept` | 是否返回行集 |
 
 #### 14.4.10 `db_query`
@@ -6426,6 +6433,7 @@ auto order = employee::column<"id">().desc(ruvia::db_nulls_order::last);
 | `template <fixed_string name> const auto& get() const&` | 只读版本，语义同上 |
 | `template <fixed_string name> auto& get() && = delete` | 删除：从临时实体取的引用会悬垂 |
 | `template <fixed_string name> const auto& get() const&& = delete` | 删除：同上，拒绝 `const` 临时实体 |
+| `template <fixed_string name> auto take() &&` | 移出列值并将列置回 unset（非 value 态抛 `std::logic_error("entity value is not set")`），或移出已加载关系并复位 |
 | `template <fixed_string name, typename value_type> auto& set(value_type&& value) &` | 写列并置 value 态，返回 `*this` 以链式调用；关系成员 `static_assert` 失败 |
 | `template <fixed_string name, typename value_type> auto& set(value_type&&) && = delete` | 删除：返回的 `*this` 引用指向临时实体会悬垂 |
 | `template <fixed_string name> auto& set_null() & requires requires { /*存储 set_null<name>() 可用*/ }` | 仅可空列；清值并置 null 态，返回 `*this` |
@@ -6450,6 +6458,7 @@ auto order = employee::column<"id">().desc(ruvia::db_nulls_order::last);
 | `template <fixed_string name> const auto& get() const&` | 只读版本 |
 | `template <fixed_string name> auto& get() && = delete` | 删除：从临时投影取的引用会悬垂 |
 | `template <fixed_string name> const auto& get() const&& = delete` | 删除：同上，拒绝 `const` 临时投影 |
+| `template <fixed_string name> auto take() &&` | 移出列值并把该列置回 unset（非 value 态抛 `std::logic_error("entity value is not set")`） |
 | `template <fixed_string name, typename value_type> auto& set(value_type&& value) &` | 写列并置 value 态，返回 `*this` |
 | `template <fixed_string name, typename value_type> auto& set(value_type&&) && = delete` | 删除：临时投影上链式返回会悬垂 |
 | `template <fixed_string name> auto& set_null() & requires requires { /*存储 set_null<name>() 可用*/ }` | 仅可空列；置 null 态，返回 `*this` |
@@ -7139,6 +7148,7 @@ co_await client.shutdown();
 | `constexpr bool applied() const noexcept` | 本次是否写入：`NX` / `XX` 条件不满足时为 `false` |
 | `const std::optional<std::string>& previous() const& noexcept` | 旧值（仅 `previous_value_ = return_` 时可能有值）；`std::nullopt`（键不存在）与空串保持区分 |
 | `const std::optional<std::string>& previous() const&& = delete` | 禁止从临时结果借用旧值引用（临时对象销毁后引用悬空） |
+| `std::optional<std::string> take_previous() && noexcept` | 移出旧值并清空源 |
 
 **`enum class redis_ttl_state : std::uint8_t`**
 
@@ -7165,8 +7175,10 @@ co_await client.shutdown();
 | `redis_key_value& operator=(redis_key_value&&) noexcept = default` | 移动赋值 |
 | `std::string_view key() const& noexcept` | 键或字段名 |
 | `std::string_view key() const&& = delete` | 禁止从临时对象取视图（视图会悬空） |
+| `std::string take_key() && noexcept` | 移出键名并清空源 |
 | `std::string_view value() const& noexcept` | 值 |
 | `std::string_view value() const&& = delete` | 禁止从临时对象取视图 |
+| `std::string take_value() && noexcept` | 移出值并清空源 |
 
 **`redis_scored_value`** —— 有序集合成员与分数。
 
@@ -7178,6 +7190,7 @@ co_await client.shutdown();
 | `redis_scored_value& operator=(redis_scored_value&&) noexcept = default` | 移动赋值 |
 | `std::string_view value() const& noexcept` | 成员 |
 | `std::string_view value() const&& = delete` | 禁止从临时对象取视图 |
+| `std::string take_value() && noexcept` | 移出成员字符串并清空源 |
 | `double score() const noexcept` | 分数 |
 
 **`template <typename entry_type> class redis_scan_page`** —— SCAN 族的一页：本页条目与续扫游标。
@@ -7192,6 +7205,7 @@ co_await client.shutdown();
 | `std::optional<redis_scan_cursor> next_cursor() const noexcept` | 续扫游标；完成时为 `std::nullopt` |
 | `std::span<const entry_type> entries() const& noexcept` | 本页条目（可能为空页但未完成） |
 | `std::span<const entry_type> entries() const&& = delete` | 禁止从临时页借用条目（span 会悬空） |
+| `std::vector<entry_type> take_entries() && noexcept` | 移出本页条目并清空源 |
 
 | 别名 | 定义 | 用途 |
 | --- | --- | --- |
@@ -7219,8 +7233,10 @@ for (;;) {
 | `redis_stream_entry& operator=(redis_stream_entry&&) noexcept = default` | 移动赋值 |
 | `std::string_view id() const& noexcept` | 条目 ID |
 | `std::string_view id() const&& = delete` | 禁止从临时对象取视图 |
+| `std::string take_id() && noexcept` | 移出条目 ID 并清空源 |
 | `std::span<const redis_key_value> fields() const& noexcept` | 字段-值；`XREADGROUP` 重读已删除的待确认消息时保留 ID、字段为空 |
 | `std::span<const redis_key_value> fields() const&& = delete` | 禁止从临时对象借用字段 |
+| `std::vector<redis_key_value> take_fields() && noexcept` | 移出字段列表并清空源 |
 
 **`redis_stream_read_result`** —— 一个流的读取结果。
 
@@ -7232,8 +7248,10 @@ for (;;) {
 | `redis_stream_read_result& operator=(redis_stream_read_result&&) noexcept = default` | 移动赋值 |
 | `std::string_view stream() const& noexcept` | 流键 |
 | `std::string_view stream() const&& = delete` | 禁止从临时对象取视图 |
+| `std::string take_stream() && noexcept` | 移出流键并清空源 |
 | `std::span<const redis_stream_entry> entries() const& noexcept` | 条目 |
 | `std::span<const redis_stream_entry> entries() const&& = delete` | 禁止从临时对象借用条目 |
+| `std::vector<redis_stream_entry> take_entries() && noexcept` | 移出条目列表并清空源 |
 
 **`redis_error`** —— Redis 失败异常，派生自 `std::system_error`。
 
@@ -7268,11 +7286,14 @@ for (;;) {
 | `bool is_error() const noexcept` | `kind() == kind_type::error` |
 | `std::string_view string() const&` | 字符串内容；种类不符抛 `std::logic_error` |
 | `std::string_view string() const&& = delete` | 禁止从临时值取视图（视图会悬空） |
+| `std::string take_string() &&` | 移出字符串并复位为 `null`；种类不符抛 `std::logic_error` |
 | `std::string_view error() const&` | 错误文本；种类不符抛 `std::logic_error` |
 | `std::string_view error() const&& = delete` | 禁止从临时值取视图 |
+| `std::string take_error() &&` | 移出错误文本并复位为 `null`；种类不符抛 `std::logic_error` |
 | `std::int64_t integer() const` | 整数；种类不符抛 `std::logic_error` |
 | `std::span<const redis_value> array() const&` | 元素；种类不符抛 `std::logic_error` |
 | `std::span<const redis_value> array() const&& = delete` | 禁止从临时值借用元素 |
+| `std::vector<redis_value> take_array() &&` | 移出元素数组并复位为 `null`；种类不符抛 `std::logic_error` |
 | `template <detail::text_scalar t_type> std::optional<t_type> as() const&` | 标量转换：`null` → `std::nullopt`；`integer` 回复转 `bool`（仅 `0` / `1`，否则 `conversion_error(invalid_format)`）、整数（越界 `conversion_error(out_of_range)`）或浮点；其余按字符串文本以共享文本标量语法转换；非字符串种类抛 `std::logic_error`。`t_type` 限 `bool`、非字符类整数、浮点、`std::string`、`ruvia::string`、`std::string_view`（无 cv 限定） |
 | `template <detail::text_scalar t_type> std::optional<t_type> as() const&& = delete` | 禁止从临时值转换（`std::string_view` 结果会悬空） |
 
@@ -7515,10 +7536,10 @@ for (;;) {
 | `task<redis_value> eval_cached(const redis_script&, std::initializer_list<std::string_view>, std::span<const std::string_view> = {}) const = delete` | 拒绝花括号键列表（与 `command` 一致），改用具名数组或 `std::span` |
 | `task<redis_value> eval_cached(const redis_script&, std::span<const std::string_view>, std::initializer_list<std::string_view>) const = delete` | 拒绝花括号参数列表，理由同上 |
 | `task<std::optional<redis_key_value>> blpop(std::string_view key, redis_block_wait wait) const` | 单键 `BLPOP`；阻塞池；超时返回 `std::nullopt`；结果 `key()` 为弹出所在键、`value()` 为元素 |
-| `task<std::optional<redis_key_value>> blpop(std::span<const std::string_view> keys, redis_block_wait wait) const` | 多键 `BLPOP`；空列表抛 `std::invalid_argument` |
+| `task<std::optional<redis_key_value>> blpop(std::span<const std::string_view> keys, redis_block_wait wait) const` | 多键 `BLPOP`；空列表抛 `std::invalid_argument`（`std::initializer_list<std::string_view>` 重载已删除） |
 | `task<std::optional<redis_key_value>> brpop(std::string_view key, redis_block_wait wait) const` | 单键 `BRPOP` |
-| `task<std::optional<redis_key_value>> brpop(std::span<const std::string_view> keys, redis_block_wait wait) const` | 多键 `BRPOP`；空列表抛 `std::invalid_argument` |
-| `task<std::optional<std::vector<redis_stream_read_result>>> xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_x_read_group_options options = {}) const` | `XREADGROUP GROUP g c [COUNT n] [BLOCK ms] [NOACK] STREAMS …`；`group` / `consumer` 为空、`streams` 为空或任一流键/ID 为空抛 `std::invalid_argument`；`std::nullopt` 为服务端 nil |
+| `task<std::optional<redis_key_value>> brpop(std::span<const std::string_view> keys, redis_block_wait wait) const` | 多键 `BRPOP`；空列表抛 `std::invalid_argument`（`std::initializer_list<std::string_view>` 重载已删除） |
+| `task<std::optional<std::vector<redis_stream_read_result>>> xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_x_read_group_options options = {}) const` | `XREADGROUP GROUP g c [COUNT n] [BLOCK ms] [NOACK] STREAMS …`；`group` / `consumer` 为空、`streams` 为空或任一流键/ID 为空抛 `std::invalid_argument`；`std::nullopt` 为服务端 nil（`std::initializer_list<redis_stream_read_view>` 重载已删除） |
 | `redis_pipeline pipeline() const` | 新建 pipeline，继承本句柄选项 |
 | `redis_transaction transaction() const` | 新建事务 batch |
 | `redis_subscription subscription() const` | 新建独占 Pub/Sub 连接（首次订阅时打开），绑定本句柄作用域、令牌与超时；无可停止令牌且无有限超时抛 `std::invalid_argument` |
@@ -7757,6 +7778,7 @@ auto reply = co_await redis.command(std::move(command));
 | `template <::ruvia::fixed_string name> auto& get() && = delete` | 禁止从临时实体取可变引用（引用会悬空） |
 | `template <::ruvia::fixed_string name> const auto& get() const&` | 只读访问；规则同上 |
 | `template <::ruvia::fixed_string name> const auto& get() const&& = delete` | 禁止从临时实体取只读引用 |
+| `template <::ruvia::fixed_string name> auto take() &&` | 移出列值并把该列置回 unset（非 value 态抛 `std::logic_error`） |
 | `template <::ruvia::fixed_string name, typename value_type> auto& set(value_type&& value) &` | 设值并返回 `*this` 以链式调用；检查整数范围与有限浮点溢出，整数列不隐式接受浮点；失败时保留原值与 unset/null 状态 |
 | `template <::ruvia::fixed_string name, typename value_type> auto& set(value_type&&) && = delete` | 禁止在临时实体上设值（返回的 `*this` 引用会悬空，修改也随临时对象丢失） |
 | `template <::ruvia::fixed_string name> auto& set_null() & requires requires { entity_.template set_null<name>(); }` | 置为 null；约束只对可空列（`nullable_ = true`）成立 |
@@ -8123,8 +8145,10 @@ if (const auto bearer = ruvia::jwt_bearer_token(authorization)) {
 | `jwt_claim& operator=(jwt_claim&& other) noexcept` | 移动赋值 |
 | `std::string_view name() const& noexcept` | 声明名 |
 | `std::string_view name() const&& = delete` | 禁止从临时声明取视图（视图会悬空） |
+| `std::string take_name() && noexcept` | 移出声明名并清空源 |
 | `std::string_view value() const& noexcept` | 解码后的字符串值 |
 | `std::string_view value() const&& = delete` | 禁止从临时声明取视图 |
+| `std::string take_value() && noexcept` | 移出字符串值并清空源 |
 
 **`jwt_numeric_date`** —— JWT NumericDate 的精确十进制表示，不受宿主时钟范围或浮点精度限制（无公开构造函数）。
 
@@ -8148,15 +8172,19 @@ if (const auto bearer = ruvia::jwt_bearer_token(authorization)) {
 | `jwt_payload& operator=(jwt_payload&& other) noexcept` | 移动赋值 |
 | `std::string_view issuer() const& noexcept` | `iss`；缺失为空 |
 | `std::string_view issuer() const&& = delete` | 禁止从临时 payload 取视图（视图会悬空） |
+| `std::string take_issuer() && noexcept` | 移出 `iss` 并清空源 |
 | `std::string_view subject() const& noexcept` | `sub`；缺失为空 |
 | `std::string_view subject() const&& = delete` | 禁止从临时 payload 取视图 |
+| `std::string take_subject() && noexcept` | 移出 `sub` 并清空源 |
 | `std::string_view audience() const& noexcept` | 第一个 `aud`；缺失为空 |
 | `std::string_view audience() const&& = delete` | 禁止从临时 payload 取视图 |
 | `std::span<const std::string> audiences() const& noexcept` | 全部 `aud`（字符串或数组形式） |
 | `std::span<const std::string> audiences() const&& = delete` | 禁止从临时 payload 借用受众列表 |
+| `std::vector<std::string> take_audiences() && noexcept` | 移出全部 `aud` 并清空源 |
 | `bool has_audience(std::string_view audience) const noexcept` | `audience` 是否为任一 `aud` |
 | `std::string_view id() const& noexcept` | `jti`；缺失为空 |
 | `std::string_view id() const&& = delete` | 禁止从临时 payload 取视图 |
+| `std::string take_id() && noexcept` | 移出 `jti` 并清空源 |
 | `const jwt_numeric_date* expires_at() const& noexcept` | `exp`；`nullptr` 表示缺失 |
 | `const jwt_numeric_date* expires_at() const&& = delete` | 禁止从临时 payload 取指针（指针会悬空） |
 | `const jwt_numeric_date* not_before() const& noexcept` | `nbf`；`nullptr` 表示缺失 |
@@ -8165,6 +8193,7 @@ if (const auto bearer = ruvia::jwt_bearer_token(authorization)) {
 | `const jwt_numeric_date* issued_at() const&& = delete` | 禁止从临时 payload 取指针 |
 | `std::span<const jwt_claim> claims() const& noexcept` | 字符串值自定义声明 |
 | `std::span<const jwt_claim> claims() const&& = delete` | 禁止从临时 payload 借用声明列表 |
+| `std::vector<jwt_claim> take_claims() && noexcept` | 移出全部字符串自定义声明并清空源 |
 | `std::optional<std::string_view> claim(std::string_view name) const& noexcept` | 按名查字符串自定义声明；无此名或非字符串值为 `std::nullopt` |
 | `std::optional<std::string_view> claim(std::string_view name) const&& = delete` | 禁止从临时 payload 取视图 |
 

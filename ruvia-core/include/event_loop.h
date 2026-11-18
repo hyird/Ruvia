@@ -20,6 +20,7 @@
 
 #include "asio_bridge.h"
 #include "blocking_pool.h"
+#include "byte_view.h"
 #include "move_only_function.h"
 #include "operation_options.h"
 #include "task.h"
@@ -37,6 +38,7 @@ struct root_task_access;
 // One pending root keeps the physical loop alive from admission to retirement.
 class root_task_retirement final {
 public:
+    root_task_retirement() noexcept = default;
     explicit root_task_retirement(std::shared_ptr<event_loop_state> state) noexcept;
     root_task_retirement(root_task_retirement&&) noexcept = default;
     ~root_task_retirement();
@@ -62,6 +64,10 @@ public:
 
     root_task_completion(const root_task_completion&) = delete;
     root_task_completion& operator=(const root_task_completion&) = delete;
+
+    [[nodiscard]] const worker_ref& worker() const noexcept {
+        return worker_;
+    }
 
     [[nodiscard]] bool valid() const noexcept {
         const std::lock_guard lock(mutex_);
@@ -178,6 +184,11 @@ public:
     root_task_state(worker_ref worker_value, std::weak_ptr<event_loop_state> loop_value) noexcept :
         completion_(std::move(worker_value), std::move(loop_value)) {}
 
+    root_task_state(worker_ref worker_value, std::weak_ptr<event_loop_state> loop_value, task<t_type>&& task_value, root_task_retirement&& lease_value) noexcept :
+        retirement_lease_(std::move(lease_value)),
+        completion_(std::move(worker_value), std::move(loop_value)),
+        task_(std::move(task_value)) {}
+
     // The type-independent completion protocol; only the result is typed here.
     [[nodiscard]] root_task_completion& completion() noexcept {
         return completion_;
@@ -196,6 +207,22 @@ public:
         requires std::is_void_v<t_type>
     {}
 
+    void start(std::shared_ptr<root_task_state> self) noexcept {
+        try {
+            task_->prepare_direct_start();
+            task_->coroutine_.promise().control_.set_completion(this, &root_task_state::on_complete);
+            self_pin_ = std::move(self);
+            task_->start();
+        } catch (...) {
+            const auto lease = std::move(retirement_lease_);
+            self_pin_.reset();
+            task_.reset();
+            completion_.complete_failure(std::current_exception());
+        }
+    }
+
+    void abandon_unstarted() noexcept;
+
     t_type get() {
         auto failure = completion_.consume_failure();
         if (failure) {
@@ -213,8 +240,40 @@ public:
     }
 
 private:
+    static void on_complete(void* raw) noexcept {
+        auto* state = static_cast<root_task_state*>(raw);
+        const worker_ref bound_worker = state->completion_.worker();
+        auto self = std::move(state->self_pin_);
+        // Deliver in a subsequent event-loop turn so frame teardown never runs
+        // inside final_suspend. A single shared_ptr capture fits inline SBO.
+        worker_ref_access::defer_or_terminate(bound_worker, [state_value = std::move(self)]() mutable {
+            state_value->deliver_and_retire();
+        });
+    }
+
+    void deliver_and_retire() noexcept {
+        const auto lease = std::move(retirement_lease_);
+        task_->prepare_direct_completion();
+        try {
+            if constexpr (std::is_void_v<t_type>) {
+                task_->coroutine_.promise().result();
+                stage_value();
+            } else {
+                stage_value(task_->coroutine_.promise().result());
+            }
+        } catch (...) {
+            completion_.stage_failure(std::current_exception());
+        }
+        task_->finish_direct_completion();
+        task_.reset();
+        completion_.publish_completion();
+    }
+
+    root_task_retirement retirement_lease_;
     root_task_completion completion_;
     [[no_unique_address]] std::conditional_t<std::is_void_v<t_type>, root_task_void_result, std::optional<t_type>> value_;
+    std::optional<task<t_type>> task_;
+    std::shared_ptr<root_task_state> self_pin_;
 };
 
 }  // namespace detail
@@ -289,6 +348,8 @@ public:
         }
     }
     void get() & = delete;
+    void get() const& = delete;
+    void get() const&& = delete;
 
 private:
     explicit root_task(std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept :
@@ -337,7 +398,7 @@ public:
 private:
     friend class event_loop;
     template <typename>
-    friend struct detail::root_task_launch_guard;
+    friend class detail::root_task_state;
 
     explicit event_loop_start_rejected(post_status status);
 
@@ -352,82 +413,34 @@ using event_loop_start_result = delivery_result<task<t_type>, post_status, post_
 
 namespace detail {
 
+template <typename t_type>
+inline void root_task_state<t_type>::abandon_unstarted() noexcept {
+    // Retire the cold frame and publish completion before letting the loop retire.
+    const auto lease = std::move(retirement_lease_);
+    task_.reset();
+    completion_.complete_failure(std::make_exception_ptr(event_loop_start_rejected(post_status::stopping)));
+}
+
 // drain() destroys remaining queue closures without invoking them when
 // a posted task throws. Own that destructor path so wait()/get() cannot
 // hang and an unobserved failure still reaches the loop sink.
 template <typename t_type>
 struct root_task_launch_guard final {
-    std::optional<task<t_type>> task_;
     std::shared_ptr<detail::root_task_state<t_type>> completion_;
 
-    root_task_launch_guard(task<t_type>&& task_value, std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept :
-        task_(std::move(task_value)),
+    explicit root_task_launch_guard(std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept :
         completion_(std::move(state_value)) {}
     root_task_launch_guard(const root_task_launch_guard&) = delete;
     root_task_launch_guard& operator=(const root_task_launch_guard&) = delete;
-    root_task_launch_guard(root_task_launch_guard&& other) noexcept :
-        task_(std::move(other.task_)),
-        completion_(std::move(other.completion_)) {}
+    root_task_launch_guard(root_task_launch_guard&&) noexcept = default;
     root_task_launch_guard& operator=(root_task_launch_guard&&) = delete;
     ~root_task_launch_guard() {
-        // A rejected or discarded launch still owns a cold frame.
-        // Retire it before waking a caller that may reclaim its inputs.
-        task_.reset();
         if (completion_ != nullptr) {
-            completion_->completion().complete_failure(std::make_exception_ptr(event_loop_start_rejected(post_status::stopping)));
+            completion_->abandon_unstarted();
         }
     }
-    void release() noexcept {
-        task_.reset();
-        completion_.reset();
-    }
-};
-template <typename t_type>
-struct root_task_completion_handler final {
-    using executor_type = asio::io_context::executor_type;
-
-    executor_type executor_;
-    std::shared_ptr<detail::root_task_state<t_type>> completion_;
-    root_task_retirement retirement_lease_;
-    bool delivered_{false};
-
-    root_task_completion_handler(executor_type executor_value, std::shared_ptr<detail::root_task_state<t_type>> state_value, root_task_retirement lease_value) noexcept :
-        executor_(std::move(executor_value)),
-        completion_(std::move(state_value)),
-        retirement_lease_(std::move(lease_value)) {}
-    root_task_completion_handler(const root_task_completion_handler&) = delete;
-    root_task_completion_handler& operator=(const root_task_completion_handler&) = delete;
-    root_task_completion_handler(root_task_completion_handler&& other) noexcept :
-        executor_(std::move(other.executor_)),
-        completion_(std::move(other.completion_)),
-        retirement_lease_(std::move(other.retirement_lease_)),
-        delivered_(std::exchange(other.delivered_, false)) {}
-    root_task_completion_handler& operator=(root_task_completion_handler&&) = delete;
-    ~root_task_completion_handler() {
-        if (delivered_) {
-            completion_->completion().publish_completion();
-        }
-    }
-    [[nodiscard]] executor_type get_executor() const noexcept {
-        return executor_;
-    }
-    void operator()(task_completion_result<t_type>&& result_value) noexcept {
-        try {
-            if constexpr (std::is_void_v<t_type>) {
-                if (result_value != nullptr) {
-                    completion_->completion().stage_failure(std::move(result_value));
-                } else {
-                    completion_->stage_value();
-                }
-            } else if (result_value.index() == 1) {
-                completion_->completion().stage_failure(std::get<1>(result_value));
-            } else {
-                completion_->stage_value(std::move(std::get<0>(result_value)));
-            }
-        } catch (...) {
-            completion_->completion().stage_failure(std::current_exception());
-        }
-        delivered_ = true;
+    [[nodiscard]] std::shared_ptr<detail::root_task_state<t_type>> release() noexcept {
+        return std::exchange(completion_, nullptr);
     }
 };
 
@@ -465,13 +478,13 @@ public:
     // A retired pool loop or attachment is invalid; accessing its context or
     // obtaining a fresh executor then throws std::logic_error. Previously
     // obtained executors must not outlive the loop's physical context storage.
-    [[nodiscard]] asio::io_context& io_context() const&;
+    [[nodiscard]] asio::io_context& io_context() const& RUVIA_LIFETIMEBOUND;
     asio::io_context& io_context() const&& = delete;
     [[nodiscard]] asio::io_context::executor_type executor() const;
     // The loop's worker endpoint: admission state, identity, posting, timers,
     // and the completion lane. Rvalue loops return a copy: the worker_ref must not
     // outlive its loop owner.
-    [[nodiscard]] const worker_ref& worker() const& noexcept;
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] worker_ref worker() const&& noexcept;
 
     // Reports a terminal runtime failure without throwing on the caller's
@@ -520,18 +533,12 @@ public:
         const auto bound_worker = worker();
         const std::weak_ptr<detail::event_loop_state> loop = state_;
         std::shared_ptr<detail::root_task_state<t_type>> completion;
-        const auto bound_executor = executor();
         auto launch_root = [&]() -> move_only_function<void()> {
-            completion = std::make_shared<detail::root_task_state<t_type>>(bound_worker, loop);
-            return [bound_executor, retirement_lease = std::move(retirement_lease), launch = detail::root_task_launch_guard<t_type>(std::move(task_value), completion)]() mutable {
-                try {
-                    async_start(std::move(*launch.task_), detail::root_task_completion_handler<t_type>(bound_executor, launch.completion_, std::move(retirement_lease)));
-                    launch.release();
-                } catch (...) {
-                    auto failed_completion = std::move(launch.completion_);
-                    launch.release();
-                    failed_completion->completion().complete_failure(std::current_exception());
-                }
+            completion = std::make_shared<detail::root_task_state<t_type>>(bound_worker, loop, std::move(task_value), std::move(retirement_lease));
+            return [launch = detail::root_task_launch_guard<t_type>(completion)]() mutable {
+                auto state_value = launch.release();
+                auto* raw_state = state_value.get();
+                raw_state->start(std::move(state_value));
             };
         };
         // post_factory calls this synchronously; borrow it to fit inline.
@@ -637,11 +644,13 @@ public:
     event_loop_attachment& operator=(event_loop_attachment&& other) = delete;
 
     [[nodiscard]] bool valid() const noexcept;
-    [[nodiscard]] event_loop loop() const noexcept;
+    [[nodiscard]] event_loop loop() const& noexcept;
+    event_loop loop() const&& = delete;
     // Runs the attached context on the current thread with Ruvia's worker
     // identity installed. A callback may destroy the attachment during run();
     // the caller-owned context must remain alive until this call returns.
-    void run();
+    void run() &;
+    void run() && = delete;
     void request_stop() noexcept;
 
 private:

@@ -408,6 +408,11 @@ std::span<redis_value> redis_value_array(redis_value& value) {
     return redis_types_access::elements(value);
 }
 
+std::vector<redis_value> take_redis_value_array(redis_value&& value) {
+    (void)redis_value_array(std::as_const(value));
+    return std::move(value).take_array();
+}
+
 void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_t index) {
     if (value.kind() != redis_value::kind_type::error) {
         return;
@@ -747,11 +752,27 @@ std::string_view redis_value::string() const& {
     return string_;
 }
 
+std::string redis_value::take_string() && {
+    if (kind_ != kind_type::string) {
+        throw std::logic_error("redis value is not a string");
+    }
+    kind_ = kind_type::null;
+    return std::exchange(string_, {});
+}
+
 std::string_view redis_value::error() const& {
     if (kind_ != kind_type::error) {
         throw std::logic_error("redis value is not an error");
     }
     return string_;
+}
+
+std::string redis_value::take_error() && {
+    if (kind_ != kind_type::error) {
+        throw std::logic_error("redis value is not an error");
+    }
+    kind_ = kind_type::null;
+    return std::exchange(string_, {});
 }
 
 std::int64_t redis_value::integer() const {
@@ -766,6 +787,14 @@ std::span<const redis_value> redis_value::array() const& {
         throw std::logic_error("redis value is not an array");
     }
     return array_;
+}
+
+std::vector<redis_value> redis_value::take_array() && {
+    if (kind_ != kind_type::array) {
+        throw std::logic_error("redis value is not an array");
+    }
+    kind_ = kind_type::null;
+    return std::exchange(array_, {});
 }
 
 redis_value redis_value::null_value() noexcept {

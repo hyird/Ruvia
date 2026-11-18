@@ -840,10 +840,20 @@ concept accepts_char_view_source = requires(source_type&& source) { ruvia::as_ch
 template <typename element_type>
 concept accepts_braced_char_view_source = requires(element_type element) { ruvia::as_chars({element}); };
 
+template <typename source_type>
+concept accepts_byte_view_source = requires(source_type&& source) { ruvia::as_bytes(std::forward<source_type>(source)); };
+
+template <typename element_type>
+concept accepts_braced_byte_view_source = requires(element_type element) { ruvia::as_bytes({element}); };
+
 static_assert(!accepts_char_view_source<std::initializer_list<std::byte>&>);
 static_assert(!accepts_char_view_source<const std::initializer_list<std::byte>&>);
 static_assert(!accepts_char_view_source<std::initializer_list<std::byte>>);
 static_assert(!accepts_braced_char_view_source<std::byte>);
+static_assert(!accepts_byte_view_source<std::string&&>);
+static_assert(!accepts_byte_view_source<std::vector<char>&&>);
+static_assert(!accepts_byte_view_source<std::initializer_list<char>>);
+static_assert(!accepts_braced_byte_view_source<char>);
 
 }  // namespace
 

@@ -162,9 +162,13 @@ class http_byte_range_slicer final {
 public:
     http_byte_range_slicer(const http_byte_range_set& ranges, http_content_length representation_length, std::string_view media_type = {}, std::string_view boundary = {});
     http_byte_range_slicer(std::span<const http_byte_range> ranges, http_content_length representation_length, std::string_view media_type = {}, std::string_view boundary = {});
+    http_byte_range_slicer(const http_byte_range_slicer&) = default;
+    http_byte_range_slicer& operator=(const http_byte_range_slicer&) = default;
+    http_byte_range_slicer(http_byte_range_slicer&& other) noexcept;
+    http_byte_range_slicer& operator=(http_byte_range_slicer&& other) noexcept;
 
     [[nodiscard]] bool multipart() const noexcept {
-        return ranges_.size() > 1;
+        return !single_mode_ && ranges_.size() > 1;
     }
     [[nodiscard]] std::uint64_t content_length() const noexcept {
         return content_length_;
@@ -174,14 +178,14 @@ public:
     }
     std::string_view content_type() const&& = delete;
     [[nodiscard]] std::string_view content_range() const& noexcept RUVIA_LIFETIMEBOUND {
-        return content_range_;
+        return std::string_view(content_range_.data(), content_range_size_);
     }
     std::string_view content_range() const&& = delete;
     [[nodiscard]] std::uint64_t current_offset() const noexcept {
         return current_offset_;
     }
     [[nodiscard]] bool complete() const noexcept {
-        return !ranges_.empty() && range_index_ == ranges_.size();
+        return range_count() != 0 && range_index_ == range_count();
     }
 
     void write(std::string_view chunk, std::string& output);
@@ -190,11 +194,21 @@ public:
     void reset(std::uint64_t start_offset = 0) noexcept;
 
 private:
+    [[nodiscard]] std::size_t range_count() const noexcept {
+        return single_mode_ ? 1U : ranges_.size();
+    }
+    [[nodiscard]] http_byte_range range_at(std::size_t index) const noexcept {
+        return single_mode_ ? single_range_ : ranges_[index];
+    }
+
+    http_byte_range single_range_{};
     std::vector<http_byte_range> ranges_;
     std::string media_type_;
     std::string boundary_;
     std::string content_type_;
-    std::string content_range_;
+    std::array<char, 68> content_range_{};
+    std::uint8_t content_range_size_{0};
+    bool single_mode_{false};
     std::uint64_t representation_length_{0};
     std::uint64_t content_length_{0};
     std::uint64_t current_offset_{0};

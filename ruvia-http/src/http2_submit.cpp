@@ -320,13 +320,15 @@ std::variant<websocket_extended_connect_negotiation, http_response_head_error> h
     if (role_ != http_connection_role::server || !http2_remote_final_head_decoded(*stream) || http2_websocket_connect_remote_head_ended(*stream) || !http2_websocket_connect_content_acceptable(*stream) || stream->local_send().head_pending() == nullptr || !http2_is_pending_websocket_connect(*stream) || !std::holds_alternative<std::monostate>(validation)) {
         return http_response_head_error::invalid_state;
     }
-    auto negotiation = make_websocket_server_negotiation(request, options);
-    if (!append_http_binary_websocket_response_fields(fields_, negotiation, max_http_header_bytes)) {
+    const auto subprotocol = choose_websocket_subprotocol(request, options.supported_subprotocols_);
+    const auto compression = websocket_negotiate_permessage_deflate(request, options.deflate_);
+    const websocket_compression_extension extensions(compression);
+    validate_websocket_response_headers(options.response_headers_, subprotocol, extensions.view());
+    if (!append_http_binary_websocket_response_fields(fields_, subprotocol, extensions.view(), options.response_headers_, max_http_header_bytes)) {
         return http_response_head_error::invalid_message;
     }
     commit_connect_response_head(*stream, http2_remote_peer_half_closed(*stream));
-    const auto compression = negotiation.compression();
-    return websocket_extended_connect_negotiation(std::move(negotiation).take_subprotocol(), compression);
+    return websocket_extended_connect_negotiation(std::string(subprotocol), compression);
 }
 
 http_finish_status http2_connection::finish_request(std::uint32_t stream_id, std::span<const http_header_view> trailers) {

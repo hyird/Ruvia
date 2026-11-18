@@ -676,7 +676,7 @@ private:
     void on_body_chunk(http2_data_event& body_chunk);
     void on_tunnel_data(http2_tunnel_data_event& tunnel_data);
     void on_tunnel_end(const http2_tunnel_end_event& tunnel_end) noexcept;
-    void on_message_end(const http2_message_end_event& message_end);
+    void on_message_end(http2_message_end_event& message_end);
     void on_stream_closed(const http2_stream_closed_event& stream_closed) noexcept;
     [[nodiscard]] bool push_request(std::uint32_t associated_stream_id, http_request_head_view request);
     [[nodiscard]] task<void> dispatch_one(std::uint32_t stream_id);
@@ -1359,14 +1359,13 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         http_request request = request_head->build_request(streaming_body ? std::string_view{} : stream_runtime->buffered_body());
         http_response response;
         response_output_target output_target{connection_, write_signal_, stream_id};
-        http_interim_response_output interim_output(&output_target, [](void* raw, const http_interim_response_head& head) -> task<void> {
+        http_interim_response_output interim_output(&output_target, [](void* raw, const http_interim_response_head& head) {
             auto& target = *static_cast<response_output_target*>(raw);
             const auto status = target.connection_.submit_interim_response_head(target.stream_id_, head);
             if (status != http_submit_status::accepted) {
                 throw std::invalid_argument("HTTP/2 interim response rejected");
             }
             target.writer_.notify();
-            co_return;
         });
         http_connection_advertisement_output advertisements(&output_target, [](void* raw, std::span<const std::string_view> origins) {
             auto& target = *static_cast<response_output_target*>(raw);
@@ -1727,7 +1726,7 @@ void http2_sans_io_session_engine::on_tunnel_end(const http2_tunnel_end_event& t
     }
 }
 
-void http2_sans_io_session_engine::on_message_end(const http2_message_end_event& message_end) {
+void http2_sans_io_session_engine::on_message_end(http2_message_end_event& message_end) {
     const auto stream_id = message_end.stream_id();
     auto* stream_runtime = stream_runtimes_.find(stream_id);
     if (stream_runtime == nullptr) {
@@ -1737,7 +1736,7 @@ void http2_sans_io_session_engine::on_message_end(const http2_message_end_event&
         return;
     }
     stream_runtimes_.mark_request_body_closed(stream_id);
-    if (stream_runtime->trailers().append_received(message_end.trailers()).has_value()) {
+    if (stream_runtime->trailers().append_received(std::move(message_end).take_trailers()).has_value()) {
         throw std::logic_error("HTTP/2 decoder published invalid request trailers");
     }
     if (stream_runtime->route_selected() && stream_runtime->body_mode() == request_body_mode::stream) {
@@ -1792,7 +1791,7 @@ void http2_sans_io_session_engine::drain_events() {
             on_tunnel_data(*tunnel_data);
         } else if (const auto* tunnel_end = event->tunnel_end()) {
             on_tunnel_end(*tunnel_end);
-        } else if (const auto* message_end = event->message_end()) {
+        } else if (auto* message_end = event->message_end()) {
             on_message_end(*message_end);
         } else if (const auto* stream_closed = event->stream_closed()) {
             on_stream_closed(*stream_closed);

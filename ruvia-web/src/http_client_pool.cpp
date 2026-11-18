@@ -341,26 +341,26 @@ task<client_resolve_result> http_client_pool::resolve_addresses(std::string_view
     co_return result;
 }
 
-task<void> http_client_pool::refresh_dns(operation_options options) {
-    require_accepting();
-    require_fixed_dial();
-    if (closing_) {
+task<void> http_client_pool::refresh_dns(std::shared_ptr<http_client_pool> self, operation_options options, stop_token host_stop) {
+    self->require_accepting();
+    self->require_fixed_dial();
+    if (self->closing_) {
         throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client pool is closed");
     }
-    ++dns_active_;
+    ++self->dns_active_;
     struct refresh_lease final {
         http_client_pool& pool_;
         ~refresh_lease() {
             --pool_.dns_active_;
             pool_.dns_changed_.notify();
         }
-    } lease{*this};
-    client_host_resolver resolver(worker_);
-    const linked_operation_options linked(options, dns_stop_.token());
+    } lease{*self};
+    client_host_resolver resolver(self->worker_);
+    const linked_operation_options linked(options, host_stop, self->dns_stop_.token());
     const stop_token& cancellation = linked.options().stop_token_;
-    const operation_deadline timeout(options.timeout_.has_value() ? options.timeout_ : std::optional{config_.connect_timeout_});
-    const auto revision = dns_revision_;
-    auto pending = resolver.resolve(config_.dial_host_, config_.dial_port_, timeout, cancellation);
+    const operation_deadline timeout(options.timeout_.has_value() ? options.timeout_ : std::optional{self->config_.connect_timeout_});
+    const auto revision = self->dns_revision_;
+    auto pending = resolver.resolve(self->config_.dial_host_, self->config_.dial_port_, timeout, cancellation);
     client_resolve_result result;
     if (auto* immediate = std::get_if<client_resolve_result>(&pending)) {
         result = std::move(*immediate);
@@ -373,8 +373,8 @@ task<void> http_client_pool::refresh_dns(operation_options options) {
     if (timeout.expired()) {
         throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP DNS refresh timed out");
     }
-    if (revision == dns_revision_) {
-        install_addresses(std::move(result));
+    if (revision == self->dns_revision_) {
+        self->install_addresses(std::move(result));
     }
 }
 
@@ -1729,13 +1729,13 @@ task<bool> http_client_pool::send_http3_datagram(http_client_response_state& sta
 }
 #endif
 
-task<void> http_client_pool::migrate_http3(std::string local_address, std::uint16_t port, operation_options options, stop_token host_stop) {
+task<void> http_client_pool::migrate_http3(std::shared_ptr<http_client_pool> self, std::string local_address, std::uint16_t port, operation_options options, stop_token host_stop) {
 #ifdef RUVIA_ENABLE_HTTP3
-    require_accepting();
-    if (closing_) {
+    self->require_accepting();
+    if (self->closing_) {
         throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client pool is closed");
     }
-    const auto timeout = operation_deadline(config_.connect_timeout_).constrained_by(options.timeout_);
+    const auto timeout = operation_deadline(self->config_.connect_timeout_).constrained_by(options.timeout_);
     const linked_operation_options linked(options, host_stop);
     const stop_token& cancellation = linked.options().stop_token_;
     if (cancellation.stop_requested()) {
@@ -1744,15 +1744,15 @@ task<void> http_client_pool::migrate_http3(std::string local_address, std::uint1
     // Connections may be created or reclaimed while one migrates: each is
     // found again by position and serial.
     std::vector<std::pair<std::size_t, std::uint64_t>> active;
-    for (std::size_t index = 0; index != http3_connections_.size(); ++index) {
-        if (http3_connections_[index] && http3_connections_[index]->active()) {
-            active.emplace_back(index, http3_connections_[index]->serial());
+    for (std::size_t index = 0; index != self->http3_connections_.size(); ++index) {
+        if (self->http3_connections_[index] && self->http3_connections_[index]->active()) {
+            active.emplace_back(index, self->http3_connections_[index]->serial());
         }
     }
     bool migrated = false;
     for (const auto& [index, serial] : active) {
-        if (index < http3_connections_.size() && http3_connections_[index] && http3_connections_[index]->serial() == serial && http3_connections_[index]->active()) {
-            co_await http3_connections_[index]->migrate(local_address, port, timeout, cancellation);
+        if (index < self->http3_connections_.size() && self->http3_connections_[index] && self->http3_connections_[index]->serial() == serial && self->http3_connections_[index]->active()) {
+            co_await self->http3_connections_[index]->migrate(local_address, port, timeout, cancellation);
             migrated = true;
         }
     }
@@ -1760,6 +1760,7 @@ task<void> http_client_pool::migrate_http3(std::string local_address, std::uint1
         throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "no active HTTP/3 connection to migrate");
     }
 #else
+    (void)self;
     (void)local_address;
     (void)port;
     (void)options;

@@ -47,13 +47,6 @@ void release_redis_source_storage(container_type& source) noexcept {
     source.swap(empty);
 }
 
-void encode_and_release_redis_source(std::string& write_buffer, redis_owned_command& source, bool) {
-    if (source.wire_.empty()) {
-        throw std::invalid_argument("redis command must not be empty");
-    }
-    write_buffer = std::move(source.wire_);
-}
-
 void encode_and_release_redis_source(std::string& write_buffer, std::vector<redis_owned_command>& source, bool wrap_transaction) {
     constexpr std::string_view multi_command = "*1\r\n$5\r\nMULTI\r\n";
     constexpr std::string_view exec_command = "*1\r\n$4\r\nEXEC\r\n";
@@ -80,13 +73,8 @@ void encode_and_release_redis_source(std::string& write_buffer, std::vector<redi
     release_redis_source_storage(source);
 }
 
-void encode_and_release_redis_source(std::string& write_buffer, std::vector<std::string>& source, bool) {
-    append_resp_command(write_buffer, source);
-    release_redis_source_storage(source);
-}
-
-void encode_and_release_redis_source(std::string& write_buffer, redis_command_args_view source, bool) {
-    append_resp_command(write_buffer, source.prefix_, source.args_);
+[[nodiscard]] redis_value identity_redis_reply(redis_value&& reply) noexcept {
+    return std::move(reply);
 }
 
 }  // namespace
@@ -161,65 +149,74 @@ void redis_pool::slot_policy::cancel_slot(redis_pool& pool, std::size_t slot) no
     pool.connections_[slot]->abort(client_abort_reason::cancelled);
 }
 
+void redis_pool::prepare_write_buffer(std::string& write_buffer, redis_owned_command& source) {
+    if (source.wire_.empty()) {
+        throw std::invalid_argument("redis command must not be empty");
+    }
+    write_buffer = std::move(source.wire_);
+}
+
+void redis_pool::prepare_write_buffer(std::string& write_buffer, std::vector<std::string>& source) {
+    append_resp_command(write_buffer, source);
+    release_redis_source_storage(source);
+}
+
+void redis_pool::prepare_write_buffer(std::string& write_buffer, std::string_view wire) {
+    if (wire.empty()) {
+        throw std::invalid_argument("redis command must not be empty");
+    }
+    write_buffer.assign(wire.data(), wire.size());
+}
+
 task<redis_value> redis_pool::execute_owned(redis_owned_command command, operation_options options, std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics, std::optional<operation_deadline> deadline) {
-    return execute_commands<redis_value>(std::move(command), std::move(options), reply_timeout, deadline, io_metrics);
+    return execute_decoded<redis_value>(std::move(command), identity_redis_reply, std::move(options), reply_timeout, io_metrics, deadline);
 }
 
 task<redis_value> redis_pool::execute_owned(std::vector<std::string> args, operation_options options, std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics, std::optional<operation_deadline> deadline) {
-    return execute_commands<redis_value>(std::move(args), std::move(options), reply_timeout, deadline, io_metrics);
+    return execute_decoded<redis_value>(std::move(args), identity_redis_reply, std::move(options), reply_timeout, io_metrics, deadline);
 }
 
-task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args, operation_options options, operation_deadline deadline) {
-    return execute_commands<redis_value>(args, std::move(options), std::nullopt, deadline);
+task<redis_value> redis_pool::execute_borrowed_wire(std::string_view wire, operation_options options, operation_deadline deadline) {
+    return execute_decoded<redis_value>(wire, identity_redis_reply, std::move(options), std::nullopt, nullptr, deadline);
 }
 
-// Own one lease, cancellation registration and failure cleanup for both a
-// single command and a pipeline. Borrowed sources remain owned by their
-// enclosing caller; owned commands can be released after encoding.
-template <typename result_type, typename command_source_type>
-task<result_type> redis_pool::execute_commands(command_source_type source, operation_options options, std::optional<timeout_duration> reply_timeout, std::optional<operation_deadline> deadline, request_io_metrics* io_metrics, bool wrap_transaction) {
+task<std::vector<redis_value>> redis_pool::execute_pipeline(std::vector<redis_owned_command> commands, operation_options options, request_io_metrics* io_metrics, bool wrap_transaction) {
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
-    constexpr bool single_reply = std::is_same_v<result_type, redis_value>;
-    const auto reply_count = [&]() -> std::size_t {
-        if constexpr (single_reply) {
-            return 1U;
-        } else {
-            return source.size() + (wrap_transaction ? 2U : 0U);
-        }
-    }();
-    result_type result;
-    if constexpr (!single_reply) {
-        if (reply_count == 0) {
-            co_return result;
-        }
+    const auto reply_count = commands.size() + (wrap_transaction ? 2U : 0U);
+    std::vector<redis_value> result;
+    if (reply_count == 0) {
+        co_return result;
     }
 
-    // Ordinary commands start their budget here; an ORM retry retains the
-    // deadline established when its enclosing operation started.
-    const operation_deadline operation_timeout_value = deadline ? *deadline : operation_deadline(options.timeout_);
+    const operation_deadline operation_timeout_value(options.timeout_);
     const auto slot = co_await slots_.acquire(operation_timeout_value, config_.acquire_timeout_, options.stop_token_);
     const slot_pool_type::lease_guard lease(slots_, slot);
     slot_pool_type::cancellation_guard cancellation(slots_, slot, options.stop_token_);
     auto& connection = *connections_[slot];
     try {
-        co_await connection.connect(&operation_timeout_value, command_timeout_);
+        if (!connection.reusable_idle()) {
+            co_await connection.connect(&operation_timeout_value, command_timeout_);
+        }
         slots_.throw_if_aborted(slot);
 
         auto& write_buffer = connection.write_buffer();
         write_buffer.clear();
-        encode_and_release_redis_source(write_buffer, source, wrap_transaction);
+        encode_and_release_redis_source(write_buffer, commands, wrap_transaction);
 
-        const auto deadline_value = operation_timeout_value.constrained_by(command_timeout_).constrained_by(reply_timeout);
-        co_await connection.write_request(deadline_value);
-        if constexpr (single_reply) {
-            result = co_await connection.read_reply(deadline_value);
-            slots_.throw_if_aborted(slot);
-        } else {
-            result.reserve(reply_count);
-            while (result.size() < reply_count) {
+        const auto deadline_value = operation_timeout_value.constrained_by(command_timeout_);
+        {
+            const redis_connection::request_buffer_guard release(write_buffer, redis_request_content::ordinary);
+            const auto written = co_await connection.start_transport_write(deadline_value);
+            connection.finish_transport_write(written);
+        }
+        result.reserve(reply_count);
+        while (result.size() < reply_count) {
+            if (auto buffered = connection.try_read_buffered_reply()) {
+                result.emplace_back(std::move(*buffered));
+            } else {
                 result.emplace_back(co_await connection.read_reply(deadline_value));
-                slots_.throw_if_aborted(slot);
             }
+            slots_.throw_if_aborted(slot);
         }
         co_return result;
     } catch (...) {
@@ -227,10 +224,6 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
         connection.close();
         throw;
     }
-}
-
-task<std::vector<redis_value>> redis_pool::execute_pipeline(std::vector<redis_owned_command> commands, operation_options options, request_io_metrics* io_metrics, bool wrap_transaction) {
-    return execute_commands<std::vector<redis_value>>(std::move(commands), std::move(options), std::nullopt, std::nullopt, io_metrics, wrap_transaction);
 }
 
 namespace {
@@ -295,6 +288,17 @@ redis_connection::redis_connection(asio::io_context& io_context, asio::ssl::cont
 
 redis_connection::~redis_connection() = default;
 
+redis_connection::request_buffer_guard::~request_buffer_guard() noexcept {
+    if (content_ == redis_request_content::credential) {
+        OPENSSL_cleanse(buffer_.data(), buffer_.size());
+    }
+    http_clear_string_retaining_small(buffer_, redis_retained_write_buffer_bytes);
+}
+
+bool redis_connection::reusable_idle() noexcept {
+    return connected_ && (reader_ == nullptr || reader_->len == reader_->pos) && transport_.idle_status() == client_idle_transport_status::reusable;
+}
+
 void redis_connection::close() noexcept {
     transport_.close();
     connected_ = false;
@@ -303,6 +307,7 @@ void redis_connection::close() noexcept {
         reply_builder_->clear();
     }
     reply_bytes_ = 0;
+    reply_in_progress_ = false;
 }
 
 void redis_connection::abort(client_abort_reason reason) noexcept {
@@ -323,72 +328,80 @@ void redis_connection::ensure_reader() {
     }
     if (reader_ == nullptr) {
         reader_.reset(reply_builder_->create_reader());
+        reply_bytes_ = 0;
+        reply_in_progress_ = false;
     }
-    reply_bytes_ = 0;
 }
 
-task<void> redis_connection::write_request(const operation_deadline& timeout, redis_request_content content) {
-    struct request_buffer_release final {
-        std::string& buffer_;
-        redis_request_content content_;
-
-        ~request_buffer_release() noexcept {
-            if (content_ == redis_request_content::credential) {
-                OPENSSL_cleanse(buffer_.data(), buffer_.size());
-            }
-            http_clear_string_retaining_small(buffer_, redis_retained_write_buffer_bytes);
-        }
-    } release{write_buffer_, content};
-    // Closing the socket does not end an in-flight write's borrow. Retire the
-    // buffer only after the transport task completes, including on exception.
-    const auto written = co_await transport_.write(write_buffer_, timeout);
+void redis_connection::finish_transport_write(const client_transport_result& written) const {
     throw_if_aborted();
     if (!written.ok()) {
         throw_redis_io_error(written);
     }
 }
 
-task<redis_value> redis_connection::read_reply(const operation_deadline& timeout, std::chrono::steady_clock::time_point* input_time) {
+task<void> redis_connection::write_request(const operation_deadline& timeout, redis_request_content content) {
+    // Closing the socket does not end an in-flight write's borrow. Retire the
+    // buffer only after the transport task completes, including on exception.
+    const request_buffer_guard release(write_buffer_, content);
+    const auto written = co_await start_transport_write(timeout);
+    finish_transport_write(written);
+}
+
+std::optional<redis_value> redis_connection::try_read_buffered_reply() {
     if (!connected_) {
         throw redis_error(backend_error_code::io_error, "redis connection is closed");
     }
     ensure_reader();
-    reply_builder_->begin();
+    if (!reply_in_progress_) {
+        reply_builder_->begin();
+        reply_bytes_ = 0;
+        reply_in_progress_ = true;
+    }
+    const auto unread_before = reader_->len - reader_->pos;
+    void* raw_reply = nullptr;
+    if (redisReaderGetReply(reader_.get(), &raw_reply) != REDIS_OK) {
+        reply_in_progress_ = false;
+        reply_builder_->throw_if_rejected();
+        throw redis_error(backend_error_code::protocol_error, hiredis_reader_error(*reader_));
+    }
+    std::optional<redis_value> reply;
+    if (raw_reply != nullptr) {
+        reply.emplace(redis_reply_builder::take(raw_reply));
+    }
+    const auto unread_after = reader_->len - reader_->pos;
+    const auto consumed = unread_before - unread_after;
+    // One socket read can contain multiple replies. Only the bytes parsed for
+    // this reply count against its limit; if incomplete, any unread bytes
+    // still belong to it and must also stay within the limit.
+    if (config_.max_reply_bytes_.has_value()) {
+        const auto limit = *config_.max_reply_bytes_;
+        if (consumed > limit || reply_bytes_ > limit - consumed || (!reply && unread_after >= limit - (reply_bytes_ + consumed))) {
+            reply_in_progress_ = false;
+            throw redis_error(backend_error_code::protocol_error, "redis reply exceeds configured limit");
+        }
+    }
+    reply_bytes_ += consumed;
+    if (reply) {
+        // hiredis normally frees an oversized empty buffer only on the
+        // next feed. Release it now, without touching pipelined bytes or
+        // changing the successful reply if the shrink allocation fails.
+        if (reader_->len == reader_->pos && reader_->maxbuf != 0 && sdsalloc(reader_->buf) > reader_->maxbuf) {
+            sdsclear(reader_->buf);
+            reader_->len = reader_->pos = 0;
+            if (auto* compacted = sdsRemoveFreeSpace(reader_->buf)) {
+                reader_->buf = compacted;
+            }
+        }
+        reply_bytes_ = 0;
+        reply_in_progress_ = false;
+    }
+    return reply;
+}
+
+task<redis_value> redis_connection::read_reply(const operation_deadline& timeout, std::chrono::steady_clock::time_point* input_time) {
     for (;;) {
-        const auto unread_before = reader_->len - reader_->pos;
-        void* raw_reply = nullptr;
-        if (redisReaderGetReply(reader_.get(), &raw_reply) != REDIS_OK) {
-            reply_builder_->throw_if_rejected();
-            throw redis_error(backend_error_code::protocol_error, hiredis_reader_error(*reader_));
-        }
-        std::optional<redis_value> reply;
-        if (raw_reply != nullptr) {
-            reply.emplace(redis_reply_builder::take(raw_reply));
-        }
-        const auto unread_after = reader_->len - reader_->pos;
-        const auto consumed = unread_before - unread_after;
-        // One socket read can contain multiple replies. Only the bytes parsed for
-        // this reply count against its limit; if incomplete, any unread bytes
-        // still belong to it and must also stay within the limit.
-        if (config_.max_reply_bytes_.has_value()) {
-            const auto limit = *config_.max_reply_bytes_;
-            if (consumed > limit || reply_bytes_ > limit - consumed || (!reply && unread_after >= limit - (reply_bytes_ + consumed))) {
-                throw redis_error(backend_error_code::protocol_error, "redis reply exceeds configured limit");
-            }
-        }
-        reply_bytes_ += consumed;
-        if (reply) {
-            // hiredis normally frees an oversized empty buffer only on the
-            // next feed. Release it now, without touching pipelined bytes or
-            // changing the successful reply if the shrink allocation fails.
-            if (reader_->len == reader_->pos && reader_->maxbuf != 0 && sdsalloc(reader_->buf) > reader_->maxbuf) {
-                sdsclear(reader_->buf);
-                reader_->len = reader_->pos = 0;
-                if (auto* compacted = sdsRemoveFreeSpace(reader_->buf)) {
-                    reader_->buf = compacted;
-                }
-            }
-            reply_bytes_ = 0;
+        if (auto reply = try_read_buffered_reply()) {
             co_return std::move(*reply);
         }
 
@@ -422,8 +435,7 @@ task<void> redis_connection::connect(const operation_deadline* operation_timeout
     if (connected_) {
         // A peer that closed the idle connection or sent unsolicited bytes
         // would desynchronize the next reply; reconnect instead.
-        const bool reader_idle = reader_ == nullptr || reader_->len == reader_->pos;
-        if (reader_idle && transport_.idle_status() == client_idle_transport_status::reusable) {
+        if (reusable_idle()) {
             co_return;
         }
         close();

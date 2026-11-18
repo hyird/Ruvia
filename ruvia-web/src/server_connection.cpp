@@ -64,23 +64,17 @@ public:
     }
     // Expires the facade once the handler returned. An operation the handler
     // left running is aborted first, so the join cannot wait on the peer.
-    [[nodiscard]] task<void> join() {
+    [[nodiscard]] operation_scope::join_operation join() {
         if (facade_.read_active_ || facade_.write_active_) {
             abort();
         }
-        co_await facade_.operations_.close_and_join();
+        return facade_.operations_.close_and_join();
     }
-    // Ends the send direction the handler left open: close_notify for TLS.
-    [[nodiscard]] task<void> finish() {
-        if (!facade_.send_ended_) {
-            facade_.send_ended_ = true;
-            co_await end_send({});
-        }
+    [[nodiscard]] bool send_ended() const noexcept {
+        return facade_.send_ended_;
     }
-
-private:
-    static void wake_read(void* raw) noexcept {
-        static_cast<asio::cancellation_signal*>(raw)->emit(asio::cancellation_type::terminal);
+    void mark_send_ended() noexcept {
+        facade_.send_ended_ = true;
     }
     [[nodiscard]] task<void> end_send(operation_options operation) {
         operation_interrupt interrupt(interrupts_, worker_, operation, this, &abort_thunk, "server connection finish");
@@ -90,7 +84,14 @@ private:
             throw inbound_transport_error(error, "server connection finish");
         }
     }
-    static task<std::optional<std::span<const std::byte>>> read_thunk(void* raw, operation_options operation) {
+
+private:
+    static void wake_read(void* raw) noexcept {
+        static_cast<asio::cancellation_signal*>(raw)->emit(asio::cancellation_type::terminal);
+    }
+    static constexpr const char* lane_in_progress = "server connection operation already in progress on this direction";
+    static task<std::optional<std::span<const std::byte>>> read_thunk(void* raw, bool& read_active, operation_options operation) {
+        auto lease = claim_operation_lane(read_active, lane_in_progress);
         auto& owner = *static_cast<server_connection_session*>(raw);
         operation_interrupt interrupt(owner.interrupts_, owner.worker_, operation, &owner.read_cancellation_, &wake_read, "server connection read");
         if (owner.receive_ended_) {
@@ -109,7 +110,11 @@ private:
         owner.entry_.touch();
         co_return std::as_bytes(std::span(owner.read_buffer_.data(), owner.read_buffer_.size()));
     }
-    static task<void> write_thunk(void* raw, std::string_view bytes, operation_options operation) {
+    static task<void> write_thunk(void* raw, std::string bytes, bool& write_active, const bool& send_ended, operation_options operation) {
+        auto lease = claim_operation_lane(write_active, lane_in_progress);
+        if (send_ended) {
+            throw std::logic_error("server connection send direction has ended");
+        }
         auto& owner = *static_cast<server_connection_session*>(raw);
         operation_interrupt interrupt(owner.interrupts_, owner.worker_, operation, raw, &abort_thunk, "server connection write");
         const auto error = co_await owner.transport_.write_bytes(bytes, http_stream_end::keep_open);
@@ -118,8 +123,12 @@ private:
             throw inbound_transport_error(error, "server connection write");
         }
     }
-    static task<void> finish_thunk(void* raw, operation_options operation) {
-        return static_cast<server_connection_session*>(raw)->end_send(std::move(operation));
+    static task<void> finish_thunk(void* raw, bool& write_active, bool& send_ended, operation_options operation) {
+        auto lease = claim_operation_lane(write_active, lane_in_progress);
+        if (!send_ended) {
+            co_await static_cast<server_connection_session*>(raw)->end_send(std::move(operation));
+            send_ended = true;
+        }
     }
     static void abort_thunk(void* raw) noexcept {
         static_cast<server_connection_session*>(raw)->abort();
@@ -141,32 +150,6 @@ private:
 }  // namespace ruvia::detail
 
 namespace ruvia {
-namespace {
-
-constexpr const char* connection_lane_in_progress = "server connection operation already in progress on this direction";
-
-task<std::optional<std::span<const std::byte>>> read_connection(void* target, task<std::optional<std::span<const std::byte>>> (*read)(void*, operation_options), bool& read_active, operation_options operation) {
-    auto lease = detail::claim_operation_lane(read_active, connection_lane_in_progress);
-    co_return co_await read(target, std::move(operation));
-}
-
-task<void> write_connection(void* target, task<void> (*write)(void*, std::string_view, operation_options), std::string bytes, bool& write_active, const bool& send_ended, operation_options operation) {
-    auto lease = detail::claim_operation_lane(write_active, connection_lane_in_progress);
-    if (send_ended) {
-        throw std::logic_error("server connection send direction has ended");
-    }
-    co_await write(target, bytes, std::move(operation));
-}
-
-task<void> finish_connection(void* target, task<void> (*finish_value)(void*, operation_options), bool& send_ended, bool& write_active, operation_options operation) {
-    auto lease = detail::claim_operation_lane(write_active, connection_lane_in_progress);
-    if (!send_ended) {
-        co_await finish_value(target, std::move(operation));
-        send_ended = true;
-    }
-}
-
-}  // namespace
 
 server_connection::server_connection(const detail::server_connection_fields& fields, const ::ruvia::stop_token& stop_token_value, const worker_ref& worker_value, void* target, read_type read, write_type write, finish_type finish_value, abort_type abort_value) noexcept :
     connection_endpoints(fields.endpoints_),
@@ -193,7 +176,7 @@ void server_connection::require_active() const {
 
 task<std::optional<std::span<const std::byte>>> server_connection::read(operation_options operation) & {
     require_active();
-    return operations_.attach(read_connection(target_, read_, read_active_, std::move(operation)));
+    return operations_.attach(read_(target_, read_active_, std::move(operation)));
 }
 
 task<void> server_connection::write(outbound_bytes bytes, operation_options operation) & {
@@ -201,12 +184,12 @@ task<void> server_connection::write(outbound_bytes bytes, operation_options oper
     if (send_ended_) {
         throw std::logic_error("server connection send direction has ended");
     }
-    return operations_.attach(write_connection(target_, write_, std::move(bytes).into_string(), write_active_, send_ended_, std::move(operation)));
+    return operations_.attach(write_(target_, std::move(bytes).into_string(), write_active_, send_ended_, std::move(operation)));
 }
 
 task<void> server_connection::finish(operation_options operation) & {
     require_active();
-    return operations_.attach(finish_connection(target_, finish_, send_ended_, write_active_, std::move(operation)));
+    return operations_.attach(finish_(target_, write_active_, send_ended_, std::move(operation)));
 }
 
 void server_connection::abort() & noexcept {
@@ -257,9 +240,10 @@ task<void> worker_connections::serve_connection(stream_type& stream, tcp_socket_
         }
         co_await session.join();
         // A worker stop keeps the immediate close.
-        if (failure == nullptr && !session.aborted() && !stop_token_.stop_requested()) {
+        if (failure == nullptr && !session.aborted() && !stop_token_.stop_requested() && !session.send_ended()) {
             try {
-                co_await session.finish();
+                session.mark_send_ended();
+                co_await session.end_send({});
             } catch (...) {
                 failure = std::current_exception();
                 if (fields.lifecycle_ != nullptr) {

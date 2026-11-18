@@ -732,6 +732,10 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
                 auto context_value = detail::context_access::make(request, services);
                 detail::context_access::services(context_value).bind_routes(*this);
                 auto fallback_response = co_await detail::context_access::static_file_resolved(context_value, *document_root.root(), fallback_probe.relative_, {}, *fallback_probe.entry_, static_file_mode, http_response{});
+                if (plan_->unmatched_middleware_count_ == 0) {
+                    response = std::move(fallback_response);
+                    co_return;
+                }
                 auto terminal = [&fallback_response](context&) -> task<http_response> {
                     co_return std::move(fallback_response);
                 };
@@ -780,6 +784,10 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             }
 
             if (unmatched_response) {
+                if (plan_->unmatched_middleware_count_ == 0) {
+                    response = std::move(*unmatched_response);
+                    co_return;
+                }
                 auto context_value = detail::context_access::make(request, services);
                 detail::context_access::services(context_value).bind_routes(*this);
                 auto terminal = [&unmatched_response](context&) -> task<http_response> {
@@ -1118,7 +1126,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_bound_stream(co
             // then the handler runs. A response stream commits it explicitly
             // with commit() (or finish() for an empty response).
             auto terminal = [&handler_invoked, &handler, &route](context& terminal_context) -> task<void> {
-                if (route.endpoint().response_stream() == nullptr && session_access::available(terminal_context)) {
+                if (route.endpoint().response_stream() == nullptr && session_access::available(terminal_context) && !session_access::try_commit_sync(terminal_context)) {
                     co_await session_access::commit(terminal_context);
                 }
                 handler_invoked = true;

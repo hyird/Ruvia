@@ -738,11 +738,11 @@ bool event_loop_attachment::valid() const noexcept {
     return state_ != nullptr && state_->runtime_.worker().valid();
 }
 
-event_loop event_loop_attachment::loop() const noexcept {
+event_loop event_loop_attachment::loop() const& noexcept {
     return event_loop(state_);
 }
 
-void event_loop_attachment::run() {
+void event_loop_attachment::run() & {
     auto state_value = state_;
     if (!state_value) {
         throw std::logic_error("cannot run an invalid event loop attachment");

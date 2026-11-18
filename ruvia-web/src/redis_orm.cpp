@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "connection_lifecycle.h"
+#include "decimal_text.h"
 #include "http_client_pool.h"
 #include "http_header.h"
 #include "redis_codec.h"
@@ -76,6 +77,19 @@ end
 return redis.call('DEL', KEYS[1])
 )lua";
 
+void append_prefixed_resp_bulk(std::string& output, std::string_view prefix, std::string_view suffix) {
+    if (suffix.size() > std::numeric_limits<std::size_t>::max() - prefix.size()) {
+        throw std::length_error("redis RESP command is too large");
+    }
+    const auto size = prefix.size() + suffix.size();
+    output.push_back('$');
+    append_decimal(output, static_cast<std::uint64_t>(size));
+    output.append("\r\n", 2);
+    output.append(prefix);
+    output.append(suffix);
+    output.append("\r\n", 2);
+}
+
 }  // namespace
 
 const redis_script& redis_orm_write_script() {
@@ -88,30 +102,30 @@ const redis_script& redis_orm_delete_script() {
     return script;
 }
 
-redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_prefix, std::string_view id, std::string_view mode, redis_write_options options, std::size_t extra_arguments) {
-    if (options.ttl_ && (options.persist_ || options.ttl_->count() <= 0 || options.ttl_->count() > 9007199254740991LL)) {
-        throw std::invalid_argument("entity TTL must be positive, at most 2^53-1 milliseconds, and cannot combine with persist");
+redis_encoded_script_call make_redis_orm_delete_call(std::string_view storage_prefix, std::string_view id) {
+    if (id.empty()) {
+        throw std::invalid_argument("Redis entity ID must not be empty");
     }
-    redis_orm_arguments_type args;
-    args.reserve(5 + extra_arguments);
-    args.emplace_back("1");
-    args.push_back(redis_entity_key(storage_prefix, id));
-    args.emplace_back(mode);
-    args.emplace_back(options.ttl_ ? "expire" : (options.persist_ ? "persist" : "keep"));
-    if (options.ttl_) {
-        append_decimal(args.emplace_back(), static_cast<std::int64_t>(options.ttl_->count()));
-    } else {
-        args.emplace_back("0");
+    const auto sha1 = redis_orm_delete_script().sha1();
+    if (id.size() > std::numeric_limits<std::size_t>::max() - storage_prefix.size()) {
+        throw std::length_error("redis RESP command is too large");
     }
-    return args;
-}
+    const std::size_t key_size = storage_prefix.size() + id.size();
+    std::size_t total_bytes = resp_header_serialized_size(4);
+    add_resp_serialized_size(total_bytes, resp_bulk_serialized_size(7));
+    add_resp_serialized_size(total_bytes, resp_bulk_serialized_size(sha1.size()));
+    add_resp_serialized_size(total_bytes, resp_bulk_serialized_size(1));
+    add_resp_serialized_size(total_bytes, resp_bulk_serialized_size(key_size));
 
-redis_orm_arguments_type redis_orm_delete_arguments(std::string_view storage_prefix, std::string_view id) {
-    redis_orm_arguments_type args;
-    args.reserve(2);
-    args.emplace_back("1");
-    args.push_back(redis_entity_key(storage_prefix, id));
-    return args;
+    redis_encoded_script_call call;
+    call.evalsha_wire_.reserve(total_bytes);
+    append_resp_header(call.evalsha_wire_, 4);
+    append_resp_bulk(call.evalsha_wire_, "EVALSHA");
+    append_resp_bulk(call.evalsha_wire_, sha1);
+    call.args_tail_offset_ = call.evalsha_wire_.size();
+    append_resp_bulk(call.evalsha_wire_, "1");
+    append_prefixed_resp_bulk(call.evalsha_wire_, storage_prefix, id);
+    return call;
 }
 
 redis_write_result redis_orm_exec_result(redis_value&& reply) {
@@ -665,18 +679,17 @@ void require_exact_numeric_text(std::string_view value) {
     require_redis_exact_number(number);
 }
 
-template <typename field_type, typename value_type>
-void append_set(redis_orm_arguments_type& args, field_type&& field, value_type&& value) {
-    args.emplace_back("s");
-    args.emplace_back(std::forward<field_type>(field));
-    args.emplace_back(std::forward<value_type>(value));
-}
-
-template <typename field_type>
-void append_delete(redis_orm_arguments_type& args, field_type&& field) {
-    args.emplace_back("d");
-    args.emplace_back(std::forward<field_type>(field));
-    args.emplace_back();
+void append_hex_tag_resp_bulk(std::string& output, std::string_view value) {
+    if (value.size() > (std::numeric_limits<std::size_t>::max() - 1U) / 2U) {
+        throw std::length_error("redis RESP command is too large");
+    }
+    const std::size_t encoded_size = 1U + value.size() * 2U;
+    output.push_back('$');
+    append_decimal(output, static_cast<std::uint64_t>(encoded_size));
+    output.append("\r\n", 2);
+    output.push_back('x');
+    http_append_lower_hex(output, value);
+    output.append("\r\n", 2);
 }
 
 [[nodiscard]] std::string redis_entity_storage_prefix(std::string_view prefix) {
@@ -686,17 +699,6 @@ void append_delete(redis_orm_arguments_type& args, field_type&& field) {
     http_append_lower_hex(result, prefix);
     result.push_back(':');
     return result;
-}
-
-// A TAG value is kept in a shadow hash field. The leading x makes an empty
-// value distinct from a missing field, and hexadecimal encoding keeps every
-// byte outside RediSearch's TAG grammar.
-[[nodiscard]] std::string encode_redis_tag(std::string_view value) {
-    std::string encoded;
-    encoded.reserve(value.size() * 2U + 1U);
-    encoded.push_back('x');
-    http_append_lower_hex(encoded, value);
-    return encoded;
 }
 
 }  // namespace
@@ -944,23 +946,90 @@ std::optional<std::string_view> redis_primary_key(const redis_mapping& mapping, 
     return result_value;
 }
 
-void append_redis_entity_field(redis_orm_arguments_type& args, std::string_view field, std::optional<std::string_view> value, bool numeric_index, bool tag_shadow_value) {
-    if (!value) {
-        append_delete(args, field);
-        append_delete(args, shadow_field(present_shadow, field));
-        if (tag_shadow_value) {
-            append_delete(args, shadow_field(tag_shadow, field));
-        }
-        return;
+namespace {
+
+void consume_write_arg(std::size_t& remaining_args) {
+    if (remaining_args == 0) {
+        throw std::logic_error("unexpected Redis write argument count");
     }
-    if (numeric_index) {
+    --remaining_args;
+}
+
+}  // namespace
+
+redis_orm_write_builder::redis_orm_write_builder(std::string_view storage_prefix, std::string_view id, std::string_view mode, redis_write_options options, std::size_t required_count, std::size_t mutation_arguments) {
+    if (id.empty()) {
+        throw std::invalid_argument("Redis entity ID must not be empty");
+    }
+    if (options.ttl_ && (options.persist_ || options.ttl_->count() <= 0 || options.ttl_->count() > 9007199254740991LL)) {
+        throw std::invalid_argument("entity TTL must be positive, at most 2^53-1 milliseconds, and cannot combine with persist");
+    }
+    if (id.size() > std::numeric_limits<std::size_t>::max() - storage_prefix.size()) {
+        throw std::length_error("redis RESP command is too large");
+    }
+    std::size_t total_args = 8;
+    add_resp_serialized_size(total_args, required_count);
+    add_resp_serialized_size(total_args, mutation_arguments);
+    remaining_args_ = total_args;
+
+    const auto sha1 = redis_orm_write_script().sha1();
+    const std::size_t estimated_bytes = 128U + storage_prefix.size() + id.size() + required_count * 24U + mutation_arguments * 24U;
+    call_.evalsha_wire_.reserve(estimated_bytes);
+
+    append_resp_header(call_.evalsha_wire_, total_args);
+    append_resp_bulk(call_.evalsha_wire_, "EVALSHA");
+    append_resp_bulk(call_.evalsha_wire_, sha1);
+    remaining_args_ -= 2;
+    call_.args_tail_offset_ = call_.evalsha_wire_.size();
+
+    append_arg("1");
+    consume_write_arg(remaining_args_);
+    append_prefixed_resp_bulk(call_.evalsha_wire_, storage_prefix, id);
+    append_arg(mode);
+    append_arg(options.ttl_ ? "expire" : (options.persist_ ? "persist" : "keep"));
+    if (options.ttl_) {
+        std::array<char, max_decimal_size> ttl_scratch{};
+        append_arg(format_decimal(ttl_scratch, static_cast<std::int64_t>(options.ttl_->count())));
+    } else {
+        append_arg("0");
+    }
+}
+
+void redis_orm_write_builder::append_arg(std::string_view value) {
+    consume_write_arg(remaining_args_);
+    append_resp_bulk(call_.evalsha_wire_, value);
+}
+
+void redis_orm_write_builder::append_field(std::string_view field, std::optional<std::string_view> value, bool numeric_index, bool write_tag_shadow) {
+    if (value && numeric_index) {
         require_exact_numeric_text(*value);
     }
-    append_set(args, field, *value);
-    append_set(args, shadow_field(present_shadow, field), present_value);
-    if (tag_shadow_value) {
-        append_set(args, shadow_field(tag_shadow, field), encode_redis_tag(*value));
+    const std::string_view op = value ? "s" : "d";
+    append_arg(op);
+    append_arg(field);
+    append_arg(value.value_or(std::string_view{}));
+    append_arg(op);
+    consume_write_arg(remaining_args_);
+    append_prefixed_resp_bulk(call_.evalsha_wire_, present_shadow, field);
+    append_arg(value ? present_value : std::string_view{});
+    if (write_tag_shadow) {
+        append_arg(op);
+        consume_write_arg(remaining_args_);
+        append_prefixed_resp_bulk(call_.evalsha_wire_, tag_shadow, field);
+        if (value) {
+            consume_write_arg(remaining_args_);
+            append_hex_tag_resp_bulk(call_.evalsha_wire_, *value);
+        } else {
+            append_arg({});
+        }
     }
+}
+
+redis_encoded_script_call redis_orm_write_builder::finish() && {
+    if (remaining_args_ != 0) {
+        throw std::logic_error("unexpected Redis write argument count");
+    }
+    return std::move(call_);
 }
 
 }  // namespace ruvia::detail

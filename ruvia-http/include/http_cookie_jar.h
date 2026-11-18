@@ -31,8 +31,28 @@ class http_cookie_jar final {
 public:
     explicit http_cookie_jar(const http_origin_view& origin, http_cookie_jar_options options = {});
     http_cookie_jar(http_scheme scheme, std::string_view host, http_cookie_jar_options options = {});
+    template <std::same_as<std::string> string_type>
+    http_cookie_jar(http_scheme scheme, string_type&& host, http_cookie_jar_options options = {}) :
+        host_(std::move(host)),
+        scheme_(scheme),
+        max_cookies_(options.max_cookies_),
+        max_cookie_bytes_(options.max_cookie_bytes_) {
+        normalize_host();
+    }
 
     void add_configured_cookie(std::string_view name, std::string_view value);
+    template <std::same_as<std::string> name_type>
+    void add_configured_cookie(name_type&& name, std::string_view value) {
+        add_configured_cookie_impl(name, value, &name, nullptr);
+    }
+    template <std::same_as<std::string> value_type>
+    void add_configured_cookie(std::string_view name, value_type&& value) {
+        add_configured_cookie_impl(name, value, nullptr, &value);
+    }
+    template <std::same_as<std::string> name_type, std::same_as<std::string> value_type>
+    void add_configured_cookie(name_type&& name, value_type&& value) {
+        add_configured_cookie_impl(name, value, &name, &value);
+    }
 
     bool absorb_set_cookie(std::string_view request_target, std::string_view set_cookie_value, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
 
@@ -93,13 +113,13 @@ public:
 
 private:
     struct stored_cookie final {
-        stored_cookie(std::string_view name, std::string_view value) :
-            stored_cookie(name, value, "/", {}) {}
-        stored_cookie(std::string_view name, std::string_view value, std::string_view path, std::string_view domain) :
-            name_(name),
-            value_(value),
-            path_(path),
-            domain_(domain) {}
+        stored_cookie(std::string name, std::string value) noexcept :
+            stored_cookie(std::move(name), std::move(value), "/", {}) {}
+        stored_cookie(std::string name, std::string value, std::string path, std::string domain) noexcept :
+            name_(std::move(name)),
+            value_(std::move(value)),
+            path_(std::move(path)),
+            domain_(std::move(domain)) {}
 
         std::string name_;
         std::string value_;
@@ -122,6 +142,8 @@ private:
         bool expired_{false};
     };
 
+    void normalize_host() noexcept;
+    void add_configured_cookie_impl(std::string_view name, std::string_view value, std::string* owned_name, std::string* owned_value);
     [[nodiscard]] std::optional<received_cookie> accept_set_cookie_view(std::string_view request_target, std::string_view set_cookie_value, std::chrono::system_clock::time_point now) const;
     bool store_received_cookie(const received_cookie& cookie);
     void reserve_cookie_slot();

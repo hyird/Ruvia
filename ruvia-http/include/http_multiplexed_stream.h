@@ -329,11 +329,27 @@ public:
     [[nodiscard]] stream_id_type stream_id() const noexcept {
         return stream_id_;
     }
+    [[nodiscard]] bool owns_bytes() const noexcept {
+        return owns_bytes_;
+    }
     [[nodiscard]] std::string_view bytes() const& noexcept RUVIA_LIFETIMEBOUND {
         return bytes_;
     }
     std::string_view bytes() const&& = delete;
+    [[nodiscard]] std::string take_bytes() && {
+        if (owns_bytes_) {
+            owns_bytes_ = false;
+            bytes_ = {};
+            return std::exchange(owned_bytes_, {});
+        }
+        std::string copied(bytes_);
+        bytes_ = {};
+        return copied;
+    }
     [[nodiscard]] http_received_data_credit take_credit() & noexcept {
+        return std::move(credit_);
+    }
+    [[nodiscard]] http_received_data_credit take_credit() && noexcept {
         return std::move(credit_);
     }
 

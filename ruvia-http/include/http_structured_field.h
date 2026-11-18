@@ -18,7 +18,7 @@
 namespace ruvia {
 
 struct http_structured_item {
-    enum class kind_type { other,
+    enum class kind_type : std::uint8_t { other,
         integer,
         boolean,
         token,
@@ -36,6 +36,16 @@ struct http_structured_item {
         return std::get<std::string>(text_);
     }
     std::string_view text() const&& = delete;
+    [[nodiscard]] std::string take_text() && {
+        if (auto* owned = std::get_if<std::string>(&text_)) {
+            auto result = std::move(*owned);
+            text_ = std::string_view{};
+            return result;
+        }
+        std::string copied(std::get<std::string_view>(text_));
+        text_ = std::string_view{};
+        return copied;
+    }
 };
 
 struct http_structured_text_input {

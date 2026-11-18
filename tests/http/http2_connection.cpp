@@ -2423,7 +2423,8 @@ TEST(Ruvia, http2_public_single_and_fragmented_request_fields_are_owned_and_keep
         auto indexed_request = server.next_event();
         EXPECT_TRUE(indexed_request && indexed_request->request_head());
         if (indexed_request && indexed_request->request_head()) {
-            EXPECT_TRUE(indexed_request->request_head()->build_request().header(head_name) == head_value);
+            const auto indexed_req = indexed_request->request_head()->build_request();
+            EXPECT_TRUE(indexed_req.header(head_name) == head_value);
         }
         auto indexed_end = server.next_event();
         EXPECT_TRUE(indexed_end && indexed_end->message_end());
@@ -2756,7 +2757,8 @@ TEST(Ruvia, http2_public_server_message_end_owns_request_trailers) {
 
     auto request = server.next_event();
     EXPECT_TRUE(request && request->request_head() != nullptr);
-    EXPECT_TRUE(!request->request_head()->build_request().header("x-request-trace"));
+    const auto built_req = request->request_head()->build_request();
+    EXPECT_TRUE(!built_req.header("x-request-trace"));
     const auto chunk = server.next_event();
     EXPECT_TRUE(chunk && chunk->data() != nullptr);
     auto end = server.next_event();

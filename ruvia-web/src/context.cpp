@@ -83,7 +83,7 @@ void mark_plain_text_defaults(http_response& response) {
     }
 }
 
-[[nodiscard]] http_response make_owned_json_response(std::string& body, const response_options& options) {
+[[nodiscard]] http_response make_owned_json_response(std::string&& body, const response_options& options) {
     auto response = detail::make_response(options);
     set_default_content_type(response, http_content_type::application_json);
     response.body(std::move(body));
@@ -231,8 +231,8 @@ sse_writer request_exchange<host_type>::stream_sse(response_options head) & {
 }
 
 template <typename host_type>
-http_response request_exchange<host_type>::json_serialized(std::string& body, const response_options& options) {
-    return make_owned_json_response(body, options);
+http_response request_exchange<host_type>::json_serialized(std::string&& body, const response_options& options) {
+    return make_owned_json_response(std::move(body), options);
 }
 
 template <typename host_type>
@@ -253,12 +253,12 @@ http_response request_exchange<host_type>::html(static_text body, response_optio
 
 // The cold task joins the host's request scope, which discards it unstarted.
 template <typename host_type>
-task<http_response> request_exchange<host_type>::file(file_response_options options, response_options head) {
+task<http_response> request_exchange<host_type>::file(file_response_options options, response_options head) & {
     return static_cast<host_type&>(*this).operation_scope_.attach(detail::context_access::file(exchange(), options, head));
 }
 
 template <typename host_type>
-task<http_response> request_exchange<host_type>::static_file(const static_root& root, static_file_response_options options, response_options head) {
+task<http_response> request_exchange<host_type>::static_file(const static_root& root, static_file_response_options options, response_options head) & {
     return static_cast<host_type&>(*this).operation_scope_.attach(detail::context_access::static_file(exchange(), root, options, head));
 }
 
@@ -280,19 +280,18 @@ http_response request_exchange<host_type>::error(const http_error_info& info, re
     return response;
 }
 
-task<http_response> context::not_found() {
-    return operation_scope_.attach(not_found_task());
-}
-
-task<http_response> context::not_found_task() {
+task<http_response> context::not_found() & {
     // Selected only here, on demand: every matched request carries the table,
     // and few of them ever ask for a not-found answer.
     const auto* routes = runtime_services().routes();
     const auto handler = routes == nullptr ? detail::http_not_found_handler_ref{nullptr} : routes->not_found_handler_for(request_.path());
     if (handler != nullptr) {
-        co_return co_await handler(*this);
+        return operation_scope_.attach(handler(*this));
     }
+    return operation_scope_.attach(not_found_task());
+}
 
+task<http_response> context::not_found_task() {
     co_return detail::make_route_not_found_response();
 }
 
@@ -333,7 +332,7 @@ task<http_response> detail::context_access::commit_streaming_head(context& conte
         throw std::logic_error("a complete response is already selected");
     }
 #ifdef RUVIA_ENABLE_REDIS
-    if (session_access::available(context_value)) {
+    if (session_access::available(context_value) && !session_access::try_commit_sync(context_value)) {
         co_await session_access::commit(context_value);
     }
 #endif
@@ -506,18 +505,18 @@ http_response make_readiness_response(context&, readiness_response_options optio
     body.append(prefix);
     append_json_string(body, reason);
     body.push_back('}');
-    auto response = make_owned_json_response(body, extra);
+    auto response = make_owned_json_response(std::move(body), extra);
     response.status(http_status::service_unavailable);
     return response;
 }
 
 template <typename host_type>
-void request_exchange<host_type>::advertise_origins(std::span<const std::string_view> origins) {
+void request_exchange<host_type>::advertise_origins(argument_list<std::string_view> origins) {
     auto& services = exchange().runtime_services();
     if (services.connection_advertisements() == nullptr || conn().tls() == nullptr) {
         throw std::logic_error("ORIGIN requires an HTTPS connection with advertisement output");
     }
-    services.connection_advertisements()->advertise_origins(origins);
+    services.connection_advertisements()->advertise_origins(origins.span());
 }
 
 template <typename host_type>
@@ -594,6 +593,11 @@ task<void> http_interim_response_output::write_owned(http_status_code status, st
     const detail::inline_http_header_views<16> active_views(fields_value);
     const http_interim_response_head head(status, active_views.view());
     operation_interrupt interrupt(interrupts_, context_value.worker(), operation, &context_value, &context_access::reset_interrupted_request, "interim response write");
+    if (write_sync_ != nullptr) {
+        interrupt.throw_if_interrupted();
+        write_sync_(target_, head);
+        co_return;
+    }
     try {
         co_await write_(target_, head);
     } catch (...) {
@@ -603,7 +607,7 @@ task<void> http_interim_response_output::write_owned(http_status_code status, st
     interrupt.throw_if_interrupted();
 }
 task<void> http_interim_response_output::send_continue() {
-    if (final_committed_) {
+    if (try_send_continue_sync() || final_committed_) {
         co_return;
     }
     auto lease = claim_operation_lane(output_active_, "interim response output is already active");
@@ -627,7 +631,7 @@ std::optional<std::string_view> dispatch_response::header(std::string_view name)
     return headers_.header(name);
 }
 
-task<dispatch_response> context::dispatch(dispatch_options options) {
+task<dispatch_response> context::dispatch(dispatch_options options) & {
     if (!runtime_services().routes() || !worker().is_current()) {
         throw std::logic_error("dispatch requires a routed context on its owning worker");
     }
@@ -659,9 +663,9 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
     // The operation is lazy and the options borrow caller storage: take owned
     // copies now. The subrequest is built directly as a parsed request; it
     // never round-trips through a wire format.
-    std::string method(options.method_.view());
-    std::string target(options.target_.view());
-    std::string body(options.body_.view());
+    std::string method(options.method_);
+    std::string target(options.target_);
+    std::string body(std::move(options.body_).into_string());
     std::vector<http_header> headers;
     if (!options.headers_.empty()) {
         headers.reserve(options.headers_.size());
@@ -851,7 +855,7 @@ const detail::request_bindings& context::request_bindings() const noexcept {
     return request_storage().request_bindings_;
 }
 
-const http_response* context::response() const noexcept {
+const http_response* context::response() const& noexcept {
     const auto* final = response_state().final();
     return final;
 }
@@ -860,7 +864,7 @@ bool context::has_response() const noexcept {
     return response_state().final() != nullptr;
 }
 
-void context::respond(http_response&& response) {
+void context::respond(http_response&& response) & {
     store_response(std::move(response));
 }
 
@@ -1072,6 +1076,50 @@ void require_request_body_read(const operation_deadline& deadline, const stop_to
     }
 }
 
+[[nodiscard]] std::optional<std::string_view> try_read_buffered_request_body_sync(const context& context_value, const operation_deadline& deadline, const stop_token& stop) {
+    require_request_body_read(deadline, stop);
+    if (const auto decoded = detail::context_access::decoded_body(context_value)) {
+        return *decoded;
+    }
+    const auto& body_source = detail::context_access::request_body_source(context_value);
+    if (body_source.lazy() != nullptr) {
+        return std::nullopt;
+    }
+    const auto lane = detail::context_access::claim_buffered_body(context_value);
+    static_cast<void>(lane);
+    if (body_source.streaming() != nullptr) {
+        throw std::logic_error("streaming request body cannot be buffered");
+    }
+    const auto& request = detail::context_access::request(context_value);
+    const auto raw = as_chars(request.body_bytes());
+    if (detail::context_access::body_identity(context_value)) {
+        return raw;
+    }
+    const auto& services = detail::context_access::services(context_value);
+    const auto parsed_coding = require_decodable_request_coding(request, detail::unsupported_request_content_coding::read_type::decoded);
+    const auto codings = parsed_coding.codings();
+    if (codings.empty()) {
+        detail::context_access::mark_body_identity(context_value);
+        return raw;
+    }
+    const auto max_decoded_bytes = services.max_decoded_request_body_bytes();
+    const bool offload = services.worker().blocking_pool() != nullptr && max_decoded_bytes > inline_request_decode_bytes;
+    if (offload && raw.size() > inline_request_decode_bytes) {
+        return std::nullopt;
+    }
+    auto decode_result = decode_http_content(codings, raw, {.max_decoded_bytes_ = offload ? inline_request_decode_bytes : max_decoded_bytes});
+    const auto* failure = std::get_if<http_content_decode_error>(&decode_result);
+    if (offload && failure != nullptr && *failure == http_content_decode_error::decoded_size_exceeded) {
+        return std::nullopt;
+    }
+    require_request_body_read(deadline, stop);
+    auto* decoded_content = std::get_if<std::string>(&decode_result);
+    if (decoded_content == nullptr) {
+        throw make_http_protocol_error(*failure, http_coding_field::content_encoding);
+    }
+    return detail::context_access::store_decoded_body(context_value, std::move(*decoded_content));
+}
+
 template <typename result_type>
 task<result_type> read_request_body(const context& context_value, operation_options operation) {
     const auto as_result = [](std::string_view text) -> result_type {
@@ -1082,9 +1130,8 @@ task<result_type> read_request_body(const context& context_value, operation_opti
         }
     };
     const operation_deadline deadline(operation.timeout_);
-    require_request_body_read(deadline, operation.stop_token_);
-    if (const auto decoded = detail::context_access::decoded_body(context_value)) {
-        co_return as_result(*decoded);
+    if (const auto sync = try_read_buffered_request_body_sync(context_value, deadline, operation.stop_token_)) {
+        co_return as_result(*sync);
     }
     const auto lane = detail::context_access::claim_buffered_body(context_value);
 
@@ -1152,7 +1199,8 @@ task<result_type> read_request_body(const context& context_value, operation_opti
 
 task<std::vector<multipart_part>> read_request_multipart(const context& context_value, operation_options operation) {
     const auto boundary = get_multipart_boundary(detail::context_access::request(context_value));
-    const auto request_body = co_await read_request_body<std::string_view>(context_value, std::move(operation));
+    const auto sync_body = detail::try_buffered_request_body_text(context_value, operation);
+    const auto request_body = sync_body ? *sync_body : co_await read_request_body<std::string_view>(context_value, std::move(operation));
     auto parsed = parse_multipart_body(request_body, {.boundary_ = boundary});
     if (const auto* error = std::get_if<multipart_parse_error>(&parsed)) {
         throw make_http_protocol_error(*error);
@@ -1442,6 +1490,19 @@ std::optional<std::string_view> context_request::negotiate(negotiable_field fiel
     // match no representation.
     return best;
 }
+
+namespace detail {
+
+std::optional<std::string_view> try_buffered_request_body_text(const context& context_value, const operation_options& operation) {
+    const operation_deadline deadline(operation.timeout_);
+    return try_read_buffered_request_body_sync(context_value, deadline, operation.stop_token_);
+}
+
+task<std::string_view> read_unscoped_request_body_text(const context& context_value, operation_options operation) {
+    return read_request_body<std::string_view>(context_value, std::move(operation));
+}
+
+}  // namespace detail
 
 task<std::string_view> context_request::body_text(operation_options operation) const {
     return context_->operation_scope_.attach(read_request_body<std::string_view>(*context_, std::move(operation)));

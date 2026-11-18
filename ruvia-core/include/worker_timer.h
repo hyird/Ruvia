@@ -8,6 +8,7 @@
 #include <optional>
 #include <utility>
 
+#include "byte_view.h"
 #include "move_only_function.h"
 #include "operation_options.h"
 #include "stop_token.h"
@@ -78,12 +79,13 @@ public:
     // while the completion is being moved in), returns false, stores nothing,
     // never invokes the completion, and leaves the registration unbound -- the
     // same terminal point stop_timers() reaches for a pending timer by
-    // delivering worker_timer_outcome::cancelled. Rescheduling a still-pending
+    // delivers worker_timer_outcome::cancelled. Rescheduling a still-pending
     // registration throws std::logic_error; an empty worker_ref throws
-    // std::runtime_error.
-    bool schedule(const worker_ref& worker, std::chrono::steady_clock::time_point deadline, move_only_function<void(worker_timer_outcome)> completion);
-    bool schedule(worker_ref&&, std::chrono::steady_clock::time_point, move_only_function<void(worker_timer_outcome)>) = delete;
-    bool schedule(const worker_ref&&, std::chrono::steady_clock::time_point, move_only_function<void(worker_timer_outcome)>) = delete;
+    // std::invalid_argument.
+    bool schedule(const worker_ref& worker, std::chrono::steady_clock::time_point deadline, move_only_function<void(worker_timer_outcome)> completion) &;
+    bool schedule(const worker_ref&, std::chrono::steady_clock::time_point, move_only_function<void(worker_timer_outcome)>) && = delete;
+    bool schedule(worker_ref&&, std::chrono::steady_clock::time_point, move_only_function<void(worker_timer_outcome)>) & = delete;
+    bool schedule(const worker_ref&&, std::chrono::steady_clock::time_point, move_only_function<void(worker_timer_outcome)>) & = delete;
 
     // Removes the registration without delivering its completion: the owner
     // that cancels has stopped observing the outcome (a finished operation,
@@ -142,11 +144,12 @@ public:
     // until destruction. Throws std::logic_error(affinity_message) off that
     // worker and std::logic_error when started twice. A relative timeout
     // starts now.
-    void start(const worker_ref& worker, const char* affinity_message);
-    void start(worker_ref&&, const char*) = delete;
-    void start(const worker_ref&&, const char*) = delete;
+    void start(const worker_ref& worker, const char* affinity_message) &;
+    void start(const worker_ref&, const char*) && = delete;
+    void start(worker_ref&&, const char*) & = delete;
+    void start(const worker_ref&&, const char*) & = delete;
 
-    [[nodiscard]] const stop_token& token() const& noexcept {
+    [[nodiscard]] const stop_token& token() const& noexcept RUVIA_LIFETIMEBOUND {
         return token_;
     }
     const stop_token& token() const&& = delete;
@@ -167,11 +170,13 @@ public:
     // queue has stopped; the owner then ends the wait as worker_stopping.
     // Allocation may throw; the owner rolls back.
     template <typename owner_type, void (owner_type::*end)(wait_status) noexcept>
-    [[nodiscard]] bool arm_deadline(owner_type& owner, bool watch_worker = false) {
+    [[nodiscard]] bool arm_deadline(owner_type& owner, bool watch_worker = false) & {
         return arm_deadline(std::addressof(owner), [](void* target, wait_status status) noexcept {
             (static_cast<owner_type*>(target)->*end)(status);
         }, watch_worker);
     }
+    template <typename owner_type, void (owner_type::*end)(wait_status) noexcept>
+    bool arm_deadline(owner_type&, bool = false) && = delete;
 
     void cancel_deadline() noexcept {
         timer_.cancel();
@@ -186,7 +191,7 @@ public:
 private:
     using end_type = void (*)(void*, wait_status) noexcept;
 
-    [[nodiscard]] bool arm_deadline(void* owner, end_type end, bool watch_worker);
+    [[nodiscard]] bool arm_deadline(void* owner, end_type end, bool watch_worker) &;
 
     std::optional<operation_timeout> timeout_;
     stop_token token_;

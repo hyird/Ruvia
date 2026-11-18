@@ -82,10 +82,8 @@ public:
     // not rescanned. A complete or rejected head ends the parse; a parser that
     // is not active throws std::logic_error until reset().
     // 分配失败以 std::bad_alloc 传出且不发布完成状态；释放资源后可用同一 buffer 重试，但部分元数据可能残留。
-    [[nodiscard]] http1_server_request_parse_result parse(std::string_view buffer);
-
-    template <detail::http_temporary_owning_char_string buffer_type>
-    http1_server_request_parse_result parse(buffer_type&&) = delete;
+    [[nodiscard]] http1_server_request_parse_result parse(borrowed_text buffer) &;
+    http1_server_request_parse_result parse(borrowed_text) && = delete;
 
     [[nodiscard]] decoder_state state() const noexcept {
         return state_;

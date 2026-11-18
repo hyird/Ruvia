@@ -35,31 +35,33 @@ public:
     multipart_part& operator=(multipart_part&&) noexcept = default;
 
     [[nodiscard]] std::string_view name() const& noexcept RUVIA_LIFETIMEBOUND {
-        if (const auto* borrowed = std::get_if<std::string_view>(&name_)) {
-            return *borrowed;
-        }
-        return std::get<std::string>(name_);
+        return view_text(name_);
     }
     [[nodiscard]] std::string_view name() const&& = delete;
+    [[nodiscard]] std::string take_name() && {
+        return take_text(name_);
+    }
 
     [[nodiscard]] std::string_view filename() const& noexcept RUVIA_LIFETIMEBOUND {
-        if (const auto* borrowed = std::get_if<std::string_view>(&filename_)) {
-            return *borrowed;
-        }
-        return std::get<std::string>(filename_);
+        return view_text(filename_);
     }
     [[nodiscard]] std::string_view filename() const&& = delete;
+    [[nodiscard]] std::string take_filename() && {
+        auto result = take_text(filename_);
+        filename_present_ = false;
+        return result;
+    }
 
     [[nodiscard]] bool has_filename() const noexcept {
         return filename_present_;
     }
     [[nodiscard]] std::string_view content_type() const& noexcept RUVIA_LIFETIMEBOUND {
-        if (const auto* borrowed = std::get_if<std::string_view>(&content_type_)) {
-            return *borrowed;
-        }
-        return std::get<std::string>(content_type_);
+        return view_text(content_type_);
     }
     std::string_view content_type() const&& = delete;
+    [[nodiscard]] std::string take_content_type() && {
+        return take_text(content_type_);
+    }
 
     [[nodiscard]] std::string_view body() const noexcept {
         return body_;
@@ -71,6 +73,24 @@ private:
 
     using text_storage_type = std::variant<std::string_view, std::string>;
     using content_type_storage_type = text_storage_type;
+
+    [[nodiscard]] static std::string_view view_text(const text_storage_type& storage) noexcept {
+        if (const auto* borrowed = std::get_if<std::string_view>(&storage)) {
+            return *borrowed;
+        }
+        return std::get<std::string>(storage);
+    }
+
+    [[nodiscard]] static std::string take_text(text_storage_type& storage) {
+        if (auto* owned = std::get_if<std::string>(&storage)) {
+            auto result = std::move(*owned);
+            storage = std::string_view{};
+            return result;
+        }
+        std::string copied(std::get<std::string_view>(storage));
+        storage = std::string_view{};
+        return copied;
+    }
 
     multipart_part(text_storage_type name, text_storage_type filename, content_type_storage_type content_type_value, std::string_view body, bool filename_present) noexcept :
         name_(std::move(name)),

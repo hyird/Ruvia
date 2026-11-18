@@ -45,8 +45,10 @@ public:
     http_transfer_coding_stack_decoder& operator=(const http_transfer_coding_stack_decoder&) = delete;
     http_transfer_coding_stack_decoder(http_transfer_coding_stack_decoder&&) = delete;
     http_transfer_coding_stack_decoder& operator=(http_transfer_coding_stack_decoder&&) = delete;
-    [[nodiscard]] http_transfer_coding_decode_result decode(std::string_view input, std::span<char> output RUVIA_LIFETIMEBOUND);
-    [[nodiscard]] http_transfer_coding_decode_result finish_input() noexcept;
+    [[nodiscard]] http_transfer_coding_decode_result decode(std::string_view input, std::span<char> output RUVIA_LIFETIMEBOUND) &;
+    http_transfer_coding_decode_result decode(std::string_view, std::span<char>) && = delete;
+    [[nodiscard]] http_transfer_coding_decode_result finish_input() & noexcept;
+    http_transfer_coding_decode_result finish_input() && = delete;
 
     [[nodiscard]] decoder_state state() const noexcept;
     // Starts a new coded body with the constructed codings and limit, keeping

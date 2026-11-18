@@ -1930,3 +1930,95 @@ TEST(Ruvia, redis_owned_results_outlive_client_retirement_and_destruction) {
     ASSERT_TRUE(retained.has_value());
     EXPECT_EQ(retained->string(), std::string_view(expected));
 }
+
+namespace {
+
+template <typename value_type>
+concept redis_value_allows_rvalue_string = requires(value_type v) { std::move(v).string(); };
+template <typename value_type>
+concept redis_value_allows_rvalue_error = requires(value_type v) { std::move(v).error(); };
+template <typename value_type>
+concept redis_value_allows_rvalue_array = requires(value_type v) { std::move(v).array(); };
+template <typename value_type>
+concept redis_value_allows_take_string = requires(value_type v) { std::move(v).take_string(); };
+template <typename value_type>
+concept redis_value_allows_take_error = requires(value_type v) { std::move(v).take_error(); };
+template <typename value_type>
+concept redis_value_allows_take_array = requires(value_type v) { std::move(v).take_array(); };
+template <typename result_type>
+concept redis_set_result_allows_take_previous = requires(result_type r) { std::move(r).take_previous(); };
+template <typename kv_type>
+concept redis_kv_allows_take = requires(kv_type kv) { std::move(kv).take_key(); std::move(kv).take_value(); };
+template <typename sv_type>
+concept redis_scored_allows_take_value = requires(sv_type sv) { std::move(sv).take_value(); };
+template <typename page_type>
+concept redis_scan_allows_take_entries = requires(page_type p) { std::move(p).take_entries(); };
+template <typename entry_type>
+concept redis_stream_entry_allows_take = requires(entry_type e) { std::move(e).take_id(); std::move(e).take_fields(); };
+template <typename read_type>
+concept redis_stream_read_allows_take = requires(read_type sr) { std::move(sr).take_stream(); std::move(sr).take_entries(); };
+template <typename exec_type>
+concept redis_executor_allows_blpop_init_list = requires(const exec_type& ex, ruvia::redis_block_wait w) { ex.blpop(std::initializer_list<std::string_view>{}, w); };
+template <typename exec_type>
+concept redis_executor_allows_brpop_init_list = requires(const exec_type& ex, ruvia::redis_block_wait w) { ex.brpop(std::initializer_list<std::string_view>{}, w); };
+template <typename exec_type>
+concept redis_executor_allows_xread_group_init_list = requires(const exec_type& ex) { ex.xread_group("g", "c", std::initializer_list<ruvia::redis_stream_read_view>{}); };
+
+}  // namespace
+
+TEST(Ruvia, redis_result_types_support_zero_copy_take_and_reject_initializer_lists) {
+    static_assert(!redis_value_allows_rvalue_string<ruvia::redis_value>);
+    static_assert(!redis_value_allows_rvalue_error<ruvia::redis_value>);
+    static_assert(!redis_value_allows_rvalue_array<ruvia::redis_value>);
+    static_assert(redis_value_allows_take_string<ruvia::redis_value>);
+    static_assert(redis_value_allows_take_error<ruvia::redis_value>);
+    static_assert(redis_value_allows_take_array<ruvia::redis_value>);
+    static_assert(redis_set_result_allows_take_previous<ruvia::redis_set_result>);
+    static_assert(redis_kv_allows_take<ruvia::redis_key_value>);
+    static_assert(redis_scored_allows_take_value<ruvia::redis_scored_value>);
+    static_assert(redis_scan_allows_take_entries<ruvia::redis_scan_result>);
+    static_assert(redis_stream_entry_allows_take<ruvia::redis_stream_entry>);
+    static_assert(redis_stream_read_allows_take<ruvia::redis_stream_read_result>);
+    static_assert(!redis_executor_allows_blpop_init_list<ruvia::redis_executor>);
+    static_assert(!redis_executor_allows_brpop_init_list<ruvia::redis_executor>);
+    static_assert(!redis_executor_allows_xread_group_init_list<ruvia::redis_executor>);
+
+    auto& io_context = ruvia::test::new_test_io_context();
+    auto worker = ruvia::attach_event_loop(io_context);
+    const std::string expected_str(256, 'v');
+    const std::string expected_err(160, 'e');
+    redis_client_test::scripted_redis_peer peer({
+        redis_client_test::redis_bulk_reply(expected_str),
+        "-" + expected_err + "\r\n",
+        "*1\r\n" + redis_client_test::redis_bulk_reply(expected_str),
+    });
+    ruvia::redis_client client(worker.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
+    ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+        const auto redis = connected.redis();
+
+        auto str_reply = co_await redis.command("GET", "k");
+        const char* const str_ptr = str_reply.string().data();
+        const std::string taken_str = std::move(str_reply).take_string();
+        EXPECT_EQ(taken_str.data(), str_ptr);
+        EXPECT_TRUE(str_reply.is_null());
+
+        auto err_reply = co_await redis.command("GET", "k");
+        const char* const err_ptr = err_reply.error().data();
+        const std::string taken_err = std::move(err_reply).take_error();
+        EXPECT_EQ(taken_err.data(), err_ptr);
+        EXPECT_TRUE(err_reply.is_null());
+
+        auto arr_reply = co_await redis.command("MGET", "k");
+        const auto* const arr_ptr = arr_reply.array().data();
+        const char* const elem_ptr = arr_reply.array()[0].string().data();
+        auto taken_arr = std::move(arr_reply).take_array();
+        EXPECT_EQ(taken_arr.data(), arr_ptr);
+        EXPECT_EQ(taken_arr.size(), std::size_t{1});
+        if (taken_arr.size() == std::size_t{1}) {
+            EXPECT_EQ(std::move(taken_arr[0]).take_string().data(), elem_ptr);
+        }
+        EXPECT_TRUE(arr_reply.is_null());
+        EXPECT_THROW((void)std::move(arr_reply).take_array(), std::logic_error);
+    });
+    peer.join();
+}

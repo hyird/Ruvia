@@ -683,7 +683,7 @@ private:
                     }
                     return submit(true);
                 } else {
-                    return submit(false);
+                    return submit(!requires(const stream_type& value) { value.on_eof_before_close(); });
                 }
             }();
             if (!connection.accept_submitted_frame(status)) {
@@ -1090,7 +1090,7 @@ task<std::optional<websocket_message>> websocket_session_connection<stream_type>
                         protocol_.notify_transport_eof();
                         co_await flush_protocol_output_now();
                         close_stream();
-                        co_return std::nullopt;
+                        break;
                     }
                     scanner_entry_.touch();
                     last_transfer_ms_ = steady_stamp_ms();
@@ -1116,7 +1116,7 @@ task<std::optional<websocket_message>> websocket_session_connection<stream_type>
                     if (protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_eof) {
                         continue;
                     }
-                    co_return std::nullopt;
+                    break;
                 }
                 throw std::logic_error("unexpected WebSocket protocol event");
             }
@@ -1127,7 +1127,15 @@ task<std::optional<websocket_message>> websocket_session_connection<stream_type>
             throw;
         }
     }
-    throw_interrupted(*interrupted, "websocket read");
+    if (interrupted.has_value()) {
+        throw_interrupted(*interrupted, "websocket read");
+    }
+    if constexpr (requires { stream_.on_eof_before_close(); }) {
+        if (protocol_.termination() == websocket_termination::eof) {
+            stream_.on_eof_before_close();
+        }
+    }
+    co_return std::nullopt;
 }
 
 template <typename stream_type>
@@ -1336,6 +1344,11 @@ task<void> websocket_session_connection<stream_type>::close_owned(::ruvia::webso
         // The peer never answered: an inbound connection end, not a handler fault.
         throw std::system_error(std::make_error_code(std::errc::timed_out), "websocket close handshake timed out");
     }
+    if constexpr (requires { stream_.on_eof_before_close(); }) {
+        if (protocol_.termination() == websocket_termination::eof) {
+            stream_.on_eof_before_close();
+        }
+    }
 }
 
 template <typename stream_type>
@@ -1519,17 +1532,6 @@ template <typename connection_type>
     return websocket(std::move(state));
 }
 
-// The terminal handler borrows an established connection, but does not close it:
-// onion middleware post-processing still belongs to the same websocket request
-// and must be able to turn its own failure into the session's 1011 outcome.
-template <typename stream_type>
-task<void> invoke_websocket_handler(websocket_session_connection<stream_type>& connection, connection_scanner::entry& scanner_entry, const route_stream_handler& handler, context& context_value) {
-    auto websocket_value = make_websocket_facade(connection);
-    context_websocket_binding websocket_binding(context_value, websocket_value);
-
-    scanner_entry.enter_long_lived();
-    co_await handler(context_value);
-}
 // The session retains the connection until the complete route middleware
 // chain finishes, then converge here. close() is idempotent through the protocol
 // core's typed close phase, so a handler that already closed itself is safe.

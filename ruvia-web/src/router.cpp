@@ -392,8 +392,12 @@ private:
     static task<void> run_upgrade_terminal(request_stream& stream, const resolved_route& resolved, context& context_value) {
         const auto& endpoint = resolved.route().endpoint();
         if (const auto* websocket_endpoint = endpoint.websocket()) {
-            const auto accepted = co_await stream.accept_websocket_endpoint(*websocket_endpoint);
-            auto* session = accepted.session();
+            std::optional<websocket_accept_result> accepted;
+            {
+                auto lease = stream.claim_websocket_accept();
+                accepted.emplace(co_await (*stream.accept_websocket_)(*websocket_endpoint));
+            }
+            auto* session = accepted->session();
             // A rejected handshake already selected its error response, whose
             // status the access log records when the server sends it.
             if (session == nullptr) {

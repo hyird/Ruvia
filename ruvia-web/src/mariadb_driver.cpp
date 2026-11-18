@@ -287,7 +287,12 @@ task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::strin
     if (classification.calls_routine_) {
         statements.routine_called();
     }
-    if (co_await exec_mysql_query(pool, index, sql, deadline_value) != 0) {
+    int query_result = 0;
+    int status = mysql_real_query_start(&query_result, &connection, sql.data(), static_cast<unsigned long>(sql.size()));
+    while (status != 0) {
+        status = mysql_real_query_cont(&query_result, &connection, co_await wait_for_mysql(pool, index, status, deadline_value));
+    }
+    if (query_result != 0) {
         throw mysql_statement_error(pool, index, "mysql_real_query", mysql_local_infile_refused(connection, classification.exclusive_));
     }
 }
@@ -1121,7 +1126,7 @@ task<result_type> run_mysql_cached(mariadb_pool& pool, std::size_t index, std::s
             free_stored_result(raw_result);
         }
     }
-    const bool extra_row_set = co_await finish_mysql_results(pool, index, deadline_value);
+    const bool extra_row_set = mysql_more_results(&connection) != 0 ? co_await finish_mysql_results(pool, index, deadline_value) : false;
     if (auto failure = mariadb_statement_failure(nullptr, extra_row_set, nullptr, returns_rows, raw_result != nullptr)) {
         std::rethrow_exception(failure);
     }
@@ -1196,7 +1201,7 @@ task<void> finish_mysql_stream(mariadb_pool& pool, std::size_t index, void*& res
     // cannot perform I/O or discard another result's status.
     mysql_free_result(raw_result);
     result_value = nullptr;
-    if (co_await finish_mysql_results(pool, index, deadline_value)) {
+    if (mysql_more_results(&connection) != 0 && co_await finish_mysql_results(pool, index, deadline_value)) {
         std::rethrow_exception(mariadb_statement_failure(nullptr, true, nullptr, true, true));
     }
 }
@@ -1217,7 +1222,11 @@ task<db_stream_step> mariadb_driver::read_stream_row(pool_type& pool, std::size_
         if (mysql_errno(&connection) != 0) {
             throw mysql_error(connection, "mysql_fetch_row", backend_error_code::command_failed);
         }
-        co_await finish_mysql_stream(pool, index, result_value, deadline_value);
+        mysql_free_result(raw_result);
+        result_value = nullptr;
+        if (mysql_more_results(&connection) != 0 && co_await finish_mysql_results(pool, index, deadline_value)) {
+            std::rethrow_exception(mariadb_statement_failure(nullptr, true, nullptr, true, true));
+        }
         co_return db_stream_end::exhausted;
     }
     const auto field_count = static_cast<std::size_t>(mysql_num_fields(raw_result));

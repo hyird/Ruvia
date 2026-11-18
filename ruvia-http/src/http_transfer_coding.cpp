@@ -74,7 +74,7 @@ http_transfer_coding_stack_decoder::~http_transfer_coding_stack_decoder() {
     delete impl_;
 }
 
-http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(std::string_view input, std::span<char> output_buffer) {
+http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(std::string_view input, std::span<char> output_buffer) & {
     const auto failed = [this](std::size_t consumed) {
         return http_transfer_coding_decode_result(consumed, http_transfer_coding_decode_failure(*impl_->failure_));
     };
@@ -196,7 +196,7 @@ void http_transfer_coding_stack_decoder::reset() {
     impl_->failure_.reset();
 }
 
-http_transfer_coding_decode_result http_transfer_coding_stack_decoder::finish_input() noexcept {
+http_transfer_coding_decode_result http_transfer_coding_stack_decoder::finish_input() & noexcept {
     if (impl_->failure_.has_value()) {
         return http_transfer_coding_decode_result(0, http_transfer_coding_decode_failure(*impl_->failure_));
     }

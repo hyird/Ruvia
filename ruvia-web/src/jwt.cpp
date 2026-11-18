@@ -444,16 +444,15 @@ template <typename visitor_type>
     return number;
 }
 
-[[nodiscard]] std::optional<std::string> jwt_decode_json_string_value(std::string_view& value) {
-    std::string decoded;
+[[nodiscard]] bool jwt_decode_json_string_into(std::string_view& value, std::string& decoded) {
     const auto parsed_value = parse_json_string(value, &decoded);
     if (!parsed_value.has_value()) {
-        return std::nullopt;
+        return false;
     }
     if (parsed_value->encoding() == json_string_encoding::literal) {
         decoded.assign(parsed_value->raw());
     }
-    return decoded;
+    return true;
 }
 
 // Decode the JWT "aud" claim (RFC 7519 §4.1.3): either a single JSON string or a
@@ -467,19 +466,21 @@ template <typename visitor_type>
         return false;
     }
     if (value.front() != '[') {
-        if (auto single = detail::jwt_decode_json_string_value(value)) {
-            out.push_back(std::move(*single));
-            return true;
+        auto& item = out.emplace_back();
+        if (!jwt_decode_json_string_into(value, item)) {
+            out.pop_back();
+            return false;
         }
-        return false;
+        return true;
     }
 
     const bool consumed = consume_json_array_elements(value, 1, [&out](std::string_view& element) {
-        if (auto decoded = detail::jwt_decode_json_string_value(element)) {
-            out.push_back(std::move(*decoded));
-            return true;
+        auto& item = out.emplace_back();
+        if (!jwt_decode_json_string_into(element, item)) {
+            out.pop_back();
+            return false;
         }
-        return false;
+        return true;
     });
     if (!consumed || out.empty()) {
         out.clear();
@@ -688,25 +689,13 @@ bool jwt_payload_access::decode_jwt_payload_claim(jwt_payload& payload_value, st
         seen_reserved_mask |= bit;
         switch (bit) {
             case 1U << 0:
-                if (auto issuer = detail::jwt_decode_json_string_value(value)) {
-                    payload_value.issuer_ = std::move(*issuer);
-                    return true;
-                }
-                return false;
+                return detail::jwt_decode_json_string_into(value, payload_value.issuer_);
             case 1U << 1:
-                if (auto subject = detail::jwt_decode_json_string_value(value)) {
-                    payload_value.subject_ = std::move(*subject);
-                    return true;
-                }
-                return false;
+                return detail::jwt_decode_json_string_into(value, payload_value.subject_);
             case 1U << 2:
                 return jwt_decode_audiences(payload_value.audiences_, value);
             case 1U << 3:
-                if (auto id = detail::jwt_decode_json_string_value(value)) {
-                    payload_value.id_ = std::move(*id);
-                    return true;
-                }
-                return false;
+                return detail::jwt_decode_json_string_into(value, payload_value.id_);
             case 1U << 4:
                 if (const auto exp = detail::jwt_parse_json_numeric_date(value)) {
                     payload_value.expires_at_.emplace(jwt_numeric_date(*exp));
@@ -738,8 +727,9 @@ bool jwt_payload_access::decode_jwt_payload_claim(jwt_payload& payload_value, st
     if (value.front() != '"') {
         return skip_json_value(value, 1);
     }
-    if (auto claim_value = detail::jwt_decode_json_string_value(value)) {
-        payload_value.claims_.push_back(detail::jwt_payload_access::claim(std::string(key), std::move(*claim_value)));
+    std::string claim_value;
+    if (detail::jwt_decode_json_string_into(value, claim_value)) {
+        payload_value.claims_.push_back(detail::jwt_payload_access::claim(std::string(key), std::move(claim_value)));
         return true;
     }
     return false;

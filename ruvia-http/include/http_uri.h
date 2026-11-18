@@ -26,9 +26,7 @@ namespace ruvia {
 // checks delimiters, not host/port syntax. Rejects unbalanced brackets, bytes
 // after ']' other than ':', and colons in port. Outputs are unspecified on
 // failure and otherwise borrow value; an empty host/port is representable.
-[[nodiscard]] bool split_uri_host_port(std::string_view value, std::string_view& host, std::string_view& port, bool& has_port) noexcept;
-template <detail::http_temporary_owning_char_string text_type>
-bool split_uri_host_port(text_type&&, std::string_view&, std::string_view&, bool&) = delete;
+[[nodiscard]] bool split_uri_host_port(borrowed_text value, std::string_view& host, std::string_view& port, bool& has_port) noexcept;
 
 // A complete HTTP(S)/WS(S) URL, without userinfo or IPv6 zones. All non-default
 // text borrows the input without decoding or normalization. Scheme case and
