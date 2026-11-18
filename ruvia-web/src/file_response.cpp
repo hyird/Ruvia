@@ -43,6 +43,9 @@ namespace {
 // (empty, an embedded NUL, or text that is not UTF-8 on Windows).
 [[nodiscard]] bool assign_native_file_path(borrowed_file_path path, http_native_path_string_type& output) {
     if (const auto native = path.native(); !native.empty()) {
+        if (native.find(http_native_path_char_type{}) != http_native_path_view_type::npos) {
+            return false;
+        }
         output.assign(native);
         return true;
     }

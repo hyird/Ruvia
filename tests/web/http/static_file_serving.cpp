@@ -612,9 +612,14 @@ TEST(Ruvia, context_file_serves_borrowed_utf8_text_paths) {
         EXPECT_EQ(from_path.status(), ruvia::http_status::ok);
         EXPECT_TRUE(matches_borrowed_body(from_path));
 
-        // Text that cannot name the file is a miss, not a truncated lookup.
+        // Neither path representation may silently open the prefix before a NUL.
         const std::string with_nul = text + std::string(1, '\0') + "x";
         EXPECT_EQ(co_await status_of(with_nul), ruvia::http_status::not_found);
+        auto native_with_nul = file_path.native();
+        native_with_nul.push_back(fs::path::value_type{});
+        native_with_nul.push_back(static_cast<fs::path::value_type>('x'));
+        const fs::path path_with_nul(std::move(native_with_nul));
+        EXPECT_EQ(co_await status_of(path_with_nul), ruvia::http_status::not_found);
         EXPECT_EQ(co_await status_of(""), ruvia::http_status::not_found);
         EXPECT_EQ(co_await status_of(nullptr), ruvia::http_status::not_found);
         EXPECT_EQ(co_await status_of(ruvia::borrowed_file_path{}), ruvia::http_status::not_found);

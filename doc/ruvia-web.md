@@ -1846,7 +1846,7 @@ auto sub = co_await c.dispatch({.method_ = "GET", .target_ = "/api/internal/prof
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `path_` | `borrowed_file_path` | `{}` | 文件路径 |
+| `path_` | `borrowed_file_path` | `{}` | 文件路径；文本和原生路径都拒绝内嵌 NUL，返回 `404` 而非打开截断后的路径 |
 | `content_type_` | `borrowed_text` | `{}` | 覆盖 Content-Type |
 
 #### 7.1.5 `ruvia::context_request`
