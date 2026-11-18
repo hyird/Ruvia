@@ -5694,8 +5694,8 @@ public:
 
     [[nodiscard]] static bool cookie_domain_matches(std::string_view host, std::string_view domain) noexcept;
     [[nodiscard]] static bool cookie_path_matches(std::string_view request_path, std::string_view cookie_path) noexcept;
-    [[nodiscard]] static std::string_view request_path_only(std::string_view target) noexcept;
-    [[nodiscard]] static std::string_view default_cookie_path(std::string_view target) noexcept;
+    [[nodiscard]] static std::string_view request_path_only(std::string_view target RUVIA_LIFETIMEBOUND) noexcept;
+    [[nodiscard]] static std::string_view default_cookie_path(std::string_view target RUVIA_LIFETIMEBOUND) noexcept;
 };
 ```
 
