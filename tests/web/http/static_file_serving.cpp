@@ -624,6 +624,15 @@ TEST(Ruvia, context_file_serves_borrowed_utf8_text_paths) {
         EXPECT_EQ(co_await status_of(nullptr), ruvia::http_status::not_found);
         EXPECT_EQ(co_await status_of(ruvia::borrowed_file_path{}), ruvia::http_status::not_found);
         const std::string invalid_utf8 = std::string(text) + "\xff";
+#if defined(__linux__)
+        // A native Linux path can name these bytes; the UTF-8 text form cannot.
+        const fs::path native_invalid_utf8(invalid_utf8);
+        {
+            std::ofstream out(native_invalid_utf8, std::ios::binary | std::ios::trunc);
+            out << "native";
+        }
+        EXPECT_EQ(co_await status_of(native_invalid_utf8), ruvia::http_status::ok);
+#endif
         EXPECT_EQ(co_await status_of(invalid_utf8), ruvia::http_status::not_found);
     });
 }

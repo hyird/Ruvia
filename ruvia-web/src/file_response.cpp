@@ -32,6 +32,7 @@
 #include "static_root.h"
 #include "static_root_index.h"
 #include "task.h"
+#include "utf8.h"
 
 namespace ruvia {
 
@@ -39,8 +40,8 @@ namespace {
 
 // Copies the file a borrowed path names into `output` in NUL-terminated
 // native form: a borrowed std::filesystem::path's native string as is, text
-// terminated and, on Windows, widened. False when the path cannot name a file
-// (empty, an embedded NUL, or text that is not UTF-8 on Windows).
+// terminated and, on Windows, widened. Reject empty paths, embedded NULs and
+// malformed UTF-8 in the text form.
 [[nodiscard]] bool assign_native_file_path(borrowed_file_path path, http_native_path_string_type& output) {
     if (const auto native = path.native(); !native.empty()) {
         if (native.find(http_native_path_char_type{}) != http_native_path_view_type::npos) {
@@ -50,11 +51,11 @@ namespace {
         return true;
     }
     const auto text = path.text();
-    if (text.empty() || text.find('\0') != std::string_view::npos) {
+    if (text.empty()) {
         return false;
     }
 #if defined(_WIN32)
-    if (text.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    if (text.find('\0') != std::string_view::npos || !std::in_range<int>(text.size())) {
         return false;
     }
     const auto text_length = static_cast<int>(text.size());
@@ -67,6 +68,21 @@ namespace {
         return false;
     }
 #else
+    for (std::size_t index = 0; index < text.size();) {
+        const auto byte = static_cast<unsigned char>(text[index]);
+        if (byte == 0) {
+            return false;
+        }
+        if (byte < 0x80) {
+            ++index;
+            continue;
+        }
+        const auto sequence = scan_utf8_sequence(text, index);
+        if (!sequence.well_formed_) {
+            return false;
+        }
+        index += sequence.length_;
+    }
     output.assign(text.data(), text.size());
 #endif
     return true;
