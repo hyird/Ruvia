@@ -806,6 +806,43 @@ TEST(Ruvia, worker_group_join_returns_the_callers_primary_failure) {
     EXPECT_EQ(failing.state(), state::stopped);
 }
 
+TEST(RuviaDeathTest, worker_group_rejects_reentrant_join_during_failure_reporting) {
+    const auto verify = [] {
+        std::thread([] {
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            std::_Exit(2);
+        }).detach();
+
+        struct reentrant_failure final : std::exception {
+            reentrant_failure(ruvia::worker_group& group, std::exception_ptr& rejected) noexcept :
+                group_(group),
+                rejected_(rejected) {}
+
+            const char* what() const noexcept override {
+                rejected_ = group_.join();
+                return "additional worker test failure";
+            }
+
+            ruvia::worker_group& group_;
+            std::exception_ptr& rejected_;
+        };
+
+        std::exception_ptr rejected;
+        ruvia::worker_runtime member;
+        ruvia::worker_group group;
+        group.add(member);
+        EXPECT_TRUE(member.fail(std::make_exception_ptr(reentrant_failure(group, rejected))));
+        const auto primary = std::make_exception_ptr(std::runtime_error("primary failure"));
+        EXPECT_EQ(group.join(primary), primary);
+        ASSERT_NE(rejected, nullptr);
+        EXPECT_THROW(std::rethrow_exception(rejected), std::logic_error);
+        EXPECT_EQ(group.join(), primary);
+        EXPECT_EQ(member.state(), state::stopped);
+        std::_Exit(::testing::Test::HasFailure() ? EXIT_FAILURE : EXIT_SUCCESS);
+    };
+    ASSERT_EXIT(verify(), ::testing::ExitedWithCode(EXIT_SUCCESS), "");
+}
+
 TEST(Ruvia, worker_group_serve_failure_closes_every_members_admission) {
     ruvia::worker_runtime producer;
     ruvia::worker_runtime consumer;

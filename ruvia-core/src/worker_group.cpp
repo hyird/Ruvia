@@ -4,6 +4,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include "failure_report.h"
@@ -167,6 +168,7 @@ bool worker_group::stop_requested() const noexcept {
 
 std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
     const char* self_join_message = nullptr;
+    const auto caller = std::this_thread::get_id();
     {
         const std::lock_guard lock(mutex_);
         for (const auto* member : members_) {
@@ -178,6 +180,10 @@ std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
                 self_join_message = "cannot join a worker group while notifying one of its members to stop";
                 break;
             }
+        }
+        if (self_join_message == nullptr && joining_thread_ == caller) {
+            // Exception diagnostics can run user code before the join result is published.
+            self_join_message = "cannot reenter a worker group join on its joining thread";
         }
     }
     if (self_join_message != nullptr) {
@@ -191,12 +197,12 @@ std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
     {
         std::unique_lock lock(mutex_);
         stop_changed_.wait(lock, [this] {
-            return !stop_dispatching_ && !joining_;
+            return !stop_dispatching_ && joining_thread_ == std::thread::id{};
         });
         if (joined_) {
             return join_failure_;
         }
-        joining_ = true;
+        joining_thread_ = caller;
     }
     for (auto* member : members_) {
         try {
@@ -243,7 +249,7 @@ std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
     }
     const std::lock_guard lock(mutex_);
     join_failure_ = std::move(primary);
-    joining_ = false;
+    joining_thread_ = {};
     joined_ = true;
     stop_changed_.notify_all();
     return join_failure_;

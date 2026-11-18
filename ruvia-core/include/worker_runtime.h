@@ -7,6 +7,7 @@
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 #include <asio/io_context.hpp>
@@ -214,10 +215,9 @@ public:
     [[nodiscard]] bool serve();
     void request_stop() noexcept;
     [[nodiscard]] bool stop_requested() const noexcept;
-    // From a member's worker thread or while delivering its stop notifications,
-    // returns a logic_error without requesting stop. Otherwise, requests stop,
-    // waits for member notifications and joins every member. Returns the failure
-    // its caller rethrows:
+    // Rejects calls from a member worker, during its stop notifications, or
+    // reentrantly on the joining thread with a logic_error, without requesting
+    // stop. Otherwise, stops and joins all members, then returns:
     // `primary` when given (a failure the caller already holds, such as one
     // start() or serve() threw), else the first member failure in registration
     // order. It is chosen before any report, so it is never reported here;
@@ -248,7 +248,7 @@ private:
     bool member_stopped_{false};
     std::exception_ptr failure_;
     worker_runtime* failed_member_{nullptr};
-    bool joining_{false};
+    std::thread::id joining_thread_;
     bool joined_{false};
     std::exception_ptr join_failure_;
 };
