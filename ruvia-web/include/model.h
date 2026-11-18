@@ -788,7 +788,8 @@ public:
         return parent_size + (parent_size == 0 ? 0U : 1U) + field_.size();
     }
 
-    [[nodiscard]] std::string_view render_to(std::span<char> buffer) const noexcept {
+    // The rendered path borrows buffer, not the path segments.
+    [[nodiscard]] std::string_view render_to(std::span<char> buffer RUVIA_LIFETIMEBOUND) const noexcept {
         std::size_t length = 0;
         append_to_buffer(buffer, length);
         return std::string_view(buffer.data(), length);
