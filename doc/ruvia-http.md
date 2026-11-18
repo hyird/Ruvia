@@ -1199,7 +1199,7 @@ public:
 
 | 成员 | 语义 |
 | --- | --- |
-| 构造 | `status` 为应答状态；`code` 为稳定的 snake_case 机器码（如 `"missing_host"`、`"conflicting_content_length"`），通过 [static_text](#api-borrowed-text-h) 在编译期要求静态存储期；`message` 被复制到固定 128 字节的内部存储（最多 127 字节，超出截断，以 NUL 结尾）。不分配、不借用 `message`。 |
+| 构造 | `status` 为应答状态；`code` 为稳定的 snake_case 机器码（如 `"missing_host"`、`"conflicting_content_length"`），通过 [static_text](#api-borrowed-text-h) 在编译期要求静态存储期；`message` 只复制最多 127 字节的合法 UTF-8 前缀，遇到无效序列或放不下的码点即停止，以 NUL 结尾。不分配、不借用 `message`。 |
 | `status()` / `code()` | 应答状态与机器码。 |
 | `what()` | 返回借用异常对象内部存储的可读消息。 |
 

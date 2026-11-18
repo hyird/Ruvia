@@ -1,11 +1,9 @@
 #pragma once
 
-#include <algorithm>
 #include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <exception>
 #include <limits>
 #include <optional>
@@ -87,19 +85,11 @@ private:
 // server driver may map onto its own application error model. `code` is a
 // stable snake_case machine token naming the specific failure (for example
 // "missing_host") and must have static storage duration: it is kept as a view.
-// The human-readable message is copied into fixed exception storage, so
-// reporting never allocates or borrows.
+// The human-readable message keeps a bounded, well-formed UTF-8 prefix in
+// fixed exception storage, without allocating or borrowing.
 class http_protocol_error final : public std::exception {
 public:
-    http_protocol_error(http_status_code status, static_text code, std::string_view message) noexcept :
-        status_(status),
-        code_(code) {
-        const auto size = (std::min)(message.size(), message_.size() - 1);
-        if (size != 0) {
-            std::memcpy(message_.data(), message.data(), size);
-        }
-        message_[size] = '\0';
-    }
+    http_protocol_error(http_status_code status, static_text code, std::string_view message) noexcept;
 
     [[nodiscard]] http_status_code status() const noexcept {
         return status_;

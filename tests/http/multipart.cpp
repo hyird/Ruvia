@@ -911,6 +911,22 @@ TEST(Ruvia, http_protocol_error_owns_bounded_diagnostic_without_allocation) {
     EXPECT_TRUE(diagnostic.find_first_not_of('x') == std::string_view::npos);
 }
 
+TEST(Ruvia, http_protocol_error_truncates_diagnostic_at_utf8_boundaries) {
+    constexpr std::string_view character = "\xe4\xb8\xad";
+    const std::string fitting_prefix(124, 'x');
+    const std::string fitting = fitting_prefix + std::string(character);
+    const ruvia::static_text code{"invalid_request"};
+    const http_protocol_error exact(ruvia::http_status::bad_request, code, fitting + "x");
+    EXPECT_EQ(std::string_view(exact.what()), fitting);
+
+    const std::string crossing_prefix(125, 'x');
+    const http_protocol_error crossing(ruvia::http_status::bad_request, code, crossing_prefix + std::string(character));
+    EXPECT_EQ(std::string_view(crossing.what()), crossing_prefix);
+
+    const http_protocol_error malformed(ruvia::http_status::bad_request, code, "invalid \xe4\xff suffix");
+    EXPECT_EQ(std::string_view(malformed.what()), "invalid ");
+}
+
 TEST(Ruvia, parse_error_status_mapping) {
     // Size limits map to their specific statuses.
     EXPECT_EQ(make_http_protocol_error(http_parse_error::header_too_large).status(), ruvia::http_status::request_header_fields_too_large);

@@ -1,6 +1,19 @@
 #include "http_protocol.h"
 
+#include <cstring>
+
+#include "utf8.h"
+
 namespace ruvia {
+
+http_protocol_error::http_protocol_error(http_status_code status, static_text code, std::string_view message) noexcept :
+    status_(status),
+    code_(code) {
+    const auto prefix = utf8_prefix(message, message_.size() - 1);
+    if (!prefix.empty()) {
+        std::memcpy(message_.data(), prefix.data(), prefix.size());
+    }
+}
 
 http_protocol_error make_http_protocol_error(http_parse_error error) noexcept {
     switch (error) {
