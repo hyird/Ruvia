@@ -24,6 +24,7 @@
 #include "http_cache.h"
 #include "http_cookie.h"
 #include "http_field_kind.h"
+#include "http_field_text.h"
 #include "http_field_validation.h"
 #include "http_header.h"
 #include "http_message_access.h"
@@ -134,7 +135,7 @@ template <typename field_type>
     for (const auto& field : fields) {
         staged.push_back(http_header::copy_with_lowercase_name(field.name(), field.value()));
     }
-    retained.reserve(field_count + staged.size());
+    detail::reserve_geometric(retained, field_count + staged.size());
     for (auto& field : staged) {
         retained.push_back(std::move(field));
     }
@@ -184,7 +185,7 @@ std::optional<http_request_trailer_error> http_request_trailers::append_received
             staged.emplace_back(field.name(), field.value());
         }
     }
-    fields_.reserve(fields_.size() + staged.size());
+    detail::reserve_geometric(fields_, fields_.size() + staged.size());
     for (auto& field : staged) {
         fields_.push_back(std::move(field));
     }
