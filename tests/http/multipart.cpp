@@ -111,6 +111,18 @@ TEST(Ruvia, multipart_boundary_allows_empty_http_parameter_slots_without_relaxin
     }
 }
 
+namespace {
+
+template <typename parser_type>
+concept multipart_parser_can_poll = requires(parser_type&& parser) {
+    std::forward<parser_type>(parser).poll();
+};
+
+static_assert(multipart_parser_can_poll<ruvia::multipart_parser&>);
+static_assert(!multipart_parser_can_poll<ruvia::multipart_parser>);
+
+}  // namespace
+
 TEST(Ruvia, multipart_parser_commits_an_eof_close_only_after_finish_input) {
     ruvia::multipart_parser parser({.boundary_ = ruvia::test::make_multipart_boundary("BOUNDARY")});
     parser.feed(

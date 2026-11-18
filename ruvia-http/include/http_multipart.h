@@ -263,7 +263,8 @@ public:
 
     // If owning part metadata throws, the part stays pending without consuming
     // its limits. poll() may be retried after allocations become available.
-    [[nodiscard]] multipart_poll_result poll() RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] multipart_poll_result poll() & RUVIA_LIFETIMEBOUND;
+    multipart_poll_result poll() && = delete;
 
     [[nodiscard]] decoder_state state() const noexcept;
     // Starts a new body with the constructed boundary and limits, keeping

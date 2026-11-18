@@ -3577,7 +3577,8 @@ public:
     multipart_parser& operator=(multipart_parser&&) = delete;
     void feed(std::string_view chunk);
     void finish_input() noexcept;
-    [[nodiscard]] multipart_poll_result poll() RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] multipart_poll_result poll() & RUVIA_LIFETIMEBOUND;
+    multipart_poll_result poll() && = delete;
     [[nodiscard]] decoder_state state() const noexcept;
     void reset() noexcept;
 };
@@ -3591,7 +3592,7 @@ multipart_body_parse_result parse_multipart_body(body_type&&, multipart_parse_op
 | --- | --- |
 | `feed(chunk)` | 把输入复制进解析器自有缓冲（复用 [`http_io_buffer`](#api-http-io-buffer-h)，增长时只复制未消费字节），`chunk` 可借用最近一次 part 正文；分配失败时该正文视图仍有效，可原样重试。解析器不处于活动状态或输入已结束时抛 `std::logic_error`。 |
 | `finish_input() noexcept` | 标记外层 HTTP 正文结束，使恰好在 EOF 结束的收尾分隔符与跨块拆分的行可被区分。 |
-| `poll()` | 推进解析并返回下一个结果。失败是终态：之后的 `poll()` 重复同一错误。若拥有 part 元数据时抛出分配异常，该 part 保持待定且不消耗限额，资源恢复后可重试 `poll()`。 |
+| `poll()` | 仅接受左值解析器，返回的 part 块借用解析器。失败是终态：之后的 `poll()` 重复同一错误。若拥有 part 元数据时抛出分配异常，该 part 保持待定且不消耗限额，资源恢复后可重试 `poll()`。 |
 | `state()` | `active` / `finished` / `failed`。 |
 | `reset() noexcept` | 以构造时的边界与限额开始新正文。 |
 

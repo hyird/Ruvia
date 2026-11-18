@@ -669,7 +669,7 @@ multipart_poll_result multipart_parser::fail(multipart_parse_error error) noexce
     return multipart_poll_result(0, multipart_parse_failure(error));
 }
 
-multipart_poll_result multipart_parser::poll() {
+multipart_poll_result multipart_parser::poll() & {
     if ((state_.index() != 0)) {
         return multipart_poll_result(0, multipart_parse_failure(std::get<1>(state_)));
     }
