@@ -399,8 +399,11 @@ http_response_head_buffer& http_response_head_buffer::operator=(const http_respo
 
 http_response_head_buffer& http_response_head_buffer::operator=(http_response_head_buffer&& other) noexcept {
     if (this != &other) {
-        heap_ = std::move(other.heap_);
+        // Keep the old allocation alive until both storage and state are published.
+        std::string retired(std::move(other.heap_));
+        heap_.swap(retired);
         copy_committed_state(other);
+        return *this;
     }
     return *this;
 }

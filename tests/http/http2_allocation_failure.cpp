@@ -40,6 +40,9 @@ std::atomic<std::size_t> live_allocations{};
 thread_local bool counting = false;
 thread_local std::size_t allocation_index = 0;
 thread_local std::size_t failure_index = (std::numeric_limits<std::size_t>::max)();
+thread_local const void* observed_allocation = nullptr;
+thread_local const ruvia::http_response_head_buffer* observed_head = nullptr;
+thread_local bool retired_after_publish = false;
 
 void before_allocation() {
     if (counting && allocation_index++ == failure_index) {
@@ -49,6 +52,10 @@ void before_allocation() {
 
 void release_allocation(void* pointer) noexcept {
     if (pointer != nullptr) {
+        if (pointer == observed_allocation) {
+            observed_allocation = nullptr;
+            retired_after_publish = observed_head->can_append_on_stack(1) && observed_head->view() == "replacement";
+        }
         std::free(pointer);
         --live_allocations;
     }
@@ -263,6 +270,23 @@ outbound_allocation_observation exercise_warmed_outbound_compression(std::size_t
     }
     require(live_allocations.load() == initial_live, "connection or encoder leaked an allocation");
     return observed;
+}
+
+TEST(Ruvia, http1_response_head_move_publishes_before_retiring_heap_storage) {
+    ruvia::http_response_head_buffer destination;
+    destination.append(std::string(ruvia::response_head_retained_heap_bytes + 1, 'a'));
+    ruvia::http_response_head_buffer source;
+    source.append("replacement");
+
+    observed_allocation = destination.view().data();
+    observed_head = &destination;
+    retired_after_publish = false;
+    destination = std::move(source);
+    observed_allocation = nullptr;
+    observed_head = nullptr;
+
+    EXPECT_TRUE(retired_after_publish);
+    EXPECT_EQ(destination.view(), "replacement");
 }
 
 TEST(Ruvia, http2_outbound_hpack_allocation_failures_preserve_state_and_reclaim_memory) {
