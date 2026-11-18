@@ -487,11 +487,19 @@ public:
     // retire before the loop can release its execution context. Contrast
     // worker_ref::defer_completion(), the completion, cancellation, and
     // resume lane of an operation the worker already admitted.
+    // Does not move or copy fn if retirement protection cannot be acquired.
     template <typename fn_type>
         requires detail::move_only_function_target<void, fn_type>
     [[nodiscard]] bool defer_cleanup(fn_type&& fn) const {
+        if constexpr (std::same_as<std::remove_cvref_t<fn_type>, move_only_function<void()>> || std::is_pointer_v<std::remove_reference_t<fn_type>>) {
+            if (fn == nullptr) {
+                throw std::invalid_argument("event loop cleanup must be callable");
+            }
+        }
         const event_loop snapshot = *this;
-        return snapshot.defer_cleanup_task(move_only_function<void()>(std::forward<fn_type>(fn)));
+        return snapshot.defer_cleanup_task([&fn] {
+            return move_only_function<void()>(std::forward<fn_type>(fn));
+        });
     }
 
     // Starts one lazy task on this loop. Accepted: the loop owns the started
@@ -562,7 +570,7 @@ public:
 private:
     explicit event_loop(std::shared_ptr<detail::event_loop_state> state_value) noexcept;
     [[nodiscard]] event_loop_stop_registration register_stop_callback(move_only_function<task<void>()> callback) const;
-    [[nodiscard]] bool defer_cleanup_task(move_only_function<void()> task) const;
+    [[nodiscard]] bool defer_cleanup_task(move_only_function<move_only_function<void()>()> prepare) const;
 
     std::shared_ptr<detail::event_loop_state> state_;
     friend class event_loop_pool;

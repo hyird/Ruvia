@@ -676,10 +676,7 @@ detail::root_task_retirement::~root_task_retirement() {
     }
 }
 
-bool event_loop::defer_cleanup_task(move_only_function<void()> task_value) const {
-    if (!task_value) {
-        throw std::invalid_argument("event loop cleanup must be callable");
-    }
+bool event_loop::defer_cleanup_task(move_only_function<move_only_function<void()>()> prepare) const {
     if (!state_ || !state_->retirement_.try_begin_cleanup()) {
         return false;
     }
@@ -689,9 +686,8 @@ bool event_loop::defer_cleanup_task(move_only_function<void()> task_value) const
         std::shared_ptr<detail::event_loop_state> state_;
         move_only_function<void()> task_;
 
-        cleanup_control(std::shared_ptr<detail::event_loop_state> state_value, move_only_function<void()> task_input) noexcept :
-            state_(std::move(state_value)),
-            task_(std::move(task_input)) {}
+        explicit cleanup_control(std::shared_ptr<detail::event_loop_state> state_value) noexcept :
+            state_(std::move(state_value)) {}
         cleanup_control(const cleanup_control&) = delete;
         cleanup_control& operator=(const cleanup_control&) = delete;
         cleanup_control(cleanup_control&& other) noexcept :
@@ -704,10 +700,13 @@ bool event_loop::defer_cleanup_task(move_only_function<void()> task_value) const
                 state_->retirement_.finish();
             }
         }
+        void operator()() {
+            task_();
+        }
     };
-    return state_->runtime_.worker().defer_completion([control = cleanup_control(state_, std::move(task_value))]() mutable {
-        control.task_();
-    });
+    cleanup_control control(state_);
+    control.task_ = prepare();
+    return state_->runtime_.worker().defer_completion(std::move(control));
 }
 
 event_loop_stop_registration event_loop::register_stop_callback(move_only_function<task<void>()> callback_value) const {

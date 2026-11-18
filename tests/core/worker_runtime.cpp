@@ -1141,9 +1141,26 @@ TEST(Ruvia, event_loop_cleanup_drains_owned_inputs_after_business_admission_clos
 }
 
 TEST(Ruvia, event_loop_cleanup_can_be_drained_without_starting_business_workers) {
+    struct cleanup_with_throwing_move final {
+        explicit cleanup_with_throwing_move(bool& moved) noexcept :
+            moved_(moved) {}
+        cleanup_with_throwing_move(cleanup_with_throwing_move&& other) :
+            moved_(other.moved_) {
+            moved_ = true;
+            throw std::runtime_error("moving cleanup failed");
+        }
+        void operator()() const {
+            ADD_FAILURE() << "unsubmitted cleanup ran";
+        }
+        bool& moved_;
+    };
+
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     const auto loop = pool.loop(0);
     const auto worker_value = loop.worker();
+    bool moved = false;
+    EXPECT_THROW((void)loop.defer_cleanup(cleanup_with_throwing_move(moved)), std::runtime_error);
+    EXPECT_TRUE(moved);
     bool ran{};
     EXPECT_TRUE(loop.defer_cleanup([&] {
         ran = worker_value.is_current();
@@ -1151,6 +1168,11 @@ TEST(Ruvia, event_loop_cleanup_can_be_drained_without_starting_business_workers)
     pool.join();
     EXPECT_TRUE(ran);
     EXPECT_TRUE(!loop.worker().valid());
+
+    moved = false;
+    EXPECT_FALSE(loop.defer_cleanup(cleanup_with_throwing_move(moved)));
+    EXPECT_FALSE(moved);
+    EXPECT_THROW((void)loop.defer_cleanup(ruvia::move_only_function<void()>{}), std::invalid_argument);
 }
 
 TEST(Ruvia, event_loop_draining_post_can_schedule_defer_cleanup_after_stop) {
