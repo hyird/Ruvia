@@ -2016,6 +2016,10 @@ TEST(Ruvia, HttpHeaderLookupsBorrowOwnerStorageThroughTemporarySpans) {
     const auto first = ruvia::find_first_http_header(std::span<const ruvia::http_header>(fields), "x-TEST");
     ASSERT_TRUE(first.has_value());
     EXPECT_EQ(first->data(), fields.front().value().data());
+    const ruvia::http_header_range_view wrapped{std::span<const ruvia::http_header>(fields)};
+    const auto wrapped_first = ruvia::find_first_http_header(wrapped, "x-TEST");
+    ASSERT_TRUE(wrapped_first.has_value());
+    EXPECT_EQ(wrapped_first->data(), fields.front().value().data());
     const auto unique = ruvia::find_unique_http_header(std::span<const ruvia::http_header>(fields).first(1), "x-TEST");
     EXPECT_EQ(unique.status_, ruvia::unique_lookup_status::found);
     EXPECT_EQ(unique.value_.data(), fields.front().value().data());

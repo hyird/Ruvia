@@ -1805,9 +1805,12 @@ public:
 
     constexpr http_header_range_view() noexcept = default;
     template <http_header_field_range range_type>
+    constexpr http_header_range_view(const range_type& fields RUVIA_LIFETIMEBOUND) noexcept;
+    template <http_header_field_range range_type>
+        requires std::ranges::contiguous_range<const range_type> && std::ranges::borrowed_range<range_type>
     constexpr http_header_range_view(const range_type& fields) noexcept;
     template <http_header_field_message message_type>
-    constexpr http_header_range_view(const message_type& message) noexcept;
+    constexpr http_header_range_view(const message_type& message RUVIA_LIFETIMEBOUND) noexcept;
 
     http_header_range_view(const http_header_range_view&) = delete;
     http_header_range_view& operator=(const http_header_range_view&) = delete;
@@ -1843,7 +1846,7 @@ inline constexpr bool enable_borrowed_range<ruvia::http_header_range_view> = tru
 }
 ```
 
-唯一的只读首部参数类型：读取字段的函数只需声明一次 `const http_header_range_view&` 形参，即可接受所有首部容器与消息。它是对字段范围或消息的类型擦除视图，借用来源直至接收它的调用返回；与 `argument_list` 类似，它也可绑定临时容器，该存储在整个调用表达式内有效。拷贝构造与拷贝赋值被删除（同时抑制移动），不能通过复制 / 移动返回、按值捕获或存入成员。它仍满足 `std::ranges::borrowed_range`：迭代器独立保存数据指针、访问器与下标，不依赖包装对象；不延长底层字段存储的寿命。显式把临时 owner 包成该视图也不能让借用逃逸到完整表达式之后。
+读取首部的函数可用 `const http_header_range_view&` 接受字段范围或消息。临时拥有型容器只可在同一完整表达式内消费。视图不可复制或移动，但返回时的直接构造仍可能产生悬垂借用；构造参数以 `RUVIA_LIFETIMEBOUND` 标注对消息或源容器的依赖。连续借用范围（如 `std::span`）只提供底层数据指针，包装对象可先销毁。视图满足 `std::ranges::borrowed_range`：迭代器不依赖包装对象，但不延长底层字段存储的寿命。
 
 | 成员 | 语义 |
 | --- | --- |

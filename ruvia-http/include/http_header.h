@@ -663,8 +663,8 @@ concept http_header_field_source = std::same_as<std::remove_cvref_t<source_type>
 // `const http_header_range_view&`, and accepts every header container. It
 // borrows the source for the call that receives it and, like argument_list,
 // also binds a temporary container: that storage lasts for the full call
-// expression. It can be neither copied nor moved, so it cannot be returned by
-// a reader, captured by value or stored in a member.
+// expression. The view is neither copyable nor movable; direct construction
+// still requires the source storage to outlive the view.
 class http_header_range_view final {
 public:
     using accessor_type = http_header_view (*)(const void*, std::size_t) noexcept;
@@ -672,44 +672,18 @@ public:
     constexpr http_header_range_view() noexcept = default;
 
     template <http_header_field_range range_type>
+    constexpr http_header_range_view(const range_type& fields RUVIA_LIFETIMEBOUND) noexcept :
+        http_header_range_view(fields, bind_range_tag{}) {}
+
+    // A contiguous borrowed range (e.g. span) supplies a data pointer. The
+    // view does not retain the range object itself.
+    template <http_header_field_range range_type>
+        requires std::ranges::contiguous_range<const range_type> && std::ranges::borrowed_range<range_type>
     constexpr http_header_range_view(const range_type& fields) noexcept :
-        size_(std::ranges::size(fields)) {
-        if constexpr (std::ranges::contiguous_range<const range_type>) {
-            data_ = std::ranges::data(fields);
-            at_ = +[](const void* base, std::size_t index) noexcept -> http_header_view {
-                const auto& field = static_cast<const std::ranges::range_value_t<const range_type>*>(base)[index];
-                return {field.name(), field.value()};
-            };
-        } else {
-            using cursor_type = std::ranges::iterator_t<const range_type>;
-            static_assert(std::is_trivially_copyable_v<cursor_type> && sizeof(cursor_type) <= cursor_bytes,
-                "Non-contiguous header iterators must fit the allocation-free cursor");
-            data_ = &fields;
-            at_ = +[](const void* base, std::size_t index) noexcept -> http_header_view {
-                const auto& field = *std::ranges::next(std::ranges::begin(*static_cast<const range_type*>(base)), static_cast<std::ranges::range_difference_t<const range_type>>(index));
-                return {field.name(), field.value()};
-            };
-            begin_cursor_ = +[](const void* base, std::byte* storage) noexcept {
-                const auto cursor = std::ranges::begin(*static_cast<const range_type*>(base));
-                std::memcpy(storage, &cursor, sizeof(cursor));
-            };
-            read_cursor_ = +[](const std::byte* storage) noexcept -> http_header_view {
-                cursor_type cursor;
-                std::memcpy(&cursor, storage, sizeof(cursor));
-                const auto& field = *cursor;
-                return {field.name(), field.value()};
-            };
-            next_cursor_ = +[](std::byte* storage) noexcept {
-                cursor_type cursor;
-                std::memcpy(&cursor, storage, sizeof(cursor));
-                ++cursor;
-                std::memcpy(storage, &cursor, sizeof(cursor));
-            };
-        }
-    }
+        http_header_range_view(fields, bind_range_tag{}) {}
 
     template <http_header_field_message message_type>
-    constexpr http_header_range_view(const message_type& message) noexcept :
+    constexpr http_header_range_view(const message_type& message RUVIA_LIFETIMEBOUND) noexcept :
         http_header_range_view(message.headers()) {
         static_assert(std::ranges::contiguous_range<decltype(message.headers())> || std::is_lvalue_reference_v<decltype(message.headers())>,
             "A non-contiguous message header range must be returned by reference");
@@ -796,6 +770,45 @@ public:
     }
 
 private:
+    struct bind_range_tag final {};
+
+    template <http_header_field_range range_type>
+    constexpr http_header_range_view(const range_type& fields, bind_range_tag) noexcept :
+        size_(std::ranges::size(fields)) {
+        if constexpr (std::ranges::contiguous_range<const range_type>) {
+            data_ = std::ranges::data(fields);
+            at_ = +[](const void* base, std::size_t index) noexcept -> http_header_view {
+                const auto& field = static_cast<const std::ranges::range_value_t<const range_type>*>(base)[index];
+                return {field.name(), field.value()};
+            };
+        } else {
+            using cursor_type = std::ranges::iterator_t<const range_type>;
+            static_assert(std::is_trivially_copyable_v<cursor_type> && sizeof(cursor_type) <= cursor_bytes,
+                "Non-contiguous header iterators must fit the allocation-free cursor");
+            data_ = &fields;
+            at_ = +[](const void* base, std::size_t index) noexcept -> http_header_view {
+                const auto& field = *std::ranges::next(std::ranges::begin(*static_cast<const range_type*>(base)), static_cast<std::ranges::range_difference_t<const range_type>>(index));
+                return {field.name(), field.value()};
+            };
+            begin_cursor_ = +[](const void* base, std::byte* storage) noexcept {
+                const auto cursor = std::ranges::begin(*static_cast<const range_type*>(base));
+                std::memcpy(storage, &cursor, sizeof(cursor));
+            };
+            read_cursor_ = +[](const std::byte* storage) noexcept -> http_header_view {
+                cursor_type cursor;
+                std::memcpy(&cursor, storage, sizeof(cursor));
+                const auto& field = *cursor;
+                return {field.name(), field.value()};
+            };
+            next_cursor_ = +[](std::byte* storage) noexcept {
+                cursor_type cursor;
+                std::memcpy(&cursor, storage, sizeof(cursor));
+                ++cursor;
+                std::memcpy(storage, &cursor, sizeof(cursor));
+            };
+        }
+    }
+
     const void* data_{nullptr};
     static constexpr std::size_t cursor_bytes = 4 * sizeof(void*);
     std::size_t size_{0};
