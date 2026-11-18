@@ -5,7 +5,9 @@
 #include <exception>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include <asio/bind_executor.hpp>
@@ -87,6 +89,21 @@ web_worker_post_result web_worker_ref::post_task(move_only_function<task<void>(w
     });
 }
 
+web_worker_start_result web_worker_ref::start_task(move_only_function<task<void>(web_worker_context&)> task_value) const {
+    if (!task_value) {
+        throw std::invalid_argument("web worker start requires a callable");
+    }
+    if (!dispatch_) {
+        return detail::delivery_access::reject<web_worker_start_result>(post_status::stopping, std::move(task_value));
+    }
+    detail::web_worker_dispatch::completion_type completion;
+    auto posted = dispatch_->post(std::move(task_value), &completion);
+    if (!posted.accepted()) {
+        return detail::delivery_access::reject<web_worker_start_result>(posted.status(), std::move(posted).take_rejected());
+    }
+    return detail::delivery_access::accept<web_worker_start_result>(detail::root_task_access::make(std::move(completion)));
+}
+
 }  // namespace ruvia
 
 namespace ruvia::detail {
@@ -104,6 +121,34 @@ struct abandon_reservation_deleter {
     }
 };
 using abandon_reservation_type = std::unique_ptr<web_worker_dispatch, abandon_reservation_deleter>;
+
+void cancel_queued_job(root_task_state<void>& completion) noexcept {
+    try {
+        throw std::system_error(std::make_error_code(std::errc::operation_canceled), "web worker stopped before starting the job");
+    } catch (...) {
+        completion.completion().complete_failure(std::current_exception(), false);
+    }
+}
+
+struct queued_web_job final {
+    abandon_reservation_type reservation_;
+    web_worker_dispatch::completion_type completion_;
+    web_worker_dispatch::job_type callback_;
+
+    queued_web_job(abandon_reservation_type reservation, web_worker_dispatch::completion_type completion, web_worker_dispatch::job_type callback) noexcept :
+        reservation_(std::move(reservation)),
+        completion_(std::move(completion)),
+        callback_(std::move(callback)) {}
+    queued_web_job(queued_web_job&&) noexcept = default;
+
+    ~queued_web_job() {
+        if (reservation_ && completion_) {
+            callback_ = nullptr;
+            reservation_.reset();
+            cancel_queued_job(*completion_);
+        }
+    }
+};
 
 }  // namespace
 
@@ -136,14 +181,18 @@ worker_id_type web_worker_dispatch::id() const noexcept {
     return worker_.id();
 }
 
-web_worker_post_result web_worker_dispatch::post(job_type job) {
+web_worker_post_result web_worker_dispatch::post(job_type job, completion_type* tracked) {
     // Reserve before entering the core queue; core invokes the factory only
     // for an accepted post and destroys an unrun job on abandonment.
     outstanding_.fetch_add(1, std::memory_order_acq_rel);
     abandon_reservation_type reservation(this);
-    auto result = worker_.post_payload(std::move(job), [&reservation](job_type&& admitted) -> move_only_function<void()> {
-        return [job = std::move(admitted), reservation = std::move(reservation)]() mutable {
-            reservation.release()->start(std::move(job));
+    auto result = worker_.post_payload(std::move(job), [&](job_type&& admitted) -> move_only_function<void()> {
+        if (tracked != nullptr) {
+            *tracked = std::make_shared<root_task_state<void>>(worker_, std::weak_ptr<event_loop_state>{});
+        }
+        return [queued = queued_web_job(std::move(reservation), tracked == nullptr ? nullptr : *tracked, std::move(admitted))]() mutable {
+            auto* dispatch = queued.reservation_.release();
+            dispatch->start(std::move(queued.callback_), std::move(queued.completion_));
         };
     });
     switch (result.status()) {
@@ -171,22 +220,31 @@ web_worker_stats web_worker_dispatch::stats() const noexcept {
     };
 }
 
-void web_worker_dispatch::start(job_type job) {
+void web_worker_dispatch::start(job_type job, completion_type completion) {
     // Stopping abandons queued jobs: retirement drains reserved queue
     // publication, which must not become new work against retiring state.
     if (!worker_.accepting() || stop_token_.stop_requested()) {
+        job = nullptr;
         abandon();
+        if (completion) {
+            cancel_queued_job(*completion);
+        }
         return;
     }
     try {
-        jobs_.spawn(run(std::move(job)));
+        jobs_.spawn(run(std::move(job), completion));
     } catch (...) {
+        job = nullptr;
         abandon();
+        if (completion) {
+            completion->completion().complete_failure(std::current_exception());
+            return;
+        }
         throw;
     }
 }
 
-ruvia::task<void> web_worker_dispatch::run(job_type job) {
+ruvia::task<void> web_worker_dispatch::run(job_type job, completion_type completion) {
     std::exception_ptr failure;
     try {
         web_worker_context context(worker_, client_registries_, &worker_states_, stop_token_, env_);
@@ -194,10 +252,15 @@ ruvia::task<void> web_worker_dispatch::run(job_type job) {
     } catch (...) {
         failure = std::current_exception();
     }
+    job = nullptr;
     completed_.fetch_add(1, std::memory_order_relaxed);
     outstanding_.fetch_sub(1, std::memory_order_acq_rel);
     if (failure != nullptr) {
         failed_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (completion) {
+        completion->completion().complete_failure(std::move(failure));
+    } else if (failure) {
         // A failed job fails its worker, like any other worker-owned work.
         (void)runtime_.fail(std::move(failure));
     }

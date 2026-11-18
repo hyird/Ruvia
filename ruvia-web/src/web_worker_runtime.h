@@ -56,6 +56,7 @@ class worker_state_registry;
 class web_worker_dispatch final {
 public:
     using job_type = move_only_function<ruvia::task<void>(web_worker_context&)>;
+    using completion_type = std::shared_ptr<root_task_state<void>>;
 
     web_worker_dispatch(ruvia::worker_runtime& runtime, worker_capabilities& capabilities, task_scope& jobs, const stop_token& stop_token_value);
 
@@ -67,7 +68,7 @@ public:
     [[nodiscard]] bool accepting() const noexcept;
     [[nodiscard]] bool is_current() const noexcept;
     [[nodiscard]] worker_id_type id() const noexcept;
-    [[nodiscard]] web_worker_post_result post(job_type job);
+    [[nodiscard]] web_worker_post_result post(job_type job, completion_type* tracked = nullptr);
     [[nodiscard]] web_worker_stats stats() const noexcept;
 
     // Reconciles the outstanding reservation of an accepted job that core
@@ -75,8 +76,8 @@ public:
     void abandon() noexcept;
 
 private:
-    void start(job_type job);
-    [[nodiscard]] ruvia::task<void> run(job_type job);
+    void start(job_type job, completion_type completion);
+    [[nodiscard]] ruvia::task<void> run(job_type job, completion_type completion);
 
     // A stable copy: queries stay valid after the server's runtime is gone.
     worker_ref worker_;

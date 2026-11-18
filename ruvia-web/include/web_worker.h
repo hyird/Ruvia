@@ -9,6 +9,7 @@
 
 #include "borrowed_text.h"
 #include "delivery_result.h"
+#include "event_loop.h"
 #include "move_only_function.h"
 #include "operation_scope.h"
 #include "stop_token.h"
@@ -26,7 +27,7 @@ namespace detail {
 class web_worker_dispatch;
 }  // namespace detail
 
-// A job posted with web_worker_ref::post(): its worker, the worker's stop
+// A job posted with web_worker_ref::post() or try_start(): its worker, the worker's stop
 // token and, through worker_services_access, the worker's resources.
 // Executors and clients bind to this job's own operation lifetime and carry
 // no request I/O metrics.
@@ -66,6 +67,7 @@ private:
 };
 
 using web_worker_post_result = post_outcome<task<void>(web_worker_context&)>;
+using web_worker_start_result = delivery_result<move_only_function<task<void>(web_worker_context&)>, post_status, post_status::accepted, root_task<void>>;
 
 struct web_worker_stats final {
     std::uint64_t accepted_{0};
@@ -92,12 +94,23 @@ public:
         return post_task(move_only_function<task<void>(web_worker_context&)>(std::forward<fn_type>(fn)));
     }
 
+    // Same admission as post(), with a root that completes after the callable
+    // and its context retire. A queued job discarded on stop completes with
+    // operation_canceled; a running job observes the worker's stop token.
+    template <typename fn_type>
+        requires std::invocable<std::decay_t<fn_type>&, web_worker_context&> && std::same_as<std::invoke_result_t<std::decay_t<fn_type>&, web_worker_context&>, task<void>>
+    [[nodiscard]] web_worker_start_result try_start(fn_type&& fn) const {
+        const auto worker = *this;
+        return worker.start_task(move_only_function<task<void>(web_worker_context&)>(std::forward<fn_type>(fn)));
+    }
+
 private:
     friend class detail::web_worker_dispatch;
 
     web_worker_ref(std::shared_ptr<detail::web_worker_dispatch> dispatch) noexcept;
 
     [[nodiscard]] web_worker_post_result post_task(move_only_function<task<void>(web_worker_context&)> task) const;
+    [[nodiscard]] web_worker_start_result start_task(move_only_function<task<void>(web_worker_context&)> task) const;
 
     // The handle owns a stable terminal endpoint. Server shutdown closes it;
     // retaining a handle cannot retain the server or its io_context.

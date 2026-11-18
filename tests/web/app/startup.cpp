@@ -7,6 +7,7 @@
 #include <exception>
 #include <future>
 #include <memory>
+#include <optional>
 #include <semaphore>
 #include <stdexcept>
 #include <string>
@@ -486,35 +487,37 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
             throw std::runtime_error("start hook ran before worker initialization");
         }
         for (auto& worker : workers) {
-            struct job_result final {
-                std::binary_semaphore completed_{0};
-                bool valid_{};
-            };
-            auto result_value = std::make_shared<job_result>();
-            const auto posted = worker.post([state_value, result_value, env = &app.env()](ruvia::web_worker_context& context_value) -> ruvia::task<void> {
-                result_value->valid_ = context_value.worker().is_current() && context_value.worker_state<worker_state>().state_ == state_value && &context_value.env() == env;
-                result_value->completed_.release();
+            auto started = worker.try_start([state_value, env = &app.env()](ruvia::web_worker_context& context_value) -> ruvia::task<void> {
+                if (!context_value.worker().is_current() || context_value.worker_state<worker_state>().state_ != state_value || &context_value.env() != env) {
+                    throw std::runtime_error("startup job ran without its worker resources");
+                }
                 co_return;
             });
-            if (!posted.accepted() || !result_value->completed_.try_acquire_for(3s) || !result_value->valid_) {
-                throw std::runtime_error("ready worker could not execute a startup job");
+            if (!started.accepted()) {
+                throw std::runtime_error("ready worker rejected startup job");
             }
+            auto completion = std::move(started).take_value();
+            if (!completion.wait_for(3s)) {
+                throw std::runtime_error("ready worker did not complete startup job");
+            }
+            std::move(completion).get();
         }
         if (state_value->outcome_ == startup_outcome::stop_from_caller) {
-            std::promise<void> completion;
-            auto done = completion.get_future();
-            const auto posted = workers.front().post([state_value, completion = std::move(completion)](ruvia::web_worker_context& context_value) mutable -> ruvia::task<void> {
+            auto started = workers.front().try_start([state_value](ruvia::web_worker_context& context_value) -> ruvia::task<void> {
                 state_value->hook_entered_.release();
                 const auto result_value = co_await ruvia::sleep_for(context_value.worker(), 1h, context_value.stop_token());
                 state_value->startup_job_cancelled_.store(result_value == ruvia::timer_sleep_result::stop_requested);
-                completion.set_value();
             });
-            if (!posted.accepted()) {
+            if (!started.accepted()) {
                 throw std::runtime_error("ready worker rejected startup initialization");
             }
             // The lifecycle caller can wait for cancellable worker initialization.
             // application::request_stop() must wake it without requiring this caller to join first.
-            done.get();
+            auto completion = std::move(started).take_value();
+            if (!completion.wait_for(3s)) {
+                throw std::runtime_error("stopping worker did not complete startup job");
+            }
+            std::move(completion).get();
             return;
         }
         state_value->hook_entered_.release();
@@ -699,4 +702,77 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
         EXPECT_EQ(state_value->stop_hooks_, stop_hooks + 2);
     }
     app.trusted_proxies({});
+    app.on_start(nullptr).on_stop(nullptr);
+}
+
+TEST(Ruvia, web_worker_root_retires_jobs_and_completes_discarded_admissions) {
+    auto& app = ruvia::app();
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation port(io);
+    app.workers({.worker_count_ = 1, .worker_queue_capacity_ = 1}).listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port()});
+    std::binary_semaphore blocker_entered(0);
+    std::binary_semaphore release_blocker(0);
+    std::atomic<bool> ran{false};
+    std::optional<ruvia::root_task<void>> cancelled;
+    app.on_start([&] {
+        auto worker = app.worker_for(std::uint64_t{0});
+        auto payload = std::make_shared<int>(42);
+        const std::weak_ptr<int> retired = payload;
+        auto failed = worker.try_start([owned = std::move(payload)](ruvia::web_worker_context&) -> ruvia::task<void> {
+            throw std::domain_error(std::to_string(*owned));
+        });
+        if (!failed.accepted() || !failed.value().wait_for(3s)) {
+            throw std::runtime_error("worker did not deliver a failed job");
+        }
+        EXPECT_TRUE(retired.expired());
+        try {
+            std::move(failed).take_value().get();
+            ADD_FAILURE() << "job exception was lost";
+        } catch (const std::domain_error& error) {
+            EXPECT_STREQ(error.what(), "42");
+        }
+
+        // Hold the worker on a synchronous callback so the next job cannot start
+        // before the startup thread closes admission.
+        auto blocker = worker.post([&](ruvia::web_worker_context&) -> ruvia::task<void> {
+            blocker_entered.release();
+            (void)release_blocker.try_acquire_for(3s);
+            co_return;
+        });
+        if (!blocker.accepted() || !blocker_entered.try_acquire_for(3s)) {
+            throw std::runtime_error("worker did not start the queue blocker");
+        }
+        auto queued = worker.try_start([&](ruvia::web_worker_context&) -> ruvia::task<void> {
+            ran.store(true);
+            co_return;
+        });
+        if (!queued.accepted()) {
+            release_blocker.release();
+            throw std::runtime_error("worker rejected the queued job");
+        }
+        cancelled.emplace(std::move(queued).take_value());
+        auto full = worker.try_start([](ruvia::web_worker_context&) -> ruvia::task<void> {
+            co_return;
+        });
+        EXPECT_EQ(full.status(), ruvia::post_status::queue_full);
+        if (!full.accepted()) {
+            EXPECT_TRUE(static_cast<bool>(std::move(full).take_rejected()));
+        }
+        app.request_stop();
+        release_blocker.release();
+        if (!cancelled->wait_for(3s)) {
+            throw std::runtime_error("stopping worker left an accepted job pending");
+        }
+    });
+
+    EXPECT_NO_THROW(app.run());
+    app.on_start(nullptr);
+    EXPECT_FALSE(ran.load());
+    ASSERT_TRUE(cancelled && cancelled->ready());
+    try {
+        std::move(*cancelled).get();
+        ADD_FAILURE() << "unstarted job did not report cancellation";
+    } catch (const std::system_error& error) {
+        EXPECT_EQ(error.code(), std::errc::operation_canceled);
+    }
 }

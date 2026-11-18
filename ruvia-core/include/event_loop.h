@@ -32,6 +32,7 @@ class event_loop;
 namespace detail {
 
 struct event_loop_state;
+struct root_task_access;
 
 // One pending root keeps the physical loop alive from admission to retirement.
 class root_task_retirement final {
@@ -96,19 +97,20 @@ public:
                 return;
             }
             owner_alive_ = false;
-            if (complete_) {
+            if (complete_ && report_failure_) {
                 unobserved = failure_;
             }
         }
         report(std::move(unobserved));
     }
 
-    void stage_failure(std::exception_ptr failure) noexcept {
+    void stage_failure(std::exception_ptr failure, bool report_failure = true) noexcept {
         const std::lock_guard lock(mutex_);
         if (complete_) {
             std::terminate();
         }
         failure_ = std::move(failure);
+        report_failure_ = report_failure;
     }
 
     // Publish only after the delivery owner has destroyed all intermediate
@@ -121,7 +123,7 @@ public:
                 std::terminate();
             }
             complete_ = true;
-            if (!owner_alive_) {
+            if (!owner_alive_ && report_failure_) {
                 unobserved = failure_;
             }
         }
@@ -129,8 +131,8 @@ public:
         report(std::move(unobserved));
     }
 
-    void complete_failure(std::exception_ptr failure) noexcept {
-        stage_failure(std::move(failure));
+    void complete_failure(std::exception_ptr failure, bool report_failure = true) noexcept {
+        stage_failure(std::move(failure), report_failure);
         publish_completion();
     }
 
@@ -165,6 +167,7 @@ private:
     std::exception_ptr failure_;
     bool complete_{false};
     bool owner_alive_{true};
+    bool report_failure_{true};
 };
 
 struct root_task_void_result final {};
@@ -305,10 +308,17 @@ private:
     }
 
     std::shared_ptr<detail::root_task_state<t_type>> state_;
-    friend class event_loop;
+    friend struct detail::root_task_access;
 };
 
 namespace detail {
+struct root_task_access final {
+    template <typename t_type>
+    [[nodiscard]] static root_task<t_type> make(std::shared_ptr<root_task_state<t_type>> state) noexcept {
+        return root_task<t_type>(std::move(state));
+    }
+};
+
 class event_loop_stop_listener;
 template <typename t_type>
 struct root_task_launch_guard;
@@ -521,7 +531,7 @@ public:
         if (status != post_status::accepted) {
             return detail::delivery_access::reject<result_type>(status, std::move(task_value));
         }
-        return detail::delivery_access::accept<result_type>(root_task<t_type>(std::move(completion)));
+        return detail::delivery_access::accept<result_type>(detail::root_task_access::make(std::move(completion)));
     }
 
     // The local strict form of try_start(): a rejection destroys the cold task

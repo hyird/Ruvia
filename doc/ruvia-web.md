@@ -485,6 +485,7 @@ const auto port = variables.get<std::uint16_t>("PORT").value_or(8080);
 
 - **句柄**：`web_worker_ref` 由 `application::workers()` / `worker_for()` 返回，持有稳定终端端点；服务器关闭时端点关闭，持有句柄不会延长服务器或其 io_context 寿命。默认构造为空句柄。
 - **投递**：`post(fn)` 从任意线程把 `task<void>(web_worker_context&)` 投到该 worker；返回 `web_worker_post_result`（即 [`post_outcome<task<void>(web_worker_context&)>`](ruvia-core.md#api-delivery-result-h)，状态 `post_status::accepted` / `queue_full` / `stopping`，被拒时交还可调用对象）。空句柄以 `stopping` 拒绝。
+- **等待终态**：`try_start(fn)` 复用 `post(fn)` 的队列和退回规则，接纳时交付 [`root_task<void>`](ruvia-core.md#api-event-loop-h)。只允许在其他线程等待。作业和上下文销毁后才发布终态；异常由 `get()` 原样重抛，不使 Worker 失败，未观察的异常记入诊断。停机丢弃未启动作业时，`get()` 抛 `std::system_error`（`operation_canceled`）；运行中的作业仍通过上下文的停止令牌协作收束。
 - **作业上下文**：每个作业获得 `web_worker_context`，可访问 worker、该 worker 的停止令牌与 [`worker_services_access`](#api-worker-services-h) 资源；执行器与客户端绑定本作业独立的操作寿命，不计入请求 I/O 指标。
 
 ```cpp
@@ -515,6 +516,7 @@ for (const auto& worker : ruvia::app().workers()) {
 | 声明 | 说明 |
 | --- | --- |
 | `using web_worker_post_result = post_outcome<task<void>(web_worker_context&)>;` | `post()` 结果 |
+| `web_worker_start_result` | 同样退回未接纳的作业；接纳时以 `take_value()` 提取 `root_task<void>` |
 
 **`web_worker_stats`**
 
@@ -538,6 +540,7 @@ for (const auto& worker : ruvia::app().workers()) {
 | `worker_id_type id() const noexcept` | worker ID；空句柄为 `0` |
 | `web_worker_stats stats() const noexcept` | 投递计数；空句柄全零 |
 | `template <typename fn_type> requires std::invocable<std::decay_t<fn_type>&, web_worker_context&> && std::same_as<std::invoke_result_t<std::decay_t<fn_type>&, web_worker_context&>, task<void>> web_worker_post_result post(fn_type&& fn) const` | 投递作业；可调用对象须以 `web_worker_context&` 调用并返回 `task<void>` |
+| `template <typename fn_type> web_worker_start_result try_start(fn_type&& fn) const` | 与 `post()` 接受相同签名，返回每个已接纳作业的完成句柄；空可调用对象抛 `std::invalid_argument` |
 
 <a id="api-worker-services-h"></a>
 
