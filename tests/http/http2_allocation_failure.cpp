@@ -681,6 +681,53 @@ TEST(Ruvia, http1_body_decoder_releases_trailers_before_finishing) {
     EXPECT_EQ(remaining, baseline);
 }
 
+TEST(Ruvia, http1_body_decoder_preserves_unreported_chunk_progress_on_trailer_allocation_failure) {
+    for (const bool discard : {false, true}) {
+        SCOPED_TRACE(discard);
+        ruvia::http_content_codings codings;
+        if (!discard) {
+            codings.push_back(ruvia::http_content_coding::gzip);
+        }
+        const auto payload_limit = ruvia::protocol_byte_limit::limited(discard ? 2 : 20);
+        ruvia::http1_body_decoder decoder(ruvia::http1_message_framing::chunked(codings), {.body_limit_ = payload_limit});
+        std::string wire;
+        if (discard) {
+            decoder.discard_content();
+            wire = "1\r\nx\r\n1\r\ny\r\n";
+        } else {
+            // An empty gzip member advances the codec without emitting output.
+            constexpr std::string_view gzip_empty{"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00", 20};
+            wire = "14\r\n";
+            wire.append(gzip_empty);
+            wire.append("\r\n");
+        }
+        wire.append("0\r\nX-Trace: retained\r\n\r\n");
+        const auto body_size = wire.size();
+        wire.append("NEXT");
+        std::array<char, 64> scratch{};
+
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            ASSERT_THROW(
+                {
+                    allocation_scope scope(0);
+                    (void)decoder.finish_input(wire, scratch, 1);
+                },
+                std::bad_alloc);
+            ASSERT_EQ(decoder.state(), ruvia::decoder_state::active);
+        }
+
+        const auto retried = decoder.decode(wire, scratch, 1);
+        const auto* trailers = retried.get_if<ruvia::http1_body_trailers>();
+        ASSERT_NE(trailers, nullptr);
+        ASSERT_EQ(trailers->fields().size(), 1U);
+        EXPECT_EQ(trailers->fields().front().value(), "retained");
+        ASSERT_EQ(retried.consumed_bytes(), body_size);
+        const auto completed = decoder.decode(std::string_view(wire).substr(retried.consumed_bytes()), scratch, 1);
+        EXPECT_TRUE(completed.holds<ruvia::decode_complete>());
+        EXPECT_EQ(completed.consumed_bytes(), 0U);
+    }
+}
+
 TEST(Ruvia, http1_body_decoder_preserves_completed_body_if_codec_recreation_fails) {
     ruvia::http_content_codings codings;
     codings.push_back(ruvia::http_content_coding::gzip);

@@ -109,6 +109,8 @@ public:
     // After finish_input(), decode() continues with the same EOF state: it can
     // drain buffered input/output, but missing body bytes are an
     // incomplete_body failure rather than a request for more input.
+    // If allocating trailers throws, retry with the same input. No wire bytes
+    // are reported as consumed until a step returns a result.
     [[nodiscard]] http1_body_decode_result decode(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes = (std::numeric_limits<std::size_t>::max)()) & RUVIA_LIFETIMEBOUND;
     http1_body_decode_result decode(std::string_view, std::span<char>, std::size_t = 0) && = delete;
     // EOF is monotonic. Supply any remaining buffered bytes; later calls may
@@ -176,6 +178,9 @@ private:
     // the caller retain its unconsumed wire suffix without storing a borrowed view.
     std::size_t pending_body_bytes_{0};
     std::size_t pending_delimiter_bytes_{0};
+    // Wire bytes consumed by framing or transfer decoding before an unreported
+    // trailer allocation failure. Retry at this offset without replaying them.
+    std::size_t chunk_retry_prefix_{0};
     bool discard_content_{false};
     bool eof_{false};
     chunked_phase_type chunked_phase_{chunked_phase_type::reading};

@@ -8,6 +8,7 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 
 #include "http1_chunked_body.h"
 #include "http1_connection_plan.h"
@@ -92,6 +93,7 @@ void http1_body_decoder::start() {
     remaining_ = framing_.content_length();
     pending_body_bytes_ = 0;
     pending_delimiter_bytes_ = 0;
+    chunk_retry_prefix_ = 0;
     discard_content_ = false;
     eof_ = false;
     chunked_phase_ = chunked_phase_type::reading;
@@ -148,7 +150,7 @@ http1_body_decode_result http1_body_decoder::run(std::string_view available, std
 }
 
 http1_body_decode_result http1_body_decoder::step(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes, bool eof) {
-    if (!discard_content_) {
+    if (!discard_content_ || chunked_) {
         return step_content(available, scratch, max_output_bytes, eof);
     }
     // Consume what the framing delimits without publishing it, then report the
@@ -244,13 +246,25 @@ http1_body_decode_result http1_body_decoder::step_close_delimited(std::string_vi
 }
 
 http1_body_decode_result http1_body_decoder::step_chunked(std::string_view available, std::span<char> scratch, std::size_t max_output_bytes, bool eof) {
-    std::size_t consumed = 0;
+    if (available.size() < chunk_retry_prefix_) {
+        throw std::invalid_argument("HTTP/1 body decoder retry requires the original input");
+    }
+    std::size_t consumed = std::exchange(chunk_retry_prefix_, 0);
     for (;;) {
         if (auto pending = drain_pending_chunk(available, consumed, scratch, eof)) {
             return *pending;
         }
         const auto rest = available.substr(consumed);
-        const auto decoded = chunked_->decode(rest, transfer_ ? (std::numeric_limits<std::size_t>::max)() : max_output_bytes);
+        const auto decoded = [&] {
+            try {
+                return chunked_->decode(rest, transfer_ ? (std::numeric_limits<std::size_t>::max)() : max_output_bytes);
+            } catch (...) {
+                // The chunk decoder can retry the trailers from rest, but
+                // earlier chunks in this call have already advanced.
+                chunk_retry_prefix_ = consumed;
+                throw;
+            }
+        }();
         const auto chunk_consumed = consumed + decoded.consumed_bytes();
         if (const auto* failure = decoded.get_if<http1_chunk_decode_failure>()) {
             return fail(chunk_framing_error(failure->error()), chunk_consumed);
@@ -264,6 +278,10 @@ http1_body_decode_result http1_body_decoder::step_chunked(std::string_view avail
         }
         const auto body = decoded.get_if<decode_output>()->bytes();
         if (!transfer_) {
+            if (discard_content_) {
+                consumed = chunk_consumed;
+                continue;
+            }
             return http1_body_decode_result(chunk_consumed, decode_output(body));
         }
         // The chunk decoder already consumed the whole chunk, but the transfer
