@@ -150,7 +150,14 @@ bool sleep_operation::await_ready() {
         result_ = timer_sleep_result::stop_requested;
         return true;
     }
-    return bounds_.deadline_passed();
+    if (!bounds_.deadline_passed()) {
+        return false;
+    }
+    // The immediate path must honor the same shutdown outcome as timer arming.
+    if (detail::worker_dispatcher::of(*worker_)->timers_stopping()) {
+        result_ = timer_sleep_result::stop_requested;
+    }
+    return true;
 }
 
 // A stopped timer queue resolves immediately with the outcome stop_timers()

@@ -424,6 +424,7 @@ ruvia::task<void> exercise_after_timer_stop(ruvia::event_loop_attachment& attach
     success = false;
     const auto loop = attachment.loop();
     const auto& worker_value = loop.worker();
+    EXPECT_EQ(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds::zero()), ruvia::timer_sleep_result::elapsed);
     auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
     auto [completion, one_shot_receiver] = ruvia::make_one_shot<int>(worker_value);
 
@@ -447,6 +448,8 @@ ruvia::task<void> exercise_after_timer_stop(ruvia::event_loop_attachment& attach
     if (co_await ruvia::sleep_for(worker_value, std::chrono::hours(1), idle.token()) != ruvia::timer_sleep_result::stop_requested) {
         co_return;
     }
+    EXPECT_EQ(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds::zero()), ruvia::timer_sleep_result::stop_requested);
+    EXPECT_EQ(co_await ruvia::sleep_until(worker_value, std::chrono::steady_clock::time_point::min()), ruvia::timer_sleep_result::stop_requested);
     if ((co_await receiver.receive({.timeout_ = std::chrono::hours(1)})).status() != ruvia::wait_status::worker_stopping) {
         co_return;
     }

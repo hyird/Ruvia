@@ -979,7 +979,7 @@ flowchart LR
 | `[[nodiscard]] sleep_operation sleep_until(const worker_ref& worker_value, std::chrono::steady_clock::time_point deadline, stop_token stop_token_value = {});` | 睡眠到 `deadline` |
 | `sleep_operation sleep_until(worker_ref&&, std::chrono::steady_clock::time_point, stop_token = {}) = delete;`、`sleep_operation sleep_until(const worker_ref&&, std::chrono::steady_clock::time_point, stop_token = {}) = delete;` | 同上 |
 
-- **目标语义**：非正时长与已过截止期不挂起，直接 `elapsed`；时长饱和，`hours::max()` 等效于等待停止。
+- **目标语义**：非正时长与已过截止期不挂起；没有停止时返回 `elapsed`。时长饱和，`hours::max()` 等效于等待停止。
 - **停止**：Worker 停止定时器时挂起中或之后启动的睡眠返回 `stop_requested`，不抛异常；启动时令牌已停止也直接返回 `stop_requested`。
 - **跨线程取消**：停止回调可能运行在其他线程，取消经 Worker 校验后执行；睡眠已结束后的迟到停止无效果。
 
