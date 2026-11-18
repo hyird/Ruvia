@@ -7073,7 +7073,7 @@ public:
 
 using http1_client_request_prepare_result = std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error>;
 
-[[nodiscard]] http1_client_request_prepare_result prepare_http1_client_request(const http_origin_view& origin, const http_request_head_view& request, std::span<char> head_buffer, http1_client_request_wire_policy policy = {});
+[[nodiscard]] http1_client_request_prepare_result prepare_http1_client_request(const http_origin_view& origin, const http_request_head_view& request, std::span<char> head_buffer RUVIA_LIFETIMEBOUND, http1_client_request_wire_policy policy = {});
 ```
 
 `prepare_http1_client_request(origin, request, head_buffer, policy)` 为直连源站或（absolute-form）正向代理准备一个 HTTP/1.1 请求头。它在触碰调用方缓冲区之前校验完整请求，生成 `Host` 与精确的 `Content-Length`，并返回分离的头/内容视图，供 writev 式 I/O 或 `Expect: 100-continue` 门控使用。普通请求不分配；Upgrade 请求只拥有其提供的协议值以便之后校验 `101`。
@@ -7143,12 +7143,12 @@ public:
     explicit http1_request_content_writer(const prepared_http1_client_request& prepared) noexcept;
     void release_content() noexcept;
     void abort() noexcept;
-    [[nodiscard]] std::variant<chunk, http1_request_content_write_error> plan_chunk(std::span<const char> payload) noexcept;
+    [[nodiscard]] std::variant<chunk, http1_request_content_write_error> plan_chunk(std::span<const char> payload RUVIA_LIFETIMEBOUND) noexcept;
     template </* 元素为 char 的临时、非 borrowed_range 连续容器 */ payload_type>
     std::variant<chunk, http1_request_content_write_error> plan_chunk(payload_type&&) noexcept = delete;
     std::variant<chunk, http1_request_content_write_error> plan_chunk(std::initializer_list<char>) noexcept = delete;
     void commit_chunk();
-    [[nodiscard]] std::variant<std::string_view, http1_request_content_write_error> plan_finish(std::span<char> buffer, std::span<const http_header_view> trailers = {}) noexcept;
+    [[nodiscard]] std::variant<std::string_view, http1_request_content_write_error> plan_finish(std::span<char> buffer RUVIA_LIFETIMEBOUND, std::span<const http_header_view> trailers = {}) noexcept;
     void commit_finish();
     [[nodiscard]] bool finished() const noexcept;
     [[nodiscard]] std::uint64_t committed_payload_bytes() const noexcept;
