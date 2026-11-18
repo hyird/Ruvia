@@ -140,7 +140,7 @@ public:
     http_error& operator=(const http_error& other);
     http_error(http_error&&) noexcept = default;
     http_error& operator=(http_error&&) noexcept = default;
-    [[nodiscard]] const char* what() const noexcept override;
+    [[nodiscard]] const char* what() const noexcept RUVIA_LIFETIMEBOUND override;
     [[nodiscard]] http_error_info info() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] http_error_info info() const&& = delete;
 

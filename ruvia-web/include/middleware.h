@@ -496,9 +496,10 @@ public:
         }
     }
 
-    [[nodiscard]] const controller_middleware_descriptor& descriptor() const noexcept {
+    [[nodiscard]] const controller_middleware_descriptor& descriptor() const& noexcept RUVIA_LIFETIMEBOUND {
         return descriptor_;
     }
+    const controller_middleware_descriptor& descriptor() const&& = delete;
 
     [[nodiscard]] owned_middleware_descriptor scoped_to(std::string_view prefix) && {
         prefix_.assign(prefix);

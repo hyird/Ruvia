@@ -2103,7 +2103,7 @@ app.on_error({.prefix_ = "/api", .handler_ = &api_error});
 | `http_error& operator=(const http_error& other)` | 先完整复制再提交，分配失败保留原值 |
 | `http_error(http_error&&) noexcept = default` | 移动构造，不分配 |
 | `http_error& operator=(http_error&&) noexcept = default` | 移动赋值，不分配 |
-| `const char* what() const noexcept override` | 返回 message |
+| `const char* what() const noexcept RUVIA_LIFETIMEBOUND override` | 返回借用异常对象内部存储的消息指针 |
 | `http_error_info info() const& noexcept` | 借用本对象的信息视图（含 issues） |
 | `http_error_info info() const&& = delete` | 拒绝从临时 `http_error` 取借用视图（视图会悬空） |
 | `http_status_code status() const noexcept` | 状态 |
