@@ -583,9 +583,9 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
         if (status != 301 && status != 302 && status != 303 && status != 307 && status != 308) {
             co_return response;
         }
-        const http_request_head_view current_view{.method_ = request.method_};
-        const auto plan = plan_http_client_redirect_request(current_view, {.status_ = response.status()});
-        if (upload_initial_hop && redirects == 0 && plan.content_disposition() != http_client_redirect_content_disposition::drop) {
+        const auto action = plan_http_client_redirect_request(request.method_, response.status());
+        const bool drop = action != http_client_redirect_request_action::preserve;
+        if (upload_initial_hop && redirects == 0 && !drop) {
             co_return response;
         }
 
@@ -671,9 +671,10 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
             response.state_->upload_->output_.stop();
         }
 
-        request.method_.assign(plan.method());
+        if (action == http_client_redirect_request_action::get_without_content) {
+            request.method_ = "GET";
+        }
         request.target_ = std::move(*next).take_target();
-        const bool drop = plan.content_disposition() == http_client_redirect_content_disposition::drop;
         std::erase_if(request.headers_, [&](const http_header& field) {
             const auto name = field.name();
             return http_ascii_equals_ignore_case(name, "host") || (next->cross_origin() && (http_ascii_equals_ignore_case(name, "authorization") || http_ascii_equals_ignore_case(name, "proxy-authorization") || http_ascii_equals_ignore_case(name, "cookie"))) || (drop && (http_ascii_equals_ignore_case(name.substr(0, 8), "content-") || http_ascii_equals_ignore_case(name, "digest") || http_ascii_equals_ignore_case(name, "repr-digest") || http_ascii_equals_ignore_case(name, "transfer-encoding") || http_ascii_equals_ignore_case(name, "trailer") || http_ascii_equals_ignore_case(name, "expect")));

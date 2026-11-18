@@ -1008,7 +1008,7 @@ namespace {
 
 using ruvia::classify_http_client_origin_authority;
 using ruvia::http_client_origin_authority_status;
-using ruvia::http_client_redirect_content_disposition;
+using ruvia::http_client_redirect_request_action;
 using ruvia::http_client_redirect_resolution_error;
 using ruvia::http_client_resolved_redirect;
 using ruvia::http_origin_view;
@@ -1061,75 +1061,27 @@ TEST(Ruvia, http_client_redirect_status_set) {
 }
 
 TEST(Ruvia, http_client_redirect_request_plan_follows_rfc) {
-    // 303 selects a retrieval request. HEAD remains HEAD; every other method
-    // becomes GET. The representation and content-specific fields are dropped.
-    {
-        http_request_head_view request;
-        request.method_ = "PUT";
-        request.content_ = ruvia::http_request_content_plan::bytes("payload");
-        const auto plan = plan_http_client_redirect_request(request, {.status_ = ruvia::http_status::see_other});
-        EXPECT_EQ(plan.method(), std::string_view("GET"));
-        EXPECT_TRUE(plan.content_disposition() == http_client_redirect_content_disposition::drop);
+    using action = http_client_redirect_request_action;
+    using namespace ruvia::http_status;
+    struct redirect_case final {
+        std::string_view method_;
+        ruvia::http_status_code status_;
+        action expected_;
+    };
+    const std::string extension_method(128, 'X');
+    const std::array cases{
+        redirect_case{"PUT", see_other, action::get_without_content},
+        redirect_case{"HEAD", see_other, action::drop_content},
+        redirect_case{"POST", found, action::get_without_content},
+        redirect_case{"POST", moved_permanently, action::get_without_content},
+        redirect_case{"PUT", moved_permanently, action::preserve},
+        redirect_case{"post", moved_permanently, action::preserve},
+        redirect_case{"POST", temporary_redirect, action::preserve},
+        redirect_case{extension_method, permanent_redirect, action::preserve},
+    };
+    for (const auto& item : cases) {
+        EXPECT_EQ(plan_http_client_redirect_request(item.method_, item.status_), item.expected_) << item.method_ << " " << item.status_.value();
     }
-    {
-        http_request_head_view request;
-        request.method_ = "HEAD";
-        const auto plan = plan_http_client_redirect_request(request, {.status_ = ruvia::http_status::see_other});
-        EXPECT_EQ(plan.method(), std::string_view("HEAD"));
-        EXPECT_TRUE(plan.content_disposition() == http_client_redirect_content_disposition::drop);
-    }
-
-    // RFC 9110 permits the historical POST-to-GET rewrite for 301/302. Other
-    // methods are not aliases for POST and retain both method and content.
-    {
-        http_request_head_view request;
-        request.method_ = "POST";
-        request.content_ = ruvia::http_request_content_plan::bytes("payload");
-        const auto plan = plan_http_client_redirect_request(request, {.status_ = ruvia::http_status::found});
-        EXPECT_EQ(plan.method(), std::string_view("GET"));
-        EXPECT_TRUE(plan.content_disposition() == http_client_redirect_content_disposition::drop);
-    }
-    {
-        http_request_head_view request;
-        request.method_ = "PUT";
-        request.content_ = ruvia::http_request_content_plan::bytes("payload");
-        const auto plan = plan_http_client_redirect_request(request, {.status_ = ruvia::http_status::moved_permanently});
-        EXPECT_EQ(plan.method(), std::string_view("PUT"));
-        EXPECT_TRUE(plan.content_disposition() == http_client_redirect_content_disposition::preserve);
-    }
-
-    // Method tokens are case-sensitive: lowercase "post" is a distinct method.
-    {
-        http_request_head_view request;
-        request.method_ = "post";
-        const auto plan = plan_http_client_redirect_request(request, {.status_ = ruvia::http_status::moved_permanently});
-        EXPECT_EQ(plan.method(), std::string_view("post"));
-        EXPECT_TRUE(plan.content_disposition() == http_client_redirect_content_disposition::preserve);
-    }
-
-    // 307/308 never change method or content.
-    for (const ruvia::http_status_code status : {ruvia::http_status::temporary_redirect, ruvia::http_status::permanent_redirect}) {
-        http_request_head_view request;
-        request.method_ = "POST";
-        request.content_ = ruvia::http_request_content_plan::bytes("payload");
-        const auto plan = plan_http_client_redirect_request(request, {.status_ = status});
-        EXPECT_EQ(plan.method(), std::string_view("POST"));
-        EXPECT_TRUE(plan.content_disposition() == http_client_redirect_content_disposition::preserve);
-    }
-}
-
-TEST(Ruvia, http_client_redirect_request_plan_owns_preserved_method) {
-    std::string method = "PROPFIND";
-    http_request_head_view request;
-    request.method_ = method;
-
-    const auto plan = plan_http_client_redirect_request(request, {.status_ = ruvia::http_status::temporary_redirect});
-    for (char& ch : method) {
-        ch = 'X';
-    }
-
-    EXPECT_EQ(plan.method(), std::string_view("PROPFIND"));
-    EXPECT_TRUE(plan.content_disposition() == http_client_redirect_content_disposition::preserve);
 }
 
 TEST(Ruvia, http_client_response_head_unique_header_distinguishes_empty_and_repeated) {

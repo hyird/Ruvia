@@ -4448,39 +4448,22 @@ public:
 
 ```cpp
 namespace ruvia {
-enum class http_client_redirect_content_disposition : std::uint8_t {
+enum class http_client_redirect_request_action : std::uint8_t {
     preserve,
-    drop,
+    drop_content,
+    get_without_content,
 };
 
-struct http_client_redirect_request_plan_options final {
-    http_status_code status_;
-};
-
-class http_client_redirect_request_plan final {
-public:
-    http_client_redirect_request_plan(const http_client_redirect_request_plan&) = delete;
-    http_client_redirect_request_plan& operator=(const http_client_redirect_request_plan&) = delete;
-    http_client_redirect_request_plan(http_client_redirect_request_plan&&) noexcept = default;
-    http_client_redirect_request_plan& operator=(http_client_redirect_request_plan&&) = delete;
-
-    [[nodiscard]] std::string_view method() const& noexcept RUVIA_LIFETIMEBOUND;
-    std::string_view method() const&& = delete;
-    [[nodiscard]] constexpr http_client_redirect_content_disposition content_disposition() const noexcept;
-};
-
-[[nodiscard]] http_client_redirect_request_plan plan_http_client_redirect_request(const http_request_head_view& request, http_client_redirect_request_plan_options options);
+[[nodiscard]] http_client_redirect_request_action plan_http_client_redirect_request(std::string_view method, http_status_code status) noexcept;
 }
 ```
 
 | 符号 | 语义 |
 | --- | --- |
-| `http_client_redirect_content_disposition::preserve` | 重定向请求保留原表示内容。 |
-| `http_client_redirect_content_disposition::drop` | I/O 所有者构造重定向请求时必须同时省略表示内容与内容相关字段（RFC 9110 §15.4）。 |
-| `status_` | 重定向响应状态码。 |
-| `plan_http_client_redirect_request(request, options)` | `303`：`HEAD` 保持 `HEAD`，其余改为 `GET`，正文 `drop`；`301`/`302` 且方法为 `POST`：改为 `GET` 并 `drop`；其余保持原方法与 `preserve`。可因分配抛出。 |
-| `method()` | 改写后的方法，复制在计划内部，不继承请求存储的生命周期；视图借用计划，右值重载删除。 |
-| 拷贝 / 移动赋值 | 删除；只可移动构造。 |
+| `preserve` | 保留原方法和表示内容。 |
+| `drop_content` | 保留方法，丢弃表示内容及相关字段（RFC 9110 §15.4）。 |
+| `get_without_content` | 改为 `GET`，丢弃表示内容及相关字段。 |
+| `plan_http_client_redirect_request(method, status)` | `303` 对 `HEAD` 返回 `drop_content`、对其他方法返回 `get_without_content`；`301`/`302` 对 `POST` 返回 `get_without_content`；其余返回 `preserve`。同步比较区分大小写，不保存或复制方法。 |
 
 #### 8.7.2 同源分类
 

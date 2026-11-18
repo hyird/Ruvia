@@ -9,7 +9,6 @@
 #include "borrowed_text.h"
 #include "http_authority.h"
 #include "http_message.h"
-#include "http_request_head_view.h"
 #include "http_status.h"
 
 namespace ruvia {
@@ -19,45 +18,15 @@ namespace ruvia {
 // authorization, connection selection, and retries remain owned by the external
 // I/O runtime. The helpers only classify HTTP response fields, apply the RFC
 // method/content rewrite rules, and resolve one HTTP(S) URI-reference.
-enum class http_client_redirect_content_disposition : std::uint8_t {
+// A dropped representation also requires omitting its content-specific fields
+// when constructing the redirected request (RFC 9110 Section 15.4).
+enum class http_client_redirect_request_action : std::uint8_t {
     preserve,
-    // The I/O owner must omit both the representation and content-specific
-    // fields when constructing the redirected request (RFC 9110 Section 15.4).
-    drop,
+    drop_content,
+    get_without_content,
 };
 
-struct http_client_redirect_request_plan_options final {
-    http_status_code status_;
-};
-
-// The method is copied into owned storage so the plan does not
-// inherit the request or request-method backing storage lifetime.
-class http_client_redirect_request_plan final {
-public:
-    http_client_redirect_request_plan(const http_client_redirect_request_plan&) = delete;
-    http_client_redirect_request_plan& operator=(const http_client_redirect_request_plan&) = delete;
-    http_client_redirect_request_plan(http_client_redirect_request_plan&&) noexcept = default;
-    http_client_redirect_request_plan& operator=(http_client_redirect_request_plan&&) = delete;
-
-    [[nodiscard]] std::string_view method() const& noexcept RUVIA_LIFETIMEBOUND {
-        return method_;
-    }
-    std::string_view method() const&& = delete;
-
-    [[nodiscard]] constexpr http_client_redirect_content_disposition content_disposition() const noexcept {
-        return content_disposition_;
-    }
-
-private:
-    friend http_client_redirect_request_plan plan_http_client_redirect_request(const http_request_head_view&, http_client_redirect_request_plan_options);
-
-    http_client_redirect_request_plan(std::string_view method, http_client_redirect_content_disposition content_disposition);
-
-    std::string method_;
-    http_client_redirect_content_disposition content_disposition_;
-};
-
-[[nodiscard]] http_client_redirect_request_plan plan_http_client_redirect_request(const http_request_head_view& request, http_client_redirect_request_plan_options options);
+[[nodiscard]] http_client_redirect_request_action plan_http_client_redirect_request(std::string_view method, http_status_code status) noexcept;
 
 // This classification has no alternative-specific payload, so an enum is the
 // complete result rather than a status coupled to unrelated fields.

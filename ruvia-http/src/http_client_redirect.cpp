@@ -12,10 +12,7 @@
 
 #include "borrowed_text.h"
 #include "http_authority.h"
-#include "http_client_response_head.h"
 #include "http_header.h"
-#include "http_request.h"
-#include "http_request_head_view.h"
 #include "http_uri_syntax.h"
 
 namespace ruvia {
@@ -174,18 +171,14 @@ struct http_client_redirect_authority final {
 
 }  // namespace
 
-http_client_redirect_request_plan::http_client_redirect_request_plan(std::string_view method, http_client_redirect_content_disposition content_disposition) :
-    method_(method),
-    content_disposition_(content_disposition) {}
-
-http_client_redirect_request_plan plan_http_client_redirect_request(const http_request_head_view& request, http_client_redirect_request_plan_options options) {
-    if (options.status_ == http_status::see_other) {
-        return http_client_redirect_request_plan(request.method_ == "HEAD" ? request.method_.view() : std::string_view("GET"), http_client_redirect_content_disposition::drop);
+http_client_redirect_request_action plan_http_client_redirect_request(std::string_view method, http_status_code status) noexcept {
+    if (status == http_status::see_other) {
+        return method == "HEAD" ? http_client_redirect_request_action::drop_content : http_client_redirect_request_action::get_without_content;
     }
-    if ((options.status_ == http_status::moved_permanently || options.status_ == http_status::found) && request.method_ == "POST") {
-        return http_client_redirect_request_plan("GET", http_client_redirect_content_disposition::drop);
+    if ((status == http_status::moved_permanently || status == http_status::found) && method == "POST") {
+        return http_client_redirect_request_action::get_without_content;
     }
-    return http_client_redirect_request_plan(request.method_.view(), http_client_redirect_content_disposition::preserve);
+    return http_client_redirect_request_action::preserve;
 }
 
 http_client_origin_authority_status classify_http_client_origin_authority(const http_origin_view& origin, std::string_view authority) noexcept {
