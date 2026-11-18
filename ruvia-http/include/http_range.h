@@ -181,7 +181,7 @@ public:
         return current_offset_;
     }
     [[nodiscard]] bool complete() const noexcept {
-        return complete_;
+        return !ranges_.empty() && range_index_ == ranges_.size();
     }
 
     void write(std::string_view chunk, std::string& output);
@@ -200,7 +200,6 @@ private:
     std::uint64_t current_offset_{0};
     std::uint64_t range_progress_{0};
     std::size_t range_index_{0};
-    bool complete_{false};
 };
 
 // Owns copied framing metadata and ordered file-slice descriptors. Observed

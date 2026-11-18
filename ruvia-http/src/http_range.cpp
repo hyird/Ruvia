@@ -410,10 +410,13 @@ void http_byte_range_slicer::write(std::string_view chunk, std::string& output) 
 }
 
 void http_byte_range_slicer::write(std::uint64_t chunk_offset, std::string_view chunk, std::string& output) {
+    if (ranges_.empty()) {
+        throw std::logic_error("HTTP byte-range slicer has no ranges");
+    }
     if (chunk_offset < current_offset_ || chunk_offset > representation_length_ || chunk.size() > representation_length_ - chunk_offset) {
         throw std::invalid_argument("HTTP byte-range slicer chunk offset is out of bounds");
     }
-    if (complete_) {
+    if (range_index_ == ranges_.size()) {
         current_offset_ = chunk_offset + chunk.size();
         return;
     }
@@ -471,11 +474,10 @@ void http_byte_range_slicer::write(std::uint64_t chunk_offset, std::string_view 
     current_offset_ = chunk_end;
     range_index_ = index;
     range_progress_ = progress;
-    complete_ = index == ranges_.size();
 }
 
 void http_byte_range_slicer::finish(std::string&) {
-    if (!complete_) {
+    if (!complete()) {
         throw std::logic_error("HTTP byte-range slicer finished before all ranges completed");
     }
 }
@@ -484,7 +486,6 @@ void http_byte_range_slicer::reset(std::uint64_t start_offset) noexcept {
     current_offset_ = start_offset;
     range_progress_ = 0;
     range_index_ = 0;
-    complete_ = false;
 }
 
 }  // namespace ruvia

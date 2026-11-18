@@ -118,6 +118,32 @@ TEST(RuviaHttpPublicApi, single_range_slicer_preserves_aliased_terminator) {
     }
 }
 
+TEST(RuviaHttpPublicApi, moved_range_slicer_cannot_write_or_finish_until_reassigned) {
+    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=1-2", 4);
+    ruvia::http_byte_range_slicer source(ranges, 4);
+    std::string output;
+    source.write("abcd", output);
+    ASSERT_TRUE(source.complete());
+
+    ruvia::http_byte_range_slicer destination(std::move(source));
+    EXPECT_TRUE(destination.complete());
+    EXPECT_EQ(destination.current_offset(), 4U);
+    EXPECT_FALSE(source.complete());
+    EXPECT_THROW(source.finish(output), std::logic_error);
+    EXPECT_THROW(source.write("", output), std::logic_error);
+    EXPECT_EQ(output, "bc");
+
+    source = ruvia::http_byte_range_slicer(ranges, 4);
+    source.write("ab", output);
+    destination = std::move(source);
+    source.reset();
+    EXPECT_THROW(source.write("abcd", output), std::logic_error);
+    EXPECT_EQ(output, "bcb");
+    destination.write("cd", output);
+    EXPECT_TRUE(destination.complete());
+    EXPECT_EQ(output, "bcbc");
+}
+
 TEST(RuviaHttpPublicApi, byte_range_limit_counts_retained_ranges_after_coalescing) {
     constexpr ruvia::http_byte_range_options options{.max_ranges_ = 2};
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=20-24, 0-4, 5-19, 30-34", 100, options);
