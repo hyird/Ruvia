@@ -1674,6 +1674,8 @@ public:
 | `http_is_quoted_string(value)` | `value` 整体恰为一个合法 quoted-string 时为 `true`。 |
 | `http_field_name_list` | 无分配迭代逗号分隔的字段名列表（如 `Connection`、`Trailer`、`Vary` 的名称列表）。成员裁剪 OWS，空成员（包括整个列表为空）被忽略；返回的视图借用输入。反复调用 `next()` 直至返回 `std::nullopt`，再用 `valid()` 区分正常结束（`true`）与遇到非 token 成员（`false`）；未排空前 `valid()` 为 `false`。此类按普通逗号切分，不感知引号（字段名列表不含 quoted-string）。 |
 
+- **内部借用**：从列表选出的成员及参数前的 token 均借用原字段文本，返回视图通过 `RUVIA_LIFETIMEBOUND` 标注这一依赖。
+
 #### 5.1.3 `class http_header` 与 `class http_header_view`
 
 ```cpp

@@ -414,8 +414,9 @@ template <typename visitor_type>
 
 // The first nonempty list member accepted by `predicate`, or an empty view.
 // Members are not validated; a quoted-string member is never split.
+// The returned view borrows `value`.
 template <typename predicate_type>
-[[nodiscard]] inline std::string_view http_find_header_token(std::string_view value, predicate_type&& predicate) noexcept {
+[[nodiscard]] inline std::string_view http_find_header_token(std::string_view value RUVIA_LIFETIMEBOUND, predicate_type&& predicate) noexcept {
     std::string_view found;
     http_visit_comma_separated_quoted_field_items(value, [&found, &predicate](std::string_view member) noexcept {
         if (!member.empty() && predicate(member)) {

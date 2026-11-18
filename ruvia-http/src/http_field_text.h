@@ -326,7 +326,7 @@ template <typename predicate_type>
     return value.front() == '"' ? http_is_quoted_string(value) : is_valid_http_header_name(value);
 }
 
-[[nodiscard]] inline std::string_view http_header_token_before_parameters(std::string_view value) noexcept {
+[[nodiscard]] inline std::string_view http_header_token_before_parameters(std::string_view value RUVIA_LIFETIMEBOUND) noexcept {
     const auto semicolon = value.find(';');
     return http_trim_ows(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
 }
