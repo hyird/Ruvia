@@ -274,19 +274,6 @@ inline void validate_response_header_storage_size(std::size_t name_size, std::si
     return http_text_overlaps({name.data(), name.size() + header_value.value().size()}, value);
 }
 
-[[nodiscard]] inline bool response_header_views_contiguous(std::string_view name, std::string_view value) noexcept {
-    if (name.data() == nullptr) {
-        return false;
-    }
-    if (value.empty()) {
-        return true;
-    }
-    if (value.data() == nullptr) {
-        return false;
-    }
-    return reinterpret_cast<std::uintptr_t>(value.data()) == reinterpret_cast<std::uintptr_t>(name.data() + name.size());
-}
-
 struct http_client_response_head_access final {
     [[nodiscard]] static http_client_response_head make(http_received_status status, http_protocol_version protocol_version) noexcept {
         return http_client_response_head(status, protocol_version);

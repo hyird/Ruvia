@@ -2001,7 +2001,7 @@ TEST(Ruvia, http3_field_sections_keep_interleaved_names_and_values_after_submiss
             EXPECT_TRUE(peers.server_.submit_interim_response_head(0, hints) == ruvia::http_submit_status::accepted);
             ruvia::http_response response;
             for (const auto& field : fields) {
-                response.header_stable_view(field.name(), field.value());
+                response.header(field.name(), field.value());
             }
             const auto submitted = peers.server_.submit_streaming_response_head(0, std::move(response), ruvia::http_response_trailer_intent::present);
             EXPECT_TRUE(std::holds_alternative<ruvia::http_response_stream_commit_plan>(submitted));

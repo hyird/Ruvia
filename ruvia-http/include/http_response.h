@@ -48,7 +48,6 @@ public:
     // Header mutations follow http_response_headers.
     void header(std::string_view key, std::string_view value);
     void header(std::string_view key, std::string_view value, http_response_header_options options);
-    void header_stable_view(borrowed_text key, borrowed_text value);
     void content_type(http_content_type type);
     // Format Allow from known-method bits followed by extension method values.
     // Extension methods must be nonempty HTTP tokens and may borrow current headers.

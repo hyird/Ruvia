@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -43,6 +44,14 @@
 #include "task_scope.h"
 #include "worker_task_fixture.h"
 namespace origin_routing_tests {
+
+template <typename observation_type>
+concept redirect_hop_exposes_url = requires(observation_type&& observation) { std::forward<observation_type>(observation).target_url(); };
+
+static_assert(!std::is_copy_constructible_v<ruvia::http_client_redirect_hop>);
+static_assert(!std::is_move_constructible_v<ruvia::http_client_redirect_hop>);
+static_assert(redirect_hop_exposes_url<const ruvia::http_client_redirect_hop&>);
+static_assert(!redirect_hop_exposes_url<const ruvia::http_client_redirect_hop>);
 
 using namespace std::chrono_literals;
 

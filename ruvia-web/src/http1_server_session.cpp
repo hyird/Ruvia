@@ -2552,7 +2552,7 @@ inline http_response make_auto_https_redirect_response(const http_request& reque
     // varies by Host. Mark it private so a shared cache never stores one Host's
     // redirect and serves it for another (a Host-header cache-poisoning open
     // redirect); a browser still caches it per-origin, keeping the HTTPS memory.
-    response.header_stable_view("Cache-Control", "private");
+    response.header("Cache-Control", "private");
     return response;
 }
 

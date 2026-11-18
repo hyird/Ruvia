@@ -3309,21 +3309,20 @@ ruvia::app().client({
 
 #### 11.2.7 `class http_client_redirect_hop final`
 
-跟随重定向前传给 `on_redirect` 的逐跳观察；视图只在回调期间有效。
+跟随重定向前传给 `on_redirect` 的逐跳观察。对象不可复制或移动；借用访问器仅接受左值，视图在同步或异步回调完成前有效。若需跨回调保留内容，须在回调内复制。
 
 | 声明 | 说明 |
 | --- | --- |
-| 由框架构造 | 观测对象及其视图有效至回调结束 |
 | `constexpr std::size_t hop_index() const noexcept` | 跳序号 |
-| `constexpr http_origin_view source_origin() const noexcept` | 源 origin |
-| `constexpr std::string_view source_target() const noexcept` | 源请求目标 |
-| `constexpr std::string_view source_url() const noexcept` | 源 URL |
-| `const http_client_connection_info& connection_info() const noexcept` | 承载重定向响应的连接信息 |
+| `constexpr http_origin_view source_origin() const& noexcept` | 借用源 origin |
+| `constexpr std::string_view source_target() const& noexcept` | 借用源请求目标 |
+| `constexpr std::string_view source_url() const& noexcept` | 借用源 URL |
+| `const http_client_connection_info& connection_info() const& noexcept` | 借用承载重定向响应的连接信息 |
 | `constexpr http_status_code status() const noexcept` | 重定向状态码 |
-| `constexpr std::string_view location() const noexcept` | 原始 `Location` 字段 |
-| `constexpr http_origin_view target_origin() const noexcept` | 目标 origin |
-| `constexpr std::string_view target() const noexcept` | 目标请求目标 |
-| `constexpr std::string_view target_url() const noexcept` | 目标 URL |
+| `constexpr std::string_view location() const& noexcept` | 借用原始 `Location` 字段 |
+| `constexpr http_origin_view target_origin() const& noexcept` | 借用目标 origin |
+| `constexpr std::string_view target() const& noexcept` | 借用目标请求目标 |
+| `constexpr std::string_view target_url() const& noexcept` | 借用目标 URL |
 | `constexpr bool cross_origin() const noexcept` | 是否跨 origin |
 
 #### 11.2.8 `struct http_client_endpoint_address final`

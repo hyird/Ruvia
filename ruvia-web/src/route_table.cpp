@@ -913,7 +913,7 @@ void report_unexpected_failure(const classified_error& error_info, const std::ex
 
 void apply_exception_response_metadata(http_response& response, const classified_error& error_info) {
     if (!error_info.accepted_codings_.empty()) {
-        response.header_stable_view("Accept-Encoding", error_info.accepted_codings_);
+        response.header("Accept-Encoding", error_info.accepted_codings_);
     } else if (error_info.rate_limit_rejection_.has_value()) {
         detail::apply_rate_limit_rejection_headers(response, *error_info.rate_limit_rejection_);
     }

@@ -2562,7 +2562,6 @@ public:
     void status(http_status_code status);
     void header(std::string_view key, std::string_view value);
     void header(std::string_view key, std::string_view value, http_response_header_options options);
-    void header_stable_view(borrowed_text key, borrowed_text value);
     void content_type(http_content_type type);
     void allow_methods(std::uint32_t method_mask, std::span<const std::string_view> extension_methods = {});
     void remove_header(std::string_view key);
@@ -2615,7 +2614,7 @@ public:
 | `status(http_status_code)` | 设置最终状态。仅接受 `200..599`；`101` 抛 `std::invalid_argument`（协议切换必须由专用协议驱动处理），其他非最终状态码同样抛 `std::invalid_argument`。临时 `1xx` 响应使用 `http_interim_response_head`。 |
 | `headers() const&` | 借用整个首部块（只读），有效至本响应下一次首部变更或销毁；右值重载被删除，拒绝从临时响应取得悬垂引用。 |
 | `header(name) const&` | 按名称大小写不敏感查找，语义同 [`http_response_headers::header`](#api-http-response-headers-h)；返回视图借用本响应。右值重载删除。 |
-| `header(key, value)` / `header(key, value, options)` / `header_stable_view` / `content_type` / `allow_methods` / `remove_header` / `set_cookie` / `content_range` / `content_range_unsatisfied` / `add_vary_token` | 逐一转发到同名 `http_response_headers` 成员，校验、异常与借用规则以 [6.2](#api-http-response-headers-h) 为准。`allow_methods` 写出 `Allow`：先按 `method_mask` 的已知方法位，再追加扩展方法；扩展方法须为非空 HTTP token，可借用当前首部存储；结果字段由本响应拥有，变更后须刷新先前取得的视图。 |
+| `header(key, value)` / `header(key, value, options)` / `content_type` / `allow_methods` / `remove_header` / `set_cookie` / `content_range` / `content_range_unsatisfied` / `add_vary_token` | 转发到同名 `http_response_headers` 成员，校验与所有权规则见 [6.2](#api-http-response-headers-h)。`allow_methods` 先按 `method_mask` 写出已知方法，再追加扩展方法；扩展方法须为非空 HTTP token，可借用当前首部存储。 |
 | `reserve_headers(count)` | 转发到 `http_response_headers::reserve`。 |
 | `transfer_headers_from(source, mode)` | 按 `mode` 把 `source` 的应用首部复制进本响应，规则见 `http_response_headers::transfer_from`；`assign` 保留目的端 `Content-Type`。 |
 | `commit_headers(staged) noexcept` | 发布一个由 `headers().clone()` 起始、在外部操作期间编辑的首部事务；发布不分配、不失败，`staged` 被置为空且独立。 |
@@ -2766,7 +2765,6 @@ public:
 
     void header(std::string_view key, std::string_view value);
     void header(std::string_view key, std::string_view value, http_response_header_options options);
-    void header_stable_view(borrowed_text key, borrowed_text value);
     void content_type(http_content_type type);
     void remove_header(std::string_view key);
     void set_cookie(const set_cookie_plan& plan);
@@ -2794,8 +2792,7 @@ public:
 
 | 成员 | 语义 |
 | --- | --- |
-| `header(key, value[, options])` | 校验字段名为 token、值为合法字段值（否则 `std::invalid_argument`），并对已知字段做发送方语义校验：非法 `Connection`、非法 `Upgrade`、出现 `TE`（不是响应字段）及已知字段值不合法均抛 `std::invalid_argument`。默认 `replace`，`options.mode_ == append` 时追加（规则见 `http_response_header_mode`）；非法 `mode_` 抛 `std::invalid_argument`。超出描述符可表示长度时抛 `std::length_error`。 |
-| `header_stable_view(key, value)` | 校验同 `header()`（替换语义），但名称与值可作为借用视图保存而不复制。调用方须保证这些字节在本块及任何保留它们的克隆存续期间有效且不变；`borrowed_text` 拒绝拥有型临时字符串。 |
+| `header(key, value[, options])` | 复制调用方的名称和值，或复用内容相同的库常量；不保留调用方视图。校验字段名、字段值及已知字段的发送方语义（如 `Connection`、`Upgrade`，以及响应禁止的 `TE`）；非法字段或模式抛 `std::invalid_argument`。默认 `replace`，`options.mode_ == append` 时追加（见 `http_response_header_mode`）；超出描述符可表示长度抛 `std::length_error`。 |
 | `content_type(type)` | 以库常量替换 `Content-Type`。 |
 | `remove_header(key)` | 删除所有同名行；字段名非法抛 `std::invalid_argument`；不存在时无操作。匹配键的存储保留到描述符表截短与索引重建完成之后。 |
 | `set_cookie(plan)` | 追加一行 `Set-Cookie`；已有同名、同 `Domain`/`Path` 作用域且 `Partitioned` 状态相同的 cookie 时替换之（分区与非分区 cookie 可共存）。 |
@@ -2804,8 +2801,8 @@ public:
 | `content_range_unsatisfied(size)` | 写出 `416` 用的 `Content-Range: bytes */size`。 |
 | `add_vary_token(token)` | 把一个字段名 token 或 `*` 合并进 `Vary`：跨行去重（大小写不敏感），已含该成员或已有通配 `*` 时不变且不分配；新增 `*` 复用静态描述符。合并直接写入最终字段存储，完成前保留旧字段，因此 `token` 可借用当前首部、分配失败后可重试。非法 token 抛 `std::invalid_argument`，超长抛 `std::length_error`。 |
 | `reserve(count)` | 预留至少 `count` 个字段行；容量足够时不分配。扩容先切换到新描述符表再释放旧表，不复制字段字节；分配失败保留原表。 |
-| `transfer_from(source, mode)` | 按 `http_response_header_transfer` 规则复制 `source` 的字段。仅接受 `merge` / `assign` / `apply`，其他值在任何变更之前抛 `std::invalid_argument`（`source` 为空也一样）。与现有字段无交集时原地追加；否则在暂存克隆上解析后发布，失败时本块不变。静态与借用描述符共享，拥有字节被复制。 |
-| `clone(additional_headers = 0) const` | 生成独立副本并为额外 `additional_headers` 个字段预留：拥有字节被复制（两块可各自变更或销毁），静态/借用视图共享。字段总数无法容纳时在克隆前抛 `std::length_error`。克隆用作“仅首部事务”：围绕外部操作编辑，再以 `http_response::commit_headers` 无分配发布。 |
+| `transfer_from(source, mode)` | 按 `http_response_header_transfer` 规则复制 `source` 的字段。仅接受 `merge` / `assign` / `apply`，其他值在任何变更之前抛 `std::invalid_argument`（`source` 为空也一样）。与现有字段无交集时原地追加；否则在暂存克隆上解析后发布，失败时本块不变。库常量共享，拥有字节被复制。 |
+| `clone(additional_headers = 0) const` | 生成独立副本并为额外 `additional_headers` 个字段预留；库常量共享，拥有字节被复制。字段总数无法容纳时在克隆前抛 `std::length_error`。克隆可用作首部事务，编辑后以 `http_response::commit_headers` 无分配发布。 |
 
 ```cpp
 auto staged = response.headers().clone(1);

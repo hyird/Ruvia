@@ -89,7 +89,7 @@ namespace {
 [[nodiscard]] http_response make_normalized_error_response(http_error_info error) {
     http_response response;
     response.status(error.status());
-    response.header_stable_view("Content-Type", "application/problem+json");
+    response.header("Content-Type", "application/problem+json");
     response.body(serialize_error_response(error));
     return response;
 }

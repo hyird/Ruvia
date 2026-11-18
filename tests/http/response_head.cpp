@@ -361,9 +361,6 @@ TEST(Ruvia, http1_response_head_validates_trailer_field_names) {
     const auto rejects = [](std::string_view value) {
         http_response response;
         EXPECT_TRUE(throws_invalid([&] {
-            response.header_stable_view("Trailer", value);
-        }));
-        EXPECT_TRUE(throws_invalid([&] {
             response.header("Trailer", value);
         }));
     };
@@ -384,11 +381,11 @@ TEST(Ruvia, http1_response_head_validates_trailer_field_names) {
     }));
 }
 
-TEST(Ruvia, stable_view_headers_validate_representation_metadata_on_insertion) {
+TEST(Ruvia, response_headers_validate_representation_metadata_on_insertion) {
     for (const auto invalid : {ruvia::http_header_view{"Content-Type", "text plain"}, ruvia::http_header_view{"Content-Encoding", "gzip;q=1"}, ruvia::http_header_view{"Trailer", "Content-Length"}}) {
         http_response response;
         EXPECT_TRUE(throws_invalid([&] {
-            response.header_stable_view(invalid.name(), invalid.value());
+            response.header(invalid.name(), invalid.value());
         }));
         EXPECT_TRUE(!response.header(invalid.name()).has_value());
     }
@@ -780,21 +777,21 @@ TEST(Ruvia, response_head_rejects_oversized_field_section) {
     EXPECT_TRUE(!emit_buffered_head(many).empty());
 }
 
-TEST(Ruvia, stable_view_headers_reject_malformed_name_and_value) {
+TEST(Ruvia, response_headers_reject_malformed_name_and_value) {
     http_response response;
     EXPECT_TRUE(throws_invalid([&] {
-        response.header_stable_view("Bad Name", "value");
+        response.header("Bad Name", "value");
     }));
     EXPECT_TRUE(throws_invalid([&] {
-        response.header_stable_view("X-Test", std::string_view("bad\r\nvalue", 10));
+        response.header("X-Test", std::string_view("bad\r\nvalue", 10));
     }));
     EXPECT_TRUE(response.headers().empty());
 }
 
-TEST(Ruvia, stable_view_headers_reject_request_only_te_field) {
+TEST(Ruvia, response_headers_reject_request_only_te_field) {
     http_response response;
     EXPECT_TRUE(throws_invalid([&] {
-        response.header_stable_view("TE", "trailers");
+        response.header("TE", "trailers");
     }));
     EXPECT_TRUE(!response.header("TE").has_value());
 }
@@ -1187,7 +1184,21 @@ TEST(Ruvia, response_header_block_iterates_without_const_qualification) {
     EXPECT_TRUE(std::distance(staged.begin(), staged.end()) == 2);
 }
 
-TEST(Ruvia, response_header_stable_view_and_allow_methods_handle_self_aliasing) {
+TEST(Ruvia, response_header_clone_outlives_caller_storage) {
+    const auto cloned = [] {
+        ruvia::http_response response;
+        std::string storage = "X-Originoriginal";
+        const std::string_view field = storage;
+        response.header(field.substr(0, 8), field.substr(8));
+        auto headers = response.headers().clone();
+        storage.assign(storage.size(), 'x');
+        EXPECT_EQ(response.header("X-Origin"), "original");
+        return headers;
+    }();
+    EXPECT_EQ(cloned.header("X-Origin"), "original");
+}
+
+TEST(Ruvia, response_header_and_allow_methods_handle_self_aliasing) {
     ruvia::http_response response;
     response.header("X-Owned", "X-CopyValue");
     const auto existing = response.header("X-Owned").value_or("");
@@ -1195,7 +1206,7 @@ TEST(Ruvia, response_header_stable_view_and_allow_methods_handle_self_aliasing) 
 
     // A contiguous slice inside an existing owned header must be copied before
     // any table growth or replacement could release the source descriptor.
-    response.header_stable_view(existing.substr(0, 6), existing.substr(6));
+    response.header(existing.substr(0, 6), existing.substr(6));
     response.header("X-Owned", "replaced-with-longer-owned-header-value");
     EXPECT_EQ(response.header("X-Copy").value_or(""), "Value");
 

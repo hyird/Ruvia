@@ -223,7 +223,7 @@ void add_http1_connection_option(http_response& response, std::string_view optio
     if (field_present) {
         response.header(detail::http_connection_field_name, option, http_response_header_options{.mode_ = http_response_header_mode::append});
     } else {
-        response.header_stable_view(detail::http_connection_field_name, option);
+        response.header(detail::http_connection_field_name, option);
     }
 }
 

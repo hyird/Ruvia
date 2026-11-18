@@ -490,7 +490,7 @@ struct websocket_accept_access final {
     } else if (datagrams && head_response.status().is_successful()) {
         // RFC 9297 section 3.4: the route's protocol uses the Capsule Protocol,
         // so its successful response says so with exactly one ?1.
-        head_response.header_stable_view("Capsule-Protocol", "?1");
+        head_response.header("Capsule-Protocol", "?1");
     }
     return head_response;
 }

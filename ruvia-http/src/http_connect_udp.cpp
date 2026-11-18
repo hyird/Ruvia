@@ -293,12 +293,12 @@ std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_res
         return http_connect_udp_error::invalid_capsule_protocol;
     }
     if (found.capsule_protocol_ == capsule_protocol_state::absent) {
-        response.header_stable_view("Capsule-Protocol", "?1");
+        response.header("Capsule-Protocol", "?1");
     }
     if (version == http_protocol_version::http11) {
         response.status_code_ = http_status::switching_protocols;
-        response.header_stable_view(detail::http_connection_field_name, detail::http_connection_upgrade_option);
-        response.header_stable_view("Upgrade", "connect-udp");
+        response.header(detail::http_connection_field_name, detail::http_connection_upgrade_option);
+        response.header("Upgrade", "connect-udp");
     }
     return response;
 }

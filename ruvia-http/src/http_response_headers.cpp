@@ -300,14 +300,6 @@ void http_response_headers::move_from(http_response_headers&& other) noexcept {
     other.size_ = 0;
 }
 
-bool http_response_headers::borrows_owned_header(std::string_view name, std::string_view value) const noexcept {
-    for (const auto& existing : *this) {
-        if (existing.owned_ && (detail::response_header_storage_overlaps(existing, name) || detail::response_header_storage_overlaps(existing, value))) {
-            return true;
-        }
-    }
-    return false;
-}
 http_response_header http_response_headers::make_owned_header(std::string_view name, std::string_view value, std::uint32_t known_bit) {
     detail::validate_response_header_storage_size(name.size(), value.size());
     const auto total = name.size() + value.size();
@@ -340,16 +332,6 @@ std::optional<http_response_header> http_response_headers::make_static_header(st
         return std::nullopt;
     }
     return header_value;
-}
-
-std::optional<http_response_header> http_response_headers::make_shared_header(std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view) const noexcept {
-    if (const auto static_header = make_static_header(name, value, known_bit)) {
-        return static_header;
-    }
-    if (stable_view && !borrows_owned_header(name, value) && detail::response_header_views_contiguous(name, value) && detail::response_header_storage_size_fits(name.size(), value.size())) {
-        return detail::http_response_header_access::make(name.data(), static_cast<std::uint32_t>(name.size()), static_cast<std::uint32_t>(value.size()), known_bit, false);
-    }
-    return std::nullopt;
 }
 
 void http_response_headers::release_header(http_response_header& header_value) noexcept {
@@ -396,9 +378,9 @@ http_response_header& http_response_headers::append_header(http_response_header 
     }
 }
 
-http_response_header& http_response_headers::add(std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view) {
-    const auto shared_header = make_shared_header(name, value, known_bit, stable_view);
-    return append_header(shared_header ? *shared_header : make_owned_header(name, value, known_bit));
+http_response_header& http_response_headers::add(std::string_view name, std::string_view value, std::uint32_t known_bit) {
+    const auto static_header = make_static_header(name, value, known_bit);
+    return append_header(static_header ? *static_header : make_owned_header(name, value, known_bit));
 }
 
 http_response_header& http_response_headers::add_uninitialized_value(std::string_view name, std::size_t value_size, std::uint32_t known_bit) {
@@ -442,10 +424,10 @@ bool http_response_headers::try_assign_owned_in_place(http_response_header& head
     return true;
 }
 
-void http_response_headers::assign(http_response_header& header_value, std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view) {
-    if (const auto shared_header = make_shared_header(name, value, known_bit, stable_view)) {
+void http_response_headers::assign(http_response_header& header_value, std::string_view name, std::string_view value, std::uint32_t known_bit) {
+    if (const auto static_header = make_static_header(name, value, known_bit)) {
         release_header(header_value);
-        header_value = *shared_header;
+        header_value = *static_header;
         return;
     }
     if (try_assign_owned_in_place(header_value, name, value, known_bit)) {
@@ -1022,13 +1004,13 @@ void http_response_headers::remove_header(std::string_view key) {
     (void)remove_header_validated(key, detail::classify_response_header_name(key));
 }
 
-void http_response_headers::set_header_validated(std::string_view key, std::string_view value, std::uint32_t known_bit, bool stable_view) {
+void http_response_headers::set_header_validated(std::string_view key, std::string_view value, std::uint32_t known_bit) {
     (void)upsert_header(key, known_bit, [&](http_response_header* existing) -> http_response_header& {
         if (existing != nullptr) {
-            assign(*existing, key, value, known_bit, stable_view);
+            assign(*existing, key, value, known_bit);
             return *existing;
         }
-        return add(key, value, known_bit, stable_view);
+        return add(key, value, known_bit);
     });
 }
 
@@ -1131,13 +1113,6 @@ bool http_response_headers::remove_header_validated(std::string_view key, std::u
     rebuild_known_header_index();
     release_header(retired_key_header);
     return true;
-}
-
-void http_response_headers::header_stable_view(borrowed_text key_text, borrowed_text value_text) {
-    const std::string_view key = key_text;
-    const std::string_view value = value_text;
-    const auto known_bit = validate_response_header_field(key, value);
-    set_header_validated(key, value, known_bit, true);
 }
 
 void http_response_headers::add_vary_token(std::string_view token) {

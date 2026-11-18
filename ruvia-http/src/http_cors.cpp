@@ -491,7 +491,7 @@ bool http_cors_policy::apply_response_headers(const http_request& request, http_
 
     if (!response.header("Access-Control-Allow-Origin").has_value()) {
         if (allow_any_origin_) {
-            response.header_stable_view("Access-Control-Allow-Origin", "*");
+            response.header("Access-Control-Allow-Origin", "*");
         } else if (origin.has_value()) {
             response.header("Access-Control-Allow-Origin", *origin);
         } else if (exact_origins_.size() == 1 && suffix_rules_.empty()) {
@@ -499,7 +499,7 @@ bool http_cors_policy::apply_response_headers(const http_request& request, http_
         }
     }
     if (allow_credentials_ && !response.header("Access-Control-Allow-Credentials").has_value()) {
-        response.header_stable_view("Access-Control-Allow-Credentials", "true");
+        response.header("Access-Control-Allow-Credentials", "true");
     }
 
     if (preflight) {

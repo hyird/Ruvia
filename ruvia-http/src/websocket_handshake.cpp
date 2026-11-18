@@ -461,7 +461,7 @@ http_protocol_error make_http_protocol_error(websocket_handshake_error error) no
 
 void apply_websocket_handshake_error_headers(websocket_handshake_error error, http_response& response) {
     if (error == websocket_handshake_error::unsupported_version) {
-        response.header_stable_view("Sec-WebSocket-Version", "13");
+        response.header("Sec-WebSocket-Version", "13");
     }
 }
 

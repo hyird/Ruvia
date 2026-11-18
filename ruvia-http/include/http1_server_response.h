@@ -334,7 +334,7 @@ inline void http1_mark_connection_close(http_response& response, http1_connectio
         });
     }
     if (merged.empty()) {
-        response.header_stable_view("Connection", base);
+        response.header("Connection", base);
     } else {
         response.header("Connection", std::move(merged));
     }

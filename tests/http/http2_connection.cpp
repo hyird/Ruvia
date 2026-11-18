@@ -1143,7 +1143,7 @@ TEST(Ruvia, http2_public_response_head_validates_stable_representation_metadata)
 
             ruvia::http_response response;
             try {
-                response.header_stable_view(invalid.name(), invalid.value());
+                response.header(invalid.name(), invalid.value());
             } catch (const std::invalid_argument&) {
                 continue;
             }

@@ -119,7 +119,8 @@ struct http_client_connection_info final {
 };
 
 // Per-hop redirect observation passed to on_redirect / redirect_policy before
-// following a redirect response. Views are valid for the duration of the callback.
+// following a redirect response. The observation and its views are valid only
+// until the callback completes, including across its suspensions.
 class http_client_redirect_hop final {
     friend class http_client_request;
 
@@ -137,36 +138,47 @@ class http_client_redirect_hop final {
         cross_origin_(cross_origin) {}
 
 public:
+    http_client_redirect_hop(const http_client_redirect_hop&) = delete;
+    http_client_redirect_hop& operator=(const http_client_redirect_hop&) = delete;
+
     [[nodiscard]] constexpr std::size_t hop_index() const noexcept {
         return hop_index_;
     }
-    [[nodiscard]] constexpr http_origin_view source_origin() const noexcept {
+    [[nodiscard]] constexpr http_origin_view source_origin() const& noexcept RUVIA_LIFETIMEBOUND {
         return source_origin_;
     }
-    [[nodiscard]] constexpr std::string_view source_target() const noexcept {
+    [[nodiscard]] http_origin_view source_origin() const&& = delete;
+    [[nodiscard]] constexpr std::string_view source_target() const& noexcept RUVIA_LIFETIMEBOUND {
         return source_target_;
     }
-    [[nodiscard]] constexpr std::string_view source_url() const noexcept {
+    [[nodiscard]] std::string_view source_target() const&& = delete;
+    [[nodiscard]] constexpr std::string_view source_url() const& noexcept RUVIA_LIFETIMEBOUND {
         return source_url_;
     }
-    [[nodiscard]] const http_client_connection_info& connection_info() const noexcept {
+    [[nodiscard]] std::string_view source_url() const&& = delete;
+    [[nodiscard]] const http_client_connection_info& connection_info() const& noexcept RUVIA_LIFETIMEBOUND {
         return *connection_info_;
     }
+    [[nodiscard]] const http_client_connection_info& connection_info() const&& = delete;
     [[nodiscard]] constexpr http_status_code status() const noexcept {
         return status_;
     }
-    [[nodiscard]] constexpr std::string_view location() const noexcept {
+    [[nodiscard]] constexpr std::string_view location() const& noexcept RUVIA_LIFETIMEBOUND {
         return location_;
     }
-    [[nodiscard]] constexpr http_origin_view target_origin() const noexcept {
+    [[nodiscard]] std::string_view location() const&& = delete;
+    [[nodiscard]] constexpr http_origin_view target_origin() const& noexcept RUVIA_LIFETIMEBOUND {
         return target_origin_;
     }
-    [[nodiscard]] constexpr std::string_view target() const noexcept {
+    [[nodiscard]] http_origin_view target_origin() const&& = delete;
+    [[nodiscard]] constexpr std::string_view target() const& noexcept RUVIA_LIFETIMEBOUND {
         return target_;
     }
-    [[nodiscard]] constexpr std::string_view target_url() const noexcept {
+    [[nodiscard]] std::string_view target() const&& = delete;
+    [[nodiscard]] constexpr std::string_view target_url() const& noexcept RUVIA_LIFETIMEBOUND {
         return target_url_;
     }
+    [[nodiscard]] std::string_view target_url() const&& = delete;
     [[nodiscard]] constexpr bool cross_origin() const noexcept {
         return cross_origin_;
     }

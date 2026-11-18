@@ -428,7 +428,7 @@ void apply_rate_limit_rejection_headers(http_response& response, const rate_limi
     response.reserve_headers(response.headers().size() + 4U);
     set_unsigned_header(response, "Retry-After", whole_seconds_after(rejection.retry_after_ms()));
     set_unsigned_header(response, "X-RateLimit-Limit", rejection.max_requests());
-    response.header_stable_view("X-RateLimit-Remaining", "0");
+    response.header("X-RateLimit-Remaining", "0");
     set_unsigned_header(response, "X-RateLimit-Reset", whole_seconds_after(rejection.reset_after_ms()));
 }
 

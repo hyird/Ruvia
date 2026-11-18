@@ -201,10 +201,6 @@ void http_response::header(std::string_view key, std::string_view value, http_re
     headers_.header(key, value, options);
 }
 
-void http_response::header_stable_view(borrowed_text key, borrowed_text value) {
-    headers_.header_stable_view(key, value);
-}
-
 void http_response::content_type(http_content_type type) {
     headers_.content_type(type);
 }

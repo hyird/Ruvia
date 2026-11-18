@@ -77,7 +77,7 @@ void set_default_content_type(http_response& response, http_content_type content
 void mark_plain_text_defaults(http_response& response) {
     set_default_content_type(response, http_content_type::text_plain_utf8);
     if (!response.header("X-Content-Type-Options")) {
-        response.header_stable_view("X-Content-Type-Options", "nosniff");
+        response.header("X-Content-Type-Options", "nosniff");
     }
 }
 
@@ -220,9 +220,9 @@ sse_writer request_exchange<host_type>::stream_sse(response_options head) & {
     auto& writer = stream(head);
     if (!writer.committed()) {
         auto& staged = exchange().stream_head();
-        staged.header_stable_view("Content-Type", "text/event-stream");
+        staged.header("Content-Type", "text/event-stream");
         if (!staged.header("Cache-Control")) {
-            staged.header_stable_view("Cache-Control", "no-cache");
+            staged.header("Cache-Control", "no-cache");
         }
     }
     return sse_writer(writer);

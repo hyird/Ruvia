@@ -52,7 +52,7 @@ http_response_stream_head prepare_http_response_stream_head(http_response respon
         if (!detail::response_has_known_header(response, detail::response_header_transfer_encoding)) {
             response.reserve_headers(response.headers().size() + 1);
         }
-        response.header_stable_view("Transfer-Encoding", "chunked");
+        response.header("Transfer-Encoding", "chunked");
     }
 
     return http_response_stream_head(std::move(response), commit_plan);
