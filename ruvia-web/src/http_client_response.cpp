@@ -1116,6 +1116,11 @@ template <typename result_type>
 task<result_type> detail::http_client_response_state::collect_body(std::size_t max_bytes, operation_options operation, callback_ref<void(std::string_view)> parse) {
     auto& state_value = *this;
     auto activity = claim_operation_lane(state_value.body_operation_active_, "HTTP client response body operation is already active");
+    const operation_deadline deadline(operation.timeout_);
+    if (deadline.expired() && !operation.stop_token_.stop_requested()) {
+        throw_interrupted(state_value, operation_interrupt_cause::timed_out, "HTTP client read timed out", "HTTP client read cancelled");
+    }
+    operation.timeout_ = deadline.timeout();
     const http_client_operation_interruption interruption(state_value, http_client_operation_lane::read, operation);
     state_value.release_consumed_body_prefix();
     state_value.collect_all_ = true;
@@ -1123,12 +1128,15 @@ task<result_type> detail::http_client_response_state::collect_body(std::size_t m
         state_value.pool_->release_response_data(state_value);
     }
     state_value.notify_producer_space();
-    while (!state_value.receive_complete()) {
-        if (state_value.read_interrupted()) {
-            // The collected prefix stays buffered for the next body operation,
-            // which restores ordinary backpressure.
+    for (;;) {
+        // A ready body can reach this point before the timer callback runs.
+        if (const auto cause = state_value.read_operation_->cause(); cause || deadline.expired()) {
+            // Keep the collected prefix and restore ordinary backpressure.
             state_value.collect_all_ = false;
-            state_value.throw_if_read_interrupted();
+            throw_interrupted(state_value, cause.value_or(operation_interrupt_cause::timed_out), "HTTP client read timed out", "HTTP client read cancelled");
+        }
+        if (state_value.receive_complete()) {
+            break;
         }
         co_await state_value.data_signal_.wait();
     }

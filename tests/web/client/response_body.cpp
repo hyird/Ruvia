@@ -737,6 +737,42 @@ TEST(Ruvia, client_response_body_collectors_return_public_results) {
     run_operation(worker, io, operation);
 }
 
+TEST(Ruvia, client_body_collection_honors_expired_deadline_with_buffered_body) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    constexpr std::string_view body = R"("buffered")";
+    const auto encoded = ruvia::encode_http_content(ruvia::http_content_coding::gzip, body, {.max_encoded_bytes_ = 128});
+    ASSERT_TRUE(encoded.has_value());
+    scripted_head_peer peer(io, worker.handle_, {"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: " + std::to_string(encoded->size()) + "\r\nConnection: close\r\n\r\n" + *encoded});
+    const auto url = "http://127.0.0.1:" + std::to_string(peer.port());
+    ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(url));
+    peer.start();
+    auto operation = [&]() -> ruvia::task<void> {
+        // A decoded response is returned only after the encoded body has arrived.
+        auto response = co_await client.client().get("/").send();
+        const ruvia::operation_options expired{.timeout_ = ruvia::operation_timeout((std::chrono::steady_clock::time_point::min)())};
+        std::error_code collect_error;
+        try {
+            (void)co_await response.collect_body(body.size(), expired);
+        } catch (const ruvia::http_client_error& error) {
+            collect_error = error.code();
+        }
+        EXPECT_EQ(collect_error, std::errc::timed_out);
+        std::error_code json_error;
+        try {
+            (void)co_await response.json<ruvia::string>(body.size(), expired);
+        } catch (const ruvia::http_client_error& error) {
+            json_error = error.code();
+        }
+        EXPECT_EQ(json_error, std::errc::timed_out);
+        const auto collected = co_await response.collect_body();
+        EXPECT_EQ(collected.text(), body);
+        co_await client.shutdown();
+        co_await peer.wait();
+    };
+    run_operation(worker, io, operation);
+}
+
 TEST(Ruvia, client_response_body_completion_preserves_truncation_after_buffered_bytes) {
     for (const auto& prefix : {std::string{}, std::string("abc")}) {
         auto& io = ruvia::test::new_test_io_context();
