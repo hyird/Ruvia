@@ -6829,7 +6829,7 @@ public:
     [[nodiscard]] constexpr http1_interim_connection_disposition connection_disposition() const noexcept;
 };
 
-[[nodiscard]] std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer);
+[[nodiscard]] std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer RUVIA_LIFETIMEBOUND);
 ```
 
 `http1_interim_connection_disposition`：编码临时响应后的连接生命周期。RFC 9112 要求 `Connection: close` 的发送方在含该选项的响应之后开始关闭，即使这会使请求得不到最终响应。
@@ -6843,7 +6843,7 @@ public:
 
 - 在触碰输出之前按 [`http_field_section_budget`](#api-http-field-section-budget-h) 校验完整的借用字段集（`max_http_header_fields` 行、`max_http_header_bytes` 即 64 KiB，含状态行与结束空行）；无法发送的头抛 `http1_response_head_error`：`Content-Length`、`Transfer-Encoding`、`Trailer`、`TE` 字段，重复的单例字段，非法字段，非法 `Connection` / `Upgrade`，有 `Upgrade` 而 `Connection` 未列出 `upgrade`，超出大小上限。
 - `head_buffer` 不足时返回 `http1_interim_response_buffer_too_small`，其 `required_head_bytes()` 给出所需字节数；输出未被修改。
-- 成功时事务性地写入 `head_buffer` 前缀（字段可与 `head_buffer` 别名），返回 `prepared_http1_interim_response`：`head()` 指向调用方输出缓冲区中的已编码字节（借用 `head_buffer`），`connection_disposition()` 给出上表处置。
+- 成功时事务性地写入 `head_buffer` 前缀（字段可与 `head_buffer` 别名），返回 `prepared_http1_interim_response`：`head()` 借用调用方输出缓冲中的已编码字节，`RUVIA_LIFETIMEBOUND` 标注这一依赖；结果不借用 `response`。`connection_disposition()` 给出上表处置。
 - 不注入 `Server` 或 `Date`：编码的字段恰为 `http_interim_response_head` 所表示的字段。
 - 两个结果类型只由该函数构造。
 

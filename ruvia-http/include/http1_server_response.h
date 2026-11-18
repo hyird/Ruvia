@@ -219,7 +219,7 @@ public:
     }
 
 private:
-    friend std::variant<class prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head&, std::span<char>);
+    friend std::variant<class prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head&, std::span<char> head_buffer RUVIA_LIFETIMEBOUND);
 
     explicit constexpr http1_interim_response_buffer_too_small(std::size_t required_head_bytes) noexcept :
         required_head_bytes_(required_head_bytes) {}
@@ -241,7 +241,7 @@ public:
     }
 
 private:
-    friend std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head&, std::span<char>);
+    friend std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head&, std::span<char> head_buffer RUVIA_LIFETIMEBOUND);
 
     constexpr prepared_http1_interim_response(std::string_view head, http1_interim_connection_disposition connection_disposition) noexcept :
         head_(head),
@@ -256,7 +256,7 @@ private:
 // before touching output, throwing http1_response_head_error for an unsendable head.
 // No Server or Date field is injected: the encoded fields are exactly those
 // represented by http_interim_response_head.
-[[nodiscard]] std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer);
+[[nodiscard]] std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer RUVIA_LIFETIMEBOUND);
 
 class http1_response_stream_plan final {
 public:
