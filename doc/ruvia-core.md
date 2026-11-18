@@ -625,7 +625,7 @@ flowchart LR
 | `[[nodiscard]] bool wait_until_ready();` | 等待就绪；就绪前已停止返回 `false`；重抛首个失败；未启动，或拥有线程等待尚未完成的阶段时，抛 `std::logic_error` |
 | `void request_serve();` | 须已就绪，否则抛 `std::logic_error`；在拥有线程运行 `serve_` |
 | `[[nodiscard]] bool wait_until_serving();` | 规则同 `wait_until_ready()` |
-| `void request_stop() noexcept;` | 每次调用在返回前关闭派发准入；重复或重入请求不等待胜出的停止派发结束 |
+| `void request_stop() noexcept;` | 先中止待定阶段，再派发停止通知；每次返回前关闭派发准入；重复或重入请求不等待胜出的停止派发结束 |
 | `bool fail(std::exception_ptr failure) noexcept;` | 记录首个失败、唤醒阶段等待者并请求停止；只有胜出失败到达 `failure_`，此时返回 `true` |
 | `[[nodiscard]] bool post_control(move_only_function<void()> control) noexcept;` | 冷路径生命周期控制，与 finalize 串行；停止开始后返回 `false` |
 | `void finalize() noexcept;` | 可靠的拥有线程二阶段控制，首次调用生效；不停止 `io_context` |

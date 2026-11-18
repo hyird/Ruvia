@@ -98,6 +98,7 @@ public:
     [[nodiscard]] bool wait_until_ready();
     void request_serve();
     [[nodiscard]] bool wait_until_serving();
+    // Pending phases abort before stop notifications run.
     // Every call closes dispatcher admission before returning. Repeated or
     // reentrant requests do not wait for the winning stop dispatch to finish.
     void request_stop() noexcept;

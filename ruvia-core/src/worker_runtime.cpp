@@ -384,17 +384,13 @@ public:
         phase_changed_.notify_all();
     }
 
-    void abort_phases() noexcept {
-        {
-            const std::lock_guard lock(mutex_);
-            if (ready_ == phase_type::pending) {
-                ready_ = phase_type::aborted;
-            }
-            if (serving_ == phase_type::pending) {
-                serving_ = phase_type::aborted;
-            }
+    void abort_pending_phases_locked() noexcept {
+        if (ready_ == phase_type::pending) {
+            ready_ = phase_type::aborted;
         }
-        phase_changed_.notify_all();
+        if (serving_ == phase_type::pending) {
+            serving_ = phase_type::aborted;
+        }
     }
 
     void request_stop() noexcept {
@@ -403,11 +399,15 @@ public:
             const std::lock_guard lock(mutex_);
             dispatch = lifecycle_.request_stop();
             if (dispatch) {
+                // Stop notifications can query the barriers synchronously,
+                // even when another caller closes the dispatcher first.
+                abort_pending_phases_locked();
                 stop_dispatching_ = true;
                 stop_dispatch_thread_ = std::this_thread::get_id();
             }
         }
         if (dispatch) {
+            phase_changed_.notify_all();
             // Publish independent stop before shutdown listeners can reenter
             // group stop. Its self-stop recursion closes admission through the
             // same nonwaiting path as every other repeat caller.
@@ -421,7 +421,6 @@ public:
             return;
         }
         stop_.request_stop();
-        abort_phases();
 #if defined(_WIN32)
         thread_join_operation* waiters;
 #endif
@@ -477,8 +476,12 @@ public:
         // Detach before the context or domain owners can disappear. Unfinished
         // post factories own their stable endpoint, not this execution context.
         context_.detach();
-        (void)lifecycle_.request_stop();
-        abort_phases();
+        {
+            const std::lock_guard lock(mutex_);
+            (void)lifecycle_.request_stop();
+            abort_pending_phases_locked();
+        }
+        phase_changed_.notify_all();
         lifecycle_.complete_stop();
     }
 

@@ -583,6 +583,42 @@ TEST(Ruvia, worker_group_rejects_join_from_any_member_before_stopping) {
     EXPECT_EQ(second.state(), state::stopped);
 }
 
+struct runtime_phase_stop_observer final {
+    explicit runtime_phase_stop_observer(ruvia::worker_runtime& runtime) :
+        runtime_(runtime) {}
+
+    [[nodiscard]] const ruvia::worker_ref& worker() const noexcept {
+        return runtime_.worker();
+    }
+
+    void worker_stopping() noexcept {
+        EXPECT_FALSE(runtime_.wait_until_ready());
+        EXPECT_FALSE(runtime_.wait_until_serving());
+        notified_ = true;
+    }
+
+    ruvia::worker_runtime& runtime_;
+    bool notified_{false};
+    ruvia::detail::worker_shutdown_registration shutdown_registration_;
+};
+
+TEST(RuviaDeathTest, worker_runtime_aborts_pending_phases_before_stop_notifications) {
+    const auto verify = [] {
+        // An observer blocked on a phase cannot return to finish the stop.
+        std::thread([] {
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            std::_Exit(2);
+        }).detach();
+        ruvia::worker_runtime runtime;
+        const auto observer = ruvia::make_worker_wait_state<runtime_phase_stop_observer>(runtime);
+        runtime.request_stop();
+        EXPECT_TRUE(observer->notified_);
+        runtime.join();
+        std::_Exit(::testing::Test::HasFailure() ? EXIT_FAILURE : EXIT_SUCCESS);
+    };
+    ASSERT_EXIT(verify(), ::testing::ExitedWithCode(EXIT_SUCCESS), "");
+}
+
 struct group_join_observer final {
     group_join_observer(ruvia::worker_group& group, ruvia::worker_ref worker) :
         group_(group),
