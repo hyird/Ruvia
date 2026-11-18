@@ -87,7 +87,8 @@ private:
 
 // Independently owned bytes collected from an outbound HTTP response body.
 // The address-stable backing storage is detached from the client and worker
-// lifecycle, and its read-only view remains valid across moves until destruction.
+// lifecycle. Move the result to transfer its bytes and reservation together,
+// without copying or invalidating views of the transferred bytes.
 // Empty results retain neither backing storage nor a retained-byte reservation.
 class http_client_response_bytes final {
 public:
@@ -96,25 +97,6 @@ public:
     http_client_response_bytes(http_client_response_bytes&&) noexcept;
     http_client_response_bytes& operator=(http_client_response_bytes&&) noexcept;
     ~http_client_response_bytes();
-
-    class allocation_deleter final {
-    public:
-        allocation_deleter() noexcept = default;
-        void operator()(std::byte* bytes) const noexcept;
-        [[nodiscard]] std::size_t size() const noexcept {
-            return size_;
-        }
-
-    private:
-        friend class http_client_response_bytes;
-        std::shared_ptr<detail::http_client_result_budget_domain> budget_domain_;
-        std::size_t size_{0};
-        std::size_t reserved_{0};
-    };
-    using owned_allocation = std::unique_ptr<std::byte[], allocation_deleter>;
-
-    // Transfers the backing allocation together with its retained-byte budget.
-    [[nodiscard]] owned_allocation take_bytes() && noexcept;
 
     [[nodiscard]] std::size_t size() const noexcept {
         return size_;
@@ -134,15 +116,13 @@ public:
 private:
     friend class detail::http_client_response_state;
 
-    http_client_response_bytes(std::size_t reserve_bytes, detail::http_client_result_budget_lease&& lease_value);
+    http_client_response_bytes(std::span<const char> buffered, std::span<const char> pending, detail::http_client_result_budget_lease&& lease_value);
     http_client_response_bytes() noexcept = default;
-    void append(std::span<const std::byte> bytes) noexcept;
     void release() noexcept;
 
     std::shared_ptr<detail::http_client_result_budget_domain> budget_domain_{};
     std::unique_ptr<std::byte[]> data_{};
     std::size_t size_{0};
-    std::size_t reserved_{0};
 };
 
 // A borrow-only facade embedded in http_client_response. It cannot be detached,

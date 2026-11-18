@@ -3786,7 +3786,7 @@ co_return c.text(body.text());
 
 #### 11.3.11 `class http_client_response_bytes final`
 
-独立拥有的正文收集结果；地址稳定的存储与客户端/worker 生命周期分离，只读视图跨移动有效直至销毁；空结果不保留存储或预算。
+独立拥有的正文收集结果，可移交至其他线程或在客户端与 worker 退出后保留。移动不复制字节，源结果变空，原视图继续指向移交后的字节。存储与保留字节预算一同移交，销毁或替换结果时归还预算；空结果不占用预算。
 
 | 声明 | 说明 |
 | --- | --- |
@@ -3801,12 +3801,6 @@ co_return c.text(body.text());
 | `std::span<const std::byte> bytes() const&& = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
 | `std::string_view text() const& noexcept` | 字符视图 |
 | `std::string_view text() const&& = delete` | 禁止在临时对象上调用：返回值借用本对象，临时对象销毁后悬垂 |
-| `class allocation_deleter final`（`http_client_response_bytes::allocation_deleter`） | `owned_allocation` 的删除器：携带有效长度与本结果的保留字节预算；隐式可复制 / 移动，复制品共享同一预算域，只应由所属 `owned_allocation` 调用一次 |
-| `allocation_deleter() noexcept = default` | 空删除器：`size()` 为 `0`，不持有预算；供 `owned_allocation` 默认构造 |
-| `void allocation_deleter::operator()(std::byte* bytes) const noexcept` | `delete[] bytes` 后把保留字节归还结果预算 |
-| `std::size_t allocation_deleter::size() const noexcept` | 分配中的有效字节数 |
-| `using owned_allocation = std::unique_ptr<std::byte[], allocation_deleter>`（`http_client_response_bytes::owned_allocation`） | 移交出的正文存储；地址稳定，独立于客户端与 worker 生命周期；释放时才归还预算 |
-| `owned_allocation take_bytes() && noexcept` | 移交原分配与保留字节预算，不复制；`get_deleter().size()` 为有效长度；空结果得到空指针且 `size()` 为 `0`；源变为空结果（`size() == 0`，视图为空） |
 
 #### 11.3.12 上传：`http_client_exchange` 与 `http_client_request_body_writer`
 

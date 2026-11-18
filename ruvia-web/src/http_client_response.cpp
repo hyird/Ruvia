@@ -483,18 +483,22 @@ void finish_http_client_response_body(http_client_response_state& state_value, c
 
 namespace ruvia {
 
-http_client_response_bytes::http_client_response_bytes(std::size_t reserve_bytes, detail::http_client_result_budget_lease&& lease_value) :
-    data_(reserve_bytes == 0 ? nullptr : std::make_unique_for_overwrite<std::byte[]>(reserve_bytes)) {
-    auto [domain, reserved] = std::move(lease_value).release();
-    budget_domain_ = std::move(domain);
-    reserved_ = reserved;
+http_client_response_bytes::http_client_response_bytes(std::span<const char> buffered, std::span<const char> pending, detail::http_client_result_budget_lease&& lease_value) :
+    data_(std::make_unique_for_overwrite<std::byte[]>(lease_value.size())),
+    size_(lease_value.size()) {
+    if (!buffered.empty()) {
+        std::memcpy(data_.get(), buffered.data(), buffered.size());
+    }
+    if (!pending.empty()) {
+        std::memcpy(data_.get() + buffered.size(), pending.data(), pending.size());
+    }
+    budget_domain_ = std::move(lease_value).take_domain();
 }
 
 http_client_response_bytes::http_client_response_bytes(http_client_response_bytes&& other) noexcept :
     budget_domain_(std::move(other.budget_domain_)),
     data_(std::move(other.data_)),
-    size_(std::exchange(other.size_, 0)),
-    reserved_(std::exchange(other.reserved_, 0)) {}
+    size_(std::exchange(other.size_, 0)) {}
 
 http_client_response_bytes& http_client_response_bytes::operator=(http_client_response_bytes&& other) noexcept {
     if (this != &other) {
@@ -502,7 +506,6 @@ http_client_response_bytes& http_client_response_bytes::operator=(http_client_re
         budget_domain_ = std::move(other.budget_domain_);
         data_ = std::move(other.data_);
         size_ = std::exchange(other.size_, 0);
-        reserved_ = std::exchange(other.reserved_, 0);
     }
     return *this;
 }
@@ -511,37 +514,14 @@ http_client_response_bytes::~http_client_response_bytes() {
     release();
 }
 
-void http_client_response_bytes::allocation_deleter::operator()(std::byte* bytes) const noexcept {
-    delete[] bytes;
-    if (budget_domain_ != nullptr) {
-        budget_domain_->release(reserved_);
-    }
-}
-
-http_client_response_bytes::owned_allocation http_client_response_bytes::take_bytes() && noexcept {
-    allocation_deleter deleter;
-    deleter.budget_domain_ = std::move(budget_domain_);
-    deleter.size_ = std::exchange(size_, 0);
-    deleter.reserved_ = std::exchange(reserved_, 0);
-    return owned_allocation(data_.release(), std::move(deleter));
-}
-
 void http_client_response_bytes::release() noexcept {
     // Free the owned byte buffer before making its reservation available to another result.
     data_.reset();
     if (budget_domain_ != nullptr) {
-        budget_domain_->release(reserved_);
+        budget_domain_->release(size_);
         budget_domain_.reset();
     }
     size_ = 0;
-    reserved_ = 0;
-}
-
-void http_client_response_bytes::append(std::span<const std::byte> bytes_value) noexcept {
-    if (!bytes_value.empty()) {
-        std::memcpy(data_.get() + size_, bytes_value.data(), bytes_value.size());
-        size_ += bytes_value.size();
-    }
 }
 
 const std::error_category& http_client_category() noexcept {
@@ -1161,13 +1141,7 @@ task<http_client_response_bytes> detail::http_client_response_state::collect_bod
     if (!reservation) {
         throw http_client_error(make_error_code(http_client_errc::result_budget_exceeded), "HTTP client retained result byte budget is exhausted", std::nullopt, state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr, state_value.request_written_);
     }
-    http_client_response_bytes result_value(total_remaining, std::move(*reservation));
-    if (remaining != 0) {
-        result_value.append(std::as_bytes(std::span(state_value.buffered_).subspan(state_value.offset_)));
-    }
-    if (!state_value.pending_.empty()) {
-        result_value.append(std::as_bytes(std::span(state_value.pending_)));
-    }
+    http_client_response_bytes result_value(std::span(state_value.buffered_).subspan(state_value.offset_), std::span(state_value.pending_), std::move(*reservation));
     // The result uses independent thread-safe storage. Only release the
     // worker-owned response buffers after the complete copy succeeds.
     state_value.consumed_body_bytes_ = saturating_add(state_value.consumed_body_bytes_, static_cast<std::uint64_t>(total_remaining));
