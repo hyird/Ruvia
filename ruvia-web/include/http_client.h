@@ -571,7 +571,6 @@ private:
     friend class http_client_request;
     friend class http_client_connect_request;
     friend class http_client_websocket_request;
-    [[nodiscard]] task<http_client_response> dispatch(const http_request_head_view& request, const http_client_request_options& options, const std::shared_ptr<http_client_informational_callback>& informational) const;
     friend class detail::http_client_registry;
     friend class detail::http_client_state;
     friend class detail::worker_client_registry_view;

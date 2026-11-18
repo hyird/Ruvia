@@ -811,11 +811,12 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 bool keep_body_;
             };
             for (const auto test : std::array{redirect_case{"301", "POST", "GET", false}, redirect_case{"302", "POST", "GET", false}, redirect_case{"303", "PUT", "GET", false}, redirect_case{"307", "POST", "POST", true}, redirect_case{"308", "PUT", "PUT", true}}) {
-                auto result = co_await origin.request(test.method_, "/fluent/redirect").query("status", test.status_).header("authorization", "Bearer same-origin").header("content-type", "text/plain").body("redirect-body").send();
+                const std::string payload = std::string(64 * 1024, 'r') + std::string("\0bytes", 6);
+                auto result = co_await origin.request(test.method_, "/fluent/redirect").query("status", test.status_).redirects(test.status_ == "308" ? 1 : 5).header("authorization", "Bearer same-origin").header("content-type", "text/plain").body(payload).send();
                 EXPECT_TRUE(result.ok());
                 auto report = (co_await result.json<fluent_client_observation>()).take_value();
                 EXPECT_EQ(report.get<"method">().view(), test.expected_method_);
-                EXPECT_EQ(report.get<"body">().view(), test.keep_body_ ? "redirect-body" : "");
+                EXPECT_TRUE(report.get<"body">().view() == (test.keep_body_ ? std::string_view(payload) : std::string_view{}));
                 EXPECT_EQ(report.get<"content_type">().view(), test.keep_body_ ? "text/plain" : "");
                 EXPECT_EQ(report.get<"authorization">().view(), "Bearer same-origin");
             }

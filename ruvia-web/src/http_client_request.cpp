@@ -84,7 +84,7 @@ http_client_request_storage::http_client_request_storage(http_client_request_sto
     method_(std::move(other.method_)),
     target_(std::move(other.target_)),
     headers_(std::move(other.headers_)),
-    body_(std::move(other.body_)),
+    body_(std::exchange(other.body_, {})),
     tunnel_authority_(std::move(other.tunnel_authority_)),
     tunnel_protocol_(std::move(other.tunnel_protocol_)),
     websocket_(std::move(other.websocket_)),
@@ -92,7 +92,6 @@ http_client_request_storage::http_client_request_storage(http_client_request_sto
     is_tunnel_(other.is_tunnel_),
     is_upgrade_(other.is_upgrade_),
     tunnel_(std::exchange(other.tunnel_, nullptr)),
-    has_body_(std::exchange(other.has_body_, false)),
     upload_(std::exchange(other.upload_, nullptr)),
     route_authority_(std::move(other.route_authority_)) {
     static_assert(std::is_nothrow_move_constructible_v<decltype(method_)>);
@@ -107,20 +106,8 @@ void http_client_request_storage::set_tunnel(std::string authority, std::string 
     is_tunnel_ = true;
 }
 
-http_client_request_storage& http_client_request_storage::set_body(std::string_view body) {
-    body_.assign(body);
-    has_body_ = true;
-    return *this;
-}
-
-http_client_request_storage& http_client_request_storage::set_body(std::string&& body) noexcept {
-    body_ = std::move(body);
-    has_body_ = true;
-    return *this;
-}
-
 http_request_content_plan http_client_request_storage::content() const& noexcept {
-    return upload_ != nullptr ? http_request_content_plan::streaming(upload_->config_.content_length_) : buffered_http_client_content(has_body_, body_);
+    return upload_ != nullptr ? http_request_content_plan::streaming(upload_->config_.content_length_) : buffered_http_client_content(has_body(), body());
 }
 
 http_client_request_expectation http_client_request_storage::expectation() const noexcept {
@@ -543,6 +530,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
     // existing bound. The same frame owns the request throughout every hop.
     const auto total = initial_deadline.has_value() ? *initial_deadline : operation_deadline(request.client_.options_.timeout_).constrained_by(request.client_.pool_->config().request_timeout_);
     const bool upload_initial_hop = initial_response.has_value();
+    std::shared_ptr<const std::string> replay_body;
     for (std::size_t redirects = 0;; ++redirects) {
         std::optional<http_client_response> hop_response;
         if (redirects == 0 && initial_response.has_value()) {
@@ -554,33 +542,31 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
                 throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP redirect deadline expired", std::nullopt, nullptr, redirects != 0, redirects);
             }
             request.client_.options_.timeout_ = total.timeout();
-            if (redirects == request.max_redirects_) {
-                detail::http_client_request_storage stored(std::move(request.method_), std::move(request.target_), std::move(request.headers_));
-                stored.options_ = std::move(request.request_options_);
-                stored.informational_ = std::move(request.informational_callback_);
+            const bool last_hop = redirects == request.max_redirects_;
+            auto dispatched = [&] {
+                auto stored = last_hop
+                    ? detail::http_client_request_storage(std::move(request.method_), std::move(request.target_), std::move(request.headers_))
+                    : detail::http_client_request_storage(request.method_, request.target_, request.headers_);
+                stored.options_ = last_hop ? std::move(request.request_options_) : detail::copy_http_client_request_settings(request.request_options_);
+                stored.informational_ = last_hop ? std::move(request.informational_callback_) : request.informational_callback_;
                 stored.pool_owner_ = request.client_.pool_owner_;
                 stored.set_host_stop(request.client_.host_stop_token_);
                 if (request.has_body_) {
-                    stored.set_body(std::move(request.body_));
-                }
-                auto dispatched = request.client_.registration_.attach(request.client_.pool_->execute(std::move(stored), request.client_.options_));
-                try {
-                    co_return co_await std::move(dispatched);
-                } catch (const http_client_error& error) {
-                    if (redirects != 0 && error.redirect_hops() == 0) {
-                        throw http_client_error(error.code(), error.what(), error.status(), error.connection_info(), error.request_written(), redirects);
+                    // A prior hop's driver may still have a pending write after
+                    // delivering its response head. Each driver keeps its own share.
+                    if (!last_hop && !replay_body && request.body_.size() > std::string{}.capacity()) {
+                        replay_body = std::make_shared<const std::string>(std::move(request.body_));
                     }
-                    throw;
+                    if (replay_body) {
+                        stored.share_body(last_hop ? std::move(replay_body) : replay_body);
+                    } else {
+                        stored.set_body(last_hop ? std::move(request.body_) : request.body_);
+                    }
                 }
-            }
-            std::optional<task<http_client_response>> dispatched;
-            {
-                const detail::inline_http_header_views<16> fields(request.headers_);
-                const http_request_head_view view{.method_ = request.method_, .target_ = request.target_, .headers_ = fields.view(), .content_ = detail::buffered_http_client_content(request.has_body_, request.body_)};
-                dispatched.emplace(request.client_.dispatch(view, request.request_options_, request.informational_callback_));
-            }
+                return request.client_.registration_.attach(request.client_.pool_->execute(std::move(stored), request.client_.options_));
+            }();
             try {
-                hop_response.emplace(co_await std::move(*dispatched));
+                hop_response.emplace(co_await std::move(dispatched));
             } catch (const http_client_error& error) {
                 if (redirects != 0 && error.redirect_hops() == 0) {
                     throw http_client_error(error.code(), error.what(), error.status(), error.connection_info(), error.request_written(), redirects);
@@ -597,7 +583,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
         if (status != 301 && status != 302 && status != 303 && status != 307 && status != 308) {
             co_return response;
         }
-        const http_request_head_view current_view{.method_ = request.method_, .target_ = request.target_, .content_ = detail::buffered_http_client_content(request.has_body_, request.body_)};
+        const http_request_head_view current_view{.method_ = request.method_};
         const auto plan = plan_http_client_redirect_request(current_view, {.status_ = response.status()});
         if (upload_initial_hop && redirects == 0 && plan.content_disposition() != http_client_redirect_content_disposition::drop) {
             co_return response;
@@ -694,6 +680,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
         });
         if (drop) {
             request.has_body_ = false;
+            replay_body.reset();
             std::string(request.body_.get_allocator()).swap(request.body_);
         }
         request.client_.pool_owner_ = std::move(next_pool);
@@ -958,22 +945,6 @@ http_client_ref http_client_ref::bind_caller_scope(detail::operation_scope& scop
     bound.registry_ = registry_;
     bound.host_stop_token_ = host_stop;
     return bound;
-}
-
-task<http_client_response> http_client_ref::dispatch(const http_request_head_view& view, const http_client_request_options& request_options, const std::shared_ptr<http_client_informational_callback>& informational) const {
-    registration_.require_active();
-    detail::http_client_request_storage request(view.method_.view(), view.target_.view(), view.headers_);
-    request.options_ = detail::copy_http_client_request_settings(request_options);
-    request.informational_ = informational;
-    request.pool_owner_ = pool_owner_;
-    request.set_host_stop(host_stop_token_);
-    if (view.content_.streaming_content() != nullptr || (view.content_.known_length_content() != nullptr && !view.content_.known_length_content()->bytes())) {
-        throw std::invalid_argument("streaming request content requires http_client_request::upload()");
-    }
-    if (const auto* known = view.content_.known_length_content()) {
-        request.set_body(*known->bytes());
-    }
-    return registration_.attach(pool_->execute(std::move(request), options_));
 }
 
 http_client_stats http_client_ref::stats() const {

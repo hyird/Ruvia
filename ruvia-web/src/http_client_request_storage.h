@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "http_authority.h"
@@ -94,8 +95,12 @@ public:
     http_client_request_storage(http_client_request_storage&& other) noexcept;
     http_client_request_storage& operator=(http_client_request_storage&&) noexcept = delete;
 
-    http_client_request_storage& set_body(std::string_view body);
-    http_client_request_storage& set_body(std::string&& body) noexcept;
+    void set_body(std::string body) noexcept {
+        body_.emplace<std::string>(std::move(body));
+    }
+    void share_body(std::shared_ptr<const std::string> body) noexcept {
+        body_.emplace<std::shared_ptr<const std::string>>(std::move(body));
+    }
 
     void set_host_stop(stop_token token) noexcept {
         host_stop_ = std::move(token);
@@ -151,12 +156,18 @@ public:
     }
     [[nodiscard]] std::string_view target() const&& = delete;
 
-    [[nodiscard]] std::string_view body() const& noexcept {
-        return body_;
+    [[nodiscard]] std::string_view body() const& noexcept RUVIA_LIFETIMEBOUND {
+        if (const auto* owned = std::get_if<std::string>(&body_)) {
+            return *owned;
+        }
+        if (const auto* shared = std::get_if<std::shared_ptr<const std::string>>(&body_)) {
+            return **shared;
+        }
+        return {};
     }
     std::string_view body() const&& = delete;
     [[nodiscard]] bool has_body() const noexcept {
-        return has_body_;
+        return !std::holds_alternative<std::monostate>(body_);
     }
     // The one request content mapping every protocol consumes: an upload
     // streams, a buffered body is borrowed bytes, otherwise none.
@@ -188,7 +199,7 @@ private:
     std::string method_;
     std::string target_;
     std::vector<http_header> headers_;
-    std::string body_;
+    std::variant<std::monostate, std::string, std::shared_ptr<const std::string>> body_;
     std::string tunnel_authority_;
     std::string tunnel_protocol_;
     std::shared_ptr<http_client_websocket_handshake> websocket_;
@@ -196,7 +207,6 @@ private:
     bool is_tunnel_{};
     bool is_upgrade_{false};
     http_client_tunnel_state* tunnel_{};
-    bool has_body_{false};
     http_client_upload_state* upload_{};
     // The normalized authority override that route() views.
     std::string route_authority_;
