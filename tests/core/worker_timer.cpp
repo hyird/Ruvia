@@ -956,6 +956,58 @@ TEST(Ruvia, TimerReentrantCancellationPreservesLaterExpiration) {
     attachment.request_stop();
     attachment.run();
 }
+
+TEST(Ruvia, TimerExpirationReleasesRegistrationBeforeMovingCallback) {
+    struct rearm_on_move final {
+        ruvia::move_only_function<void()>& rearm_;
+        std::optional<ruvia::worker_timer_outcome>& outcome_;
+
+        rearm_on_move(ruvia::move_only_function<void()>& rearm, std::optional<ruvia::worker_timer_outcome>& outcome) noexcept :
+            rearm_(rearm),
+            outcome_(outcome) {}
+
+        rearm_on_move(rearm_on_move&& other) noexcept :
+            rearm_(other.rearm_),
+            outcome_(other.outcome_) {
+            if (auto rearm = std::move(rearm_)) {
+                rearm();
+            }
+        }
+
+        void operator()(ruvia::worker_timer_outcome outcome) const noexcept {
+            outcome_ = outcome;
+        }
+    };
+
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context);
+    const auto loop = attachment.loop();
+    const auto& worker = loop.worker();
+    ruvia::move_only_function<void()> rearm;
+    std::optional<ruvia::worker_timer_outcome> first;
+    std::optional<ruvia::worker_timer_outcome> second;
+    ruvia::worker_timer_registration registration;
+    asio::post(io_context, [&] {
+        const auto due = std::chrono::steady_clock::time_point::min();
+        EXPECT_TRUE(registration.schedule(worker, due, rearm_on_move(rearm, first)));
+        rearm = [&, due] {
+            try {
+                EXPECT_TRUE(registration.schedule(worker, due, [&](ruvia::worker_timer_outcome outcome) {
+                    EXPECT_EQ(first, ruvia::worker_timer_outcome::expired);
+                    second = outcome;
+                }));
+            } catch (const std::logic_error& error) {
+                ADD_FAILURE() << error.what();
+            }
+        };
+    });
+    io_context.run_for(std::chrono::seconds(1));
+    EXPECT_EQ(first, ruvia::worker_timer_outcome::expired);
+    EXPECT_EQ(second, ruvia::worker_timer_outcome::expired);
+    attachment.request_stop();
+    attachment.run();
+}
+
 TEST(Ruvia, TimerSelfReschedulingYieldsToOtherHandlers) {
     EXPECT_TRUE(self_rescheduling_due_timer_yields_to_other_handlers());
 }

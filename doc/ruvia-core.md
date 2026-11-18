@@ -947,7 +947,7 @@ flowchart LR
 | `[[nodiscard]] bool registered() const noexcept;` | 绑定到某个 Worker；到期不经借用注册写回，由其稳定所有者之后释放或复用 |
 
 - **完成线程**：完成回调在绑定 Worker 线程调用。
-- **重入取消**：先从到期队列注销，再移出完成对象；对象的移动或析构可取消同一 Worker 上的其他定时器。
+- **重入**：先撤销旧定时器的活动代际，再移出完成对象；移出期间可复用同一注册或取消同一 Worker 上的其他定时器，原槽位在移出完成前不复用。
 - **跨 Worker 复用**：到期或取消后可登记到另一个 Worker；该 Worker 以 acquire/release 次序观察释放，经完成得知到期的调用方即可复用。
 
 **`class wait_bounds final`**：一次 Worker 绑定等待的截止期部分（启动时的 `operation_options`、启动时解析的截止期与结束它的定时器）。停止投递留给所有者：持锁内联或按 id 跳回 Worker。

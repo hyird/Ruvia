@@ -523,10 +523,12 @@ move_only_function<void(worker_timer_outcome)> worker_dispatcher::release_timer_
     auto& slot = timer_slots_[slot_index];
     slot.occupied_ = false;
     slot.cancel_requested_ = false;
+    // A callback move can rearm its registration, but cannot reuse this slot
+    // until the move has finished.
+    slot.active_generation_.store(0, std::memory_order_release);
     auto completion = std::move(slot.completion_);
     slot.next_free_ = free_timer_slot_;
     free_timer_slot_ = slot_index;
-    slot.active_generation_.store(0, std::memory_order_release);
     return completion;
 }
 
