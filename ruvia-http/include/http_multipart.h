@@ -263,7 +263,7 @@ public:
 
     // If owning part metadata throws, the part stays pending without consuming
     // its limits. poll() may be retried after allocations become available.
-    [[nodiscard]] multipart_poll_result poll();
+    [[nodiscard]] multipart_poll_result poll() RUVIA_LIFETIMEBOUND;
 
     [[nodiscard]] decoder_state state() const noexcept;
     // Starts a new body with the constructed boundary and limits, keeping
@@ -273,7 +273,7 @@ public:
 private:
     struct complete_input_tag_type final {};
 
-    friend multipart_body_parse_result parse_multipart_body(std::string_view, multipart_parse_options);
+    friend multipart_body_parse_result parse_multipart_body(std::string_view body RUVIA_LIFETIMEBOUND, multipart_parse_options options);
 
     multipart_parser(std::string_view complete_body, multipart_parse_options options, complete_input_tag_type);
 
@@ -326,7 +326,7 @@ private:
 // Parses a complete multipart/form-data body without I/O. Returned part bodies
 // borrow `body`. Names, filenames, and Content-Type values from unfolded header
 // blocks own string storage; unmodified header blocks keep borrowing `body`.
-[[nodiscard]] multipart_body_parse_result parse_multipart_body(std::string_view body, multipart_parse_options options);
+[[nodiscard]] multipart_body_parse_result parse_multipart_body(std::string_view body RUVIA_LIFETIMEBOUND, multipart_parse_options options);
 
 template <detail::http_temporary_owning_char_string body_type>
 multipart_body_parse_result parse_multipart_body(body_type&&, multipart_parse_options) = delete;

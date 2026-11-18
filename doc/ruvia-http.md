@@ -3577,12 +3577,12 @@ public:
     multipart_parser& operator=(multipart_parser&&) = delete;
     void feed(std::string_view chunk);
     void finish_input() noexcept;
-    [[nodiscard]] multipart_poll_result poll();
+    [[nodiscard]] multipart_poll_result poll() RUVIA_LIFETIMEBOUND;
     [[nodiscard]] decoder_state state() const noexcept;
     void reset() noexcept;
 };
 
-[[nodiscard]] multipart_body_parse_result parse_multipart_body(std::string_view body, multipart_parse_options options);
+[[nodiscard]] multipart_body_parse_result parse_multipart_body(std::string_view body RUVIA_LIFETIMEBOUND, multipart_parse_options options);
 template </* 未指定实现类型：拥有字符的临时字符串 */ body_type>
 multipart_body_parse_result parse_multipart_body(body_type&&, multipart_parse_options) = delete;
 ```
