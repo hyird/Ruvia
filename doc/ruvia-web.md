@@ -2334,8 +2334,8 @@ if (const auto decision = limiter.decide(c.conn().client().address()); !decision
 | `inline constexpr std::size_t rate_limit_key_buffer_bytes = 48` | `format_rate_limit_address_key` 所需缓冲容量（`"v6s/"` + 32 hex + `/` + 至多 10 位 scope） |
 | `inline constexpr std::size_t default_rate_limit_capacity_per_worker = 8192` | 有宿主级规则或路由级限流时每 worker 预分配的键槽数 |
 | `enum class rate_limit_overflow_policy : std::uint8_t { deny, allow }` | 探测段已满时：`deny` 拒绝，`allow` 放行 |
-| `std::string_view format_rate_limit_address_key(const ip_address& address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept` | 把地址规范化为限流键，写入 `buffer` 并返回其视图（[`ip_address`](ruvia-http.md#api-ip-address-h)） |
-| `std::string_view format_rate_limit_address_key(std::string_view address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept` | 同上，文本地址 |
+| `std::string_view format_rate_limit_address_key(const ip_address& address, std::span<char, rate_limit_key_buffer_bytes> buffer RUVIA_LIFETIMEBOUND) noexcept` | 把地址规范化为限流键，写入 `buffer` 并借用其存储（[`ip_address`](ruvia-http.md#api-ip-address-h)） |
+| `std::string_view format_rate_limit_address_key(std::string_view address RUVIA_LIFETIMEBOUND, std::span<char, rate_limit_key_buffer_bytes> buffer RUVIA_LIFETIMEBOUND) noexcept` | 可解析时借用 `buffer`；否则原样借用 `address`。删除重载拒绝传入临时拥有型字符串 |
 | `void apply_rate_limit_headers(http_response& response, const rate_limit_decision& decision)` | 写入 `Retry-After`（拒绝时）与 `X-RateLimit-*` 头 |
 
 `rate_limit_rule`：

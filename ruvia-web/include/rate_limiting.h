@@ -7,6 +7,7 @@
 #include <span>
 #include <string_view>
 
+#include "borrowed_text.h"
 #include "http_response.h"
 #include "ip_address.h"
 #include "middleware.h"
@@ -61,8 +62,11 @@ struct rate_limit_config final {
 // - IPv4 and IPv4-mapped IPv6 share the canonical dotted IPv4 host key;
 // - Unscoped IPv6 is grouped by its /64 network prefix ("v6/<16 hex>");
 // - Scoped IPv6 keys on its full 128-bit address and numeric scope ("v6s/<32 hex>/<scope>").
-[[nodiscard]] std::string_view format_rate_limit_address_key(const ip_address& address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept;
-[[nodiscard]] std::string_view format_rate_limit_address_key(std::string_view address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept;
+[[nodiscard]] std::string_view format_rate_limit_address_key(const ip_address& address, std::span<char, rate_limit_key_buffer_bytes> buffer RUVIA_LIFETIMEBOUND) noexcept;
+// Unrecognized text is returned unchanged, borrowing address instead of buffer.
+[[nodiscard]] std::string_view format_rate_limit_address_key(std::string_view address RUVIA_LIFETIMEBOUND, std::span<char, rate_limit_key_buffer_bytes> buffer RUVIA_LIFETIMEBOUND) noexcept;
+template <detail::http_temporary_owning_char_string address_type>
+std::string_view format_rate_limit_address_key(address_type&&, std::span<char, rate_limit_key_buffer_bytes>) = delete;
 
 struct rate_limit_decision final {
     bool allowed_{true};

@@ -8,6 +8,7 @@
 #include <mutex>
 #include <semaphore>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -32,6 +33,7 @@
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "middleware.h"
+#include "rate_limiting.h"
 #if defined(RUVIA_ENABLE_HTTP2)
 
 #include "http2_connection.h"
@@ -406,6 +408,20 @@ TEST(Ruvia, server_observers_see_client_hellos_and_http2_input_by_connection_id)
     EXPECT_EQ(records().counts(), observed);
 }
 
+namespace {
+
+template <typename address_type>
+concept can_format_rate_limit_address_key = requires(address_type&& address, std::span<char, ruvia::rate_limit_key_buffer_bytes> buffer) {
+    ruvia::format_rate_limit_address_key(std::forward<address_type>(address), buffer);
+};
+
+static_assert(can_format_rate_limit_address_key<const std::string&>);
+static_assert(can_format_rate_limit_address_key<std::string_view>);
+static_assert(can_format_rate_limit_address_key<ruvia::ip_address>);
+static_assert(!can_format_rate_limit_address_key<std::string>);
+
+}  // namespace
+
 TEST(Ruvia, standalone_sliding_window_rate_limiter_and_address_key_canonicalization) {
     std::array<char, ruvia::rate_limit_key_buffer_bytes> buf1{};
     std::array<char, ruvia::rate_limit_key_buffer_bytes> buf2{};
@@ -416,6 +432,10 @@ TEST(Ruvia, standalone_sliding_window_rate_limiter_and_address_key_canonicalizat
     const auto v4 = ruvia::format_rate_limit_address_key("192.0.2.9", buf1);
     const auto mapped = ruvia::format_rate_limit_address_key("::ffff:192.0.2.9", buf2);
     EXPECT_EQ(v4, mapped);
+    EXPECT_EQ(v4.data(), buf1.data());
+
+    const std::string unparsed = "local-transport";
+    EXPECT_EQ(ruvia::format_rate_limit_address_key(unparsed, buf1).data(), unparsed.data());
 
     ruvia::sliding_window_rate_limiter limiter({
         .rule_ = {.max_requests_ = 2, .window_ = std::chrono::seconds(10)},
