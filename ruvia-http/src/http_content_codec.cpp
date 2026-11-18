@@ -164,13 +164,17 @@ http_content_encoder::~http_content_encoder() {
 }
 
 void http_content_encoder::write(std::string_view input, std::string& output, bool flush) {
-    if (phase_ != phase::active) {
+    if (phase_ == phase::finished || phase_ == phase::failed) {
         throw std::logic_error("HTTP content encoder is no longer writable");
     }
+    if (input.empty() && (impl_ == nullptr || !flush)) {
+        return;
+    }
+    phase_ = phase::streaming;
     try {
         if (impl_ == nullptr) {
             detail::append_http_text(output, input);
-        } else if (!input.empty() || flush) {
+        } else {
             // An unlimited cap cannot be exceeded.
             if (detail::http_text_aliases_string(input, output)) {
                 // Appending codec output can reallocate the caller's string
@@ -207,8 +211,8 @@ void http_content_encoder::finish(std::string& output) {
 }
 
 std::optional<std::string> http_content_encoder::encode(std::string_view input, http_content_encode_options options) {
-    if (phase_ != phase::active) {
-        throw std::logic_error("HTTP content encoder is no longer writable");
+    if (phase_ != phase::fresh) {
+        throw std::logic_error("whole-buffer encoding requires a fresh HTTP content encoder");
     }
     std::string output;
     bool fits = false;
@@ -241,7 +245,7 @@ void http_content_encoder::reset() {
             throw;
         }
     }
-    phase_ = phase::active;
+    phase_ = phase::fresh;
 }
 
 http_worker_codecs::~http_worker_codecs() {

@@ -364,6 +364,26 @@ TEST(RuviaHttpPublicApi, content_codec_shared_request_budget_is_not_per_instance
     EXPECT_EQ(memory.live_bytes(), 0U);
 }
 
+TEST(RuviaHttpPublicApi, content_encoder_keeps_one_shot_and_streaming_representations_separate) {
+    for (const auto coding : {http_content_coding::identity, http_content_coding::gzip}) {
+        SCOPED_TRACE(static_cast<int>(coding));
+        http_content_encoder encoder(coding);
+        std::string output;
+        encoder.write("prefix", output, true);
+        EXPECT_THROW((void)encoder.encode("suffix", {.max_encoded_bytes_ = 1024}), std::logic_error);
+        ASSERT_EQ(encoder.state(), ruvia::decoder_state::active);
+        encoder.write("suffix", output);
+        encoder.finish(output);
+        EXPECT_EQ(decoded(coding, output, 12), "prefixsuffix");
+
+        encoder.reset();
+        encoder.write({}, output);
+        const auto encoded = encoder.encode("fresh", {.max_encoded_bytes_ = 1024});
+        ASSERT_TRUE(encoded.has_value());
+        EXPECT_EQ(decoded(coding, *encoded, 5), "fresh");
+    }
+}
+
 TEST(RuviaHttpPublicApi, content_encoder_accepts_coding_specific_levels_and_preserves_them_on_reset) {
     const std::string plain(512, 'l');
     for (const auto coding : {http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {

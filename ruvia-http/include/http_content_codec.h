@@ -140,20 +140,35 @@ public:
     void finish(std::string& output);
     // One complete representation within the exact output cap. nullopt means
     // only that max_encoded_bytes_ would be exceeded; zero permits only a
-    // zero-byte encoding. Consumes the stream like write() plus finish();
-    // reset() before the next representation.
+    // zero-byte encoding. Requires a fresh stream: after an incremental
+    // write that consumes input or flushes a codec, encode() throws without
+    // changing the stream. reset() before the next representation.
     [[nodiscard]] std::optional<std::string> encode(std::string_view input, http_content_encode_options options);
     void reset();
     [[nodiscard]] decoder_state state() const noexcept {
-        return phase_;
+        switch (phase_) {
+            case phase::fresh:
+            case phase::streaming:
+                return decoder_state::active;
+            case phase::finished:
+                return decoder_state::finished;
+            case phase::failed:
+                return decoder_state::failed;
+        }
+        std::terminate();
     }
 
 private:
     struct impl_type;
-    using phase = decoder_state;
+    enum class phase : std::uint8_t {
+        fresh,
+        streaming,
+        finished,
+        failed,
+    };
     http_content_coding coding_;
     impl_type* impl_{nullptr};
-    phase phase_{phase::active};
+    phase phase_{phase::fresh};
 };
 
 // A fresh http_content_encoder's encode().

@@ -3313,11 +3313,11 @@ public:
 | `coding()` | 构造时的 coding。 |
 | `write(input, output, flush = false)` | 消费全部 `input` 并把编码字节追加到调用方拥有的 `output`，不保留任一视图。`input` 可以借用 `output`，包括末尾的 NUL；压缩写入在追加可能使其失效前先做快照。`flush == true` 时输出所有待发字节，用于 SSE 等低延迟流。空输入合法（包括重复 flush），不结束流。 |
 | `finish(output)` | 结束流并追加剩余字节；幂等。 |
-| `encode(input, options)` | 在 `max_encoded_bytes_` 精确输出上限内编码一个完整表示（上限语义见 [7.2.1](#api-http-content-codec-h)）。等同 `write()` + `finish()` 消费流，下一个表示前须 `reset()`。 |
+| `encode(input, options)` | 在 `max_encoded_bytes_` 精确输出上限内编码一个完整表示（上限语义见 [7.2.1](#api-http-content-codec-h)）。只接受新流；增量写入已消费输入或已刷新编解码器时，抛 `std::logic_error` 且不改变流，调用方仍可继续 `write()` 或 `finish()`。 |
 | `reset()` | 让任意阶段的编码器回到全新活动流。zlib 与 zstd 复用工作内存；Brotli 无原生重置，重建状态可能分配。重置失败（抛异常）使编码器保持 `failed`。 |
-| `state()` | `active`：可 `write()` / `encode()`；`finished`：成功 `finish()` 或 `encode()`（含返回 `std::nullopt`）之后；`failed`：活动流编码或重置期间抛出异常后，包括 `identity` 复制输出时的分配失败。只有成功的 `reset()` 回到 `active`。 |
+| `state()` | `active`：可 `write()`，新流还可 `encode()`；`finished`：成功 `finish()` 或 `encode()`（含返回 `std::nullopt`）之后；`failed`：编码或重置过程中抛出异常后。只有成功的 `reset()` 回到初始状态。 |
 
-状态规则：任何异常都是终态，因为输入/输出可能已部分推进。`finished` 时 `write()` / `encode()` 抛 `std::logic_error` 且不改变 `output`，`finish()` 为无操作；`failed` 时 `write()` / `finish()` / `encode()` 抛 `std::logic_error`。`coding()` 与 `state()` 在任何状态可用。`output` 可以在调用之间清空，并在编码器销毁后仍有效。分配异常在编解码器经其 C API 返回时保留原类型；内部 OOM 时直接退出的 Brotli 构建无法在此边界恢复。
+状态规则：编码过程中抛出的异常使流进入终态，因为输入/输出可能已部分推进。`finished` 时 `write()` / `encode()` 抛 `std::logic_error` 且不改变 `output`，`finish()` 为无操作；`failed` 时 `write()` / `finish()` / `encode()` 抛 `std::logic_error`。`coding()` 与 `state()` 在任何状态可用。`output` 可以在调用之间清空，并在编码器销毁后仍有效。分配异常在编解码器经其 C API 返回时保留原类型；内部 OOM 时直接退出的 Brotli 构建无法在此边界恢复。
 
 #### 7.2.3 `class http_worker_codecs` 与 `class http_content_encoder_lease`
 
