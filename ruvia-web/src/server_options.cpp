@@ -69,7 +69,7 @@ void connection_failure_sink::invoke(ip_address remote_address, std::exception_p
 }
 
 void connection_failure_sink::invoke(std::string_view remote_address, std::exception_ptr exception) const noexcept {
-    invoke(ip_address::parse(remote_address).value_or(ip_address{}), std::move(exception));
+    invoke(ip_address::try_parse(remote_address).value_or(ip_address{}), std::move(exception));
 }
 
 void http_server_options::set_server(const server_config& config) {

@@ -40,25 +40,25 @@ public:
         normalize_host();
     }
 
-    void add_configured_cookie(std::string_view name, std::string_view value);
+    void set_cookie(std::string_view name, std::string_view value);
     template <std::same_as<std::string> name_type>
-    void add_configured_cookie(name_type&& name, std::string_view value) {
-        add_configured_cookie_impl(name, value, &name, nullptr);
+    void set_cookie(name_type&& name, std::string_view value) {
+        set_cookie_impl(name, value, &name, nullptr);
     }
     template <std::same_as<std::string> value_type>
-    void add_configured_cookie(std::string_view name, value_type&& value) {
-        add_configured_cookie_impl(name, value, nullptr, &value);
+    void set_cookie(std::string_view name, value_type&& value) {
+        set_cookie_impl(name, value, nullptr, &value);
     }
     template <std::same_as<std::string> name_type, std::same_as<std::string> value_type>
-    void add_configured_cookie(name_type&& name, value_type&& value) {
-        add_configured_cookie_impl(name, value, &name, &value);
+    void set_cookie(name_type&& name, value_type&& value) {
+        set_cookie_impl(name, value, &name, &value);
     }
 
-    bool absorb_set_cookie(std::string_view request_target, std::string_view set_cookie_value, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
+    [[nodiscard]] bool apply_set_cookie(std::string_view request_target, std::string_view set_cookie_value, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
 
-    void retain_response_cookies(std::string_view request_target, const http_header_range_view& headers, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
+    void apply_response_cookies(std::string_view request_target, const http_header_range_view& headers, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
 
-    [[nodiscard]] std::string cookie_header(std::string_view request_target, bool include_received = true, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
+    [[nodiscard]] std::string format_cookie_header(std::string_view request_target, bool include_received = true, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
 
     template <typename fn_type>
     void visit_matching_cookies(std::string_view request_target, bool include_received, std::chrono::system_clock::time_point now, fn_type&& fn) {
@@ -143,7 +143,7 @@ private:
     };
 
     void normalize_host() noexcept;
-    void add_configured_cookie_impl(std::string_view name, std::string_view value, std::string* owned_name, std::string* owned_value);
+    void set_cookie_impl(std::string_view name, std::string_view value, std::string* owned_name, std::string* owned_value);
     [[nodiscard]] std::optional<received_cookie> accept_set_cookie_view(std::string_view request_target, std::string_view set_cookie_value, std::chrono::system_clock::time_point now) const;
     bool store_received_cookie(const received_cookie& cookie);
     void reserve_cookie_slot();

@@ -192,7 +192,7 @@ using http_framed_response_head_plan_result = std::variant<http_framed_response_
     }
     // An empty suppressed HEAD body describes the GET representation only
     // through its declared Content-Length, if any (RFC 9110 section 8.6).
-    if (body_plan.body_suppressed() && body_plan.status_allows_body() && body_plan.explicit_content_length_allowed() && content_length == 0 && (response.has_head_metadata_body() || response_has_known_header(response, response_header_content_length))) {
+    if (body_plan.body_suppressed() && body_plan.status_allows_body() && body_plan.explicit_content_length_allowed() && content_length == 0 && (response.has_head_metadata_only() || response_has_known_header(response, response_header_content_length))) {
         return http_framed_response_head_plan::preserve_explicit(body_plan, response);
     }
     if (body_plan.auto_content_length_allowed()) {

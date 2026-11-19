@@ -38,7 +38,7 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> publish(ruvia::context& c) {
-        const auto body = co_await c.req().body_text();
+        const auto body = co_await c.request().body_text();
         // PUBLISH is an ordinary command on the pooled connections and reports
         // how many subscriber connections received the message.
         const auto receivers = co_await c.redis().publish(channel_name, body);

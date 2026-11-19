@@ -53,7 +53,7 @@ enum class url_decode_mode : std::uint8_t { percent,
 // Decodes the pct-encoded triplet starting at input[index] (RFC 3986 2.1):
 // '%' followed by two hex digits. Returns no value when the triplet is
 // truncated, does not start with '%', or contains a non-hex digit.
-[[nodiscard]] constexpr std::optional<unsigned char> http_try_decode_percent_byte(std::string_view input, std::size_t index) noexcept {
+[[nodiscard]] constexpr std::optional<unsigned char> decode_percent_byte(std::string_view input, std::size_t index) noexcept {
     if (index >= input.size() || input.size() - index < 3 || input[index] != '%') {
         return std::nullopt;
     }
@@ -74,7 +74,7 @@ enum class url_decode_mode : std::uint8_t { percent,
 
 // Appends the canonical uppercase pct-encoded triplet for byte. Callers own the
 // policy deciding which bytes need escaping. Failure leaves output unchanged.
-inline void http_append_percent_byte(std::string& output, unsigned char byte) {
+inline void append_percent_byte(std::string& output, unsigned char byte) {
     const char triplet[]{'%', http_upper_hex_digit(byte >> 4), http_upper_hex_digit(byte)};
     output.append(triplet, sizeof(triplet));
 }
@@ -116,12 +116,12 @@ template <typename visitor_type>
 
 }  // namespace detail
 
-[[nodiscard]] inline bool validate_url_encoding(std::string_view value) noexcept {
+[[nodiscard]] inline bool is_valid_url_encoding(std::string_view value) noexcept {
     for (std::size_t i = 0; i < value.size(); ++i) {
         if (value[i] != '%') {
             continue;
         }
-        if (!http_try_decode_percent_byte(value, i)) {
+        if (!decode_percent_byte(value, i)) {
             return false;
         }
         i += 2;
@@ -141,7 +141,7 @@ template <typename visitor_type>
         if ((mode == url_decode_mode::form || mode == url_decode_mode::strict_form) && c == '+') {
             c = ' ';
         } else if (c == '%') {
-            if (const auto byte = http_try_decode_percent_byte(input, i)) {
+            if (const auto byte = decode_percent_byte(input, i)) {
                 if (mode == url_decode_mode::path && (*byte == '/' || *byte == '\\')) {
                     return std::nullopt;
                 }
@@ -187,7 +187,7 @@ inline constexpr int uri_path_separator_unit = 0x100;
         return uri_path_separator_unit;
     }
     if (c == '%') {
-        const auto byte = http_try_decode_percent_byte(path, index);
+        const auto byte = decode_percent_byte(path, index);
         if (!byte) {
             ++index;
             return -1;

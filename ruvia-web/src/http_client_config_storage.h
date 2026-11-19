@@ -97,7 +97,7 @@ inline void validate_http_client_versions(const http_client_versions& versions, 
     }
     auto result = spec;
     if (authority) {
-        result.origin_ = http_origin_view::for_scheme(spec.scheme_, {.host_ = authority->host(), .port_ = authority->port()});
+        result.origin_ = http_origin_view(spec.scheme_, {.host_ = authority->host(), .port_ = authority->port()});
     }
     auto host = result.origin_ ? result.origin_->host() : std::string_view{};
     if (host.starts_with('[')) {
@@ -228,7 +228,7 @@ struct http_client_config_storage final {
     // cache the returned view, which borrows uri_host_. Requires fixed_origin_.
     [[nodiscard]] http_origin_view origin() const {
         const http_origin_options options{.host_ = uri_host_, .port_ = port_};
-        return http_origin_view::for_scheme(scheme_, options);
+        return http_origin_view(scheme_, options);
     }
 
 private:
@@ -286,7 +286,7 @@ private:
         uri_host_(spec.origin_ ? spec.origin_->host() : std::string_view{}),
         scheme_(spec.scheme_),
         port_(spec.origin_ ? spec.origin_->port() : (spec.scheme_ == http_scheme::https ? 443 : 80)),
-        authority_(spec.origin_ ? make_http_origin_authority(origin()) : std::string{}),
+        authority_(spec.origin_ ? format_http_origin_authority(origin()) : std::string{}),
         connection_limits_(source_value.connection_limits_),
         max_concurrent_http2_streams_per_connection_(source_value.max_concurrent_http2_streams_per_connection_),
         max_buffered_requests_(source_value.max_buffered_requests_),

@@ -194,7 +194,7 @@ TEST(Ruvia, app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pen
     configure();
     app.request_stop();
     app.run();
-    EXPECT_TRUE(app.workers().empty());
+    EXPECT_TRUE(app.worker_refs().empty());
     EXPECT_EQ(observed->live_.load(), 0U);
     const auto cold_destroyed = observed->destroyed_.load();
     for (unsigned cycle = 0; cycle != 3; ++cycle) {
@@ -243,7 +243,7 @@ TEST(Ruvia, app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pen
         EXPECT_EQ(observed->live_.load(), 0U);
         EXPECT_EQ(observed->destroyed_.load(), cold_destroyed + (cycle + 1) * 3U);
         EXPECT_EQ(observed->wrong_owner_.load(), 0U);
-        EXPECT_TRUE(app.workers().empty());
+        EXPECT_TRUE(app.worker_refs().empty());
         for (const auto& endpoint : {http, https}) {
             asio::ip::tcp::socket closed(io);
             asio::error_code error;

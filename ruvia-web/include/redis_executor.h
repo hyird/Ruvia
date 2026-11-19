@@ -171,7 +171,7 @@ struct redis_stream_read_view final {
     borrowed_text id_{};
 };
 
-enum class redis_x_read_group_acknowledgement_policy : std::uint8_t {
+enum class redis_xread_group_acknowledgement_policy : std::uint8_t {
     track_pending,
     no_ack,
 };
@@ -198,10 +198,10 @@ public:
 static_assert(std::is_trivially_copyable_v<redis_positive_count>);
 static_assert(sizeof(redis_positive_count) == sizeof(std::uint64_t));
 
-struct redis_x_read_group_options final {
+struct redis_xread_group_options final {
     std::optional<redis_positive_count> count_{};
     std::optional<redis_block_wait> block_{};
-    redis_x_read_group_acknowledgement_policy acknowledgement_{redis_x_read_group_acknowledgement_policy::track_pending};
+    redis_xread_group_acknowledgement_policy acknowledgement_{redis_xread_group_acknowledgement_policy::track_pending};
 };
 
 enum class redis_set_condition : std::uint8_t {
@@ -440,8 +440,8 @@ private:
 
 // SCAN / SSCAN yield keys or members, HSCAN field-value pairs, ZSCAN scored members.
 using redis_scan_result = redis_scan_page<std::string>;
-using redis_hash_scan_result = redis_scan_page<redis_key_value>;
-using redis_z_scan_result = redis_scan_page<redis_scored_value>;
+using redis_hscan_result = redis_scan_page<redis_key_value>;
+using redis_zscan_result = redis_scan_page<redis_scored_value>;
 
 class redis_stream_entry final {
 public:
@@ -562,6 +562,7 @@ public:
     [[nodiscard]] std::vector<redis_value> take_array() &&;
 
     template <detail::text_scalar t_type>
+        requires(!std::same_as<t_type, std::string_view>)
     [[nodiscard]] std::optional<t_type> as() const& {
         if (is_null()) {
             return std::nullopt;
@@ -585,6 +586,13 @@ public:
             }
         }
         return detail::convert_text<t_type>(string());
+    }
+    template <std::same_as<std::string_view> t_type>
+    [[nodiscard]] std::optional<t_type> as() const& RUVIA_LIFETIMEBOUND {
+        if (is_null()) {
+            return std::nullopt;
+        }
+        return detail::convert_text<std::string_view>(string());
     }
     template <detail::text_scalar t_type>
     [[nodiscard]] std::optional<t_type> as() const&& = delete;
@@ -799,7 +807,7 @@ private:                                                                        
     RUVIA_REDIS_COMMAND(std::int64_t, srem, (std::string_view key, std::string_view member), (std::string_view key, std::string_view member), (key, member))
     RUVIA_REDIS_COMMAND(std::vector<std::string>, smembers, (std::string_view key), (std::string_view key), (key))
     RUVIA_REDIS_COMMAND(std::int64_t, scard, (std::string_view key), (std::string_view key), (key))
-    RUVIA_REDIS_COMMAND(bool, sismember, (std::string_view key, std::string_view member), (std::string_view key, std::string_view member), (key, member))
+    RUVIA_REDIS_COMMAND(bool, sis_member, (std::string_view key, std::string_view member), (std::string_view key, std::string_view member), (key, member))
     RUVIA_REDIS_COMMAND(std::optional<std::string>, spop, (std::string_view key), (std::string_view key), (key))
     RUVIA_REDIS_COMMAND(std::optional<std::string>, srand_member, (std::string_view key), (std::string_view key), (key))
     RUVIA_REDIS_COMMAND(std::vector<std::string>, sinter, (std::span<const std::string_view> keys), (std::span<const std::string_view> keys), (keys))
@@ -813,9 +821,9 @@ private:                                                                        
     RUVIA_REDIS_COMMAND(std::int64_t, zcard, (std::string_view key), (std::string_view key), (key))
     RUVIA_REDIS_COMMAND(std::int64_t, zcount, (std::string_view key, double min, double max), (std::string_view key, double min, double max), (key, min, max))
     RUVIA_REDIS_COMMAND(redis_scan_result, scan, (redis_scan_options options = {}), (redis_scan_options options), (options))
-    RUVIA_REDIS_COMMAND(redis_hash_scan_result, hscan, (std::string_view key, redis_scan_options options = {}), (std::string_view key, redis_scan_options options), (key, options))
+    RUVIA_REDIS_COMMAND(redis_hscan_result, hscan, (std::string_view key, redis_scan_options options = {}), (std::string_view key, redis_scan_options options), (key, options))
     RUVIA_REDIS_COMMAND(redis_scan_result, sscan, (std::string_view key, redis_scan_options options = {}), (std::string_view key, redis_scan_options options), (key, options))
-    RUVIA_REDIS_COMMAND(redis_z_scan_result, zscan, (std::string_view key, redis_scan_options options = {}), (std::string_view key, redis_scan_options options), (key, options))
+    RUVIA_REDIS_COMMAND(redis_zscan_result, zscan, (std::string_view key, redis_scan_options options = {}), (std::string_view key, redis_scan_options options), (key, options))
     RUVIA_REDIS_COMMAND(redis_value, eval, (std::string_view script, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {}), (std::string_view script, std::span<const std::string_view> keys, std::span<const std::string_view> args), (script, keys, args))
     RUVIA_REDIS_COMMAND(redis_value, eval_sha, (std::string_view sha1, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {}), (std::string_view sha1, std::span<const std::string_view> keys, std::span<const std::string_view> args), (sha1, keys, args))
     RUVIA_REDIS_COMMAND(std::string, script_load, (std::string_view script), (std::string_view script), (script))
@@ -1055,14 +1063,20 @@ enum class redis_pubsub_confirmation_kind : std::uint8_t {
 
 class redis_pubsub_confirmation final {
 public:
+    redis_pubsub_confirmation(const redis_pubsub_confirmation&) = delete;
+    redis_pubsub_confirmation& operator=(const redis_pubsub_confirmation&) = delete;
+    redis_pubsub_confirmation(redis_pubsub_confirmation&&) noexcept = default;
+    redis_pubsub_confirmation& operator=(redis_pubsub_confirmation&&) noexcept = default;
+
     [[nodiscard]] redis_pubsub_confirmation_kind kind() const noexcept {
         return kind_;
     }
     // Present empty names are legal. Absence is Redis's nil confirmation when
     // an unsubscribe-all command has no matching subscriptions to remove.
-    [[nodiscard]] std::optional<std::string_view> name() const noexcept {
+    [[nodiscard]] std::optional<std::string_view> name() const& noexcept RUVIA_LIFETIMEBOUND {
         return name_;
     }
+    std::optional<std::string_view> name() const&& = delete;
     [[nodiscard]] std::int64_t subscription_count() const noexcept {
         return subscription_count_;
     }
@@ -1081,17 +1095,25 @@ private:
 
 class redis_pubsub_message final {
 public:
-    [[nodiscard]] std::string_view channel() const noexcept {
+    redis_pubsub_message(const redis_pubsub_message&) = delete;
+    redis_pubsub_message& operator=(const redis_pubsub_message&) = delete;
+    redis_pubsub_message(redis_pubsub_message&&) noexcept = default;
+    redis_pubsub_message& operator=(redis_pubsub_message&&) noexcept = default;
+
+    [[nodiscard]] std::string_view channel() const& noexcept RUVIA_LIFETIMEBOUND {
         return channel_;
     }
+    std::string_view channel() const&& = delete;
     // Absence means a direct message; a present empty pattern is still a
     // pattern delivery. Neither channel nor payload has an absence sentinel.
-    [[nodiscard]] std::optional<std::string_view> pattern() const noexcept {
+    [[nodiscard]] std::optional<std::string_view> pattern() const& noexcept RUVIA_LIFETIMEBOUND {
         return pattern_;
     }
-    [[nodiscard]] std::string_view payload() const noexcept {
+    std::optional<std::string_view> pattern() const&& = delete;
+    [[nodiscard]] std::string_view payload() const& noexcept RUVIA_LIFETIMEBOUND {
         return payload_;
     }
+    std::string_view payload() const&& = delete;
 
 private:
     friend struct detail::redis_types_access;
@@ -1110,6 +1132,11 @@ private:
 // Copy text that must outlive that boundary.
 class redis_pubsub_event final {
 public:
+    redis_pubsub_event(const redis_pubsub_event&) = delete;
+    redis_pubsub_event& operator=(const redis_pubsub_event&) = delete;
+    redis_pubsub_event(redis_pubsub_event&&) noexcept = default;
+    redis_pubsub_event& operator=(redis_pubsub_event&&) noexcept = default;
+
     [[nodiscard]] const redis_pubsub_confirmation* confirmation() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<redis_pubsub_confirmation>(&value_);
     }
@@ -1122,9 +1149,9 @@ public:
 private:
     friend struct detail::redis_types_access;
     explicit redis_pubsub_event(redis_pubsub_confirmation value) noexcept :
-        value_(value) {}
+        value_(std::move(value)) {}
     explicit redis_pubsub_event(redis_pubsub_message value) noexcept :
-        value_(value) {}
+        value_(std::move(value)) {}
 
     std::variant<redis_pubsub_confirmation, redis_pubsub_message> value_;
 };
@@ -1283,10 +1310,10 @@ public:
 
     // EVALSHA, falling back to EVAL only for NOSCRIPT, under one deadline.
     // Owns the script and all keys/arguments before returning the cold task.
-    [[nodiscard]] task<redis_value> eval_cached(const redis_script& script, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {}) const;
-    task<redis_value> eval_cached(const redis_script&, std::initializer_list<std::string_view>, std::span<const std::string_view> = {}) const = delete;
-    task<redis_value> eval_cached(const redis_script&, std::span<const std::string_view>, std::initializer_list<std::string_view>) const = delete;
-    task<redis_value> eval_cached(const redis_script&, std::initializer_list<std::string_view>, std::initializer_list<std::string_view>) const = delete;
+    [[nodiscard]] task<redis_value> eval_script(const redis_script& script, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {}) const;
+    task<redis_value> eval_script(const redis_script&, std::initializer_list<std::string_view>, std::span<const std::string_view> = {}) const = delete;
+    task<redis_value> eval_script(const redis_script&, std::span<const std::string_view>, std::initializer_list<std::string_view>) const = delete;
+    task<redis_value> eval_script(const redis_script&, std::initializer_list<std::string_view>, std::initializer_list<std::string_view>) const = delete;
 
     // Every command owns its arguments before this call returns.
     template <typename... args_type>
@@ -1310,11 +1337,11 @@ public:
     [[nodiscard]] task<std::optional<redis_key_value>> brpop(std::span<const std::string_view> keys, redis_block_wait wait) const;
     task<std::optional<redis_key_value>> brpop(std::initializer_list<std::string_view> keys, redis_block_wait wait) const = delete;
     // std::nullopt is the server's nil reply: no stream returned an entry.
-    [[nodiscard]] task<std::optional<std::vector<redis_stream_read_result>>> xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_x_read_group_options options = {}) const;
-    task<std::optional<std::vector<redis_stream_read_result>>> xread_group(std::string_view group, std::string_view consumer, std::initializer_list<redis_stream_read_view> streams, redis_x_read_group_options options = {}) const = delete;
+    [[nodiscard]] task<std::optional<std::vector<redis_stream_read_result>>> xread_group(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, redis_xread_group_options options = {}) const;
+    task<std::optional<std::vector<redis_stream_read_result>>> xread_group(std::string_view group, std::string_view consumer, std::initializer_list<redis_stream_read_view> streams, redis_xread_group_options options = {}) const = delete;
 
     // 每批命令共享一次租约及同一连接，WAIT/WAITAOF 只保护该批中位于
-    // 屏障之前的写入，不保护此前通过独立 handle 调用完成的写入。
+    // 屏障之前的写入，不保护此前通过独立 executor 调用完成的写入。
     // 迁移示例（不能写成先 co_await set()，再独立 command("WAIT", ...)）：
     //   auto batch = redis.with_options({.timeout_ = std::chrono::seconds(2)}).pipeline();
     //   batch.set("key", "value").command("WAIT", "1", "1000");
@@ -1333,7 +1360,7 @@ public:
     [[nodiscard]] redis_pipeline pipeline() const;
     [[nodiscard]] redis_transaction transaction() const;
 
-    // A dedicated Pub/Sub connection bound to this handle's scope, stop token
+    // A dedicated Pub/Sub connection bound to this executor's scope, stop token
     // and operation timeout. Like an infinite blocking wait, it requires a
     // stoppable token or a finite timeout (std::invalid_argument otherwise).
     [[nodiscard]] redis_subscription subscription() const;
@@ -1363,7 +1390,7 @@ private:
     [[nodiscard]] task<redis_value> command_owned(detail::redis_owned_command&& command) const;
     // ORM scripts run as EVALSHA; a NOSCRIPT reply loads the body through
     // EVAL within the same operation.
-    [[nodiscard]] task<redis_value> script_owned(redis_script script, detail::redis_encoded_script_call&& call) const;
+    [[nodiscard]] task<redis_value> execute_script(redis_script script, detail::redis_encoded_script_call&& call) const;
 
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<result_type> command_mapped(std::vector<std::string>&& args, mapper_type mapper) const {
@@ -1380,7 +1407,7 @@ private:
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<result_type> script_mapped(const redis_script& script, detail::redis_encoded_script_call&& call, mapper_type mapper) const {
         registration_.require_active();
-        return registration_.attach(detail::map_redis_command<result_type>(script_owned(script, std::move(call)), std::move(mapper)));
+        return registration_.attach(detail::map_redis_command<result_type>(execute_script(script, std::move(call)), std::move(mapper)));
     }
 
     // `io_metrics` is the request's counter block, or null outside a request.

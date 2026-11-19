@@ -97,8 +97,8 @@ void exercise_tls_response_retirement(bool join_before_reuse) {
     auto operation = [&]() -> ruvia::task<void> {
         ruvia::stop_source cancellation;
         {
-            auto response = co_await client.client().with_options({.stop_token_ = cancellation.token()}).get("/partial").send();
-            const auto first = co_await response.stream().read_text();
+            auto response = co_await client.ref().with_options({.stop_token_ = cancellation.token()}).get("/partial").send();
+            const auto first = co_await response.body().read_text();
             EXPECT_TRUE(first.has_value());
             EXPECT_TRUE(!first->empty());
             EXPECT_TRUE(first->size() < large.size());
@@ -112,27 +112,27 @@ void exercise_tls_response_retirement(bool join_before_reuse) {
             }));
         }
         if (join_before_reuse) {
-            while (client.client().stats().in_flight_requests_ != 0) {
+            while (client.ref().stats().in_flight_requests_ != 0) {
                 (void)co_await ruvia::async_asio([&io](auto handler) {
                     asio::post(io, [handler = std::move(handler)]() mutable {
                         handler(std::error_code{});
                     });
                 });
             }
-            EXPECT_EQ(client.client().stats().failed_requests_, std::size_t{1});
+            EXPECT_EQ(client.ref().stats().failed_requests_, std::size_t{1});
         }
         for (const auto body : expected) {
-            auto response = co_await client.client().get("/next?exact=body").send();
+            auto response = co_await client.ref().get("/next?exact=body").send();
             EXPECT_TRUE(response.protocol_version() == ruvia::http_protocol_version::http11);
             const auto bytes_value = co_await response.collect_body();
             EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), body);
-            EXPECT_TRUE(!(co_await response.stream().read()));
+            EXPECT_TRUE(!(co_await response.body().read()));
         }
         co_await peer_done.wait();
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
         }
-        EXPECT_EQ(client.client().stats().failed_requests_, std::size_t{1});
+        EXPECT_EQ(client.ref().stats().failed_requests_, std::size_t{1});
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
@@ -191,7 +191,7 @@ TEST(Ruvia, http1_tls_close_delimited_response_requires_close_notify) {
         ruvia::http_client client(worker.attachment_.loop(), config);
         auto operation = [&]() -> ruvia::task<void> {
             const acceptor_closer closer{acceptor};
-            auto response = co_await client.client().get("/close-delimited").send();
+            auto response = co_await client.ref().get("/close-delimited").send();
             std::optional<std::string> body;
             bool truncated = false;
             try {
@@ -270,7 +270,7 @@ TEST(Ruvia, http_client_tls_matches_dns_names_only_against_dns_id_subject_alt_na
             const acceptor_closer closer{acceptor};
             std::optional<std::error_code> failure;
             try {
-                auto response = co_await client.client().get("/identity").send();
+                auto response = co_await client.ref().get("/identity").send();
                 EXPECT_EQ(response.status().value(), std::uint16_t{200});
                 (void)co_await response.collect_body();
             } catch (const ruvia::http_client_error& error) {
@@ -324,7 +324,7 @@ struct tunnel_peer final {
         unsigned completed = 0;
         bool failed = false;
         try {
-            auto result = co_await client.client().connect("target.test:443").connect();
+            auto result = co_await client.ref().connect("target.test:443").open();
             auto tunnel = std::move(*result.tunnel());
             for (; completed != 64; ++completed) {
                 co_await tunnel.stream().write("x");
@@ -401,7 +401,7 @@ TEST(Ruvia, http_client_tls_constructor_defers_credential_io_until_first_request
     run_operation(worker, io, [&]() -> ruvia::task<void> {
         bool failed = false;
         try {
-            (void)co_await client.client().get("/").send();
+            (void)co_await client.ref().get("/").send();
         } catch (const std::system_error&) {
             failed = true;
         }
@@ -463,8 +463,9 @@ void exercise_concurrent_tls_preparation(std::optional<std::size_t> cancelled, b
     }),
         ruvia::post_status::accepted);
     entered.get_future().wait();
-    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &blocking});
-    const auto worker = attachment.loop().worker();
+    auto attachment = ruvia::event_loop_attachment(io, {.blocking_pool_ = &blocking});
+    const auto loop_for_worker = attachment.loop();
+    const auto worker = loop_for_worker.worker();
     asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
     const auto base_url = std::string("https://localhost:").append(std::to_string(acceptor.local_endpoint().port()));
     auto config = local_http_client_config(base_url);
@@ -504,7 +505,7 @@ void exercise_concurrent_tls_preparation(std::optional<std::size_t> cancelled, b
             ++started;
             progress.notify();
             try {
-                auto response = co_await client.client().with_options({.stop_token_ = cancelled == index ? stop.token() : ruvia::stop_token{}}).get("/").send();
+                auto response = co_await client.ref().with_options({.stop_token_ = cancelled == index ? stop.token() : ruvia::stop_token{}}).get("/").send();
                 const auto bytes = co_await response.collect_body();
                 bodies[index].assign(bytes.text());
             } catch (...) {
@@ -606,8 +607,9 @@ TEST(Ruvia, tls_admission_rejection_leaves_credentials_available_for_preparation
     }),
         ruvia::post_status::accepted);
     entered.get_future().wait();
-    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &blocking});
-    const auto worker = attachment.loop().worker();
+    auto attachment = ruvia::event_loop_attachment(io, {.blocking_pool_ = &blocking});
+    const auto loop_for_worker = attachment.loop();
+    const auto worker = loop_for_worker.worker();
     auto config = local_http_client_config("https://127.0.0.1:443");
     config.tls_.ca_file_ = identity.ca_file_.parent_path() / "absent-after-rejection-ca.pem";
     ruvia::http_client client(attachment.loop(), config);
@@ -619,7 +621,7 @@ TEST(Ruvia, tls_admission_rejection_leaves_credentials_available_for_preparation
             ruvia::post_status::accepted);
         std::exception_ptr unexpected;
         try {
-            (void)co_await client.client().get("/").send();
+            (void)co_await client.ref().get("/").send();
             ADD_FAILURE() << "TLS preparation bypassed the full blocking queue";
         } catch (const ruvia::blocking_operation_rejected& error) {
             EXPECT_EQ(error.status(), ruvia::blocking_status::queue_full);
@@ -632,7 +634,7 @@ TEST(Ruvia, tls_admission_rejection_leaves_credentials_available_for_preparation
         // A rejected attempt did not read the file. A later admitted attempt
         // must now report the missing CA, not replay the old queue rejection.
         try {
-            (void)co_await client.client().get("/").send();
+            (void)co_await client.ref().get("/").send();
             ADD_FAILURE() << "TLS preparation ignored a missing CA file";
         } catch (const std::system_error&) {
         } catch (...) {
@@ -664,8 +666,9 @@ void exercise_initial_tls_cancellation(bool raw_tcp, tls_startup_cancel mode) {
         gate.wait();
     }),
         ruvia::post_status::accepted);
-    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &blocking});
-    const auto worker = attachment.loop().worker();
+    auto attachment = ruvia::event_loop_attachment(io, {.blocking_pool_ = &blocking});
+    const auto loop_for_worker = attachment.loop();
+    const auto worker = loop_for_worker.worker();
     auto run = [&]() -> ruvia::task<void> {
         std::unique_ptr<ruvia::tcp_client> tcp;
         std::unique_ptr<ruvia::http_client> http;
@@ -688,7 +691,7 @@ void exercise_initial_tls_cancellation(bool raw_tcp, tls_startup_cancel mode) {
                 if (tcp) {
                     co_await tcp->connect(options);
                 } else {
-                    (void)co_await http->client().with_options(options).get("/").send();
+                    (void)co_await http->ref().with_options(options).get("/").send();
                 }
                 ADD_FAILURE() << "cancelled TLS startup succeeded";
             } catch (const ruvia::http_client_error& error) {
@@ -783,7 +786,7 @@ TEST(Ruvia, http_client_tls_refuses_server_initiated_renegotiation) {
     ruvia::http_client client(worker.attachment_.loop(), config);
     auto operation = [&]() -> ruvia::task<void> {
         const acceptor_closer closer{acceptor};
-        auto response = co_await client.client().get("/renegotiate").send();
+        auto response = co_await client.ref().get("/renegotiate").send();
         const auto bytes_value = co_await response.collect_body();
         EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), "ok");
         co_await client.shutdown();
@@ -852,7 +855,7 @@ TEST(Ruvia, tls_client_sends_close_notify_before_closing) {
                             ruvia::http_response response;
                             response.body("ok");
                             (void)connection.submit_response_head(stream_id, response, ruvia::plan_buffered_http_response_write(built.known_method(), response));
-                            (void)connection.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535);
+                            (void)connection.submit_data(stream_id, response.body(), ruvia::http2_end_stream::end_stream, 65535);
                             (void)connection.release(std::move(*request));
                         }
                     }
@@ -883,7 +886,7 @@ TEST(Ruvia, tls_client_sends_close_notify_before_closing) {
         ruvia::http_client client(worker.attachment_.loop(), config);
         auto operation = [&]() -> ruvia::task<void> {
             const acceptor_closer closer{acceptor};
-            auto response = co_await client.client().get("/close-notify").send();
+            auto response = co_await client.ref().get("/close-notify").send();
             const auto bytes_value = co_await response.collect_body();
             EXPECT_EQ(bytes_value.size(), std::size_t{2});
             co_await client.shutdown();
@@ -963,7 +966,7 @@ TEST(Ruvia, http_client_tls_idle_probe_retires_a_connection_with_unread_peer_rec
         auto operation = [&]() -> ruvia::task<void> {
             const acceptor_closer closer{acceptor};
             for (const std::string_view expected : {std::string_view("first"), std::string_view("second")}) {
-                auto response = co_await client.client().get("/idle").send();
+                auto response = co_await client.ref().get("/idle").send();
                 const auto bytes_value = co_await response.collect_body();
                 EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), expected);
                 while (!idle_sent) {
@@ -978,9 +981,9 @@ TEST(Ruvia, http_client_tls_idle_probe_retires_a_connection_with_unread_peer_rec
             if (peer_failure) {
                 std::rethrow_exception(peer_failure);
             }
-            const auto stats = client.client().stats();
+            const auto stats = client.ref().stats();
             EXPECT_EQ(stats.failed_requests_, std::size_t{0});
-            EXPECT_EQ(stats.idle_connections_with_pending_data_, std::size_t{1});
+            EXPECT_EQ(stats.idle_connections_with_pending_input_, std::size_t{1});
             co_await client.shutdown();
         };
         run_operation(worker, io, operation);

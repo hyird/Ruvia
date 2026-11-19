@@ -152,7 +152,7 @@ template <typename t_type>
     using scalar_type = std::remove_cvref_t<t_type>;
     if constexpr (std::is_same_v<scalar_type, string>) {
         string result_value;
-        result_value.assign_owned(value);
+        result_value.assign(value);
         return result_value;
     } else if constexpr (std::is_same_v<scalar_type, std::string>) {
         return std::string(value.data(), value.size());
@@ -176,7 +176,7 @@ template <typename t_type>
     using scalar_type = std::remove_cvref_t<t_type>;
     if constexpr (std::is_same_v<scalar_type, string>) {
         string result_value;
-        result_value.assign_owned(std::move(value));
+        result_value.assign(std::move(value));
         return result_value;
     } else if constexpr (std::is_same_v<scalar_type, std::string>) {
         return std::move(value);
@@ -739,18 +739,19 @@ struct redis_entity_storage final {
     using type = entity_value_storage<columns...>;
 };
 
+}  // namespace detail
+
 template <typename entity>
-concept redis_entity_schema = requires(const entity& value) {
+concept redis_entity = requires {
     typename entity::redis_entity_type;
     typename entity::columns_type;
     requires std::same_as<entity, typename entity::redis_entity_type>;
-    requires redis_columns<typename entity::columns_type>;
-    { entity::prefix() } -> std::convertible_to<std::string_view>;
+    requires detail::redis_columns<typename entity::columns_type>;
+    { entity::key_prefix() } -> std::convertible_to<std::string_view>;
 };
-}  // namespace detail
 
 // Created only by redis_field_reference::asc() / desc().
-class redis_find_order final {
+class redis_order_term final {
 public:
     [[nodiscard]] std::string_view column() const noexcept {
         return column_;
@@ -763,7 +764,7 @@ private:
     template <typename, fixed_string>
     friend class redis_field_reference;
 
-    constexpr redis_find_order(std::string_view column, order_direction direction) noexcept :
+    constexpr redis_order_term(std::string_view column, order_direction direction) noexcept :
         column_(column),
         direction_(direction) {}
 
@@ -773,7 +774,7 @@ private:
 
 template <typename entity_type, fixed_string name>
 class redis_field_reference final {
-    static_assert(detail::redis_entity_schema<entity_type>, "Redis field references require a Redis entity");
+    static_assert(redis_entity<entity_type>, "Redis field references require a Redis entity");
     static_assert(entity_type::template column_index<name>() < std::tuple_size_v<typename entity_type::columns_type>);
     using operation = detail::redis_binary_operator;
     using kind = detail::redis_predicate_node::kind_type;
@@ -839,11 +840,11 @@ public:
     [[nodiscard]] redis_predicate not_in(std::initializer_list<value_type> values) const {
         return not_in(std::span<const value_type>(values.begin(), values.size()));
     }
-    [[nodiscard]] redis_find_order asc() const noexcept {
-        return redis_find_order(name.view(), order_direction::asc);
+    [[nodiscard]] redis_order_term asc() const noexcept {
+        return redis_order_term(name.view(), order_direction::asc);
     }
-    [[nodiscard]] redis_find_order desc() const noexcept {
-        return redis_find_order(name.view(), order_direction::desc);
+    [[nodiscard]] redis_order_term desc() const noexcept {
+        return redis_order_term(name.view(), order_direction::desc);
     }
 
 private:
@@ -852,7 +853,7 @@ private:
         auto& storage = *result_value.storage_;
         const auto index = storage.add(kind::field);
         storage.nodes_[index].field_ = name.view();
-        storage.nodes_[index].entity_prefix_ = entity_type::prefix();
+        storage.nodes_[index].entity_prefix_ = entity_type::key_prefix();
         return result_value;
     }
     template <detail::redis_predicate_argument value_type>
@@ -886,24 +887,24 @@ private:
 #define RUVIA_REDIS_COLUMN(name, value_type, ...) ::ruvia::redis_column<::ruvia::fixed_string{#name}, value_type __VA_OPT__(, ) __VA_ARGS__>
 
 // set<field>() 检查整数范围与有限浮点溢出；整数列不隐式接受浮点输入。
-// 失败保留原值和 unset/null 状态；经可变 get() 或显式转换执行的赋值由调用方负责。
-#define RUVIA_REDIS_ENTITY(name, key_prefix, ...)                                                                      \
-    struct name final {                                                                                                \
-    private:                                                                                                           \
-        using descriptor_type = ::ruvia::detail::redis_entity_storage<::ruvia::fixed_string{key_prefix}, __VA_ARGS__>; \
-        using storage_type = typename descriptor_type::type;                                                           \
-        storage_type entity_;                                                                                          \
-        RUVIA_DETAIL_ENTITY_OWNER_API(name, storage_type, entity_)                                                     \
-        using redis_entity_type = name;                                                                                \
-        using columns_type = typename storage_type::columns_type;                                                      \
-        static constexpr std::string_view prefix() noexcept {                                                          \
-            return descriptor_type::prefix_value.view();                                                               \
-        }                                                                                                              \
-        template <::ruvia::fixed_string field_name>                                                                    \
-        static constexpr ::ruvia::redis_field_reference<name, field_name> column() noexcept {                          \
-            return {};                                                                                                 \
-        }                                                                                                              \
-        RUVIA_DETAIL_ENTITY_VALUE_API(entity_)                                                                         \
+// 失败保留原值和 unset/null 状态；经显式转换执行的赋值由调用方负责。
+#define RUVIA_REDIS_ENTITY(name, entity_prefix, ...)                                                                      \
+    struct name final {                                                                                                   \
+    private:                                                                                                              \
+        using descriptor_type = ::ruvia::detail::redis_entity_storage<::ruvia::fixed_string{entity_prefix}, __VA_ARGS__>; \
+        using storage_type = typename descriptor_type::type;                                                              \
+        storage_type entity_;                                                                                             \
+        RUVIA_DETAIL_ENTITY_OWNER_API(name, storage_type, entity_)                                                        \
+        using redis_entity_type = name;                                                                                   \
+        using columns_type = typename storage_type::columns_type;                                                         \
+        static constexpr std::string_view key_prefix() noexcept {                                                         \
+            return descriptor_type::prefix_value.view();                                                                  \
+        }                                                                                                                 \
+        template <::ruvia::fixed_string field_name>                                                                       \
+        static constexpr ::ruvia::redis_field_reference<name, field_name> column() noexcept {                             \
+            return {};                                                                                                    \
+        }                                                                                                                 \
+        RUVIA_DETAIL_ENTITY_VALUE_API(entity_)                                                                            \
     };
 
 // FT.SEARCH always returns one page (`LIMIT offset num`, default `0 10`):
@@ -915,7 +916,7 @@ inline constexpr std::uint64_t redis_find_default_limit = 100;
 // Redis filters and pagination have no SQL relation, lock or cache options.
 struct redis_find_options final {
     redis_predicate where_{};
-    std::optional<redis_find_order> order_{};
+    std::optional<redis_order_term> order_{};
     std::optional<query_row_count> offset_{};
     std::optional<query_row_count> limit_{};
 };
@@ -953,9 +954,9 @@ public:
     // Each index column must be a unique, identifier-named entity column whose
     // type fits the index kind; violations throw std::invalid_argument.
     template <typename entity_type>
-        requires detail::redis_entity_schema<entity_type>
+        requires redis_entity<entity_type>
     [[nodiscard]] static redis_search_mapping create(const redis_repository_config& config = {}) {
-        return redis_search_mapping(detail::normalize_redis_mapping(detail::redis_query_columns<entity_type>, entity_type::prefix(), config));
+        return redis_search_mapping(detail::normalize_redis_mapping(detail::redis_query_columns<entity_type>, entity_type::key_prefix(), config));
     }
 
     redis_search_mapping(const redis_search_mapping& other);
@@ -1000,9 +1001,52 @@ private:
     std::uint64_t affected_entities_{};
 };
 
+namespace detail {
+
+template <typename columns_type>
+struct redis_primary_key_column_finder;
+
+template <typename... columns>
+struct redis_primary_key_column_finder<std::tuple<columns...>> final {
+    using type = std::tuple_element_t<0, decltype(std::tuple_cat(std::conditional_t<columns::options.primary_key_, std::tuple<columns>, std::tuple<>>{}...))>;
+};
+
+template <typename entity_type>
+using redis_primary_key_value_t = std::remove_cvref_t<typename redis_primary_key_column_finder<typename entity_type::columns_type>::type::value_type>;
+
+template <typename id_type, typename pk_value_type>
+concept redis_primary_key_id =
+    (redis_column_value_kind<pk_value_type>() == redis_column_kind::text && std::convertible_to<const id_type&, std::string_view> && !std::same_as<std::remove_cvref_t<id_type>, std::nullptr_t>) || (is_redis_entity_native_integer<pk_value_type> && is_model_integer<std::remove_cvref_t<id_type>>);
+
+template <typename pk_value_type, typename id_type>
+    requires redis_primary_key_id<id_type, pk_value_type>
+[[nodiscard]] std::string_view encode_redis_primary_key_id(const id_type& id, std::span<char, redis_scalar_scratch_size> scratch) {
+    if constexpr (redis_column_value_kind<pk_value_type>() == redis_column_kind::text) {
+        (void)scratch;
+        if constexpr (std::is_pointer_v<std::remove_cvref_t<id_type>>) {
+            if (id == nullptr) {
+                throw std::invalid_argument("Redis entity ID must not be null");
+            }
+        }
+        const std::string_view view(id);
+        if (view.empty()) {
+            throw std::invalid_argument("Redis entity ID must not be empty");
+        }
+        return view;
+    } else {
+        if (!std::in_range<pk_value_type>(id)) {
+            throw std::invalid_argument("Redis primary key is out of range");
+        }
+        return encode_redis_scalar(static_cast<pk_value_type>(id), scratch);
+    }
+}
+
+}  // namespace detail
+
 template <typename entity_type>
 class redis_repository final {
-    static_assert(detail::redis_entity_schema<entity_type>, "Redis repositories require a RUVIA_REDIS_ENTITY declaration");
+    static_assert(redis_entity<entity_type>, "Redis repositories require a RUVIA_REDIS_ENTITY declaration");
+    using pk_value_type = detail::redis_primary_key_value_t<entity_type>;
 
 public:
     redis_repository(const redis_repository&) = delete;
@@ -1026,10 +1070,11 @@ public:
         return write(write_mode::upsert, detail::redis_entity_id(entity, id_scratch), entity, options);
     }
 
-    [[nodiscard]] task<redis_write_result> update(const redis_predicate& predicate, const entity_type& changes, redis_write_options options = {}) const {
+    template <typename id_type>
+        requires detail::redis_primary_key_id<id_type, pk_value_type>
+    [[nodiscard]] task<redis_write_result> update_by_id(const id_type& id, const entity_type& changes, redis_write_options options = {}) const {
         detail::redis_scalar_scratch_type id_scratch;
-        const auto id = require_primary_key(predicate, id_scratch);
-        return write(write_mode::update, id, changes, options);
+        return write(write_mode::update, detail::encode_redis_primary_key_id<pk_value_type>(id, id_scratch), changes, options);
     }
 
     [[nodiscard]] task<entity_rows<entity_type>> find(const redis_find_options& options = {}) const {
@@ -1075,28 +1120,31 @@ public:
         return executor_.template command_mapped<bool>(search_mapping().compile_find(options, redis_search_mode::count).take_arguments(), detail::redis_orm_exists_result);
     }
 
-    [[nodiscard]] task<redis_write_result> delete_by(const redis_predicate& predicate) const {
+    template <typename id_type>
+        requires detail::redis_primary_key_id<id_type, pk_value_type>
+    [[nodiscard]] task<redis_write_result> delete_by_id(const id_type& id) const {
         detail::redis_scalar_scratch_type id_scratch;
-        const auto id = require_primary_key(predicate, id_scratch);
-        return delete_by_id(id);
+        return delete_encoded_id(detail::encode_redis_primary_key_id<pk_value_type>(id, id_scratch));
     }
 
     [[nodiscard]] task<redis_write_result> remove(const entity_type& entity) const {
         detail::redis_scalar_scratch_type id_scratch;
-        return delete_by_id(detail::redis_entity_id(entity, id_scratch));
+        return delete_encoded_id(detail::redis_entity_id(entity, id_scratch));
     }
 
-    [[nodiscard]] task<bool> expire(const redis_predicate& predicate, std::chrono::seconds ttl) const {
+    template <typename id_type>
+        requires detail::redis_primary_key_id<id_type, pk_value_type>
+    [[nodiscard]] task<bool> expire_by_id(const id_type& id, std::chrono::seconds ttl) const {
         detail::redis_scalar_scratch_type id_scratch;
-        const auto id = require_primary_key(predicate, id_scratch);
-        const auto key = detail::redis_entity_key(mapping().storage_prefix_, id);
+        const auto key = detail::redis_entity_key(mapping().storage_prefix_, detail::encode_redis_primary_key_id<pk_value_type>(id, id_scratch));
         return executor_.expire(key, ttl);
     }
 
-    [[nodiscard]] task<redis_ttl> ttl(const redis_predicate& predicate) const {
+    template <typename id_type>
+        requires detail::redis_primary_key_id<id_type, pk_value_type>
+    [[nodiscard]] task<redis_ttl> ttl_by_id(const id_type& id) const {
         detail::redis_scalar_scratch_type id_scratch;
-        const auto id = require_primary_key(predicate, id_scratch);
-        const auto key = detail::redis_entity_key(mapping().storage_prefix_, id);
+        const auto key = detail::redis_entity_key(mapping().storage_prefix_, detail::encode_redis_primary_key_id<pk_value_type>(id, id_scratch));
         return executor_.pttl(key);
     }
 
@@ -1138,15 +1186,7 @@ private:
         mapping_ = nullptr;
     }
 
-    [[nodiscard]] std::string_view require_primary_key(const redis_predicate& predicate, std::span<char, detail::redis_scalar_scratch_size> scratch) const {
-        const auto result_value = detail::redis_primary_key(mapping(), predicate, scratch);
-        if (!result_value) {
-            throw std::invalid_argument("Redis repository operation requires an exact primary-key predicate");
-        }
-        return *result_value;
-    }
-
-    [[nodiscard]] task<redis_write_result> delete_by_id(std::string_view id) const {
+    [[nodiscard]] task<redis_write_result> delete_encoded_id(std::string_view id) const {
         return executor_.template script_mapped<redis_write_result>(detail::redis_orm_delete_script(), detail::make_redis_orm_delete_call(mapping().storage_prefix_, id), detail::redis_orm_delete_result);
     }
 

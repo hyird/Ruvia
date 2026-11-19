@@ -78,7 +78,7 @@ public:
     // A complete address literal: dotted-decimal IPv4 without leading zeros,
     // or RFC 4291 §2.2 IPv6 text with an optional numeric "%zone". Brackets,
     // ports, surrounding space and embedded NUL yield std::nullopt.
-    [[nodiscard]] static std::optional<ip_address> parse(std::string_view text) noexcept;
+    [[nodiscard]] static std::optional<ip_address> try_parse(std::string_view text) noexcept;
 
     [[nodiscard]] constexpr ip_address_family family() const noexcept {
         return family_;
@@ -186,7 +186,7 @@ class ip_cidr final {
 public:
     constexpr ip_cidr() noexcept = default;
 
-    [[nodiscard]] static std::optional<ip_cidr> parse(std::string_view text) noexcept;
+    [[nodiscard]] static std::optional<ip_cidr> try_parse(std::string_view text) noexcept;
 
     [[nodiscard]] ip_address network() const noexcept;
     [[nodiscard]] constexpr std::uint8_t prefix_bits() const noexcept {

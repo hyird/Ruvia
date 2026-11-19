@@ -813,7 +813,7 @@ struct tls_identity_source final {
     if (text.empty()) {
         throw std::invalid_argument("TLS local address must not be empty");
     }
-    const auto parsed = ruvia::parse_ip_address(text);
+    const auto parsed = ruvia::try_parse_asio_ip_address(text);
     if (!parsed) {
         throw std::invalid_argument("TLS local address must be a numeric IP address");
     }

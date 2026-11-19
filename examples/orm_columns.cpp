@@ -194,12 +194,12 @@ int main(int argc, char** argv) {
         }
         if (execute) {
             asio::io_context context_value(asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));
-            auto attachment = attach_event_loop(context_value);
+            auto attachment = event_loop_attachment(context_value);
             db_client db(attachment.loop(), settings);
             db_client concurrent(attachment.loop(), settings);
-            auto root = attachment.loop().start(run(db, concurrent, attachment));
+            auto root = attachment.loop().submit(run(db, concurrent, attachment)).take_value();
             attachment.run();
-            std::move(root).get();
+            std::move(root).take_value();
         }
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';

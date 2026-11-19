@@ -66,7 +66,7 @@ struct one_shot_state final {
         return wait_slot_;
     }
     template <typename consume_type>
-    [[nodiscard]] auto consume_ready(consume_type&& consume) {
+    [[nodiscard]] auto take_ready(consume_type&& consume) {
         struct ready_consumption final {
             std::optional<t_type>& value_;
             ~ready_consumption() {
@@ -175,13 +175,13 @@ private:
                 rejection = one_shot_complete_status::worker_stopping;
             } else if (state->wait_slot_.occupied()) {
                 state->lifecycle_.template emplace<detail::one_shot_consumed>();
-                state->wait_slot_.complete(wait_result<std::monostate>::with_value(std::monostate{}));
+                state->wait_slot_.complete(wait_result<std::monostate>::from_value(std::monostate{}));
             } else {
                 state->lifecycle_.template emplace<detail::one_shot_ready>();
             }
         }
         if (rejection) {
-            return state->consume_ready([&](t_type&& ready_value) {
+            return state->take_ready([&](t_type&& ready_value) {
                 return detail::delivery_access::reject<one_shot_complete_result<t_type>>(*rejection, std::move(ready_value));
             });
         }
@@ -224,7 +224,7 @@ public:
             auto lock = owner_value.lock_state();
             if (std::holds_alternative<detail::one_shot_ready>(owner_value.lifecycle_)) {
                 owner_value.lifecycle_.template emplace<detail::one_shot_consumed>();
-                wait_.complete_ready(wait_result<std::monostate>::with_value(std::monostate{}));
+                wait_.complete_ready(wait_result<std::monostate>::from_value(std::monostate{}));
                 return true;
             }
             if (std::holds_alternative<detail::one_shot_worker_stopping>(owner_value.lifecycle_)) {
@@ -244,12 +244,12 @@ public:
         }
 
         [[nodiscard]] wait_result<t_type> await_resume() {
-            auto result = wait_.take_result();
+            auto result = wait_.take_value();
             if (!result.has_value()) {
-                return wait_result<t_type>::with_status(result.status());
+                return wait_result<t_type>::from_status(result.status());
             }
-            return wait_.state().consume_ready([](t_type&& ready_value) {
-                return wait_result<t_type>::with_value(std::move(ready_value));
+            return wait_.state().take_ready([](t_type&& ready_value) {
+                return wait_result<t_type>::from_value(std::move(ready_value));
             });
         }
 
@@ -268,10 +268,10 @@ public:
     // silently turn a temporary receiver into an already-closed operation.
     // A relative options.timeout_ bounds the wait from its start; a deadline
     // that has passed reports timed_out unless a value is ready.
-    [[nodiscard]] wait_operation wait(operation_options options = {}) const& {
+    [[nodiscard]] wait_operation wait(operation_options options = {}) & {
         return wait_operation(state_, std::move(options));
     }
-    wait_operation wait(operation_options = {}) const&& = delete;
+    wait_operation wait(operation_options = {}) && = delete;
 
     // The worker every wait must run on. Makes the receive-side affinity
     // contract queryable instead of only failing at await time. A moved-from
@@ -286,7 +286,7 @@ public:
 
     // Closing discards an unconsumed value before returning and closes every
     // future wait. Its destruction may reenter this receiver or its completion.
-    void close() const {
+    void close() {
         if (!state_) {
             return;
         }

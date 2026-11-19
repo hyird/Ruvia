@@ -357,7 +357,7 @@ task<std::error_code> http3_endpoint::wait_writable() {
     const auto completion = co_await ruvia::async_asio([this](auto handler) {
         socket_.async_wait(asio::socket_base::wait_write, std::move(handler));
     });
-    co_return completion.error_code();
+    co_return completion.code();
 }
 #endif
 
@@ -380,7 +380,7 @@ task<void> http3_endpoint::run_receive_loop() {
             if (!socket_.is_open()) {
                 co_return;
             }
-            if (const auto error = completion.error_code()) {
+            if (const auto error = completion.code()) {
                 if (http3_ignorable_receive_error(error)) {
                     continue;
                 }

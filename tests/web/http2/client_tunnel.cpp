@@ -101,21 +101,22 @@ ruvia::task<void> client_tunnel_routes::echo(ruvia::context& c) {
 }  // namespace
 TEST(Ruvia, http2_client_tunnel_owns_cold_input_half_closes_and_preserves_siblings) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     std::exception_ptr failure;
     std::optional<ruvia::http_client_tunnel> retained_tunnel;
     ruvia::test::http_server_fixture server(io);
     auto run = [&]() -> ruvia::task<void> {
-        const auto& worker_value = attachment.loop().worker();
+        const auto loop_for_worker_value = attachment.loop();
+        const auto& worker_value = loop_for_worker_value.worker();
         auto& observation_value = *observation;
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(server.endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .versions_ = ruvia::http_client_versions{.http1_ = false}});
-        const auto client_origin = client.client();
+        const auto client_origin = client.ref();
         try {
             for (unsigned round = 0; round != 4; ++round) {
                 observation_value.finish_first_ = round >= 2;
                 std::string authority(round == 1 ? "proxy.test" : "client-target.test:443");
-                auto cold = client_origin.connect(authority).protocol(round == 1 ? "test-protocol" : "").target(round == 1 ? "/tunnel" : "").connect();
+                auto cold = client_origin.connect(authority).protocol(round == 1 ? "test-protocol" : "").target(round == 1 ? "/tunnel" : "").open();
                 authority.assign("mutated");
                 auto result_value = co_await std::move(cold);
                 EXPECT_TRUE(result_value.response() == nullptr && result_value.tunnel() != nullptr);
@@ -149,7 +150,7 @@ TEST(Ruvia, http2_client_tunnel_owns_cold_input_half_closes_and_preserves_siblin
                     co_await readers.join();
                     auto sibling = co_await client_origin.get("/sibling").send();
                     std::string sibling_body{};
-                    while (auto bytes = co_await sibling.stream().read_text()) {
+                    while (auto bytes = co_await sibling.body().read_text()) {
                         sibling_body.append(*bytes);
                     }
                     EXPECT_TRUE(sibling_body == "sibling");
@@ -178,7 +179,7 @@ TEST(Ruvia, http2_client_tunnel_owns_cold_input_half_closes_and_preserves_siblin
                 }
                 auto sibling = co_await client_origin.get("/sibling").send();
                 std::string sibling_body{};
-                while (auto bytes = co_await sibling.stream().read_text()) {
+                while (auto bytes = co_await sibling.body().read_text()) {
                     sibling_body.append(*bytes);
                 }
                 EXPECT_TRUE(sibling_body == "sibling");
@@ -204,9 +205,9 @@ TEST(Ruvia, http2_client_tunnel_owns_cold_input_half_closes_and_preserves_siblin
         server.finish();
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -248,7 +249,7 @@ ruvia::task<void> client_tunnel_routes::no_datagrams(ruvia::context& c) {
 }  // namespace
 TEST(Ruvia, http2_client_capsule_stream_retains_results_and_cold_operations_after_shutdown) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     std::exception_ptr failure;
     ruvia::test::http_server_fixture server(io);
     auto run = [&]() -> ruvia::task<void> {
@@ -257,9 +258,9 @@ TEST(Ruvia, http2_client_capsule_stream_retains_results_and_cold_operations_afte
         {
             const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(server.endpoint().port())));
             ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .versions_ = ruvia::http_client_versions{.http1_ = false}});
-            const auto client_origin = client.client();
+            const auto client_origin = client.ref();
             try {
-                auto result_value = co_await client_origin.connect("proxy.test").protocol("test-capsules").target("/capsules").connect({.max_chunk_bytes_ = 1024});
+                auto result_value = co_await client_origin.connect("proxy.test").protocol("test-capsules").target("/capsules").open({.max_chunk_bytes_ = 1024});
                 if (!result_value.tunnel()) {
                     throw std::runtime_error("capsule CONNECT rejected");
                 }
@@ -291,7 +292,7 @@ TEST(Ruvia, http2_client_capsule_stream_retains_results_and_cold_operations_afte
                 {
                     // Without declared datagrams: no Capsule-Protocol, and the
                     // handler's datagrams()/udp()/capsules() throw std::logic_error.
-                    auto plain_result = co_await client_origin.connect("proxy.test").protocol("test-no-datagrams").target("/no-datagrams").connect();
+                    auto plain_result = co_await client_origin.connect("proxy.test").protocol("test-no-datagrams").target("/no-datagrams").open();
                     if (!plain_result.tunnel()) {
                         throw std::runtime_error("protocol CONNECT without datagrams rejected");
                     }
@@ -304,7 +305,7 @@ TEST(Ruvia, http2_client_capsule_stream_retains_results_and_cold_operations_afte
                     EXPECT_EQ(answer, std::string("rejected"));
                     co_await plain.stream().finish();
                 }
-                auto second = co_await client_origin.connect("proxy.test").protocol("test-capsules").target("/capsules").connect();
+                auto second = co_await client_origin.connect("proxy.test").protocol("test-capsules").target("/capsules").open();
                 if (!second.tunnel()) {
                     throw std::runtime_error("second capsule CONNECT rejected");
                 }
@@ -323,9 +324,9 @@ TEST(Ruvia, http2_client_capsule_stream_retains_results_and_cold_operations_afte
         server.finish();
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -337,16 +338,16 @@ TEST(Ruvia, http2_client_capsule_stream_retains_results_and_cold_operations_afte
 // serving other requests.
 TEST(Ruvia, http2_client_capsule_stream_closes_when_its_tunnel_owner_is_destroyed_first) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     std::exception_ptr failure;
     ruvia::test::http_server_fixture server(io);
     auto run = [&]() -> ruvia::task<void> {
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(server.endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .versions_ = ruvia::http_client_versions{.http1_ = false}});
-        const auto client_origin = client.client();
+        const auto client_origin = client.ref();
         try {
             std::optional<ruvia::http_client_tunnel_result> opened;
-            opened.emplace(co_await client_origin.connect("proxy.test").protocol("test-capsules").target("/capsules").connect());
+            opened.emplace(co_await client_origin.connect("proxy.test").protocol("test-capsules").target("/capsules").open());
             if (!opened->tunnel()) {
                 throw std::runtime_error("capsule CONNECT rejected");
             }
@@ -386,9 +387,9 @@ TEST(Ruvia, http2_client_capsule_stream_closes_when_its_tunnel_owner_is_destroye
         server.finish();
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -396,12 +397,12 @@ TEST(Ruvia, http2_client_capsule_stream_closes_when_its_tunnel_owner_is_destroye
 
 // RFC 9297 section 3.2: an unknown capsule type and a DATAGRAM with an
 // unknown Context ID (RFC 9298 section 4) are skipped even beyond the reader's
-// max_capsule_length_. A malformed DATAGRAM then fails the tunnel as a
+// max_capsule_bytes_. A malformed DATAGRAM then fails the tunnel as a
 // malformed message (RFC 9297 section 3.3): RST_STREAM(PROTOCOL_ERROR) per
 // RFC 9113 section 8.1.1, not CANCEL.
 TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_input_with_protocol_error) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::exception_ptr peer_failure;
     std::optional<ruvia::http2_error_code> reset_error;
@@ -447,7 +448,7 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
                             reset_error = closed->error();
                         }
                     } else if (auto* data = event->tunnel_data()) {
-                        (void)data->take_credit();
+                        (void)std::move(*data).take_credit();
                     }
                 }
                 if (fed != ruvia::http2_feed_status::events_pending) {
@@ -467,11 +468,11 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .versions_ = ruvia::http_client_versions{.http1_ = false}});
         try {
-            auto opened = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").connect();
+            auto opened = co_await client.ref().connect_udp("/.well-known/masque/udp/target.test/53/").open();
             if (!opened.tunnel()) {
                 throw std::runtime_error("CONNECT-UDP rejected");
             }
-            auto udp = opened.tunnel()->stream().udp({.max_capsule_length_ = 100});
+            auto udp = opened.tunnel()->stream().udp({.max_capsule_bytes_ = 100});
             auto datagram = co_await udp.read();
             if (datagram) {
                 first.assign(reinterpret_cast<const char*>(datagram->bytes().data()), datagram->bytes().size());
@@ -483,7 +484,8 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
             }
             // The reset is queued with the abort; let the session write it
             // before shutdown closes the connection.
-            const auto& worker_value = attachment.loop().worker();
+            const auto loop_for_worker_value = attachment.loop();
+            const auto& worker_value = loop_for_worker_value.worker();
             for (unsigned attempt = 0; !reset_error && attempt != 200; ++attempt) {
                 (void)co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(10));
             }
@@ -493,9 +495,9 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
         co_await client.shutdown();
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -511,7 +513,7 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
 // directions close; a closed stream need not emit another reset frame.
 TEST(Ruvia, http2_client_half_closed_tunnel_rejects_truncated_capsule_on_end_stream) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     bool server_done = false;
     const auto serve = [&]() -> asio::awaitable<void> {
@@ -548,7 +550,7 @@ TEST(Ruvia, http2_client_half_closed_tunnel_rejects_truncated_capsule_on_end_str
                             4);
                         (void)connection.submit_data(end->stream_id(), truncated, ruvia::http2_end_stream::end_stream, 65535);
                     } else if (auto* data = event->tunnel_data()) {
-                        (void)data->take_credit();
+                        (void)std::move(*data).take_credit();
                     }
                 }
                 if (fed != ruvia::http2_feed_status::events_pending) {
@@ -565,9 +567,9 @@ TEST(Ruvia, http2_client_half_closed_tunnel_rejects_truncated_capsule_on_end_str
     auto run = [&]() -> ruvia::task<void> {
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .versions_ = ruvia::http_client_versions{.http1_ = false}});
-        auto opened = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").connect();
+        auto opened = co_await client.ref().connect_udp("/.well-known/masque/udp/target.test/53/").open();
         EXPECT_TRUE(opened.tunnel() != nullptr);
-        auto udp = opened.tunnel()->stream().udp({.max_capsule_length_ = 100});
+        auto udp = opened.tunnel()->stream().udp({.max_capsule_bytes_ = 100});
         co_await udp.finish();
         try {
             (void)co_await udp.read();
@@ -578,9 +580,9 @@ TEST(Ruvia, http2_client_half_closed_tunnel_rejects_truncated_capsule_on_end_str
         co_await client.shutdown();
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     EXPECT_TRUE(client_threw);
 }
 
@@ -589,7 +591,7 @@ TEST(Ruvia, http2_client_half_closed_tunnel_rejects_truncated_capsule_on_end_str
 // the same stream ID of a newly reconnected HTTP/2 session.
 TEST(Ruvia, http2_client_stale_tunnel_malformed_abort_does_not_reset_reconnected_session_stream) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::uint32_t second_conn_rst_stream_id = 0;
     std::uint32_t second_conn_rst_code = 0;
@@ -674,18 +676,19 @@ TEST(Ruvia, http2_client_stale_tunnel_malformed_abort_does_not_reset_reconnected
 
     bool udp1_threw = false;
     auto run = [&]() -> ruvia::task<void> {
-        const auto& worker_value = attachment.loop().worker();
+        const auto loop_for_worker_value = attachment.loop();
+        const auto& worker_value = loop_for_worker_value.worker();
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .versions_ = ruvia::http_client_versions{.http1_ = false}});
-        auto opened1 = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").connect();
+        auto opened1 = co_await client.ref().connect_udp("/.well-known/masque/udp/target.test/53/").open();
         EXPECT_TRUE(opened1.tunnel() != nullptr);
-        auto udp1 = opened1.tunnel()->stream().udp({.max_capsule_length_ = 100});
+        auto udp1 = opened1.tunnel()->stream().udp({.max_capsule_bytes_ = 100});
         co_await udp1.finish();
         (void)co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(30));
 
-        auto opened2 = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").connect();
+        auto opened2 = co_await client.ref().connect_udp("/.well-known/masque/udp/target.test/53/").open();
         EXPECT_TRUE(opened2.tunnel() != nullptr);
-        auto udp2 = opened2.tunnel()->stream().udp({.max_capsule_length_ = 100});
+        auto udp2 = opened2.tunnel()->stream().udp({.max_capsule_bytes_ = 100});
         (void)udp2;
 
         try {
@@ -700,9 +703,9 @@ TEST(Ruvia, http2_client_stale_tunnel_malformed_abort_does_not_reset_reconnected
         co_await client.shutdown();
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     EXPECT_TRUE(udp1_threw);
     EXPECT_EQ(second_conn_rst_stream_id, std::uint32_t{0});
     EXPECT_EQ(second_conn_rst_code, std::uint32_t{0});
@@ -716,10 +719,11 @@ struct held_tunnel_read final {
 
 void exercise_http2_held_tunnel_budget(bool worker_budget) {
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     ruvia::test::tcp_port_reservation port(io);
     const auto run = [&]() -> ruvia::task<void> {
-        const auto& worker = attachment.loop().worker();
+        const auto loop_for_worker = attachment.loop();
+        const auto& worker = loop_for_worker.worker();
         auto [read_sender, reads] = ruvia::make_channel<held_tunnel_read>(worker, {.capacity_ = 7});
         auto [exit_sender, exits] = ruvia::make_channel<unsigned>(worker, {.capacity_ = 7});
         ruvia::worker_signal permit_read(worker), release_views(worker);
@@ -738,15 +742,15 @@ void exercise_http2_held_tunnel_budget(bool worker_budget) {
         ruvia::http_server server(attachment.loop(),
             {.request_stream_ = [&](ruvia::request_stream& request) -> ruvia::task<void> {
             if (!request.tunnel_requested()) {
-                EXPECT_EQ(request.conn().connection_id(), connection_id);
+                EXPECT_EQ(request.connection().connection_id(), connection_id);
                 request.respond(request.text("barrier"));
                 co_return;
             }
             ++entered;
             if (connection_id == 0) {
-                connection_id = request.conn().connection_id();
+                connection_id = request.connection().connection_id();
             }
-            EXPECT_EQ(request.conn().connection_id(), connection_id);
+            EXPECT_EQ(request.connection().connection_id(), connection_id);
             try {
                 auto* tunnel = &(co_await request.accept_tunnel()).get();
                 co_await permit_read.wait();
@@ -803,9 +807,9 @@ void exercise_http2_held_tunnel_budget(bool worker_budget) {
         std::exception_ptr failure;
         try {
             co_await server.start();
-            const auto origin = client.client();
+            const auto origin = client.ref();
             const auto queue_and_read = [&](std::size_t bytes) -> ruvia::task<held_tunnel_read> {
-                auto opened = co_await origin.connect("held-budget.test:443").connect();
+                auto opened = co_await origin.connect("held-budget.test:443").open();
                 if (!opened.tunnel()) {
                     throw std::runtime_error("held-view CONNECT rejected");
                 }
@@ -907,9 +911,9 @@ void exercise_http2_held_tunnel_budget(bool worker_budget) {
             std::rethrow_exception(handler_failure);
         }
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
 }
 }  // namespace
 

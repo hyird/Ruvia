@@ -136,7 +136,7 @@ struct mariadb_column final {
 // restricts (mariadb_statement_traits::integer_params_), and the hash of its
 // key, for refusing it.
 struct mariadb_statement final {
-    st_mysql_stmt* handle_{nullptr};
+    st_mysql_stmt* statement_{nullptr};
     std::uint64_t integer_params_{0};
     std::size_t key_hash_{0};
 };
@@ -305,7 +305,7 @@ struct mariadb_prepared_run final {
     };
 
     mariadb_statement_cache* cache_{nullptr};
-    mariadb_statement_cache::entry_ref handle_{};
+    mariadb_statement_cache::entry_ref cached_entry_{};
     std::span<const db_value> params_{};
     step step_{step::done};
     // The current step's operation has been started and waits to continue.

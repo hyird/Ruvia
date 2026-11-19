@@ -396,7 +396,7 @@ class zlib_inflate_stream;
 class websocket_deflate;
 }  // namespace detail
 
-enum class websocket_inflate_result : std::uint8_t {
+enum class websocket_inflate_status : std::uint8_t {
     ok,
     error,
     too_large,
@@ -431,7 +431,7 @@ public:
 
     // Appends the decompressed message to `out`, bounded by `message_limit`
     // across everything this call appends (RFC 7692 section 7.2.2).
-    [[nodiscard]] websocket_inflate_result inflate_message(std::string_view payload, std::string& out, protocol_byte_limit message_limit);
+    [[nodiscard]] websocket_inflate_status inflate_message(std::string_view payload, std::string& out, protocol_byte_limit message_limit);
 
 private:
     // A connection inflates through the shared inflater under its receive

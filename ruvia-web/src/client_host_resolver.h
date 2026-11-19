@@ -120,7 +120,7 @@ public:
         if (stop.stop_requested()) {
             return client_resolve_result{.error_ = asio::error::operation_aborted};
         }
-        if (const auto address = parse_ip_address(std::string_view(host))) {
+        if (const auto address = try_parse_asio_ip_address(std::string_view(host))) {
             return client_resolve_result{.literal_ = asio::ip::tcp::endpoint(*address, port)};
         }
         return resolve_query(std::string(std::forward<host_type>(host)), port, timeout, std::move(stop));

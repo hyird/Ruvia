@@ -36,7 +36,7 @@ struct http_content_coding_field_result_access final {
 template <typename visitor_type>
 [[nodiscard]] inline http_field_list_parse_status visit_http_content_coding_field(std::string_view value, http_field_list_role role, visitor_type&& visitor) {
     return http_visit_token_list(value, role, [&visitor](std::string_view token) {
-        return visitor(token, http_content_coding_from_token(token));
+        return visitor(token, parse_http_content_coding_token(token));
     });
 }
 
@@ -247,7 +247,7 @@ public:
             }
             // RFC 9112 section 7.2: brotli, zstd, identity and unknown
             // tokens are not decodable transfer codings.
-            const auto transfer_coding = http_content_coding_from_token(coding);
+            const auto transfer_coding = parse_http_content_coding_token(coding);
             if (transfer_coding.has_value() && is_http_transfer_coding(*transfer_coding)) {
                 if (has_parameters) {
                     malformed = true;
@@ -286,7 +286,7 @@ private:
 };
 
 [[nodiscard]] inline bool http_is_client_supported_te_transfer_coding(std::string_view coding) noexcept {
-    const auto transfer_coding = http_content_coding_from_token(coding);
+    const auto transfer_coding = parse_http_content_coding_token(coding);
     return transfer_coding.has_value() && is_http_transfer_coding(*transfer_coding);
 }
 

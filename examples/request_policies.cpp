@@ -29,7 +29,7 @@ public:
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         // The binding borrows this local value until next() finishes. Neither
         // the label nor its request-backed string_view may escape the request.
-        const request_label label{c.req().header("X-Demo-Name").value_or("guest")};
+        const request_label label{c.request().header("X-Demo-Name").value_or("guest")};
         auto binding = c.bind_request_state(label);
         co_await next_value();
     }
@@ -50,7 +50,7 @@ private:
     ruvia::task<ruvia::http_response> small(ruvia::context& c) {
         // body_limit is checked before buffering. More than 16 bytes produces
         // 413; a route may tighten, but cannot enlarge, the server-wide limit.
-        const auto body = co_await c.req().body_text();
+        const auto body = co_await c.request().body_text();
         co_return c.text(body);
     }
 
@@ -74,7 +74,7 @@ private:
             .target_ = "/policies/label",
             .headers_ = headers,
         });
-        co_return c.text(std::move(response).take_body_bytes(), {.status_ = response.status()});
+        co_return c.text(std::move(response).take_body(), {.status_ = response.status()});
     }
 
     ruvia::task<ruvia::http_response> csrf(ruvia::context& c) {

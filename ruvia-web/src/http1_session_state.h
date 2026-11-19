@@ -196,8 +196,8 @@ public:
     [[nodiscard]] connection_write_outcome await_resume() {
         if (remainder_) {
             const auto completion = remainder_->await_resume();
-            written_.error_ = completion.error_code();
-            written_.bytes_ += completion.result();
+            written_.error_ = completion.code();
+            written_.bytes_ += completion.value();
         }
         return written_;
     }

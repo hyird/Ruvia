@@ -19,7 +19,7 @@ enum class http_request_content_indication : std::uint8_t { no_content,
 // RFC 9110 Section 10.1.1 forbids a client from generating 100-continue when
 // the request has no content. Keep this sender check next to the recipient-side
 // expectation state so HTTP/1 and HTTP/2 cannot derive different answers.
-[[nodiscard]] constexpr bool http_client_expectation_is_valid(bool has_continue, http_request_content_indication content) noexcept {
+[[nodiscard]] constexpr bool is_valid_http_client_expectation(bool has_continue, http_request_content_indication content) noexcept {
     return !has_continue || content == http_request_content_indication::will_follow;
 }
 
@@ -35,7 +35,7 @@ enum class http_server_expectation_plan : std::uint8_t {
     reject_unsupported,
 };
 
-[[nodiscard]] inline http_protocol_error http_unsupported_expectation_error() noexcept {
+[[nodiscard]] inline http_protocol_error make_http_unsupported_expectation_error() noexcept {
     return http_protocol_error(http_status::expectation_failed, static_text{"unsupported_expectation"}, "unsupported Expect header");
 }
 
@@ -45,7 +45,7 @@ enum class http_server_expectation_plan : std::uint8_t {
 // member is retained as the single semantic fact "unsupported" for product policy.
 class http_request_expectations final {
 public:
-    void parse_field(std::string_view value) noexcept;
+    void update(std::string_view value) noexcept;
 
     [[nodiscard]] bool has_continue() const noexcept {
         return (flags_ & continue_flag) != 0;

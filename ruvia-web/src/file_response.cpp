@@ -186,10 +186,10 @@ public:
             throw std::logic_error("static memory response slice is out of range");
         }
         if (offset == 0 && length == bytes_value.size()) {
-            response.file_bytes_body(owner);
+            response.file_representation_body(owner);
         } else {
             // Do not pin an entire old file version to serve a small range.
-            response.file_bytes_body(std::string(bytes_value.substr(static_cast<std::size_t>(offset), static_cast<std::size_t>(length))));
+            response.file_representation_body(std::string(bytes_value.substr(static_cast<std::size_t>(offset), static_cast<std::size_t>(length))));
         }
     }
 
@@ -216,7 +216,7 @@ public:
                 body.append(plan.metadata().substr(segment.metadata_offset_, segment.metadata_length_));
             }
         }
-        response.file_bytes_body(std::move(body));
+        response.file_representation_body(std::move(body));
     }
 
 private:
@@ -524,7 +524,7 @@ void apply_file_response_state(const http_response& head, const file_response_so
         .negotiates_encoding_ = false,
     };
     const file_response_plan planned(context_value, source_value, head.status());
-    auto body = file_response_body_source::file(file_response_path(std::move(opened.path_), snapshot.identity_, std::move(opened.file_.handle_)));
+    auto body = file_response_body_source::file(file_response_path(std::move(opened.path_), snapshot.identity_, std::move(opened.file_.descriptor_)));
     co_return make_file_response(head, source_value, body, planned);
 }
 

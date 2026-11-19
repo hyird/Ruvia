@@ -510,7 +510,7 @@ private:
                 } else {
                     identity = position->second;
                 }
-                decode_relations(entity.template get<relation_type::name>(), row, node_index, identity.scope_);
+                decode_relations(db_entity_access<entity_type>::template relation<relation_type::name>(entity), row, node_index, identity.scope_);
             }
         });
     }
@@ -596,10 +596,18 @@ public:
         return query_;
     }
     const db_query& query() const&& = delete;
-    [[nodiscard]] const std::vector<std::string>& columns() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] db_query take_query() && noexcept {
+        return std::exchange(query_, {});
+    }
+    db_query take_query() & = delete;
+    [[nodiscard]] std::span<const std::string> columns() const& noexcept RUVIA_LIFETIMEBOUND {
         return columns_;
     }
-    const std::vector<std::string>& columns() const&& = delete;
+    std::span<const std::string> columns() const&& = delete;
+    [[nodiscard]] std::vector<std::string> take_columns() && noexcept {
+        return std::exchange(columns_, {});
+    }
+    std::vector<std::string> take_columns() & = delete;
 
 private:
     db_query query_;
@@ -802,7 +810,7 @@ void append_entity_insert_rows(db_query& query, std::span<const e_type> entities
 
 template <typename e_type>
 struct db_map_projection final {
-    static_assert(sql_entity<e_type> || sql_projection<e_type>, "SQL results require a SQL entity or a db_projection");
+    static_assert(::ruvia::db_entity<e_type> || ::ruvia::db_projection<e_type>, "SQL results require a DB entity or a db_projection");
     explicit db_map_projection(std::span<const std::string> selected, bool allow_extra_columns = false, bool wildcard = false) :
         wildcard_(wildcard) {
         if (!wildcard && selected.empty()) {
@@ -897,8 +905,8 @@ struct db_map_required_one final {
         return decoder.decode(rows, 0);
     }
 };
-struct db_projection final {
-    db_projection() = default;
+struct db_selected_projection final {
+    db_selected_projection() = default;
     [[nodiscard]] bool empty() const noexcept {
         return columns_.empty() && !wildcard_;
     }
@@ -906,7 +914,7 @@ struct db_projection final {
     bool wildcard_{false};
 };
 // Wildcards stay in the AST; only explicit result names are tracked for mapping.
-db_projection apply_projection(db_query& query, std::span<const db_selection> selection, std::string_view qualifier, bool returning = false, std::string_view root_table = {}, const db_projection* previous = nullptr);
+db_selected_projection apply_projection(db_query& query, std::span<const db_selection> selection, std::string_view qualifier, bool returning = false, std::string_view root_table = {}, const db_selected_projection* previous = nullptr);
 [[nodiscard]] std::string format_truncate_table(std::string_view table, db_driver driver);
 
 void apply_entity_upsert(db_query& query, std::span<const db_column_info> entity_columns, std::span<db_assignment> updates, std::span<const std::string_view> inserted_columns, const db_conflict_options& options, db_driver driver, std::string_view table, std::string_view qualifier, std::string_view update_date, std::string_view version);
@@ -957,7 +965,7 @@ public:
                 detail::require_db_column(detail::db_entity_columns<entity_type>, field.column_);
             }
         }
-        detail::db_projection implicit;
+        detail::db_selected_projection implicit;
         const auto* previous = &selected_;
         if (selected_.empty()) {
             implicit.columns_.reserve(column_capacity);
@@ -979,13 +987,13 @@ public:
     }
     template <typename joined_type>
     db_query_builder& join(db_join_type type, std::string_view alias, const db_predicate& on = {}) {
-        static_assert(sql_entity<joined_type>, "SQL joins require a SQL entity");
+        static_assert(db_entity<joined_type>, "SQL joins require a DB entity");
         query_.join(type, joined_type::table_name(), detail::import_join_predicate<joined_type, entity_type>(query_, on, alias_, alias), alias);
         return *this;
     }
     template <typename joined_type>
     db_query_builder& join(db_join_type type, std::string_view alias, std::span<const std::string_view> using_columns) {
-        static_assert(sql_entity<joined_type>, "SQL joins require a SQL entity");
+        static_assert(db_entity<joined_type>, "SQL joins require a DB entity");
         query_.join(type, joined_type::table_name(), {}, alias, using_columns);
         return *this;
     }
@@ -1078,7 +1086,7 @@ public:
         return *this;
     }
     // Borrows the flat AST, without applying execution-time soft-delete filtering.
-    // The builder and its resource must outlive the view; consumers clone on import.
+    // Copies the source values AST before returning, so the view's lifetime ends at this call.
     // Composition entry points below (subquery, exists, join, combine, and the
     // write builder's update_from / delete_using / insert_from) embed the
     // filtered query, so soft-deleted rows never leak through a nested source.
@@ -1228,7 +1236,7 @@ public:
         query_.cache(options);
         return *this;
     }
-    db_query_builder& set_lock(const db_lock_options& options) {
+    db_query_builder& lock(const db_lock_options& options) {
         query_.lock(options);
         return *this;
     }
@@ -1291,7 +1299,7 @@ public:
         requires std::same_as<executor_type, db_executor>
     {
         executor_.registration_.require_active();
-        auto statement = get_query_and_parameters();
+        auto statement = compile();
         auto& scope = executor_.registration_.scope();
         return executor_.registration_.attach(db_executor::query_stream_prepared(executor_.client_, std::move(statement.sql_), std::move(statement.params_), scope, executor_.io_metrics_, executor_.options_, executor_.request_stop_));
     }
@@ -1323,7 +1331,7 @@ public:
         }
         return db_command_set<executor_type>::template query_mapped_and_count<entity_rows<output_type>>(executor_, target_query, count, std::move(mapper));
     }
-    [[nodiscard]] db_statement get_query_and_parameters() const {
+    [[nodiscard]] db_statement compile() const {
         std::optional<db_query> active_query;
         const auto& target_query = target(active_query);
         auto prepared = prepare_relation_query(target_query);
@@ -1435,7 +1443,7 @@ private:
     detail::db_repository_executor_type<executor_type> executor_;
     db_query query_;
     std::string alias_;
-    detail::db_projection selected_;
+    detail::db_selected_projection selected_;
     std::optional<detail::db_relation_plan> relations_{};
     bool with_deleted_{false};
 };
@@ -1507,7 +1515,7 @@ public:
     }
     template <typename source>
     db_write_query_builder& update_from(std::string_view alias = {}) {
-        static_assert(sql_entity<source>, "SQL update sources require a SQL entity");
+        static_assert(db_entity<source>, "SQL update sources require a DB entity");
         query_.update_from(source::table_name(), alias);
         return *this;
     }
@@ -1524,7 +1532,7 @@ public:
     }
     template <typename source>
     db_write_query_builder& delete_using(std::string_view alias = {}) {
-        static_assert(sql_entity<source>, "SQL delete sources require a SQL entity");
+        static_assert(db_entity<source>, "SQL delete sources require a DB entity");
         query_.delete_using(source::table_name(), alias);
         return *this;
     }
@@ -1541,7 +1549,7 @@ public:
     }
     template <typename joined_type>
     db_write_query_builder& join(db_join_type type, std::string_view alias, const db_predicate& on = {}) {
-        static_assert(sql_entity<joined_type>, "SQL joins require a SQL entity");
+        static_assert(db_entity<joined_type>, "SQL joins require a DB entity");
         query_.join(type, joined_type::table_name(), detail::import_join_predicate<joined_type, entity_type>(query_, on, alias_, alias), alias);
         return *this;
     }
@@ -1682,12 +1690,12 @@ public:
         require_returning("get_scalars requires RETURNING");
         return db_command_set<executor_type>::template query_mapped<std::vector<scalar_type>>(executor_, query_, detail::db_map_scalars<scalar_type>{});
     }
-    [[nodiscard]] db_statement get_query_and_parameters() const {
+    [[nodiscard]] db_statement compile() const {
         validate();
         return query_.compile(executor_.query_driver());
     }
     // Borrows the complete validated DML AST, including RETURNING and parameters.
-    // The builder and its resource must outlive the view; with() clones on import.
+    // The builder must outlive the view; with() clones on import.
     [[nodiscard]] const db_query& query() const& RUVIA_LIFETIMEBOUND {
         validate();
         return query_;
@@ -1754,14 +1762,14 @@ private:
     db_query query_;
     bool inserting_;
     std::string alias_;
-    detail::db_projection selected_;
+    detail::db_selected_projection selected_;
     std::array<std::string_view, column_capacity> inserted_columns_{};
     std::size_t inserted_column_count_{0};
 };
 
 template <typename entity_type, typename executor_type>
 class db_repository final {
-    static_assert(sql_entity<entity_type>, "SQL repositories require a RUVIA_DB_ENTITY declaration");
+    static_assert(db_entity<entity_type>, "SQL repositories require a RUVIA_DB_ENTITY declaration");
 
 public:
     [[nodiscard]] db_query_builder<entity_type, executor_type> query_builder(std::string_view alias = {}) const {

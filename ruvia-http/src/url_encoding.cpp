@@ -129,7 +129,7 @@ template <typename literal_width_type>
                 throw std::length_error("percent-encoded text exceeds string capacity");
             }
             detail::reserve_geometric(*encoded, encoded->size() + 3);
-            http_append_percent_byte(*encoded, static_cast<unsigned char>(input[i]));
+            append_percent_byte(*encoded, static_cast<unsigned char>(input[i]));
         }
     } catch (...) {
         if (initially_empty && encoded == &storage) {
@@ -155,7 +155,7 @@ std::string_view percent_encode_uri_reference(borrowed_text text, std::string& s
     return percent_encode_text(reference, storage, [&](std::size_t i) noexcept -> std::size_t {
         const auto byte = static_cast<unsigned char>(reference[i]);
         if (byte == '%') {
-            return http_try_decode_percent_byte(reference, i) ? 3 : 0;
+            return decode_percent_byte(reference, i) ? 3 : 0;
         }
         return uri_reference_keeps_literal(byte, i, layout, fragment_seen) ? 1 : 0;
     });
@@ -175,7 +175,7 @@ std::optional<std::string_view> decode_url_component(borrowed_text text, std::st
     std::size_t first = 0;
     for (; first < input.size(); ++first) {
         const char c = input[first];
-        if ((c == '+' && (mode == url_decode_mode::form || mode == url_decode_mode::strict_form)) || (c == '%' && (mode != url_decode_mode::form || http_try_decode_percent_byte(input, first)))) {
+        if ((c == '+' && (mode == url_decode_mode::form || mode == url_decode_mode::strict_form)) || (c == '%' && (mode != url_decode_mode::form || decode_percent_byte(input, first)))) {
             break;
         }
     }

@@ -91,17 +91,17 @@ public:
         } reset{slot};
         if (slot.is_connected()) {
             slot.assign([this](asio::cancellation_type) {
-                response_.data_signal_.notify();
+                response_.body_signal_.notify();
             });
         }
         while (response_.offset_ == response_.buffered_.size() && response_.pending_.empty() && !response_.receive_complete() && !response_.failure_ && !response_.pool_closed_ && !response_.abandoned_) {
             check();
-            co_await response_.data_signal_.wait();
+            co_await response_.body_signal_.wait();
         }
         check();
         try {
             response_.release_consumed_body_prefix();
-            response_.promote_pending_data();
+            response_.promote_pending_body();
             if (response_.offset_ == response_.buffered_.size()) {
                 response_.rethrow_response_failure();
                 if (response_.pool_closed_) {
@@ -153,7 +153,7 @@ public:
                     output.borrowed_chunk_ = chunk;
                     output.chunk_ready_ = true;
                     const borrowed_reset guard{output};
-                    output.notify_data();
+                    output.notify_chunk();
                     while (output.chunk_ready_ && (!output.stopped_ || output.chunk_in_flight_)) {
                         co_await output.space_.wait();
                     }
@@ -177,7 +177,7 @@ public:
     }
     void abort() noexcept {
         response_.tunnel_->stream_.abort();
-        response_.data_signal_.notify();
+        response_.body_signal_.notify();
     }
     http_client_response_state& response() noexcept {
         return response_;
@@ -374,8 +374,8 @@ task<websocket> http_client_websocket_request::connect_owned(http_client_websock
     worker_timer_registration opening_timer;
     const auto connect_timeout = detail::constrain_http_client_timeout(pool.config().connect_timeout_, timeouts.connect_);
     if (connect_timeout) {
-        (void)opening_timer.schedule(pool.worker(), deadline_after(connect_timeout->value()), [&opening_stop, &opening_expired](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired) {
+        (void)opening_timer.schedule(pool.worker(), deadline_after(connect_timeout->value()), [&opening_stop, &opening_expired](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired) {
                 opening_expired = true;
                 opening_stop.request_stop();
             }

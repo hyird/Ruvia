@@ -484,7 +484,7 @@ task<void> windows_acceptor::join(worker_ref caller, asio::io_context& caller_io
             thread.async_wait(std::move(handler));
         });
         if (waited.failed()) {
-            throw std::system_error(waited.error_code(), "failed to await acceptor thread exit");
+            throw std::system_error(waited.code(), "failed to await acceptor thread exit");
         }
     }
     runtime_.join();
@@ -507,7 +507,7 @@ void windows_acceptor::join() {
 }
 
 std::exception_ptr windows_acceptor::failure() noexcept {
-    return runtime_.take_failure();
+    return runtime_.observe_failure();
 }
 
 task<void> windows_acceptor::run() {
@@ -801,7 +801,7 @@ task<void> windows_acceptor::run_accepts(tcp_listener& listener) {
                         native.complete(asio::error_code(accept_error, asio::system_category()), 0);
                     }
                 });
-                error = completion.error_code();
+                error = completion.code();
             }
             // A stop, or this listener's removal, aborted the accept.
             if (!admitting_ || !listener.admitting_) {
@@ -819,7 +819,7 @@ task<void> windows_acceptor::run_accepts(tcp_listener& listener) {
                 }
             }
             report_accept_error(error);
-            if (co_await ruvia::sleep_for(runtime_.worker(), accept_retry_delay) == timer_sleep_result::stop_requested) {
+            if (co_await ruvia::sleep_for(runtime_.worker(), accept_retry_delay) == sleep_status::stop_requested) {
                 break;
             }
         }
@@ -925,7 +925,7 @@ task<void> windows_acceptor::run_receives(udp_listener& listener) {
             if (!admitting_ || !socket.is_open()) {
                 co_return;
             }
-            if (const auto error = completion.error_code()) {
+            if (const auto error = completion.code()) {
                 if (http3_ignorable_receive_error(error)) {
                     continue;
                 }
@@ -934,7 +934,7 @@ task<void> windows_acceptor::run_receives(udp_listener& listener) {
             remote.resize(static_cast<std::size_t>(message.namelen));
             const auto destination = packet_destination(message, remote, listener.endpoint_.port());
             if (destination) {
-                steer(listener, std::span<const std::byte>(buffer.data(), completion.result()), remote, destination->local_, destination->interface_index_);
+                steer(listener, std::span<const std::byte>(buffer.data(), completion.value()), remote, destination->local_, destination->interface_index_);
             }
         }
     } catch (...) {

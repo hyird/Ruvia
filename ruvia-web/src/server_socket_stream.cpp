@@ -34,8 +34,8 @@ public:
     graceful_close_bounds(asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_ref& worker_value) :
         guard_(scanner, entry_, connection_transport::tcp(socket)) {
         entry_.set_phase(connection_scanner::phase::writing);
-        armed_ = timer_.schedule(worker_value, deadline_after(graceful_close_time), [target = &socket](worker_timer_outcome outcome) {
-            if (outcome == worker_timer_outcome::expired) {
+        armed_ = timer_.schedule(worker_value, deadline_after(graceful_close_time), [target = &socket](worker_timer_status outcome) {
+            if (outcome == worker_timer_status::expired) {
                 close_socket(*target);
             }
         });
@@ -75,7 +75,7 @@ task<void> close_gracefully(asio::ip::tcp::socket& socket, server_tls_stream* tl
             const auto completion = co_await async_asio([tls](auto handler) {
                 tls->async_shutdown(std::move(handler));
             });
-            if (completion.error_code()) {
+            if (completion.code()) {
                 co_return;
             }
         }
@@ -90,10 +90,10 @@ task<void> close_gracefully(asio::ip::tcp::socket& socket, server_tls_stream* tl
         const auto completion = co_await async_asio<std::size_t>([&socket, &discarded](auto handler) {
             socket.async_read_some(asio::buffer(discarded), std::move(handler));
         });
-        if (completion.error_code()) {
+        if (completion.code()) {
             co_return;
         }
-        total += completion.result();
+        total += completion.value();
     }
 }
 

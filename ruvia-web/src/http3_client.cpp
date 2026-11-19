@@ -370,8 +370,8 @@ public:
             return;
         }
         try {
-            (void)idle_timer_.schedule(pool_.worker(), deadline_after(pool_.config().idle_timeout_->value()), [this](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired && streams_.empty()) {
+            (void)idle_timer_.schedule(pool_.worker(), deadline_after(pool_.config().idle_timeout_->value()), [this](worker_timer_status outcome) noexcept {
+                if (outcome == worker_timer_status::expired && streams_.empty()) {
                     close();
                 }
             });
@@ -410,9 +410,9 @@ public:
         item.done_ = true;
         response.complete_ = true;
         response.tunnel_->output_.ended_ = true;
-        response.tunnel_->output_.notify_data();
+        response.tunnel_->output_.notify_chunk();
         response.tunnel_->output_.space_.notify();
-        response.data_signal_.notify();
+        response.body_signal_.notify();
     }
     static void fail_closed_stream(stream& item, std::optional<http3_error_code> error) noexcept {
         item.error_ = error == http3_error_code::message_error ? make_error_code(http_client_errc::protocol_error) : make_error_code(http_client_errc::io_error);
@@ -571,7 +571,7 @@ public:
     void consume_stream_event(stream& item, http3_data_event& value) {
         auto& response = item.response_;
         // Credit not retained below returns when this scope ends.
-        auto credit = value.take_credit();
+        auto credit = std::move(value).take_credit();
         const auto bytes = value.bytes();
         pool_.wire_counters().received_ += bytes.size();
         if (item.retry_425_) {
@@ -618,7 +618,7 @@ public:
             item.done_ = true;
         }
         item.timer_.read_deadline_.reset();
-        response.data_signal_.notify();
+        response.body_signal_.notify();
     }
     void consume_stream_event(stream& item, const http3_transport_action_event& value) {
         auto& response = item.response_;
@@ -690,7 +690,7 @@ public:
         }
         response.http3_datagrams_->push_back(std::move(value).take_payload());
         response.http3_datagram_bytes_ += payload_bytes;
-        response.data_signal_.notify();
+        response.body_signal_.notify();
     }
     task<void> deliver_informational(std::int64_t id, http_client_response_state* response, operation_deadline timeout) {
         struct callback_guard final {
@@ -728,7 +728,7 @@ public:
             }
         }
         response->head_signal_.notify();
-        response->data_signal_.notify();
+        response->body_signal_.notify();
         if (item && &item->response_ == response) {
             item->signal_.notify();
         }
@@ -836,13 +836,13 @@ public:
                 if (!open_ || !socket.is_open()) {
                     break;
                 }
-                if (result.error_code()) {
-                    if (http3_ignorable_receive_error(result.error_code())) {
+                if (result.code()) {
+                    if (http3_ignorable_receive_error(result.code())) {
                         continue;
                     }
-                    throw std::system_error(result.error_code());
+                    throw std::system_error(result.code());
                 }
-                const auto received = quic_->receive_datagram(path(local, remote), 0, std::span(bytes.data(), result.result()), http3_quic_now());
+                const auto received = quic_->receive_datagram(path(local, remote), 0, std::span(bytes.data(), result.value()), http3_quic_now());
                 step_quic(received.status_);
                 writer_.notify();
                 for (auto* item : streams_) {
@@ -870,8 +870,8 @@ public:
         if (time == UINT64_MAX) {
             return;
         }
-        (void)expiry_.schedule(pool_.worker(), http3_quic_steady_time(time), [this](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired) {
+        (void)expiry_.schedule(pool_.worker(), http3_quic_steady_time(time), [this](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired) {
                 writer_.notify();
             }
         });
@@ -913,11 +913,11 @@ public:
                     if (!open_) {
                         break;
                     }
-                    if (sent.error_code()) {
+                    if (sent.code()) {
                         if (output != socket_.get()) {
                             continue;
                         }
-                        throw std::system_error(sent.error_code());
+                        throw std::system_error(sent.code());
                     }
                     for (auto* item : streams_) {
                         item->signal_.notify();
@@ -978,8 +978,8 @@ public:
             worker_timer_registration drain_timer;
             bool drain_expired = false;
             if (const auto deadline = acquire_timeout.deadline()) {
-                (void)drain_timer.schedule(pool_.worker(), *deadline, [this, &drain_expired](worker_timer_outcome outcome) noexcept {
-                    if (outcome == worker_timer_outcome::expired) {
+                (void)drain_timer.schedule(pool_.worker(), *deadline, [this, &drain_expired](worker_timer_status outcome) noexcept {
+                    if (outcome == worker_timer_status::expired) {
                         drain_expired = true;
                         changed_.notify();
                     }
@@ -1027,8 +1027,8 @@ public:
         worker_timer_registration timer;
         const auto bound = item.timeout_.constrained_by(acquire_timeout.timeout()).constrained_by(item.response_.effective_connect_timeout_);
         if (const auto deadline = bound.deadline()) {
-            (void)timer.schedule(pool_.worker(), *deadline, [this](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired) {
+            (void)timer.schedule(pool_.worker(), *deadline, [this](worker_timer_status outcome) noexcept {
+                if (outcome == worker_timer_status::expired) {
                     close(std::make_error_code(std::errc::timed_out));
                 }
             });
@@ -1060,7 +1060,7 @@ public:
             throw http_client_error(make_error_code(http_client_errc::tls_failed), "HTTP/3 ALPN setup failed");
         }
         reference_.get_conn = [](ngtcp2_crypto_conn_ref* ref) {
-            return static_cast<session*>(ref->user_data)->quic_->native_handle();
+            return static_cast<session*>(ref->user_data)->quic_->native();
         };
         reference_.user_data = this;
         SSL_set_app_data(tls_.get(), &reference_);
@@ -1106,7 +1106,7 @@ public:
         const auto receive_window = (std::max)(std::uint64_t{64 * 1024}, (std::min)(std::uint64_t{16 * 1024 * 1024}, static_cast<std::uint64_t>(config.max_response_bytes_)));
         const http3_quic_connection_options options{.crypto_callbacks_ = client_crypto_callbacks(), .owner_callbacks_ = owner_callbacks, .source_connection_id_ = random_cid(), .destination_connection_id_ = random_cid(), .initial_path_ = path(local_, remote_), .initial_timestamp_ = http3_quic_now(), .handshake_timeout_ = bound.remaining() ? http3_quic_duration(timeout_duration(*bound.remaining())) : UINT64_MAX, .idle_timeout_ = 0, .initial_max_data_ = receive_window, .initial_max_stream_data_ = 64 * 1024, .max_udp_payload_size_ = config.http3_.max_datagram_bytes_, .callback_context_ = this, .http3_ = {.max_concurrent_streams_ = config.http3_.max_concurrent_streams_, .max_stream_output_bytes_ = config.http3_.max_stream_output_bytes_, .enable_h3_datagram_ = true}};
         quic_.emplace(http3_quic_connection::client(options));
-        quic_->set_tls_native_handle(crypto_.get());
+        quic_->set_tls_session(crypto_.get());
         if (allow_early && config.http3_.enable_early_data_ && ticket != nullptr && ticket->session_ && ticket->params_size_ && ticket->settings_valid_ && SSL_SESSION_get_max_early_data(ticket->session_.get()) != 0) {
             if (SSL_set_quic_tls_early_data_enabled(tls_.get(), 1) != 1) {
                 throw http_client_error(make_error_code(http_client_errc::tls_failed), "cannot enable QUIC early data");
@@ -1340,8 +1340,8 @@ public:
     }
     void arm_next() {
         delay_.cancel();
-        (void)delay_.schedule(pool_.worker(), deadline_after(client_connection_attempt_delay), [this](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired) {
+        (void)delay_.schedule(pool_.worker(), deadline_after(client_connection_attempt_delay), [this](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired) {
                 launch_ready_ = true;
                 changed_.notify();
             }
@@ -1414,8 +1414,8 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, const oper
     const auto bound = timeout.constrained_by(acquire_timeout.timeout()).constrained_by(response.effective_connect_timeout_);
     worker_timer_registration deadline_timer;
     if (const auto deadline = bound.deadline()) {
-        (void)deadline_timer.schedule(race.pool_.worker(), *deadline, [&race](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired) {
+        (void)deadline_timer.schedule(race.pool_.worker(), *deadline, [&race](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired) {
                 race.cancel(std::make_error_code(std::errc::timed_out));
             }
         });
@@ -1843,8 +1843,8 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
         worker_timer_registration admission_timer;
         bool admission_expired = false;
         if (const auto deadline = acquire_timeout.deadline()) {
-            (void)admission_timer.schedule(self.pool_.worker(), *deadline, [&item, &admission_expired](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired) {
+            (void)admission_timer.schedule(self.pool_.worker(), *deadline, [&item, &admission_expired](worker_timer_status outcome) noexcept {
+                if (outcome == worker_timer_status::expired) {
                     admission_expired = true;
                     item.signal_.notify();
                 }
@@ -2036,7 +2036,7 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
         throw http_client_error(make_error_code(http_client_errc::connect_failed), "HTTP/3 migration socket setup failed");
     }
     worker_timer_registration timer;
-    (void)timer.schedule(self.pool_.worker(), *timeout.deadline(), [&self](worker_timer_outcome) noexcept {
+    (void)timer.schedule(self.pool_.worker(), *timeout.deadline(), [&self](worker_timer_status) noexcept {
         self.changed_.notify();
     });
     for (;;) {
@@ -2131,8 +2131,8 @@ task<bool> http3_client_connection::send_datagram(http_client_response_state& re
     const auto bound = item->timeout_.constrained_by(response.effective_write_timeout_);
     worker_timer_registration timer;
     if (const auto deadline = bound.deadline()) {
-        (void)timer.schedule(self.pool_.worker(), *deadline, [&self](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired) {
+        (void)timer.schedule(self.pool_.worker(), *deadline, [&self](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired) {
                 self.changed_.notify();
             }
         });

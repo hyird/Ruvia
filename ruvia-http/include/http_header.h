@@ -340,7 +340,7 @@ private:
 }
 
 // True when the whole of `value` is exactly one well-formed quoted-string.
-[[nodiscard]] constexpr bool http_is_quoted_string(std::string_view value) noexcept {
+[[nodiscard]] constexpr bool is_http_quoted_string(std::string_view value) noexcept {
     return !value.empty() && http_quoted_string_size(value) == value.size();
 }
 
@@ -512,7 +512,7 @@ public:
 
     // Owning boundaries that normalize field names lower-case them while
     // copying, so the field still costs one allocation.
-    [[nodiscard]] static http_header copy_with_lowercase_name(std::string_view name, std::string_view value) {
+    [[nodiscard]] static http_header with_lowercase_name(std::string_view name, std::string_view value) {
         auto result = http_header(name, value);
         for (std::size_t index = 0; index < result.name_size_; ++index) {
             result.bytes_[index] = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(result.bytes_[index])));
@@ -911,7 +911,7 @@ public:
         }) {}
 
     // Current field lines. Any mutation below invalidates the view.
-    [[nodiscard]] http_header_range_view fields() const noexcept;
+    [[nodiscard]] http_header_range_view headers() const noexcept;
     // Erases every line named `name` (case-insensitive); a name no field can
     // carry erases nothing. `name` must not borrow this container.
     void remove(std::string_view name) noexcept;

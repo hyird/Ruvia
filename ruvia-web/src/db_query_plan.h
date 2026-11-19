@@ -20,9 +20,9 @@
 namespace ruvia {
 class db_query;
 
-// A statement copied into the worker's memory resource so it outlives the
-// caller's arguments: a suspended query keeps borrowing its SQL and parameters
-// long after the expression that produced them has ended.
+// A statement holding owning SQL and parameters so it outlives the caller's
+// arguments: a suspended query keeps borrowing its SQL and parameters long after
+// the expression that produced them has ended.
 struct prepared_db_statement final {
     std::string sql_;
     std::vector<db_value> params_;

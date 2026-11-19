@@ -52,10 +52,16 @@ public:
     }
     std::string_view view() const&& = delete;
 
+    [[nodiscard]] std::span<const std::byte> bytes() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::as_bytes(std::span<const char>(value_));
+    }
+    std::span<const std::byte> bytes() const&& = delete;
+
     // 消费已拥有的存储，不再次复制。
-    [[nodiscard]] std::string into_string() && noexcept {
+    [[nodiscard]] std::string take_string() && noexcept {
         return std::move(value_);
     }
+    std::string take_string() & = delete;
 
 private:
     std::string value_;

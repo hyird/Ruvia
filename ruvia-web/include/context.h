@@ -94,7 +94,7 @@ class context_services;
 // Runtime connection metadata associated with a Web request. This information
 // comes from the server adapter rather than from the HTTP message bytes, so it
 // intentionally lives outside http_request and context_request.
-class conn_info final : public connection_endpoints {
+class connection_info final : public connection_endpoints {
 public:
     // Who the request is from. Equal to remote() unless the peer is a configured
     // trusted proxy AND it sent a forwarding header, in which case it is what
@@ -138,19 +138,19 @@ private:
 
     using transport_type = std::variant<plain_connection_transport, tls_connection_transport>;
 
-    conn_info(const connection_endpoints& endpoints, std::string_view remote_text, transport_type transport, http_scheme scheme) noexcept :
+    connection_info(const connection_endpoints& endpoints, std::string_view remote_text, transport_type transport, http_scheme scheme) noexcept :
         connection_endpoints(endpoints),
         remote_text_(remote_text),
         client_(endpoints.remote()),
         transport_(transport),
         scheme_(scheme) {}
 
-    [[nodiscard]] static conn_info plain(const connection_endpoints& endpoints, std::string_view remote_text) noexcept {
-        return conn_info(endpoints, remote_text, plain_connection_transport{}, http_scheme::http);
+    [[nodiscard]] static connection_info plain(const connection_endpoints& endpoints, std::string_view remote_text) noexcept {
+        return connection_info(endpoints, remote_text, plain_connection_transport{}, http_scheme::http);
     }
 
-    [[nodiscard]] static conn_info tls(const connection_endpoints& endpoints, std::string_view remote_text, const tls_connection_transport& transport) noexcept {
-        return conn_info(endpoints, remote_text, transport, http_scheme::https);
+    [[nodiscard]] static connection_info tls(const connection_endpoints& endpoints, std::string_view remote_text, const tls_connection_transport& transport) noexcept {
+        return connection_info(endpoints, remote_text, transport, http_scheme::https);
     }
 
     // Applied only after the peer has been matched against the configured
@@ -179,10 +179,10 @@ private:
     bool via_trusted_proxy_{false};
 };
 
-static_assert(std::is_nothrow_copy_constructible_v<conn_info>);
-static_assert(std::is_nothrow_move_constructible_v<conn_info>);
-static_assert(std::is_nothrow_copy_assignable_v<conn_info>);
-static_assert(std::is_nothrow_move_assignable_v<conn_info>);
+static_assert(std::is_nothrow_copy_constructible_v<connection_info>);
+static_assert(std::is_nothrow_move_constructible_v<connection_info>);
+static_assert(std::is_nothrow_copy_assignable_v<connection_info>);
+static_assert(std::is_nothrow_move_assignable_v<connection_info>);
 
 // Inputs are copied before dispatch() returns its lazy scoped operation.
 // Only origin-form targets and buffered request/response bodies are accepted.
@@ -209,9 +209,10 @@ public:
     }
     std::string_view body() const&& = delete;
     // Transfers the owned bytes and leaves the body empty; metadata is unchanged.
-    [[nodiscard]] std::string take_body_bytes() && noexcept {
+    [[nodiscard]] std::string take_body() && noexcept {
         return std::exchange(body_, {});
     }
+    std::string take_body() & = delete;
     [[nodiscard]] const http_response_headers& headers() const& noexcept RUVIA_LIFETIMEBOUND {
         return headers_;
     }
@@ -293,7 +294,7 @@ public:
     // Duplicate fields are preserved in materialization order; scalar lookup uses
     // the first occurrence. Header lists compare names case-insensitively;
     // other field sources compare exactly. Enumeration preserves name spelling.
-    [[nodiscard]] std::optional<std::string_view> get(std::string_view name) const noexcept {
+    [[nodiscard]] std::optional<std::string_view> get(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND {
         for (const auto& item : items_) {
             if (names_equal(item.name(), name)) {
                 return item.value();
@@ -301,6 +302,7 @@ public:
         }
         return std::nullopt;
     }
+    std::optional<std::string_view> get(std::string_view) const&& = delete;
 
     // Security-relevant single-valued fields must not pick one of several
     // occurrences: a repeated name reports repeated instead of a value.
@@ -617,9 +619,9 @@ public:
     [[nodiscard]] bool early_data() const noexcept;
 
     // Connection metadata borrows this request's transport state.
-    // conn_info::connection_id() names the connection.
-    [[nodiscard]] const conn_info& conn() const& noexcept RUVIA_LIFETIMEBOUND;
-    const conn_info& conn() const&& = delete;
+    // connection_info::connection_id() names the connection.
+    [[nodiscard]] const connection_info& connection() const& noexcept RUVIA_LIFETIMEBOUND;
+    const connection_info& connection() const&& = delete;
     // Copies shared ownership of the state returned by connection_open_.
     [[nodiscard]] std::shared_ptr<void> connection_state() const noexcept;
     // Closes the entire transport immediately, including every HTTP/2 or
@@ -757,7 +759,7 @@ public:
     task<http_response> file(file_response_options, response_options = {}) && = delete;
 
     // relative_path_ is a decoded file path below the root, such as
-    // req().param("*") of a wildcard route; it is never percent-decoded again.
+    // request().param("*") of a wildcard route; it is never percent-decoded again.
     // '/' and '\\' separate segments. A "." or ".." segment, an empty interior
     // segment, an absolute path, or a NUL is 403 -- rejected, never resolved,
     // whichever parameter it came from -- and an unindexed name 404. A file
@@ -779,7 +781,7 @@ private:
     [[nodiscard]] static http_response json_serialized(std::string&& body, const response_options& options);
 };
 
-// Worker resources (worker_state<T>(), run_blocking(), env(), client(), db(),
+// Worker resources (worker_state<T>(), run_blocking(), env(), http_client(), db(),
 // redis()) come from worker_services_access. Inside a router dispatch they see
 // that router's worker states and clients; executors and clients bind this
 // request's operation lifetime and stop_token(). The connection, streaming
@@ -812,10 +814,10 @@ public:
     context(context&&) = delete;
     context& operator=(context&&) = delete;
 
-    [[nodiscard]] context_request req() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] context_request request() const& noexcept RUVIA_LIFETIMEBOUND {
         return context_request(*this);
     }
-    context_request req() const&& = delete;
+    context_request request() const&& = delete;
 
     // The streamed request content of a stream_body route; throws
     // std::logic_error on a route whose body is buffered.
@@ -852,7 +854,7 @@ public:
     // time. One type is one slot: binding T again inside a nested scope shadows
     // the outer binding until the inner handle dies.
     //
-    // Deliberately disjoint from req().validated<T>(): that answers "a validator
+    // Deliberately disjoint from request().validated<T>(): that answers "a validator
     // produced and checked this", and hand-bound state must never be able to
     // impersonate it.
     template <typename t_type>
@@ -864,12 +866,9 @@ public:
 
     // Throws std::logic_error when nothing of this type is bound.
     template <typename t_type>
-    [[nodiscard]] const std::remove_cvref_t<t_type>& request_state() const;
-
+    [[nodiscard]] const std::remove_cvref_t<t_type>& request_state() const& RUVIA_LIFETIMEBOUND;
     template <typename t_type>
-    [[nodiscard]] const std::remove_cvref_t<t_type>* try_request_state() const noexcept {
-        return request_bindings().try_get_state<t_type>();
-    }
+    const std::remove_cvref_t<t_type>& request_state() const&& = delete;
 
     // Re-enter the immutable route table on this worker. Authentication,
     // validation and middleware run in a fresh request context.
@@ -892,10 +891,10 @@ public:
     // The session of a negotiated websocket or CONNECT route (controller or
     // router): the server already ran the handshake, so context never accepts
     // one itself; request_stream::accept_websocket()/accept_tunnel() do.
-    [[nodiscard]] ::ruvia::websocket& websocket() const& RUVIA_LIFETIMEBOUND;
-    ::ruvia::websocket& websocket() const&& = delete;
-    [[nodiscard]] http_tunnel& tunnel() const& RUVIA_LIFETIMEBOUND;
-    http_tunnel& tunnel() const&& = delete;
+    [[nodiscard]] ::ruvia::websocket& websocket() & RUVIA_LIFETIMEBOUND;
+    ::ruvia::websocket& websocket() && = delete;
+    [[nodiscard]] http_tunnel& tunnel() & RUVIA_LIFETIMEBOUND;
+    http_tunnel& tunnel() && = delete;
 
     // 明确后处理已 respond 的缓冲响应；尚无响应或已提交时修改抛 logic_error。
     // 字段只属于当前响应，下一次替换不继承；跨替换字段显式写入 policy()。
@@ -914,8 +913,8 @@ public:
     void respond(http_response&& response) &;
     void respond(http_response&&) && = delete;
 
-    [[nodiscard]] task<http_response> not_found() &;
-    task<http_response> not_found() && = delete;
+    [[nodiscard]] task<http_response> invoke_not_found() &;
+    task<http_response> invoke_not_found() && = delete;
 
 private:
     [[nodiscard]] context& exchange_context() noexcept {
@@ -1000,7 +999,7 @@ inline request_state_binding<t_type> context::bind_request_state(const t_type& v
 }
 
 template <typename t_type>
-inline const std::remove_cvref_t<t_type>& context::request_state() const {
+inline const std::remove_cvref_t<t_type>& context::request_state() const& RUVIA_LIFETIMEBOUND {
     return request_bindings().get_state<t_type>();
 }
 
@@ -1051,7 +1050,7 @@ namespace detail {
 
 template <validation_target target, typename model_type>
 [[nodiscard]] task<std::optional<model_type>> parse_optional_request_model(const context& context_value, operation_options operation) {
-    if (!request_has_body_media_type<target>(context_value.req().header("Content-Type"))) {
+    if (!request_has_body_media_type<target>(context_value.request().header("Content-Type"))) {
         co_return std::nullopt;
     }
     const auto sync_body = try_buffered_request_body_text(context_value, operation);
@@ -1090,13 +1089,13 @@ inline request_binding_guard<t_type> bind_validated_model(context& context_value
 template <validation_target target>
 [[nodiscard]] const request_name_value_list& validation_target_fields(context& c) {
     if constexpr (target == validation_target::query) {
-        return c.req().query_fields();
+        return c.request().query_fields();
     } else if constexpr (target == validation_target::param) {
-        return c.req().param_fields();
+        return c.request().param_fields();
     } else if constexpr (target == validation_target::header) {
-        return c.req().header_fields();
+        return c.request().header_fields();
     } else if constexpr (target == validation_target::cookie) {
-        return c.req().cookie_fields();
+        return c.request().cookie_fields();
     } else {
         static_assert(always_false<std::integral_constant<validation_target, target>>, "unsupported validator target");
     }
@@ -1105,7 +1104,7 @@ template <validation_target target>
 template <validation_target target, typename body_type, bool reject_unknown_fields>
 task<void> model_validation_middleware<target, body_type, reject_unknown_fields>::invoke(context& c, next& next_value) {
     if constexpr (target == validation_target::json || target == validation_target::form) {
-        if (!request_has_body_media_type<target>(c.req().header("Content-Type"))) {
+        if (!request_has_body_media_type<target>(c.request().header("Content-Type"))) {
             throw_invalid_content_type<target>();
         }
         const auto sync_body = try_buffered_request_body_text(c, {});

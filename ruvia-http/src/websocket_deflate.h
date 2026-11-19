@@ -119,7 +119,7 @@ public:
     // dictionary at its first fragment unless context takeover applies.
     bool compress_fragment(std::string_view input, bool first, bool final, std::string& out);
 
-    websocket_inflate_result decompress(std::string_view input, std::string& out, protocol_byte_limit message_limit, websocket_receive_storage& storage);
+    websocket_inflate_status decompress(std::string_view input, std::string& out, protocol_byte_limit message_limit, websocket_receive_storage& storage);
 
     // A trial that is not sent must not enter the peer's future dictionary.
     // Starting the next compressed message with an empty sender dictionary is

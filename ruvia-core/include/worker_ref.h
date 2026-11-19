@@ -147,7 +147,7 @@ public:
     // std::invalid_argument before admission, whatever the worker's state.
     template <typename fn_type>
         requires detail::move_only_function_target<void, fn_type>
-    [[nodiscard]] post_outcome<> post(fn_type&& fn) const {
+    [[nodiscard]] post_result<> post(fn_type&& fn) const {
         if constexpr (detail::move_only_function_borrow_safe_input<void(), fn_type>) {
             return post_task(move_only_function<void()>(std::forward<fn_type>(fn)));
         } else {
@@ -186,7 +186,7 @@ private:
     explicit worker_ref(std::shared_ptr<detail::worker_dispatcher> dispatcher) noexcept;
     // post() behind its type-erasure boundary: the same admission as
     // post_factory(), with a factory that hands over the built callable.
-    [[nodiscard]] post_outcome<> post_task(move_only_function<void()> task) const;
+    [[nodiscard]] post_result<> post_task(move_only_function<void()> task) const;
 
     // Owns the stable dispatcher endpoint, not the worker's io_context.
     // The worker detaches that endpoint before destroying its execution context.

@@ -68,7 +68,7 @@ template <typename policy>
     output.chunk_ = std::move(input.bytes_);
     output.chunk_ready_ = true;
     in_flight_output_guard in_flight{*state_value, output};
-    output.notify_data();
+    output.notify_chunk();
     while (output.chunk_ready_ && !output.stopped_) {
         co_await output.space_.wait();
     }
@@ -94,7 +94,7 @@ template <typename policy, typename input_type>
     }
     output.end_requested_ = true;
     in_flight_output_guard in_flight{*state_value, output};
-    output.notify_data();
+    output.notify_chunk();
     while (!output.ended_ && (!output.stopped_ || output.completion_pending_)) {
         co_await output.space_.wait();
     }
@@ -240,7 +240,7 @@ task<void> http_client_request_body_writer::relay_body(http_client_response pin,
             }
             output.borrowed_chunk_ = bytes.substr(0, count);
             output.chunk_ready_ = true;
-            output.notify_data();
+            output.notify_chunk();
             // A stopped write can still hold a socket/TLS or protocol borrow.
             while (output.chunk_ready_ && (!output.stopped_ || output.chunk_in_flight_)) {
                 co_await output.space_.wait();
@@ -302,7 +302,7 @@ task<void> http_client_request_body_writer::write(outbound_bytes bytes_value, op
     if (bytes_value.size() > state_->upload_->config_.max_chunk_bytes_) {
         throw std::length_error("HTTP upload chunk exceeds configured bound");
     }
-    return state_->upload_->output_.output_scope_.attach(detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), std::move(bytes_value).into_string(), std::move(operation)}));
+    return state_->upload_->output_.output_scope_.attach(detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), std::move(bytes_value).take_string(), std::move(operation)}));
 }
 task<void> http_client_request_body_writer::finish(argument_list<http_header_view> fields_value, operation_options operation) & {
     if (state_ == nullptr) {
@@ -445,7 +445,7 @@ http_client_tunnel_state::http_client_tunnel_state(http_client_response_state& r
 task<std::optional<std::span<const std::byte>>> http_client_tunnel_state::read(void* target, operation_options operation) {
     // The body operation binds to the response state, not to this handle.
     http_client_response pin(static_cast<http_client_response_state*>(target));
-    return pin.stream().read(std::move(operation));
+    return pin.body().read(std::move(operation));
 }
 task<void> http_client_tunnel_state::write(void* target, std::string&& bytes, operation_options operation) {
     auto& state_value = *static_cast<http_client_response_state*>(target);

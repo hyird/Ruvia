@@ -191,7 +191,7 @@ namespace {
     std::vector<http_header> result;
     result.reserve(headers.size());
     for (const auto& header : headers) {
-        result.push_back(http_header::copy_with_lowercase_name(header.name(), header.value()));
+        result.push_back(http_header::with_lowercase_name(header.name(), header.value()));
     }
     return result;
 }

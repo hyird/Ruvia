@@ -228,19 +228,19 @@ inline void inbound_resize(std::string& target, inbound_buffer_reservation& rese
     }
 }
 
-inline void inbound_append(std::string& target, inbound_buffer_reservation& reservation, std::string_view data) {
-    if (data.empty()) {
+inline void inbound_append(std::string& target, inbound_buffer_reservation& reservation, std::string_view bytes) {
+    if (bytes.empty()) {
         return;
     }
-    if (data.size() > target.max_size() - target.size()) {
+    if (bytes.size() > target.max_size() - target.size()) {
         throw std::length_error("inbound buffer length overflow");
     }
-    const auto needed = target.size() + data.size();
+    const auto needed = target.size() + bytes.size();
     if (needed > target.capacity()) {
         const auto doubled = target.capacity() > target.max_size() / 2 ? target.max_size() : target.capacity() * 2;
         inbound_reserve(target, reservation, (std::max)(needed, doubled));
     }
-    target.append(data.data(), data.size());
+    target.append(bytes.data(), bytes.size());
     reservation.resize_to(inbound_string_heap_bytes(target));
 }
 

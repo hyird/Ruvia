@@ -84,7 +84,7 @@ ruvia::task<void> verify_stop_callback_reentrant_join_waits_for_finish(ruvia::wo
 }
 
 ruvia::task<void> wait_for_stop(ruvia::worker_ref worker_value, ruvia::stop_token token, bool& stopped) {
-    stopped = co_await ruvia::sleep_for(worker_value, std::chrono::hours(1), std::move(token)) == ruvia::timer_sleep_result::stop_requested;
+    stopped = co_await ruvia::sleep_for(worker_value, std::chrono::hours(1), std::move(token)) == ruvia::sleep_status::stop_requested;
 }
 
 ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
@@ -388,10 +388,11 @@ private:
 // be reported again.
 bool verify_additional_child_failures_are_reported() {
     asio::io_context io_context;
-    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
+    auto attachment = ruvia::event_loop_attachment(io_context, {.queue_capacity_ = 8});
     bool first_rethrown = false;
     stderr_capture capture;
-    ruvia::test::run_worker_tasks(attachment, join_distinct_failures(attachment.loop().worker(), first_rethrown));
+    const auto loop = attachment.loop();
+    ruvia::test::run_worker_tasks(attachment, join_distinct_failures(loop.worker(), first_rethrown));
     const auto text = capture.finish();
     return first_rethrown && text.find("ruvia: additional task scope child failed: second child failed\\x0d\\x0a\\x09\\x1b[0m\n") != std::string_view::npos && text.find("additional task scope child failed: child failed") == std::string_view::npos;
 }
@@ -409,8 +410,9 @@ TEST(Ruvia, TaskScopeLifecycle) {
     EXPECT_TRUE(retained_token.stop_requested());
 
     asio::io_context io_context;
-    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-    const auto worker_value = attachment.loop().worker();
+    auto attachment = ruvia::event_loop_attachment(io_context, {.queue_capacity_ = 8});
+    const auto loop_for_worker_value = attachment.loop();
+    const auto worker_value = loop_for_worker_value.worker();
     bool success = false;
     bool reentrant_stop_join_safe = false;
     ruvia::test::run_worker_tasks(attachment, ruvia::test::task_scope_tests::exercise(worker_value, success), ruvia::test::task_scope_tests::verify_stop_callback_reentrant_join_waits_for_finish(worker_value, reentrant_stop_join_safe));

@@ -52,7 +52,7 @@ struct timer_slot final {
     std::size_t next_free_{no_timer_slot};
     bool occupied_{false};
     bool cancel_requested_{false};
-    move_only_function<void(worker_timer_outcome)> completion_;
+    move_only_function<void(worker_timer_status)> completion_;
 };
 
 // Heap order: earliest deadline first, ties broken by registration order.
@@ -119,7 +119,7 @@ public:
     void when_shutdown_notifications_complete(move_only_function<void()> callback);
     [[nodiscard]] bool notifying_shutdown_on_current_thread() const noexcept;
     void when_idle(move_only_function<void()> callback);
-    bool schedule_timer(worker_timer_registration& registration, std::chrono::steady_clock::time_point deadline, move_only_function<void(worker_timer_outcome)> completion);
+    bool schedule_timer(worker_timer_registration& registration, std::chrono::steady_clock::time_point deadline, move_only_function<void(worker_timer_status)> completion);
     // From any thread. A notified cancellation of a still-live timer delivers
     // `cancelled` inline from the handler a foreign thread posts, or deferred
     // when the caller is already running on this worker.
@@ -241,10 +241,10 @@ private:
     void release_drained_timer_heap() noexcept;
     // Deactivates an active slot, returns it to the free list, and hands back
     // its completion for the caller to invoke or destroy.
-    [[nodiscard]] move_only_function<void(worker_timer_outcome)> release_timer_slot(std::size_t slot) noexcept;
+    [[nodiscard]] move_only_function<void(worker_timer_status)> release_timer_slot(std::size_t slot) noexcept;
     // Removes a live timer from the queue and hands back its completion; empty
     // when the timer already expired or was cancelled.
-    [[nodiscard]] move_only_function<void(worker_timer_outcome)> take_timer(std::size_t slot, std::uint64_t generation) noexcept;
+    [[nodiscard]] move_only_function<void(worker_timer_status)> take_timer(std::size_t slot, std::uint64_t generation) noexcept;
 
     asio::io_context& io_context_;
     std::unique_ptr<asio::steady_timer> timer_;

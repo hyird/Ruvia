@@ -152,7 +152,7 @@ enum class post_status : std::uint8_t {
 };
 
 template <typename signature_type = void()>
-using post_outcome = delivery_result<move_only_function<signature_type>, post_status, post_status::accepted>;
+using post_result = delivery_result<move_only_function<signature_type>, post_status, post_status::accepted>;
 
 namespace detail {
 

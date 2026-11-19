@@ -122,7 +122,8 @@ using app_hook = move_only_function<void()>;
 // dispatch_configuration members; they require a stopped app.
 class application final : public listener_controls, public dispatch_configuration<application> {
 public:
-    [[nodiscard]] const ruvia::env& env() const noexcept;
+    [[nodiscard]] const ruvia::env& env() const& noexcept RUVIA_LIFETIMEBOUND;
+    const ruvia::env& env() const&& = delete;
     application& load_dotenv(dotenv_options options = {}) &;
     application& load_dotenv(dotenv_options options = {}) && = delete;
     application& load_dotenv(const std::filesystem::path& path, dotenv_options options = {}) &;
@@ -219,10 +220,10 @@ public:
     application& redis(std::nullptr_t) &;
     application& redis(std::nullptr_t) && = delete;
 #endif
-    application& client(http_client_config config) &;
-    application& client(http_client_config config) && = delete;
-    application& client(std::nullptr_t) &;
-    application& client(std::nullptr_t) && = delete;
+    application& http_client(http_client_config config) &;
+    application& http_client(http_client_config config) && = delete;
+    application& http_client(std::nullptr_t) &;
+    application& http_client(std::nullptr_t) && = delete;
     // The app's start + wait: binds and serves until request_stop(), then returns
     // after every worker retired (a host's start() then shutdown()). May run again
     // after it returns. The first preparation, startup, or worker failure is
@@ -241,7 +242,7 @@ public:
     // CONNECTION_CLOSE(H3_NO_ERROR) -- and handlers observe their stop token
     // (context::stop_token()); then worker I/O stops before background
     // operations are joined.
-    void request_stop() &;
+    void request_stop() & noexcept;
     void request_stop() && = delete;
     // The blocking pool's counters, or all zero when no pool is configured or
     // the app is not running. Queue depth and the rejected count are what a
@@ -249,7 +250,7 @@ public:
     [[nodiscard]] ::ruvia::blocking_pool_stats blocking_pool_stats() const;
     // Worker handles, published once every worker is ready (before on_start
     // hooks run) and until run() returns. Empty or invalid otherwise.
-    [[nodiscard]] std::vector<web_worker_ref> workers() const;
+    [[nodiscard]] std::vector<web_worker_ref> worker_refs() const;
     [[nodiscard]] web_worker_ref worker_for(std::uint64_t key) const;
     [[nodiscard]] web_worker_ref worker_for(std::string_view key) const;
 

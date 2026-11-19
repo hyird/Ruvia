@@ -119,13 +119,13 @@ inline std::optional<std::string_view> extract_tls_client_certificate(SSL* ssl, 
     if (X509_NAME_print_ex(bio.get(), subject, 0, XN_FLAG_RFC2253) < 0) {
         throw std::runtime_error("TLS client certificate subject could not be rendered");
     }
-    char* data = nullptr;
-    const long length = BIO_get_mem_data(bio.get(), &data);
-    if (length < 0 || (length > 0 && data == nullptr)) {
+    char* bytes = nullptr;
+    const long length = BIO_get_mem_data(bio.get(), &bytes);
+    if (length < 0 || (length > 0 && bytes == nullptr)) {
         throw std::runtime_error("TLS client certificate subject could not be read");
     }
     if (length > 0) {
-        out.assign(data, static_cast<std::size_t>(length));
+        out.assign(bytes, static_cast<std::size_t>(length));
     }
     return std::string_view(out);
 }

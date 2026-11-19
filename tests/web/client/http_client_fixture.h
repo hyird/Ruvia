@@ -30,13 +30,15 @@ namespace {
 class test_worker final {
 public:
     explicit test_worker(asio::io_context& io) :
-        attachment_(ruvia::attach_event_loop(io, {.queue_capacity_ = 8})),
-        handle_(attachment_.loop().worker()) {}
+        attachment_(ruvia::event_loop_attachment(io, {.queue_capacity_ = 8})),
+        loop_(attachment_.loop()),
+        handle_(loop_.worker()) {}
 
     test_worker(const test_worker&) = delete;
     test_worker& operator=(const test_worker&) = delete;
 
     ruvia::event_loop_attachment attachment_;
+    ruvia::event_loop loop_;
     ruvia::worker_ref handle_;
 };
 
@@ -55,9 +57,9 @@ void run_operation(test_worker& worker_value, asio::io_context& io, operation_ty
         }
         worker_value.attachment_.request_stop();
     };
-    auto root = worker_value.attachment_.loop().start(run());
+    auto root = worker_value.attachment_.loop().submit(run()).take_value();
     worker_value.attachment_.run();
-    std::move(root).get();
+    std::move(root).take_value();
     io.restart();
     if (failure != nullptr) {
         std::rethrow_exception(failure);

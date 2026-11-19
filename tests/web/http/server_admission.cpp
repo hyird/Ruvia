@@ -73,7 +73,7 @@ class admission_routes final {
     }
 
     ruvia::task<ruvia::http_response> upload(ruvia::context& context_value) {
-        (void)co_await context_value.req().body_text();
+        (void)co_await context_value.request().body_text();
         co_return context_value.text("uploaded");
     }
 

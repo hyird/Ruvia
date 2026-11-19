@@ -47,7 +47,7 @@ client_tcp_transport::client_tcp_transport(asio::io_context& io, asio::ssl::cont
     tls_(tls),
     endpoint_(endpoint),
     literal_endpoint_([&]() -> std::optional<asio::ip::tcp::endpoint> {
-        if (const auto address = parse_ip_address(endpoint_.host_)) {
+        if (const auto address = try_parse_asio_ip_address(endpoint_.host_)) {
             return asio::ip::tcp::endpoint(*address, endpoint_.port_);
         }
         return std::nullopt;
@@ -150,7 +150,7 @@ client_idle_transport_status client_tcp_transport::idle_status() noexcept {
     if (secure()) {
         SSL* const native = stream_->native_handle();
         if (SSL_has_pending(native) != 0 || BIO_ctrl_pending(SSL_get_rbio(native)) != 0) {
-            return client_idle_transport_status::pending_data;
+            return client_idle_transport_status::pending_input;
         }
     }
     std::error_code error;
@@ -159,7 +159,7 @@ client_idle_transport_status client_tcp_transport::idle_status() noexcept {
     if (error == asio::error::would_block) {
         return client_idle_transport_status::reusable;
     }
-    return !error && bytes != 0 ? client_idle_transport_status::pending_data : client_idle_transport_status::closed;
+    return !error && bytes != 0 ? client_idle_transport_status::pending_input : client_idle_transport_status::closed;
 }
 
 void client_tcp_transport::cancel_wait() noexcept {
@@ -182,8 +182,8 @@ bool client_tcp_transport::arm(lane_deadline& lane, const operation_deadline& ti
     }
     const auto deadline_value = *timeout.deadline();
     lane.deadline_.arm(deadline_value);
-    (void)lane.timer_.schedule(worker_, deadline_value, [this, &lane](worker_timer_outcome outcome) noexcept {
-        if (outcome == worker_timer_outcome::expired && lane.deadline_.expire(std::chrono::steady_clock::now())) {
+    (void)lane.timer_.schedule(worker_, deadline_value, [this, &lane](worker_timer_status outcome) noexcept {
+        if (outcome == worker_timer_status::expired && lane.deadline_.expire(std::chrono::steady_clock::now())) {
             abort(client_abort_reason::timeout);
         }
     });
@@ -192,7 +192,7 @@ bool client_tcp_transport::arm(lane_deadline& lane, const operation_deadline& ti
 
 bool client_tcp_transport::clear(lane_deadline& lane) noexcept {
     lane.timer_.cancel();
-    return lane.deadline_.clear();
+    return lane.deadline_.take_expired();
 }
 
 client_transport_result client_tcp_transport::aborted() const noexcept {
@@ -270,8 +270,8 @@ task<client_transport_result> client_tcp_transport::connect(const operation_dead
         const auto connected = co_await async_asio([this, endpoint = *resolved.literal_](auto handler) mutable {
             stream_->next_layer().socket().async_connect(endpoint, std::move(handler));
         });
-        if (connected.error_code() || abort_reason_ != client_abort_reason::none || read_.deadline_.expired() || timeout.expired()) {
-            co_return finish(read_, timeout, connected.error_code(), 0, client_transport_status::connect_failed);
+        if (connected.code() || abort_reason_ != client_abort_reason::none || read_.deadline_.expired() || timeout.expired()) {
+            co_return finish(read_, timeout, connected.code(), 0, client_transport_status::connect_failed);
         }
     } else {
         client_happy_eyeballs connector(worker_, stream_->get_executor(), resolved.addresses_);
@@ -320,7 +320,7 @@ task<client_transport_result> client_tcp_transport::connect(const operation_dead
         stream_->async_handshake(asio::ssl::stream_base::client, std::move(handler));
     });
     tls_duration_ = std::chrono::steady_clock::now() - tls_started;
-    auto result_value = finish(read_, timeout, handshake.error_code(), 0, client_transport_status::tls_failed);
+    auto result_value = finish(read_, timeout, handshake.code(), 0, client_transport_status::tls_failed);
     tls_close_ready_ = result_value.ok();
     co_return result_value;
 }
@@ -345,12 +345,12 @@ task<client_transport_result> client_tcp_transport::read_some(std::span<char> by
         socket.async_read_some(buffer, asio::bind_immediate_executor(socket.get_executor(), std::move(handler)));
     });
     // After a TLS failure the engine owes the peer no further records.
-    if (is_tls_error(completion.error_code())) {
+    if (is_tls_error(completion.code())) {
         tls_close_ready_ = false;
     }
-    const auto transferred = completion.result();
+    const auto transferred = completion.value();
     counters_.received_ += transferred;
-    auto result_value = finish(read_, timeout, completion.error_code(), completion.error_code() ? 0 : transferred, client_transport_status::io_failed);
+    auto result_value = finish(read_, timeout, completion.code(), completion.code() ? 0 : transferred, client_transport_status::io_failed);
     if (result_value.ok() && result_value.bytes_ == 0) {
         result_value.status_ = client_transport_status::eof;
     }
@@ -386,12 +386,12 @@ task<client_transport_result> client_tcp_transport::write_buffers(buffers_type b
         : co_await async_asio<std::size_t>([this, buffers](auto handler) mutable {
         asio::async_write(stream_->next_layer().socket(), buffers, std::move(handler));
     });
-    if (completion.error_code()) {
+    if (completion.code()) {
         tls_close_ready_ = false;
     }
-    const auto transferred = completion.result();
+    const auto transferred = completion.value();
     counters_.sent_ += transferred;
-    auto result_value = finish(write_, timeout, completion.error_code(), completion.error_code() ? 0 : transferred, client_transport_status::io_failed);
+    auto result_value = finish(write_, timeout, completion.code(), completion.code() ? 0 : transferred, client_transport_status::io_failed);
     if (result_value.status_ == client_transport_status::eof) {
         result_value.status_ = client_transport_status::io_failed;
     }

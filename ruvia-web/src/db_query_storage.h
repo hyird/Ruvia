@@ -17,7 +17,7 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline db_value clone_db_value_for_resource(const db_value& value) {
+[[nodiscard]] inline db_value clone_db_value(const db_value& value) {
     switch (value.type()) {
         case db_value_type::null:
             return db_value(nullptr);
@@ -39,7 +39,7 @@ namespace ruvia::detail {
     std::vector<db_value> output;
     output.reserve(values.size());
     for (const auto& value : values) {
-        output.push_back(clone_db_value_for_resource(value));
+        output.push_back(clone_db_value(value));
     }
     return output;
 }

@@ -118,7 +118,7 @@ namespace {
 // Consumes the complete view, including checking for embedded NUL. IPv6
 // literals with reasonable scope identifiers fit in the stack buffer; longer
 // strings are rejected without heap allocation.
-std::optional<asio::ip::address> parse_ip_address(std::string_view text) noexcept {
+std::optional<asio::ip::address> try_parse_asio_ip_address(std::string_view text) noexcept {
     if (text.find('\0') != std::string_view::npos) {
         return std::nullopt;
     }

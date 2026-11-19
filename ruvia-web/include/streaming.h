@@ -129,8 +129,8 @@ public:
     /// 或 `stop` 取消（含客户端断开）返回 stop_requested，与 sleep_for 相同：
     /// duration 是睡眠目标而非操作时限，故不接受 operation_options。
     /// 提交前或响应完成后调用抛 logic_error；HTTP/2 对端终止仍作为传输错误报告。
-    [[nodiscard]] task<timer_sleep_result> sleep(timeout_duration duration, stop_token stop = {}) &;
-    task<timer_sleep_result> sleep(timeout_duration, stop_token = {}) && = delete;
+    [[nodiscard]] task<sleep_status> sleep(timeout_duration duration, stop_token stop = {}) &;
+    task<sleep_status> sleep(timeout_duration, stop_token = {}) && = delete;
 
     /// 仅报告已观察到的真实失败或取消；正常完成不等于 aborted。
     /// 观察写失败与读侧终止（HTTP/1 请求体完整消费后的 FIN/RST，HTTP/2 流终止）。
@@ -157,7 +157,7 @@ private:
     using commit_type = task<stream_commit_result> (*)(void*);
     using write_type = task<void> (*)(void*, std::string_view);
     using end_type = task<void> (*)(void*, std::span<const http_header_view>);
-    using sleep_type = task<timer_sleep_result> (*)(void*, timeout_duration, const stop_token&);
+    using sleep_type = task<sleep_status> (*)(void*, timeout_duration, const stop_token&);
     using bind_context_type = void (*)(void*, context*);
     using release_context_type = void (*)(void*) noexcept;
     using committed_type = bool (*)(void*) noexcept;
@@ -237,8 +237,8 @@ public:
     [[nodiscard]] task<void> write(const sse_message& message, operation_options operation = {}) &;
     task<void> write(const sse_message&, operation_options = {}) && = delete;
 
-    [[nodiscard]] task<timer_sleep_result> sleep(timeout_duration duration, stop_token stop = {}) &;
-    task<timer_sleep_result> sleep(timeout_duration, stop_token = {}) && = delete;
+    [[nodiscard]] task<sleep_status> sleep(timeout_duration duration, stop_token stop = {}) &;
+    task<sleep_status> sleep(timeout_duration, stop_token = {}) && = delete;
 
     [[nodiscard]] bool aborted() const noexcept {
         return writer_ == nullptr || writer_->aborted();

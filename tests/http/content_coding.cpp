@@ -489,12 +489,12 @@ TEST(Ruvia, http_content_coding_field_mapping_is_protocol_generic) {
             EXPECT_EQ(parsed_value.codings().size(), 1U);
             EXPECT_TRUE(parsed_value.codings().front() == coding);
         }
-        EXPECT_TRUE(ruvia::http_content_coding_from_token(token) == coding);
+        EXPECT_TRUE(ruvia::parse_http_content_coding_token(token) == coding);
     }
-    EXPECT_TRUE(ruvia::http_content_coding_from_token("X-GZIP") == http_content_coding::gzip);
-    EXPECT_TRUE(ruvia::http_content_coding_from_token("BR") == http_content_coding::brotli);
-    EXPECT_TRUE(!ruvia::http_content_coding_from_token("compress").has_value());
-    EXPECT_TRUE(!ruvia::http_content_coding_from_token("").has_value());
+    EXPECT_TRUE(ruvia::parse_http_content_coding_token("X-GZIP") == http_content_coding::gzip);
+    EXPECT_TRUE(ruvia::parse_http_content_coding_token("BR") == http_content_coding::brotli);
+    EXPECT_TRUE(!ruvia::parse_http_content_coding_token("compress").has_value());
+    EXPECT_TRUE(!ruvia::parse_http_content_coding_token("").has_value());
 
     const auto unsupported = parse_http_content_coding("compress");
     const auto stacked = parse_http_content_coding("gzip, br");
@@ -1409,7 +1409,7 @@ TEST(Ruvia, url_component_encoding_escapes_every_non_unreserved_octet) {
         if (ruvia::is_uri_unreserved_byte(static_cast<unsigned char>(byte))) {
             expected.push_back(static_cast<char>(byte));
         } else {
-            ruvia::http_append_percent_byte(expected, static_cast<unsigned char>(byte));
+            ruvia::append_percent_byte(expected, static_cast<unsigned char>(byte));
         }
     }
     std::string storage("replace");
@@ -1430,12 +1430,12 @@ TEST(Ruvia, url_component_encoding_escapes_every_non_unreserved_octet) {
 }
 
 TEST(Ruvia, percent_byte_decoding_rejects_out_of_range_and_truncated_triplets) {
-    EXPECT_TRUE(ruvia::http_try_decode_percent_byte("a%2Fb", 1) == std::optional<unsigned char>('/'));
-    EXPECT_TRUE(!ruvia::http_try_decode_percent_byte("abc", std::string_view::npos).has_value());
-    EXPECT_TRUE(!ruvia::http_try_decode_percent_byte("abc", 3).has_value());
-    EXPECT_TRUE(!ruvia::http_try_decode_percent_byte("%2", 0).has_value());
-    EXPECT_TRUE(!ruvia::http_try_decode_percent_byte("%G0", 0).has_value());
-    EXPECT_TRUE(!ruvia::http_try_decode_percent_byte("x20", 0).has_value());
+    EXPECT_TRUE(ruvia::decode_percent_byte("a%2Fb", 1) == std::optional<unsigned char>('/'));
+    EXPECT_TRUE(!ruvia::decode_percent_byte("abc", std::string_view::npos).has_value());
+    EXPECT_TRUE(!ruvia::decode_percent_byte("abc", 3).has_value());
+    EXPECT_TRUE(!ruvia::decode_percent_byte("%2", 0).has_value());
+    EXPECT_TRUE(!ruvia::decode_percent_byte("%G0", 0).has_value());
+    EXPECT_TRUE(!ruvia::decode_percent_byte("x20", 0).has_value());
 }
 
 TEST(Ruvia, uri_reference_encoding_borrows_or_writes_storage) {
@@ -1501,12 +1501,12 @@ TEST(Ruvia, url_decode_all_bytes_and_malformed_suffix) {
 }
 
 TEST(Ruvia, url_validate_encoding) {
-    using ruvia::validate_url_encoding;
-    EXPECT_TRUE(validate_url_encoding("plain"));
-    EXPECT_TRUE(validate_url_encoding("%41%42"));
-    EXPECT_TRUE(!validate_url_encoding("%4"));
-    EXPECT_TRUE(!validate_url_encoding("%zz"));
-    EXPECT_TRUE(validate_url_encoding(""));
+    using ruvia::is_valid_url_encoding;
+    EXPECT_TRUE(is_valid_url_encoding("plain"));
+    EXPECT_TRUE(is_valid_url_encoding("%41%42"));
+    EXPECT_TRUE(!is_valid_url_encoding("%4"));
+    EXPECT_TRUE(!is_valid_url_encoding("%zz"));
+    EXPECT_TRUE(is_valid_url_encoding(""));
 }
 
 TEST(Ruvia, url_uri_paths_equivalent_and_ordered_by_canonical_form) {
@@ -1984,8 +1984,8 @@ TEST(Ruvia, number_format_signed_extremes) {
 
 TEST(RuviaHttpPublicApi, no_transform_detection_and_encoder_memory_cap) {
     // Quote-aware Cache-Control: no-transform detection.
-    EXPECT_FALSE(ruvia::http_cache_control_has_no_transform("public, ext=\"a, no-transform, b\", max-age=60"));
-    EXPECT_TRUE(ruvia::http_cache_control_has_no_transform("public, ext=\"a, b\", no-transform, max-age=60"));
+    EXPECT_FALSE(ruvia::has_http_cache_no_transform("public, ext=\"a, no-transform, b\", max-age=60"));
+    EXPECT_TRUE(ruvia::has_http_cache_no_transform("public, ext=\"a, b\", no-transform, max-age=60"));
 
     // Exhausted native codec memory cap throws std::bad_alloc.
     EXPECT_THROW((void)ruvia::http_content_encoder(ruvia::http_content_coding::gzip, {.max_memory_bytes_ = 64}), std::bad_alloc);

@@ -104,7 +104,7 @@ bool is_http_cors_controlled_response_header(std::string_view name) noexcept {
 }
 
 void merge_http_vary_tokens(editable_http_headers headers, std::span<const std::string_view> tokens) {
-    const auto fields = headers.fields();
+    const auto fields = headers.headers();
     std::array<std::string_view, 8> inline_missing{};
     std::size_t inline_missing_count = 0;
     std::vector<std::string_view> overflow_missing;
@@ -505,7 +505,7 @@ bool http_cors_policy::rewrite_response_headers(borrowed_text request_origin, ed
     // same block. Snapshot only when the policy will echo those bytes.
     std::string retained_origin;
     if (granted && !allow_any_origin_) {
-        for (const auto field : response_headers.fields()) {
+        for (const auto field : response_headers.headers()) {
             if (detail::http_text_overlaps(origin, field.name()) || detail::http_text_overlaps(origin, field.value())) {
                 retained_origin.assign(origin);
                 origin = retained_origin;

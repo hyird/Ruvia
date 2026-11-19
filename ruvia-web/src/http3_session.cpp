@@ -251,7 +251,7 @@ public:
         for (;;) {
             require_live();
             // Reliable input is not starved by a native datagram flood.
-            if (auto bytes = stream_.body_queue().take(); !bytes.empty()) {
+            if (auto bytes = stream_.body_queue().take_queued(); !bytes.empty()) {
                 session_.wake_writer();
                 co_return http_tunnel_input{std::move(bytes), false};
             }
@@ -338,7 +338,7 @@ private:
 };
 }  // namespace
 ngtcp2_conn* http3_session::native_connection(ngtcp2_crypto_conn_ref* reference) noexcept {
-    return static_cast<http3_session*>(reference->user_data)->connection_->native_handle();
+    return static_cast<http3_session*>(reference->user_data)->connection_->native();
 }
 
 http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, const ngtcp2_pkt_hd& initial, const asio::ip::udp::endpoint& remote, const ngtcp2_cid& original_dcid, std::optional<ngtcp2_cid> retry_scid, std::span<const std::uint8_t> retry_token, connection_lifecycle lifecycle) :
@@ -424,7 +424,7 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         .callback_context_ = this,
         .http3_ = http3_options,
     }));
-    connection_->set_tls_native_handle(crypto_.get());
+    connection_->set_tls_session(crypto_.get());
     configure_http3_server_tls_session(*tls_, *connection_, initial.version, http3_options, endpoint.session_config().http3_->early_data_, tls_resumption_context_);
 
     const connection_transport transport(this, [](void* target) noexcept {
@@ -745,7 +745,7 @@ void http3_session::on_request_head(http3_request_head_event& event) {
 void http3_session::on_data(http3_data_event& event) {
     const auto stream_id = event.stream_id();
     // Credit the stream does not keep returns when this scope ends.
-    auto credit = event.take_credit();
+    auto credit = std::move(event).take_credit();
     if (credit.valid()) {
         wake_writer();
     }
@@ -1266,7 +1266,7 @@ void http3_session::arm_timer() noexcept {
         return;
     }
     try {
-        const bool scheduled = timer_.schedule(services_.worker_, http3_quic_steady_time(expiry), [this](worker_timer_outcome outcome) {
+        const bool scheduled = timer_.schedule(services_.worker_, http3_quic_steady_time(expiry), [this](worker_timer_status outcome) {
             timer_fired(outcome);
         });
         if (!scheduled) {
@@ -1278,9 +1278,9 @@ void http3_session::arm_timer() noexcept {
     }
 }
 
-void http3_session::timer_fired(worker_timer_outcome outcome) noexcept {
+void http3_session::timer_fired(worker_timer_status outcome) noexcept {
     armed_expiry_ = UINT64_MAX;
-    if (outcome != worker_timer_outcome::expired) {
+    if (outcome != worker_timer_status::expired) {
         // Only a stopping worker cancels with notification.
         connection_lifecycle_.set_reason(connection_close_reason::cancelled);
         close_now();
@@ -1320,7 +1320,7 @@ void http3_session::enter_closing() noexcept {
     timer_.cancel();
     armed_expiry_ = UINT64_MAX;
     try {
-        const bool scheduled = timer_.schedule(services_.worker_, deadline_after(http3_quic_nanoseconds(connection_->close_period())), [this](worker_timer_outcome outcome) {
+        const bool scheduled = timer_.schedule(services_.worker_, deadline_after(http3_quic_nanoseconds(connection_->close_period())), [this](worker_timer_status outcome) {
             timer_fired(outcome);
         });
         if (!scheduled) {
@@ -1612,7 +1612,7 @@ task<multiplexed_buffered_response_write_result> http3_buffered_response_writer:
     if (source) {
         co_return co_await write_file_body(stream_id, *signal, *source, committed_status);
     }
-    const auto status = co_await write_http3_stream_data(session_, stream_id, *signal, response.body_bytes());
+    const auto status = co_await write_http3_stream_data(session_, stream_id, *signal, response.body());
     if (status == http3_data_write_status::completed) {
         if (session_.codec().finish_stream(stream_id) != http_finish_status::accepted) {
             session_.reset_stream(stream_id, http3_error_code::internal_error);

@@ -25,7 +25,7 @@
 //                  with an outcome the domain already has, or
 //                  complete_or_publish() to become the pending waiter;
 //   await_suspend  suspend();
-//   await_resume   take_result().
+//   await_resume   take_value().
 //
 // Domain events complete the pending waiter through the slot under the same
 // lock; a detail::worker_shutdown_registration routes worker_stopping there.
@@ -185,7 +185,7 @@ public:
     void complete_ready(wait_result<t_type>&&) && = delete;
 
     void complete_ready(wait_status status) & {
-        (void)complete_result(wait_result<t_type>::with_status(status));
+        (void)complete_result(wait_result<t_type>::from_status(status));
     }
     void complete_ready(wait_status) && = delete;
 
@@ -247,10 +247,10 @@ public:
     }
     bool suspend(std::coroutine_handle<>) && = delete;
 
-    [[nodiscard]] wait_result<t_type> take_result() & {
+    [[nodiscard]] wait_result<t_type> take_value() & {
         return completion_.take_value();
     }
-    wait_result<t_type> take_result() && = delete;
+    wait_result<t_type> take_value() && = delete;
 
 private:
     friend class worker_wait_slot<t_type, state_type>;
@@ -260,7 +260,7 @@ private:
     }
 
     [[nodiscard]] bool complete_status(wait_status status) noexcept {
-        return completion_.complete(wait_result<t_type>::with_status(status));
+        return completion_.complete(wait_result<t_type>::from_status(status));
     }
 
     // Completion has already detached the intrusive waiter before wake() runs.

@@ -89,7 +89,7 @@ class interim_phase_routes final {
         std::string bytes(bulk_bytes, 'b');
         const auto length = std::to_string(bulk_bytes);
         const std::array headers{ruvia::http_header_view{"content-length", length}};
-        const bool fixed = c.req().path() == "/interim-phase/bulk-fixed";
+        const bool fixed = c.request().path() == "/interim-phase/bulk-fixed";
         auto& output = c.stream({.headers_ = std::span(headers).first(fixed ? 1 : 0)});
         const auto started = std::chrono::steady_clock::now();
         if (co_await output.commit() == ruvia::stream_commit_result::completed) {
@@ -274,7 +274,7 @@ TEST(Ruvia, a_trickling_reader_cannot_hold_a_write_past_write_completion_timeout
     ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &preparation});
     const auto loop = loops.loop(0);
     loops.start();
-    auto server = loop.start(serve_slow_reader(loop, std::move(accepted), endpoint.port(), {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}}, close_reason));
+    auto server = loop.submit(serve_slow_reader(loop, std::move(accepted), endpoint.port(), {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}}, close_reason)).take_value();
     std::string response;
     std::array<char, 4096> buffer;
     asio::error_code error;
@@ -293,7 +293,7 @@ TEST(Ruvia, a_trickling_reader_cannot_hold_a_write_past_write_completion_timeout
     }
     const auto elapsed = std::chrono::steady_clock::now() - requested;
     client.next_layer().close(error);
-    std::move(server).get();
+    std::move(server).take_value();
     loops.join();
 
     EXPECT_EQ(close_reason, ruvia::connection_close_reason::timeout);

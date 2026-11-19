@@ -114,7 +114,7 @@ std::vector<unsigned> http2_statuses(stream_type& stream, std::initializer_list<
     while (!pending.empty()) {
         while (peer.wants_write()) {
             output.clear();
-            (void)peer.take_output_batch(16384, output);
+            (void)peer.drain_output_batch(16384, output);
             asio::write(stream, asio::buffer(output));
         }
         asio::error_code error;

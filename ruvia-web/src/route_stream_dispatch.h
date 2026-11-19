@@ -86,7 +86,7 @@ task<void> response_stream_end_thunk(void* target, std::span<const http_header_v
 }
 
 template <typename sink>
-task<timer_sleep_result> response_stream_sleep_thunk(void* target, timeout_duration duration, const stop_token& stop_token_value) {
+task<sleep_status> response_stream_sleep_thunk(void* target, timeout_duration duration, const stop_token& stop_token_value) {
     return static_cast<sink*>(target)->sleep(duration, stop_token_value);
 }
 
@@ -432,7 +432,7 @@ template <typename stream_type, typename head_type>
     const auto written = co_await ruvia::async_asio<std::size_t>([&stream, &buffers](auto handler) {
         asio::async_write(stream, buffers, std::move(handler));
     });
-    co_return written.error_code();
+    co_return written.code();
 }
 
 // The context retains header storage through handshake construction. The
@@ -540,7 +540,7 @@ public:
             throw;
         }
     }
-    [[nodiscard]] stream_argument_type release_stream() noexcept {
+    [[nodiscard]] stream_argument_type take_stream() noexcept {
         if constexpr (native_stream) {
             return *stream_;
         } else {
@@ -557,7 +557,7 @@ public:
     }
     std::string_view subprotocol() const&& = delete;
 
-    [[nodiscard]] std::string&& release_subprotocol() noexcept {
+    [[nodiscard]] std::string&& take_subprotocol() noexcept {
         return std::move(subprotocol_);
     }
 
@@ -649,7 +649,7 @@ struct tunnel_upgrade_session_operation final {
         }
         auto* committed = std::get_if<websocket_upgrade_commit<transport_type>>(&attempt);
         try {
-            websocket_session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_, websocket_endpoint.lifecycle(), protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_), pending_, make_websocket_session_connection_options(options_, committed->compression(), websocket_endpoint.deflate(), websocket_endpoint.message_limit(options_.server_.max_websocket_message_bytes_)), committed->release_subprotocol(), &inbound_);
+            websocket_session_.emplace(committed->take_stream(), services_.worker(), scanner_entry_, websocket_endpoint.lifecycle(), protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_), pending_, make_websocket_session_connection_options(options_, committed->compression(), websocket_endpoint.deflate(), websocket_endpoint.message_limit(options_.server_.max_websocket_message_bytes_)), committed->take_subprotocol(), &inbound_);
         } catch (...) {
             committed->abort();
             throw;
@@ -749,7 +749,7 @@ struct websocket_upgrade_session_operation final {
             committed.emplace(commit_upgrade_(context_value, response_headers_value));
         }
         try {
-            session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_, websocket_endpoint_.lifecycle(), protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_), pending_frames_, make_websocket_session_connection_options(options_, committed->compression(), websocket_endpoint_.deflate(), websocket_endpoint_.message_limit(options_.server_.max_websocket_message_bytes_)), committed->release_subprotocol(), &inbound_);
+            session_.emplace(committed->take_stream(), services_.worker(), scanner_entry_, websocket_endpoint_.lifecycle(), protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_), pending_frames_, make_websocket_session_connection_options(options_, committed->compression(), websocket_endpoint_.deflate(), websocket_endpoint_.message_limit(options_.server_.max_websocket_message_bytes_)), committed->take_subprotocol(), &inbound_);
         } catch (...) {
             committed->abort();
             throw;

@@ -257,7 +257,7 @@ using ruvia::http_known_method;
 using ruvia::http_protocol_version;
 using ruvia::http_request;
 using ruvia::http_request_target_form;
-using ruvia::request_content_coding;
+using ruvia::parse_http_request_content_coding;
 using ruvia::test::parse_http1_request_message;
 
 }  // namespace
@@ -285,10 +285,10 @@ TEST(Ruvia, request_header_blocks_reclaim_repeated_parses_and_preserve_retained_
 
 TEST(Ruvia, request_public_reset_clears_borrowed_views_and_owned_headers) {
     const http_header_view headers[]{{"Host", "example.test"}};
-    auto request = ruvia::make_parsed_http_request("GET", "https://example.test/path?key=value", headers, {});
+    auto request = ruvia::make_http_request("GET", "https://example.test/path?key=value", headers, {});
     {
         const http_header_view conflicting_host[]{{"Host", "conflicting.example"}};
-        auto rebound_req = ruvia::make_parsed_http_request("GET", "https://example.test/path", conflicting_host, {});
+        auto rebound_req = ruvia::make_http_request("GET", "https://example.test/path", conflicting_host, {});
         EXPECT_EQ(rebound_req.header("Host").value_or(""), std::string_view("example.test"));
     }
     request.reset();
@@ -308,7 +308,7 @@ TEST(Ruvia, request_public_reset_clears_borrowed_views_and_owned_headers) {
 
 TEST(Ruvia, request_header_distinguishes_missing_from_present_empty) {
     const http_header_view headers[]{{"X-Empty", ""}, {"Host", ""}};
-    const auto request = ruvia::make_parsed_http_request("GET", "/", headers, {});
+    const auto request = ruvia::make_http_request("GET", "/", headers, {});
     EXPECT_TRUE(!request.header("X-Missing").has_value());
     const auto present_empty = request.header("x-empty");
     EXPECT_TRUE(present_empty.has_value());
@@ -326,7 +326,7 @@ TEST(Ruvia, request_target_rejects_encoded_nul_in_path) {
         EXPECT_TRUE(!ruvia::is_valid_http_origin_form_target(target));
         bool rejected = false;
         try {
-            (void)ruvia::make_parsed_http_request("GET", target, {}, {});
+            (void)ruvia::make_http_request("GET", target, {}, {});
         } catch (const ruvia::http_protocol_error& error) {
             rejected = error.status() == ruvia::http_status::bad_request;
         }
@@ -334,12 +334,12 @@ TEST(Ruvia, request_target_rejects_encoded_nul_in_path) {
     }
     bool absolute_rejected = false;
     try {
-        (void)ruvia::make_parsed_http_request("GET", "http://example.com/a%00b", {}, {});
+        (void)ruvia::make_http_request("GET", "http://example.com/a%00b", {}, {});
     } catch (const ruvia::http_protocol_error& error) {
         absolute_rejected = error.status() == ruvia::http_status::bad_request;
     }
     EXPECT_TRUE(absolute_rejected);
-    const auto request = ruvia::make_parsed_http_request("GET", "/a%41b", {}, {});
+    const auto request = ruvia::make_http_request("GET", "/a%41b", {}, {});
     EXPECT_EQ(request.path(), std::string_view("/a%41b"));
 }
 
@@ -352,7 +352,7 @@ TEST(Ruvia, parsed_request_applies_recipient_field_rules_like_wire_parsers) {
     for (const auto headers : {std::span<const http_header_view>(duplicate_range), std::span<const http_header_view>(duplicate_if_range), std::span<const http_header_view>(duplicate_host)}) {
         bool rejected = false;
         try {
-            (void)ruvia::make_parsed_http_request("GET", "/", headers, {});
+            (void)ruvia::make_http_request("GET", "/", headers, {});
         } catch (const ruvia::http_protocol_error& error) {
             rejected = error.status() == ruvia::http_status::bad_request;
         }
@@ -360,14 +360,14 @@ TEST(Ruvia, parsed_request_applies_recipient_field_rules_like_wire_parsers) {
     }
 
     const http_header_view repeated_list[]{{"Accept", "text/plain"}, {"Accept", "text/html"}, {"User-Agent", "first/1"}, {"User-Agent", "second/2"}};
-    const auto request = ruvia::make_parsed_http_request("GET", "/", repeated_list, {});
+    const auto request = ruvia::make_http_request("GET", "/", repeated_list, {});
     EXPECT_EQ(request.headers().size(), std::size_t{4});
 }
 
 TEST(Ruvia, request_content_coding_accumulates_repeated_header_fields_in_order) {
     const http_header_view headers[]{{"Content-Encoding", "br"}, {"Content-Encoding", "gzip"}};
-    const auto request = ruvia::make_parsed_http_request("POST", "/", headers, {});
-    const auto coding = request_content_coding(request);
+    const auto request = ruvia::make_http_request("POST", "/", headers, {});
+    const auto coding = parse_http_request_content_coding(request);
     EXPECT_TRUE(coding.invalid() == nullptr);
     EXPECT_TRUE(coding.unsupported() == nullptr);
     EXPECT_EQ(coding.codings().size(), 2U);
@@ -379,9 +379,9 @@ TEST(Ruvia, request_content_coding_accumulates_repeated_header_fields_in_order) 
 
 TEST(Ruvia, request_content_coding_combines_field_lines_with_list_semantics) {
     const http_header_view headers[]{{"Content-Encoding", ","}, {"Content-Encoding", "gzip"}};
-    const auto request = ruvia::make_parsed_http_request("POST", "/", headers, {});
+    const auto request = ruvia::make_http_request("POST", "/", headers, {});
 
-    const auto coding = request_content_coding(request);
+    const auto coding = parse_http_request_content_coding(request);
     EXPECT_TRUE(coding.invalid() == nullptr);
     EXPECT_TRUE(coding.unsupported() == nullptr);
     EXPECT_EQ(coding.codings().size(), 1U);
@@ -391,7 +391,7 @@ TEST(Ruvia, request_content_coding_combines_field_lines_with_list_semantics) {
 }
 
 TEST(Ruvia, request_access_raw_query_lookup_preserves_encoding_and_uses_last_match) {
-    const auto request = ruvia::make_parsed_http_request("GET", "/?a=first&b=2&a=second+value&encoded%20key=raw%2Fvalue", {}, {});
+    const auto request = ruvia::make_http_request("GET", "/?a=first&b=2&a=second+value&encoded%20key=raw%2Fvalue", {}, {});
 
     const auto value = request.last_raw_query_value("a");
     EXPECT_TRUE(value.has_value());
@@ -402,7 +402,7 @@ TEST(Ruvia, request_access_raw_query_lookup_preserves_encoding_and_uses_last_mat
 
 TEST(Ruvia, request_access_cookie_lookup_uses_first_match) {
     const http_header_view headers[]{{"Cookie", "sid=first; theme=dark; sid=second"}};
-    const auto request = ruvia::make_parsed_http_request("GET", "/", headers, {});
+    const auto request = ruvia::make_http_request("GET", "/", headers, {});
 
     const auto value = request.cookie("sid");
     EXPECT_TRUE(value.has_value());
@@ -411,7 +411,7 @@ TEST(Ruvia, request_access_cookie_lookup_uses_first_match) {
 
 TEST(Ruvia, request_access_cookie_lookup_scans_repeated_cookie_fields) {
     const http_header_view headers[]{{"Cookie", "a=1"}, {"Cookie", "b=2"}};
-    const auto request = ruvia::make_parsed_http_request("GET", "/", headers, {});
+    const auto request = ruvia::make_http_request("GET", "/", headers, {});
 
     const auto first = request.cookie("a");
     EXPECT_TRUE(first.has_value());
@@ -424,7 +424,7 @@ TEST(Ruvia, request_access_cookie_lookup_scans_repeated_cookie_fields) {
 TEST(Ruvia, request_access_cookie_lookup_preserves_distinct_fields_with_shared_storage) {
     constexpr std::string_view shared = "sid=old; sid=new; token=present";
     const http_header_view headers[]{{"Cookie", shared}, {"Cookie", shared.substr(0, 7)}};
-    const auto request = ruvia::make_parsed_http_request("GET", "/", headers, {});
+    const auto request = ruvia::make_http_request("GET", "/", headers, {});
     EXPECT_EQ(request.headers().size(), std::size_t{2});
     EXPECT_EQ(request.header("Cookie").value_or("missing"), shared);
     EXPECT_EQ(request.cookie("sid").value_or("missing"), std::string_view("old"));
@@ -444,7 +444,7 @@ TEST(Ruvia, request_unique_header_distinguishes_absent_found_and_repeated) {
         {"X-Empty", ""},
         {"Content-Type", "text/plain"},
     };
-    const auto request = ruvia::make_parsed_http_request("POST", "/", headers, {});
+    const auto request = ruvia::make_http_request("POST", "/", headers, {});
 
     // Known singleton field accepted as recipient-tolerant when repeated.
     EXPECT_TRUE(request.unique_header("user-agent").status_ == unique_lookup_status::repeated);
@@ -479,7 +479,7 @@ TEST(Ruvia, request_trailers_singular_lookup_uses_first_match) {
 
 TEST(Ruvia, request_body_string_view_and_known_method_bits_match_contracts) {
     const std::array<std::byte, 4> payload{std::byte{'d'}, std::byte{'a'}, std::byte{'t'}, std::byte{'a'}};
-    const auto request = ruvia::make_parsed_http_request("POST", "/", {}, payload);
+    const auto request = ruvia::make_http_request("POST", "/", {}, payload);
     EXPECT_EQ(request.body(), std::string_view("data"));
     EXPECT_EQ(request.body_bytes().size(), std::size_t{4});
     static_assert(ruvia::http_known_method_bit(http_known_method::get) == 1U);
@@ -489,7 +489,7 @@ TEST(Ruvia, request_body_string_view_and_known_method_bits_match_contracts) {
 namespace {
 
 template <typename method_type, typename target_type, typename body_type>
-concept make_parsed_request_accepts = requires(method_type&& method, target_type&& target, body_type&& body) { ruvia::make_parsed_http_request(std::forward<method_type>(method), std::forward<target_type>(target), std::span<const ruvia::http_header_view>{}, std::forward<body_type>(body)); };
+concept make_parsed_request_accepts = requires(method_type&& method, target_type&& target, body_type&& body) { ruvia::make_http_request(std::forward<method_type>(method), std::forward<target_type>(target), std::span<const ruvia::http_header_view>{}, std::forward<body_type>(body)); };
 
 static_assert(make_parsed_request_accepts<const std::string&, const std::string&, const std::vector<std::byte>&>);
 static_assert(!make_parsed_request_accepts<std::string, const std::string&, const std::vector<std::byte>&>);
@@ -532,7 +532,7 @@ struct target_origin_snapshot final {
 
 [[nodiscard]] target_origin_snapshot decide(std::string_view method, std::string_view target, std::string_view host, http_target_origin_connection connection) {
     const std::array headers{ruvia::http_header_view("Host", host)};
-    const auto request = ruvia::make_parsed_http_request(method, target, headers, {});
+    const auto request = ruvia::make_http_request(method, target, headers, {});
     const auto origin = ruvia::plan_http_target_origin(request, connection);
     const auto addr = origin.address();
     return {origin.action(), origin.host_kind(), std::string(origin.host()), std::vector<std::uint8_t>(addr.begin(), addr.end())};
@@ -981,25 +981,25 @@ TEST(Ruvia, http_date_conversion_rejects_unrepresentable_years) {
 
 namespace {
 
-using ruvia::http_client_expectation_is_valid;
 using ruvia::http_request_content_indication;
 using ruvia::http_request_expectations;
 using ruvia::http_unsupported_expectation_policy;
+using ruvia::is_valid_http_client_expectation;
 
 }  // namespace
 
 // The Expect field and what a client that sends it must follow with.
 
 TEST(Ruvia, client_expectation_requires_following_content) {
-    EXPECT_TRUE(http_client_expectation_is_valid(false, http_request_content_indication::no_content));
-    EXPECT_TRUE(!http_client_expectation_is_valid(true, http_request_content_indication::no_content));
-    EXPECT_TRUE(http_client_expectation_is_valid(true, http_request_content_indication::will_follow));
+    EXPECT_TRUE(is_valid_http_client_expectation(false, http_request_content_indication::no_content));
+    EXPECT_TRUE(!is_valid_http_client_expectation(true, http_request_content_indication::no_content));
+    EXPECT_TRUE(is_valid_http_client_expectation(true, http_request_content_indication::will_follow));
 }
 
 TEST(Ruvia, expectations_parse_one_logical_recipient_list) {
     http_request_expectations expectations;
-    expectations.parse_field(" , 100-continue, , 100-Continue, ");
-    expectations.parse_field(" 100-CONTINUE ");
+    expectations.update(" , 100-continue, , 100-Continue, ");
+    expectations.update(" 100-CONTINUE ");
 
     EXPECT_TRUE(expectations.has_continue());
     EXPECT_TRUE(!expectations.has_unsupported());
@@ -1011,14 +1011,14 @@ TEST(Ruvia, expectations_parse_one_logical_recipient_list) {
 
 TEST(Ruvia, expectations_preserve_unsupported_extensions_as_semantics) {
     http_request_expectations expectations;
-    expectations.parse_field("100-continue");
-    expectations.parse_field(R"(custom="a,b")");
+    expectations.update("100-continue");
+    expectations.update(R"(custom="a,b")");
 
     EXPECT_TRUE(expectations.has_continue());
     EXPECT_TRUE(expectations.has_unsupported());
     const auto rejected = expectations.server_plan(http_request_content_indication::will_follow, http_unsupported_expectation_policy::reject);
     EXPECT_TRUE(rejected == ruvia::http_server_expectation_plan::reject_unsupported);
-    EXPECT_EQ(ruvia::http_unsupported_expectation_error().status(), ruvia::http_status::expectation_failed);
+    EXPECT_EQ(ruvia::make_http_unsupported_expectation_error().status(), ruvia::http_status::expectation_failed);
     const auto ignored = expectations.server_plan(http_request_content_indication::will_follow, http_unsupported_expectation_policy::ignore);
     EXPECT_TRUE(ignored == ruvia::http_server_expectation_plan::send_continue);
 
@@ -1138,15 +1138,15 @@ TEST(Ruvia, public_quoted_string_cursor_validates_and_decodes) {
     EXPECT_EQ(cursor.consumed(), std::size_t{9});
 
     EXPECT_EQ(ruvia::http_quoted_string_size(R"("x" tail)"), std::size_t{3});
-    EXPECT_TRUE(ruvia::http_is_quoted_string(R"("")"));
-    EXPECT_TRUE(ruvia::http_is_quoted_string("\"\t obs\x80\""));
-    EXPECT_TRUE(!ruvia::http_is_quoted_string(""));
-    EXPECT_TRUE(!ruvia::http_is_quoted_string("token"));
-    EXPECT_TRUE(!ruvia::http_is_quoted_string(R"("open)"));
-    EXPECT_TRUE(!ruvia::http_is_quoted_string(R"("a"b")"));
-    EXPECT_TRUE(!ruvia::http_is_quoted_string(R"("trailing\")"));
-    EXPECT_TRUE(!ruvia::http_is_quoted_string("\"ctl\x01\""));
-    EXPECT_TRUE(!ruvia::http_is_quoted_string("\"del\x7f\""));
+    EXPECT_TRUE(ruvia::is_http_quoted_string(R"("")"));
+    EXPECT_TRUE(ruvia::is_http_quoted_string("\"\t obs\x80\""));
+    EXPECT_TRUE(!ruvia::is_http_quoted_string(""));
+    EXPECT_TRUE(!ruvia::is_http_quoted_string("token"));
+    EXPECT_TRUE(!ruvia::is_http_quoted_string(R"("open)"));
+    EXPECT_TRUE(!ruvia::is_http_quoted_string(R"("a"b")"));
+    EXPECT_TRUE(!ruvia::is_http_quoted_string(R"("trailing\")"));
+    EXPECT_TRUE(!ruvia::is_http_quoted_string("\"ctl\x01\""));
+    EXPECT_TRUE(!ruvia::is_http_quoted_string("\"del\x7f\""));
 
     EXPECT_EQ(ruvia::http_find_unquoted_delimiter(R"(a="x,\",y",b)", 0, ','), std::size_t{10});
 }

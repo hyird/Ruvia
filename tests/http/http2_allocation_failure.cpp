@@ -205,7 +205,7 @@ outbound_allocation_observation exercise_warmed_outbound_compression(std::size_t
         auto server = ruvia::http2_connection::server({});
         const auto transfer = [&](ruvia::http2_connection& from, ruvia::http2_connection& to) {
             auto& bytes = retained.emplace_back();
-            (void)from.take_output_batch((std::numeric_limits<std::size_t>::max)(), bytes);
+            (void)from.drain_output_batch((std::numeric_limits<std::size_t>::max)(), bytes);
             require(to.feed(bytes) == ruvia::http2_feed_status::accepted, "peer rejected encoded output");
         };
         transfer(client, server);
@@ -418,7 +418,7 @@ TEST(Ruvia, sse_parser_transfers_large_ids_and_discards_unpublished_updates) {
 
     ASSERT_TRUE(parser.parse("id: previous\n\n").holds<ruvia::decode_need_input>());
     ASSERT_TRUE(parser.parse(field).holds<ruvia::decode_need_input>());
-    parser.finish();
+    parser.finish_input();
     EXPECT_EQ(parser.last_event_id(), "previous");
     EXPECT_EQ(live_allocations.load(), empty);
 
@@ -529,22 +529,22 @@ TEST(Ruvia, cookie_jar_releases_storage_when_a_large_value_is_replaced) {
     const auto large_cookie = "id=" + std::string(4000, 'x');
     const auto shorter_cookie = "id=" + std::string(256, 'y');
 
-    ASSERT_TRUE(jar.absorb_set_cookie("/", "id=a", now));
+    ASSERT_TRUE(jar.apply_set_cookie("/", "id=a", now));
     const auto small = live_allocations.load();
-    ASSERT_TRUE(jar.absorb_set_cookie("/", large_cookie, now));
+    ASSERT_TRUE(jar.apply_set_cookie("/", large_cookie, now));
     const auto large = live_allocations.load();
     ASSERT_GT(large, small);
     EXPECT_THROW(
         {
             allocation_scope scope(0);
-            (void)jar.absorb_set_cookie("/", shorter_cookie, now);
+            (void)jar.apply_set_cookie("/", shorter_cookie, now);
         },
         std::bad_alloc);
-    EXPECT_EQ(jar.cookie_header("/", true, now), large_cookie);
-    ASSERT_TRUE(jar.absorb_set_cookie("/", "id=b", now));
+    EXPECT_EQ(jar.format_cookie_header("/", true, now), large_cookie);
+    ASSERT_TRUE(jar.apply_set_cookie("/", "id=b", now));
     const auto replaced = live_allocations.load();
 
-    EXPECT_EQ(jar.cookie_header("/", true, now), "id=b");
+    EXPECT_EQ(jar.format_cookie_header("/", true, now), "id=b");
     EXPECT_EQ(replaced, small);
 }
 

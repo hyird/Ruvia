@@ -88,6 +88,8 @@ public:
     // continue. A non-positive timeout throws std::invalid_argument.
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &;
     task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
+    [[nodiscard]] task<std::optional<std::string_view>> read_text(operation_options operation = {}) &;
+    task<std::optional<std::string_view>> read_text(operation_options = {}) && = delete;
     // Owns `bytes` before returning (exact std::string rvalues move without
     // copying), then sends them once awaited. A timeout
     // or stop in `operation` of write() or finish() aborts the connection (a

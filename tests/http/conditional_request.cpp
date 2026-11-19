@@ -95,14 +95,14 @@ TEST(Ruvia, http_etag_preconditions_fold_repeated_field_lines) {
     using ruvia::http_header_view;
 
     const http_header_view fields[]{{"If-None-Match", R"("current")"}, {"If-None-Match", R"("stale")"}};
-    const auto request = ruvia::make_parsed_http_request("GET", "/", fields, {});
+    const auto request = ruvia::make_http_request("GET", "/", fields, {});
 
     const auto matched = get_http_etag_preconditions(request, R"("current")");
     EXPECT_TRUE(matched.if_none_match_.present_);
     EXPECT_TRUE(matched.if_none_match_.matches());
 
     const http_header_view wildcard_fields[]{{"If-Match", "*"}};
-    const auto wildcard = ruvia::make_parsed_http_request("GET", "/", wildcard_fields, {});
+    const auto wildcard = ruvia::make_http_request("GET", "/", wildcard_fields, {});
     const auto existence = get_http_etag_preconditions(wildcard, R"("unused")");
     EXPECT_TRUE(existence.if_match_.present_);
     EXPECT_TRUE(existence.if_match_.matches());

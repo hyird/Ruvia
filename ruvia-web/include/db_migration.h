@@ -144,11 +144,9 @@ private:
 // run's own operation_options bound it.
 class db_migrator final {
 public:
-    // The configuration and migration-table name are copied into options.resource;
-    // their source PMR storage may be released after construction. The supplied
-    // resource itself must outlive this migrator and its runs. An invalid loop,
-    // or a DNS host on a loop without a blocking pool, throws
-    // std::invalid_argument.
+    // The configuration and migration-table name are copied during construction,
+    // so their source storage may be released afterwards. An invalid loop, or a
+    // DNS host on a loop without a blocking pool, throws std::invalid_argument.
     db_migrator(event_loop loop, const db_config& config, const db_migrator_options& options = {});
     ~db_migrator();
 

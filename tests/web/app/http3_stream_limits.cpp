@@ -89,7 +89,7 @@ std::span<const std::byte> byte_view(std::string_view value) {
 // Lets the peer fill the receive windows and fall silent before the handler
 // consumes anything.
 ruvia::task<void> hold_off(ruvia::context& context) {
-    if (co_await ruvia::sleep_for(context.worker(), 200ms) != ruvia::timer_sleep_result::elapsed) {
+    if (co_await ruvia::sleep_for(context.worker(), 200ms) != ruvia::sleep_status::elapsed) {
         throw std::runtime_error("test hold-off sleep interrupted");
     }
 }
@@ -99,7 +99,7 @@ ruvia::task<void> hold_off(ruvia::context& context) {
 ruvia::task<void> await_release(ruvia::context& context) {
     const auto deadline = std::chrono::steady_clock::now() + client_timeout;
     while (!observed().release_held_.load()) {
-        if (std::chrono::steady_clock::now() >= deadline || co_await ruvia::sleep_for(context.worker(), 1ms, context.stop_token()) != ruvia::timer_sleep_result::elapsed) {
+        if (std::chrono::steady_clock::now() >= deadline || co_await ruvia::sleep_for(context.worker(), 1ms, context.stop_token()) != ruvia::sleep_status::elapsed) {
             throw std::runtime_error("held handler was not released");
         }
     }
@@ -116,7 +116,7 @@ struct refused_connect_hold final {
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 
     ruvia::task<void> invoke(ruvia::context& context, ruvia::next& next) {
-        if (context.req().known_method() == ruvia::http_known_method::connect && context.req().authority() == refused_connect_authority) {
+        if (context.request().known_method() == ruvia::http_known_method::connect && context.request().authority() == refused_connect_authority) {
             co_await await_release(context);
         }
         co_await next();
@@ -141,7 +141,7 @@ public:
 
     // Runs only with a complete buffered body.
     ruvia::task<ruvia::http_response> inbound_buffered(ruvia::context& context) {
-        const auto body = co_await context.req().body_text();
+        const auto body = co_await context.request().body_text();
         ++observed().buffered_bodies_;
         co_return context.text(std::string(std::to_string(body.size())));
     }
@@ -179,7 +179,7 @@ public:
     ruvia::task<void> held_tunnel(ruvia::context& context) {
         (void)context.tunnel();
         const auto deadline = std::chrono::steady_clock::now() + client_timeout;
-        while (std::chrono::steady_clock::now() < deadline && co_await ruvia::sleep_for(context.worker(), 1ms, context.stop_token()) == ruvia::timer_sleep_result::elapsed) {
+        while (std::chrono::steady_clock::now() < deadline && co_await ruvia::sleep_for(context.worker(), 1ms, context.stop_token()) == ruvia::sleep_status::elapsed) {
         }
     }
     // Reads its UDP packets only once the test has sent them all.
@@ -217,7 +217,7 @@ public:
         co_await tunnel.finish();
     }
     ruvia::task<ruvia::http_response> upload(ruvia::context& context) {
-        const auto body = co_await context.req().body_text();
+        const auto body = co_await context.request().body_text();
         observed().uploaded_bytes_ = body.size();
         ++observed().uploads_;
         co_return context.text("uploaded");

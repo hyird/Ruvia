@@ -102,7 +102,7 @@ bool throws_head_error(fn_type&& fn) {
 TEST(Ruvia, http1_head_metadata_body_preserves_declared_or_unknown_representation_length) {
     for (const auto version : {ruvia::http_protocol_version::http10, ruvia::http_protocol_version::http11}) {
         http_response response;
-        response.head_metadata_body();
+        response.mark_head_metadata_only();
         const auto unknown = emit_buffered_head(response, http_known_method::head, version);
         EXPECT_TRUE(unknown.find("Content-Length:") == std::string::npos);
 
@@ -569,7 +569,7 @@ TEST(Ruvia, http1_response_head_rejects_transfer_encoding_other_than_chunked) {
         http_response committed;
         committed.header("Transfer-Encoding", coding);
         EXPECT_TRUE(throws_head_error([&] {
-            (void)ruvia::http1_commit_final_response(committed, ruvia::plan_http1_request_connection(ruvia::http_protocol_version::http11, true, false));
+            (void)ruvia::commit_http1_final_response(committed, ruvia::plan_http1_request_connection(ruvia::http_protocol_version::http11, true, false));
         }));
         EXPECT_TRUE(!committed.header("Connection").has_value());
 
@@ -796,12 +796,12 @@ TEST(Ruvia, response_headers_reject_request_only_te_field) {
     EXPECT_TRUE(!response.header("TE").has_value());
 }
 
-TEST(Ruvia, http1_commit_final_response_preserves_custom_connection_options_when_closing) {
+TEST(Ruvia, commit_http1_final_response_preserves_custom_connection_options_when_closing) {
     http_response response;
     response.status(ruvia::http_status::ok);
     response.header("X-Custom-Hop", "secret-hop");
     response.header("Connection", "keep-alive, X-Custom-Hop");
-    const auto committed = ruvia::http1_commit_final_response(response, ruvia::plan_http1_request_connection(ruvia::http_protocol_version::http11, true, false));
+    const auto committed = ruvia::commit_http1_final_response(response, ruvia::plan_http1_request_connection(ruvia::http_protocol_version::http11, true, false));
     EXPECT_EQ(committed.close_policy(), ruvia::http1_close_policy::close_after_response);
     EXPECT_EQ(response.header("Connection").value_or(""), std::string_view("close, X-Custom-Hop"));
 
@@ -810,7 +810,7 @@ TEST(Ruvia, http1_commit_final_response_preserves_custom_connection_options_when
     upgrade_response.header("Upgrade", "example/1");
     upgrade_response.header("X-Hop-2", "v");
     upgrade_response.header("Connection", "X-Hop-2");
-    const auto upgrade_committed = ruvia::http1_commit_final_response(upgrade_response, ruvia::plan_http1_request_connection(ruvia::http_protocol_version::http11, true, false));
+    const auto upgrade_committed = ruvia::commit_http1_final_response(upgrade_response, ruvia::plan_http1_request_connection(ruvia::http_protocol_version::http11, true, false));
     EXPECT_EQ(upgrade_committed.close_policy(), ruvia::http1_close_policy::close_after_response);
     EXPECT_EQ(upgrade_response.header("Connection").value_or(""), std::string_view("close, Upgrade, X-Hop-2"));
 }
@@ -1255,7 +1255,7 @@ TEST(Ruvia, response_public_write_plan_distinguishes_head_from_bodyless_status) 
     EXPECT_EQ(head_plan.content_length(), std::uint64_t{19});
     EXPECT_TRUE(!head_plan.send_body());
     EXPECT_TRUE(head_plan.matches_response(response));
-    EXPECT_EQ(response.body_bytes(), "head-representation");
+    EXPECT_EQ(response.body_bytes().size(), std::size_t{19});
     EXPECT_EQ(response.body(), "head-representation");
     EXPECT_TRUE(!response.file_body().has_value());
 

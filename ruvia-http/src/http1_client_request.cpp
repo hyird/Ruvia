@@ -243,7 +243,7 @@ struct request_head_write_plan final {
     }
     const bool expect_continue = expectation == http_client_request_expectation::continue_;
     const auto content_indication = explicit_content && (!length || *length != 0) ? http_request_content_indication::will_follow : http_request_content_indication::no_content;
-    if (!http_client_expectation_is_valid(expect_continue, content_indication)) {
+    if (!is_valid_http_client_expectation(expect_continue, content_indication)) {
         return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::expectation_without_content);
     }
     if (content_indication == http_request_content_indication::will_follow) {

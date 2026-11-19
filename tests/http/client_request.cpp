@@ -907,9 +907,9 @@ TEST(Ruvia, http1_client_forwards_options_content_without_inventing_media_type) 
 
 namespace {
 
+using ruvia::format_http_origin_authority;
 using ruvia::http_origin_view;
 using ruvia::http_scheme;
-using ruvia::make_http_origin_authority;
 using ruvia::test::throws_on;
 
 http_origin_view origin_for(std::string_view host, std::uint16_t port, http_scheme scheme = http_scheme::http) {
@@ -917,7 +917,7 @@ http_origin_view origin_for(std::string_view host, std::uint16_t port, http_sche
 }
 
 std::string authority_for(const http_origin_view& origin) {
-    const auto authority = make_http_origin_authority(origin);
+    const auto authority = format_http_origin_authority(origin);
     return authority;
 }
 

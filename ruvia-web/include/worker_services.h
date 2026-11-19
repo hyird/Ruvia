@@ -99,13 +99,13 @@ public:
     [[nodiscard]] redis_executor redis(std::string_view alias, operation_scope& operation_scope, request_io_metrics* io_metrics, const stop_token& stop_token) const;
 #endif
 
-    [[nodiscard]] http_client_ref client(operation_scope& operation_scope, const stop_token& stop_token) const;
-    [[nodiscard]] http_client_ref client(std::string_view alias, operation_scope& operation_scope, const stop_token& stop_token) const;
+    [[nodiscard]] http_client_ref http_client(operation_scope& operation_scope, const stop_token& stop_token) const;
+    [[nodiscard]] http_client_ref http_client(std::string_view alias, operation_scope& operation_scope, const stop_token& stop_token) const;
 
 private:
     explicit constexpr worker_client_registry_view(std::nullptr_t) noexcept {}
 
-    [[nodiscard]] const http_client& borrowed_http_clients(std::string_view alias) const;
+    [[nodiscard]] const ::ruvia::http_client& borrowed_http_clients(std::string_view alias) const;
 
     const borrowed_clients* borrowed_{nullptr};
     http_client_registry* http_clients_{nullptr};
@@ -124,7 +124,7 @@ class worker_services final {
 public:
     template <typename state_type>
     [[nodiscard]] state_type& worker_state() const {
-        return *static_cast<state_type*>(worker_state_instance(detail::type_key<state_type>()));
+        return *static_cast<std::remove_const_t<state_type>*>(worker_state_instance(detail::type_key<std::remove_const_t<state_type>>()));
     }
 
     template <typename callable_type>
@@ -140,8 +140,8 @@ public:
 
     [[nodiscard]] const ruvia::env& env() const noexcept;
 
-    [[nodiscard]] http_client_ref client() const;
-    [[nodiscard]] http_client_ref client(std::string_view alias) const;
+    [[nodiscard]] http_client_ref http_client() const;
+    [[nodiscard]] http_client_ref http_client(std::string_view alias) const;
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] db_executor db() const;
     [[nodiscard]] db_executor db(std::string_view alias) const;
@@ -194,9 +194,17 @@ public:
     // Borrows this worker's registered instance; never hand it to another
     // worker. An unregistered type throws std::logic_error.
     template <typename state_type>
-    [[nodiscard]] state_type& worker_state() const {
+    [[nodiscard]] state_type& worker_state() & RUVIA_LIFETIMEBOUND {
         return services().template worker_state<state_type>();
     }
+    template <typename state_type>
+    [[nodiscard]] const state_type& worker_state() const& RUVIA_LIFETIMEBOUND {
+        return services().template worker_state<std::remove_const_t<state_type>>();
+    }
+    template <typename state_type>
+    state_type& worker_state() && = delete;
+    template <typename state_type>
+    const state_type& worker_state() const&& = delete;
 
     // The callable executes on the blocking pool and must own everything it
     // touches. Completion resumes on this worker; options.timeout_ or shutdown
@@ -207,20 +215,23 @@ public:
     // With application::blocking_pool(nullptr) the result reports
     // blocking_status::unavailable without submitting the callable.
     template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options = {}) const {
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options = {}) const& {
         return services().run_blocking(std::move(callable), std::move(options));
     }
+    template <typename callable_type>
+    task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type, operation_options = {}) const&& = delete;
 
     // The application's env; an empty one when the host has none.
-    [[nodiscard]] const ruvia::env& env() const noexcept {
+    [[nodiscard]] const ruvia::env& env() const& noexcept RUVIA_LIFETIMEBOUND {
         return services().env();
     }
+    const ruvia::env& env() const&& = delete;
 
     // Defined in the library and instantiated there for every host.
-    [[nodiscard]] http_client_ref client() const&;
-    [[nodiscard]] http_client_ref client(std::string_view alias) const&;
-    http_client_ref client() const&& = delete;
-    http_client_ref client(std::string_view) const&& = delete;
+    [[nodiscard]] http_client_ref http_client() const&;
+    [[nodiscard]] http_client_ref http_client(std::string_view alias) const&;
+    http_client_ref http_client() const&& = delete;
+    http_client_ref http_client(std::string_view) const&& = delete;
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] db_executor db() const&;
     [[nodiscard]] db_executor db(std::string_view alias) const&;

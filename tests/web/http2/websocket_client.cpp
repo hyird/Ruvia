@@ -33,7 +33,7 @@
 namespace {
 void exercise_client(bool reset_peer, bool secure = false) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::optional<ruvia::test::tls_identity> identity;
     if (secure) {
@@ -110,7 +110,7 @@ void exercise_client(bool reset_peer, bool secure = false) {
                         request_lease.emplace(std::move(*request));
                     } else if (auto* data = event->tunnel_data()) {
                         websocket_input.append(data->bytes());
-                        (void)data->take_credit();
+                        (void)std::move(*data).take_credit();
                         while (auto ws_event = websocket->next_event()) {
                             if (auto* message = ws_event->message()) {
                                 ++messages;
@@ -167,7 +167,7 @@ void exercise_client(bool reset_peer, bool secure = false) {
         ruvia::http_client client(attachment.loop(), config);
         std::exception_ptr failure;
         try {
-            auto websocket = co_await client.client().websocket("/").headers(headers).deflate({.compression_ = {.enabled_ = true}}).connect();
+            auto websocket = co_await client.ref().websocket("/").headers(headers).deflate({.compression_ = {.enabled_ = true}}).connect();
             auto& client_handle = websocket;
             if (reset_peer) {
                 (void)co_await client_handle.read();
@@ -197,9 +197,9 @@ void exercise_client(bool reset_peer, bool secure = false) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -222,7 +222,7 @@ enum class closing_peer { clean_release,
 
 void exercise_closing_peer(closing_peer behavior) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::exception_ptr peer_failure;
     bool received_close = false;
@@ -258,7 +258,7 @@ void exercise_closing_peer(closing_peer behavior) {
                         websocket.emplace(websocket_input);
                     } else if (auto* data = event->tunnel_data()) {
                         websocket_input.append(data->bytes());
-                        (void)data->take_credit();
+                        (void)std::move(*data).take_credit();
                         while (auto frame = websocket->next_event()) {
                             if (const auto* close = frame->close()) {
                                 received_close = true;
@@ -333,7 +333,7 @@ void exercise_closing_peer(closing_peer behavior) {
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url, .versions_ = ruvia::http_client_versions{.http1_ = false}});
         std::exception_ptr failure;
         try {
-            auto websocket = co_await client.client().websocket("/").connect();
+            auto websocket = co_await client.ref().websocket("/").connect();
             auto& client_handle = websocket;
             co_await client_handle.close({.code_ = ruvia::websocket_close_status::normal_closure, .reason_ = "complete"});
             close_completed = client_handle.termination() == ruvia::websocket_termination::local_close;
@@ -349,9 +349,9 @@ void exercise_closing_peer(closing_peer behavior) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -394,10 +394,11 @@ enum class handshake_end { close_on_data,
 // waits for the client connection to retire after shutdown.
 void exercise_handshake_end(handshake_end mode) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::exception_ptr peer_failure;
-    const auto worker = attachment.loop().worker();
+    const auto loop_for_worker = attachment.loop();
+    const auto worker = loop_for_worker.worker();
     ruvia::worker_signal peer_done(worker);
     bool reached_eof = false;
     const auto serve = [&]() -> asio::awaitable<void> {
@@ -475,7 +476,7 @@ void exercise_handshake_end(handshake_end mode) {
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url, .versions_ = ruvia::http_client_versions{.http1_ = false}});
         std::exception_ptr failure;
         try {
-            auto websocket = co_await client.client().websocket("/").lifecycle({.close_handshake_timeout_ = std::chrono::milliseconds(50)}).connect();
+            auto websocket = co_await client.ref().websocket("/").lifecycle({.close_handshake_timeout_ = std::chrono::milliseconds(50)}).connect();
             connected = true;
             auto& client_handle = websocket;
             closed_by_peer = !(co_await client_handle.read()) && client_handle.peer_close_code() == std::uint16_t{1000} && client_handle.peer_close_reason() == std::string_view("bye") && websocket.peer_close_code() == std::uint16_t{1000} && websocket.peer_close_reason() == std::string_view("bye");
@@ -491,9 +492,9 @@ void exercise_handshake_end(handshake_end mode) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }

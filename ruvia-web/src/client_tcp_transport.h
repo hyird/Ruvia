@@ -317,7 +317,7 @@ struct client_wire_counters final {
 enum class client_idle_transport_status : std::uint8_t {
     reusable,
     closed,
-    pending_data,
+    pending_input,
 };
 
 // Borrowed origin of one transport; the owner's startup config outlives it.

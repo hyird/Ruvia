@@ -116,7 +116,7 @@ private:
         ruvia::http_response response;
         response.body("ok");
         const auto head = connection.submit_response_head(stream_id, response, ruvia::plan_buffered_http_response_write(built.known_method(), response));
-        if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) || connection.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535).status_ != ruvia::http_data_submit_status::complete || connection.release(std::move(request)) != ruvia::http2_server_request_release_status::released) {
+        if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) || connection.submit_data(stream_id, response.body(), ruvia::http2_end_stream::end_stream, 65535).status_ != ruvia::http_data_submit_status::complete || connection.release(std::move(request)) != ruvia::http2_server_request_release_status::released) {
             throw std::runtime_error("HTTP/2 liveness peer response rejected");
         }
         responded_ = std::chrono::steady_clock::now();
@@ -272,7 +272,7 @@ public:
         ruvia::http_response response;
         response.body(body);
         const auto head = connection_.submit_response_head(stream_id, response, ruvia::plan_buffered_http_response_write(built.known_method(), response));
-        if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) || connection_.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535).status_ != ruvia::http_data_submit_status::complete || connection_.release(std::move(request)) != ruvia::http2_server_request_release_status::released) {
+        if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) || connection_.submit_data(stream_id, response.body(), ruvia::http2_end_stream::end_stream, 65535).status_ != ruvia::http_data_submit_status::complete || connection_.release(std::move(request)) != ruvia::http2_server_request_release_status::released) {
             throw std::runtime_error("scripted HTTP/2 response rejected");
         }
     }
@@ -345,7 +345,7 @@ using tcp_origin_connection = http2_origin_connection<asio::ip::tcp::socket>;
 
 [[nodiscard]] ruvia::task<void> send_and_discard(ruvia::http_client& client, std::string_view target) {
     try {
-        auto response = co_await client.client().get(target).send();
+        auto response = co_await client.ref().get(target).send();
         (void)co_await response.collect_body();
     } catch (const ruvia::http_client_error&) {
         // Ended by the client's shutdown.
@@ -354,7 +354,7 @@ using tcp_origin_connection = http2_origin_connection<asio::ip::tcp::socket>;
 
 [[nodiscard]] ruvia::task<void> send_and_keep(ruvia::http_client& client, std::string_view target, std::optional<std::string>& body, bool& done, ruvia::worker_signal& done_signal) {
     try {
-        auto response = co_await client.client().get(target).send();
+        auto response = co_await client.ref().get(target).send();
         const auto bytes_value = co_await response.collect_body();
         body.emplace(response_text(bytes_value));
     } catch (const ruvia::http_client_error&) {
@@ -485,7 +485,7 @@ TEST(Ruvia, http2_client_uses_available_stream_capacity_across_connections) {
     config.request_timeout_ = std::chrono::seconds(2);
     ruvia::http_client client(worker.attachment_.loop(), config);
     const auto send = [&](ruvia::http_client& client_value, std::string_view target) -> ruvia::task<void> {
-        auto response = co_await client_value.client().get(target).send();
+        auto response = co_await client_value.ref().get(target).send();
         EXPECT_TRUE(response.status() == ruvia::http_status::ok);
         EXPECT_TRUE((co_await response.collect_body()).empty());
     };
@@ -558,7 +558,7 @@ TEST(Ruvia, http2_cold_start_cancelled_waiter_does_not_close_active_session) {
                     ruvia::http_response response;
                     response.body("first-ok");
                     const auto head = connection.submit_response_head(stream_id, response, ruvia::plan_buffered_http_response_write(built.known_method(), response));
-                    if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) || connection.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535).status_ != ruvia::http_data_submit_status::complete || connection.release(std::move(*request)) != ruvia::http2_server_request_release_status::released) {
+                    if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) || connection.submit_data(stream_id, response.body(), ruvia::http2_end_stream::end_stream, 65535).status_ != ruvia::http_data_submit_status::complete || connection.release(std::move(*request)) != ruvia::http2_server_request_release_status::released) {
                         throw std::runtime_error("HTTP/2 response submission failed");
                     }
                     answered = true;
@@ -580,13 +580,13 @@ TEST(Ruvia, http2_cold_start_cancelled_waiter_does_not_close_active_session) {
     config.versions_ = ruvia::http_client_versions{.http1_ = false};
     ruvia::http_client client(worker.attachment_.loop(), config);
     const auto send_first = [](ruvia::http_client& c, bool& ok_out) -> ruvia::task<void> {
-        auto response = co_await c.client().get("/first").send();
+        auto response = co_await c.ref().get("/first").send();
         const auto body = co_await response.collect_body();
         ok_out = response.status() == ruvia::http_status::ok && std::string_view(reinterpret_cast<const char*>(body.bytes().data()), body.size()) == "first-ok";
     };
     const auto send_second = [](ruvia::http_client& c, ruvia::stop_token token, bool& cancelled_out) -> ruvia::task<void> {
         try {
-            (void)co_await c.client().with_options({.stop_token_ = std::move(token)}).get("/second").send();
+            (void)co_await c.ref().with_options({.stop_token_ = std::move(token)}).get("/second").send();
         } catch (const ruvia::http_client_error& error) {
             cancelled_out = error.code() == std::make_error_code(std::errc::operation_canceled);
         }
@@ -673,7 +673,7 @@ TEST(Ruvia, http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_m
                         ruvia::http_response response;
                         response.body("h2-ok");
                         (void)connection.submit_response_head(stream_id, response, ruvia::plan_buffered_http_response_write(built.known_method(), response));
-                        (void)connection.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535);
+                        (void)connection.submit_data(stream_id, response.body(), ruvia::http2_end_stream::end_stream, 65535);
                         (void)connection.release(std::move(*request));
                         // GOAWAY precedes the close so the client retires this
                         // session deterministically: seen before the next send it
@@ -726,20 +726,20 @@ TEST(Ruvia, http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_m
     auto operation = [&]() -> ruvia::task<void> {
         const acceptor_closer closer{acceptor};
         {
-            auto first = co_await negotiate_client.client().get("/first").send();
+            auto first = co_await negotiate_client.ref().get("/first").send();
             EXPECT_TRUE(first.protocol_version() == ruvia::http_protocol_version::http2);
             const auto first_body = co_await first.collect_body();
             EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(first_body.bytes().data()), first_body.size()), "h2-ok");
         }
         {
-            auto second = co_await negotiate_client.client().get("/second").send();
+            auto second = co_await negotiate_client.ref().get("/second").send();
             EXPECT_TRUE(second.protocol_version() == ruvia::http_protocol_version::http11);
             const auto second_body = co_await second.collect_body();
             EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(second_body.bytes().data()), second_body.size()), "h1-ok");
         }
         bool protocol_unavailable = false;
         try {
-            (void)co_await h2_only_client.client().get("/mismatch").send();
+            (void)co_await h2_only_client.ref().get("/mismatch").send();
         } catch (const ruvia::http_client_error& error) {
             protocol_unavailable = error.code() == ruvia::make_error_code(ruvia::http_client_errc::protocol_unavailable);
         }
@@ -795,18 +795,18 @@ TEST(Ruvia, http2_client_stream_timeout_evicts_a_silent_session) {
     ruvia::task_scope requests(worker.handle_);
     auto operation = [&]() -> ruvia::task<void> {
         co_await run_against(client, origin, requests, [&]() -> ruvia::task<void> {
-            auto prime = co_await client.client().get("/prime").send();
+            auto prime = co_await client.ref().get("/prime").send();
             EXPECT_EQ(response_text(co_await prime.collect_body()), "prime");
             const auto started = std::chrono::steady_clock::now();
             std::optional<std::error_code> code;
             try {
-                (void)co_await client.client().get("/silent").send();
+                (void)co_await client.ref().get("/silent").send();
             } catch (const ruvia::http_client_error& error) {
                 code = error.code();
             }
             EXPECT_TRUE(code == std::make_error_code(std::errc::timed_out));
             EXPECT_TRUE(std::chrono::steady_clock::now() - started < std::chrono::seconds(3));
-            auto fresh = co_await client.client().get("/fresh").send();
+            auto fresh = co_await client.ref().get("/fresh").send();
             EXPECT_EQ(response_text(co_await fresh.collect_body()), "fresh");
         });
     };
@@ -845,7 +845,7 @@ TEST(Ruvia, http2_client_stream_timeout_keeps_a_session_that_answers_other_strea
     ruvia::worker_signal done_signal(worker.handle_);
     const auto send_stalled = [&]() -> ruvia::task<void> {
         try {
-            (void)co_await client.client().get("/stall").send();
+            (void)co_await client.ref().get("/stall").send();
         } catch (const ruvia::http_client_error& error) {
             stalled_code = error.code();
         }
@@ -857,13 +857,13 @@ TEST(Ruvia, http2_client_stream_timeout_keeps_a_session_that_answers_other_strea
             requests.spawn(send_stalled());
             // The stalled head reached the peer before the answered one.
             co_await origin.reach(1);
-            auto answered = co_await client.client().get("/answer").send();
+            auto answered = co_await client.ref().get("/answer").send();
             EXPECT_EQ(response_text(co_await answered.collect_body()), "answered");
             while (!stalled_done) {
                 co_await done_signal.wait();
             }
             EXPECT_TRUE(stalled_code == std::make_error_code(std::errc::timed_out));
-            auto after = co_await client.client().get("/after").send();
+            auto after = co_await client.ref().get("/after").send();
             EXPECT_EQ(response_text(co_await after.collect_body()), "after");
         });
     };
@@ -882,7 +882,7 @@ TEST(Ruvia, http2_client_idle_timeout_closes_a_connection_without_streams) {
     config.idle_timeout_ = std::chrono::milliseconds(100);
     ruvia::http_client client(worker.attachment_.loop(), config);
     auto operation = [&]() -> ruvia::task<void> {
-        auto response = co_await client.client().get("/ok").send();
+        auto response = co_await client.ref().get("/ok").send();
         EXPECT_EQ(response_text(co_await response.collect_body()), "ok");
         // Only the idle bound closes the connection before the guard does.
         co_await peer.wait();
@@ -909,7 +909,7 @@ TEST(Ruvia, http2_client_ping_fails_a_silent_connection) {
         const auto started = std::chrono::steady_clock::now();
         std::optional<std::error_code> code;
         try {
-            (void)co_await client.client().get("/silent").send();
+            (void)co_await client.ref().get("/silent").send();
         } catch (const ruvia::http_client_error& error) {
             code = error.code();
         }
@@ -935,7 +935,7 @@ TEST(Ruvia, http2_client_ping_ack_keeps_a_quiet_connection_alive) {
     config.http2_ping_interval_ = std::chrono::milliseconds(100);
     ruvia::http_client client(worker.attachment_.loop(), config);
     auto operation = [&]() -> ruvia::task<void> {
-        auto response = co_await client.client().get("/slow").send();
+        auto response = co_await client.ref().get("/slow").send();
         EXPECT_EQ(response_text(co_await response.collect_body()), "ok");
         co_await client.shutdown();
         co_await peer.wait();
@@ -975,7 +975,7 @@ TEST(Ruvia, http2_client_draining_session_bounds_a_new_request_by_acquire_timeou
             const auto started = std::chrono::steady_clock::now();
             std::optional<std::error_code> code;
             try {
-                (void)co_await client.client().with_options({.timeout_ = std::chrono::seconds(5)}).get("/next").send();
+                (void)co_await client.ref().with_options({.timeout_ = std::chrono::seconds(5)}).get("/next").send();
             } catch (const ruvia::http_client_error& error) {
                 code = error.code();
             }
@@ -1060,7 +1060,7 @@ TEST(Ruvia, http2_client_draining_session_yields_to_a_free_slot) {
             (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(100));
             EXPECT_TRUE(b_body == std::optional<std::string>(std::string("b")));
             EXPECT_TRUE(c_body == std::optional<std::string>(std::string("c")));
-            auto next = co_await client.client().get("/next").send();
+            auto next = co_await client.ref().get("/next").send();
             EXPECT_EQ(response_text(co_await next.collect_body()), "next");
         });
     };
@@ -1106,18 +1106,18 @@ TEST(Ruvia, http2_client_retries_only_idempotent_requests_after_a_reused_connect
     ruvia::task_scope requests(worker.handle_);
     auto operation = [&]() -> ruvia::task<void> {
         co_await run_against(client, origin, requests, [&]() -> ruvia::task<void> {
-            auto prime = co_await client.client().get("/prime").send();
+            auto prime = co_await client.ref().get("/prime").send();
             EXPECT_EQ(response_text(co_await prime.collect_body()), "prime");
-            auto retried = co_await client.client().get("/retry").send();
+            auto retried = co_await client.ref().get("/retry").send();
             EXPECT_EQ(response_text(co_await retried.collect_body()), "retried");
             std::optional<std::error_code> post_failure;
             try {
-                (void)co_await client.client().request("POST", "/post").send();
+                (void)co_await client.ref().request("POST", "/post").send();
             } catch (const ruvia::http_client_error& error) {
                 post_failure = error.code();
             }
             EXPECT_TRUE(post_failure == ruvia::make_error_code(ruvia::http_client_errc::io_error));
-            const auto stats = client.client().stats();
+            const auto stats = client.ref().stats();
             EXPECT_EQ(stats.completed_requests_, std::size_t{2});
             EXPECT_EQ(stats.failed_requests_, std::size_t{1});
         });
@@ -1165,7 +1165,7 @@ TEST(Ruvia, http2_client_stream_capacity_wait_is_an_acquisition) {
             const auto started = std::chrono::steady_clock::now();
             std::optional<std::error_code> code;
             try {
-                (void)co_await client.client().with_options({.timeout_ = std::chrono::seconds(5)}).get("/blocked").send();
+                (void)co_await client.ref().with_options({.timeout_ = std::chrono::seconds(5)}).get("/blocked").send();
             } catch (const ruvia::http_client_error& error) {
                 code = error.code();
             }
@@ -1261,10 +1261,10 @@ TEST(Ruvia, http_client_retries_over_http11_after_http11_required) {
     ruvia::task_scope requests(worker.handle_);
     auto operation = [&]() -> ruvia::task<void> {
         co_await run_against(client, origin, requests, [&]() -> ruvia::task<void> {
-            auto first = co_await client.client().get("/first").send();
+            auto first = co_await client.ref().get("/first").send();
             EXPECT_TRUE(first.protocol_version() == ruvia::http_protocol_version::http11);
             EXPECT_EQ(response_text(co_await first.collect_body()), "h1-ok");
-            auto second = co_await client.client().get("/second").send();
+            auto second = co_await client.ref().get("/second").send();
             EXPECT_TRUE(second.protocol_version() == ruvia::http_protocol_version::http11);
             EXPECT_EQ(response_text(co_await second.collect_body()), "h1-again");
         });

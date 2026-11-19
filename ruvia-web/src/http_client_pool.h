@@ -341,8 +341,8 @@ public:
     [[nodiscard]] client_wire_counters& wire_counters() noexcept {
         return wire_counters_;
     }
-    void record_idle_connection_with_pending_data() noexcept {
-        ++idle_connections_with_pending_data_;
+    void record_idle_connection_with_pending_input() noexcept {
+        ++idle_connections_with_pending_input_;
     }
     // Worker idle bound (http_client_worker_limits): this pool's idle count of
     // one kind (an upper bound until recount_idle()), its least recently used
@@ -491,7 +491,7 @@ private:
     std::size_t requests_in_flight_{0};
     std::size_t completed_requests_{0};
     std::size_t failed_requests_{0};
-    std::size_t idle_connections_with_pending_data_{0};
+    std::size_t idle_connections_with_pending_input_{0};
     bool prefers_http11_{false};
     bool background_joined_{false};
     client_resolve_result dns_addresses_;

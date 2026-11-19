@@ -316,8 +316,8 @@ void db_pool<driver_type>::start_lease(std::size_t index) {
     if (const auto deadline = leased.lease_timeout_.deadline(); deadline.has_value()) {
         // A stopping worker schedules nothing; its shutdown closes the pool,
         // and every operation stays bounded by the lease deadline meanwhile.
-        (void)leased.lease_timer_.schedule(worker_, *deadline, [this, index](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired) {
+        (void)leased.lease_timer_.schedule(worker_, *deadline, [this, index](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired) {
                 expire_idle_lease(index);
             }
         });
@@ -579,12 +579,12 @@ bool db_pool<driver_type>::slot_wait::await_ready() {
 }
 
 template <typename driver_type>
-bool db_pool<driver_type>::slot_wait::await_suspend(std::coroutine_handle<> handle) noexcept {
+bool db_pool<driver_type>::slot_wait::await_suspend(std::coroutine_handle<> continuation) noexcept {
     if (kind_ == db_deadline_kind::sleep) {
-        pool_.slots_[index_]->deadline_continuation_ = handle;
+        pool_.slots_[index_]->deadline_continuation_ = continuation;
         return true;
     }
-    return socket_wait_.await_suspend(handle);
+    return socket_wait_.await_suspend(continuation);
 }
 
 template <typename driver_type>

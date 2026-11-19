@@ -255,7 +255,7 @@ task<void> detail::session_access::commit(context& context_value) {
     }
     try {
         if (const auto* owner = state_value.owner()) {
-            const auto connection = context_value.conn();
+            const auto connection = context_value.connection();
             const bool secure = connection.scheme() == http_scheme::https;
             // Session Cookie 属于明确的跨替换响应策略，只在最终交付/流提交时应用。
             // Redis 成功后通过无分配移动发布完整字段，既有 commit guard 保证只持久化一次。
@@ -301,7 +301,7 @@ task<void> detail::session_access::commit(context& context_value) {
                         const std::array<std::string_view, 2> args{payload, ttl};
                         // Redis executes the entire transition atomically. A stale request may
                         // neither recreate a revoked identifier nor mint a successor from it.
-                        return context_value.redis(owner->redis_alias_).eval_cached(rotation_script, keys, args);
+                        return context_value.redis(owner->redis_alias_).eval_script(rotation_script, keys, args);
                     }();
                     const auto result_value = co_await std::move(eval_task);
                     if (result_value.kind() == redis_value::kind_type::error) {
@@ -366,7 +366,7 @@ task<void> session_middleware::invoke(context& c, next& next_value) {
     detail::session_access::bind(c, this);
     // A repeated session cookie is treated as absent: loading either occurrence
     // would let an injected cookie fixate or shadow the session.
-    const auto cookie = c.req().unique_cookie(cookie_name_);
+    const auto cookie = c.request().unique_cookie(cookie_name_);
     if (cookie.status_ == unique_lookup_status::found && detail::is_valid_session_id(cookie.value_)) {
         detail::session_access::observe_presented_id(c, cookie.value_);
         auto get_task = [&] {

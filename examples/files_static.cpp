@@ -53,7 +53,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> asset(ruvia::context& c) {
-        co_return co_await c.static_file(*g_assets, {.relative_path_ = c.req().param("*").value_or("index.html")});
+        co_return co_await c.static_file(*g_assets, {.relative_path_ = c.request().param("*").value_or("index.html")});
     }
 };
 

@@ -224,7 +224,7 @@ struct db_cte_options final {
     db_materialization materialization_{db_materialization::default_};
     borrowed_span<borrowed_text> columns_{};
 };
-// span 及元素中的文本均为借用；lock/set_lock 入口同步复制或导入。
+// span 及元素中的文本均为借用；lock 入口同步复制或导入。
 // 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
 struct db_lock_options final {
     db_row_lock mode_{db_row_lock::update};
@@ -245,6 +245,14 @@ struct db_assignment;
 struct db_named_argument;
 
 namespace detail {
+
+struct db_selected_projection;
+void append_db_expression(std::string& output, const db_expr& expression, db_driver driver);
+db_selected_projection apply_projection(db_query& query, std::span<const db_selection> selection, std::string_view qualifier, bool returning, std::string_view root_table, const db_selected_projection* previous);
+template <typename assigned_type, typename sink_type>
+void append_lifecycle_assignments(std::string_view qualifier, std::string_view update_date, std::string_view version, assigned_type&& assigned, sink_type&& sink);
+template <typename e_type>
+void select_entity(db_query& query, std::string_view alias);
 
 class db_owned_expression final {
 public:
@@ -277,7 +285,7 @@ public:
     [[nodiscard]] db_expression import_into(db_query& target, std::string_view table = {}, std::string_view alias = {}) const;
 
     [[nodiscard]] static db_owned_expression from_borrowed(db_expression expression, borrowed_text table = {}, bool aliased = false) noexcept;
-    [[nodiscard]] static db_owned_expression from_expression(db_expression expression, std::string_view table = {}, bool aliased = false);
+    [[nodiscard]] static db_owned_expression clone_expression(db_expression expression, std::string_view table = {}, bool aliased = false);
     [[nodiscard]] static db_owned_expression make_null() noexcept;
     [[nodiscard]] static db_owned_expression make_default() noexcept;
     [[nodiscard]] static db_owned_expression make_star(std::string_view table = {});
@@ -369,8 +377,6 @@ private:
 class db_predicate final {
 public:
     db_predicate() noexcept = default;
-    db_predicate(detail::db_owned_expression owned) noexcept :
-        owned_(std::move(owned)) {}
     db_predicate(db_expression expression) noexcept :
         owned_(detail::db_owned_expression::from_borrowed(expression, {}, true)) {}
     db_predicate(const db_predicate&) = default;
@@ -378,8 +384,8 @@ public:
     db_predicate(db_predicate&&) noexcept = default;
     db_predicate& operator=(db_predicate&&) noexcept = default;
 
-    [[nodiscard]] static db_predicate from_expression(db_expression expression) {
-        return db_predicate(detail::db_owned_expression::from_expression(expression));
+    [[nodiscard]] static db_predicate clone_expression(db_expression expression) {
+        return db_predicate(detail::db_owned_expression::clone_expression(expression));
     }
     [[nodiscard]] static db_predicate exists(const db_query& subquery) {
         return db_predicate(detail::db_owned_expression::make_exists(subquery));
@@ -430,8 +436,19 @@ public:
 
 private:
     friend class db_expr;
+    friend class db_tuple;
     template <typename, fixed_string>
     friend class db_field_reference;
+    friend db_predicate operator==(const db_expr& lhs, const db_expr& rhs);
+    friend db_predicate operator!=(const db_expr& lhs, const db_expr& rhs);
+    friend db_predicate operator<(const db_expr& lhs, const db_expr& rhs);
+    friend db_predicate operator<=(const db_expr& lhs, const db_expr& rhs);
+    friend db_predicate operator>(const db_expr& lhs, const db_expr& rhs);
+    friend db_predicate operator>=(const db_expr& lhs, const db_expr& rhs);
+
+    db_predicate(detail::db_owned_expression owned) noexcept :
+        owned_(std::move(owned)) {}
+
     static db_predicate combine(db_predicate left, db_binary_operator op, const db_predicate& right) {
         if (left.empty() || right.empty()) {
             throw std::invalid_argument("cannot combine empty database conditions");
@@ -449,8 +466,6 @@ private:
 class db_expr final {
 public:
     db_expr() noexcept = default;
-    db_expr(detail::db_owned_expression owned) noexcept :
-        owned_(std::move(owned)) {}
     db_expr(db_expression expression, borrowed_text table = {}, bool aliased = false) noexcept :
         owned_(detail::db_owned_expression::from_borrowed(expression, table, aliased)) {}
     db_expr(const db_predicate& predicate) :
@@ -458,8 +473,8 @@ public:
     db_expr(db_predicate&& predicate) noexcept :
         owned_(std::move(predicate.owned_)) {}
 
-    [[nodiscard]] static db_expr from_expression(db_expression expression, std::string_view table = {}, bool aliased = false) {
-        return db_expr(detail::db_owned_expression::from_expression(expression, table, aliased));
+    [[nodiscard]] static db_expr clone_expression(db_expression expression, std::string_view table = {}, bool aliased = false) {
+        return db_expr(detail::db_owned_expression::clone_expression(expression, table, aliased));
     }
     // Compiled for PostgreSQL, a bound value is untyped wherever the SQL
     // around it gives it a type: the other operand, the target column, the
@@ -729,16 +744,44 @@ public:
         return db_predicate(detail::db_owned_expression::make_between(owned_, lower.owned_, upper.owned_, true));
     }
 
+private:
+    friend class detail::db_owned_expression;
+    friend class db_query;
+    friend class db_tuple;
+    template <typename, fixed_string>
+    friend class db_field_reference;
+    friend void detail::append_db_expression(std::string& output, const db_expr& expression, db_driver driver);
+    friend detail::db_selected_projection detail::apply_projection(db_query& query, std::span<const db_selection> selection, std::string_view qualifier, bool returning, std::string_view root_table, const detail::db_selected_projection* previous);
+    template <typename assigned_type, typename sink_type>
+    friend void detail::append_lifecycle_assignments(std::string_view qualifier, std::string_view update_date, std::string_view version, assigned_type&& assigned, sink_type&& sink);
+    template <typename e_type>
+    friend void detail::select_entity(db_query& query, std::string_view alias);
+    friend db_expr operator+(const db_expr& lhs, const db_expr& rhs);
+    friend db_expr operator-(const db_expr& lhs, const db_expr& rhs);
+    friend db_expr operator*(const db_expr& lhs, const db_expr& rhs);
+    friend db_expr operator/(const db_expr& lhs, const db_expr& rhs);
+    friend db_expr operator%(const db_expr& lhs, const db_expr& rhs);
+    friend db_expr operator&(const db_expr& lhs, const db_expr& rhs);
+    friend db_expr operator|(const db_expr& lhs, const db_expr& rhs);
+    friend db_expr operator^(const db_expr& lhs, const db_expr& rhs);
+    friend db_predicate operator==(const db_expr& lhs, const db_expr& rhs);
+    friend db_predicate operator!=(const db_expr& lhs, const db_expr& rhs);
+    friend db_predicate operator<(const db_expr& lhs, const db_expr& rhs);
+    friend db_predicate operator<=(const db_expr& lhs, const db_expr& rhs);
+    friend db_predicate operator>(const db_expr& lhs, const db_expr& rhs);
+    friend db_predicate operator>=(const db_expr& lhs, const db_expr& rhs);
+
+    db_expr(detail::db_owned_expression owned) noexcept :
+        owned_(std::move(owned)) {}
+
     [[nodiscard]] const detail::db_owned_expression& owned() const& noexcept RUVIA_LIFETIMEBOUND {
         return owned_;
     }
+    const detail::db_owned_expression& owned() const&& = delete;
     [[nodiscard]] detail::db_owned_expression&& owned() && noexcept {
         return std::move(owned_);
     }
 
-private:
-    template <typename, fixed_string>
-    friend class db_field_reference;
     [[nodiscard]] db_expr binary(db_binary_operator op, const db_expr& rhs) const {
         return db_expr(detail::db_owned_expression::make_binary(owned_, op, rhs.owned_));
     }
@@ -1066,8 +1109,8 @@ void apply_entity_upsert(db_query& query, std::span<const db_column_info> entity
 // arguments and copies values, identifiers and nested queries before
 // returning, so their sources may then be destroyed. A db_expression bound to
 // this query (db_expr::expression) is used in place; one bound to another
-// query is copied. Its memory resource must outlive the query. Compilation is
-// the sole place that emits SQL and assigns parameter positions.
+// query is copied. Compilation is the sole place that emits SQL and assigns
+// parameter positions.
 class db_query final {
 public:
     db_query();
@@ -1226,15 +1269,14 @@ private:
     db_expression binary(db_expression lhs, db_binary_operator op, db_expression rhs);
     db_expression unary(db_unary_operator op, db_expression value);
     db_expression alias(db_expression value, std::string_view name);
-    // The rvalue overloads take over an argument already allocated from this
-    // query's resource and copy any other; either way the argument is left
-    // moved-from unless it is this query itself.
+    // The rvalue overloads take over an argument with owned storage and copy any
+    // other; either way the argument is left moved-from unless it is this query itself.
     db_expression exists(const db_query& query);
     db_expression exists(db_query&& query);
     db_expression subquery(const db_query& query);
     db_expression subquery(db_query&& query);
     db_expression aggregate(std::string_view function, std::span<const db_expression> args, bool distinct = false, std::span<const db_order_term> order = {});
-    // Copies the expression and its referenced subqueries into this query's resource;
+    // Copies the expression and its referenced subqueries into this query;
     // the source must remain alive during import, but is unchanged and need not outlive the result.
     // Both qualifiers must be empty or valid nonempty names. A mapping rewrites exact
     // column/star qualifiers, including correlated references in nested queries, but not

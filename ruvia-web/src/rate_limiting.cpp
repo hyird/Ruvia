@@ -400,7 +400,7 @@ namespace {
     char key_buffer[rate_limit_key_buffer_bytes];
     // The client, not the hop -- same as the app-wide limiter. Behind a trusted
     // proxy, remote() is the proxy and every caller would share one key.
-    return limiter->allow_route(context_access::route_rate_limit_scope(context_value), declaration, rate_limit_key_for(context_value.conn().client().address(), key_buffer), rule, rate_limit_instant(context_access::rate_limit_arrival(context_value)));
+    return limiter->allow_route(context_access::route_rate_limit_scope(context_value), declaration, rate_limit_key_for(context_value.connection().client().address(), key_buffer), rule, rate_limit_instant(context_access::rate_limit_arrival(context_value)));
 }
 
 void set_unsigned_header(http_response& response, std::string_view name, std::uint64_t value) {

@@ -136,7 +136,7 @@ bool http3_request_head::validate() {
             case detail::http_field_kind::expect:
                 // An extensible list: unsupported members stay for the Web
                 // product's 417 policy.
-                expectations_.parse_field(value);
+                expectations_.update(value);
                 break;
             case detail::http_field_kind::content_length:
                 if (content_length.parse_field(value) != detail::http_content_length_parse_status::ok) {

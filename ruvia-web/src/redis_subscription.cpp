@@ -141,7 +141,7 @@ task<std::optional<redis_pubsub_event>> redis_subscription_connection::read(oper
                 if (current_reply_.kind() == redis_value::kind_type::error) {
                     throw redis_error(backend_error_code::command_failed, current_reply_.error());
                 }
-                co_return parse_redis_pubsub_event(current_reply_);
+                co_return decode_redis_pubsub_event(current_reply_);
             }
             --pending_pings_;
         }
@@ -211,7 +211,7 @@ task<std::optional<redis_pubsub_event>> redis_subscription_connection::read(oper
         throw redis_error(backend_error_code::command_failed, current_reply_.error());
     }
     try {
-        co_return parse_redis_pubsub_event(current_reply_);
+        co_return decode_redis_pubsub_event(current_reply_);
     } catch (...) {
         fail();
         throw;
@@ -242,8 +242,8 @@ void redis_subscription_connection::arm_idle_probe(clock_type::time_point deadli
     try {
         // The read that armed the timer cancels it before returning, so the
         // completion never outlives this connection.
-        (void)idle_probe_timer_.schedule(owner_.worker_, deadline, [this](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired) {
+        (void)idle_probe_timer_.schedule(owner_.worker_, deadline, [this](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired) {
                 idle_probe_expired();
             }
         });

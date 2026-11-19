@@ -39,7 +39,7 @@ enum class wait_status : std::uint8_t {
 // The outcome category is fixed at construction. Construction and extraction
 // follow the payload's copy/move semantics; a failed payload move never leaves
 // an existing outcome without a category. Rebuild an owning optional to replace
-// an outcome instead of assigning it. with_value() and with_status() let a
+// an outcome instead of assigning it. from_value() and from_status() let a
 // composed worker-bound wait produce the same outcomes as the built-in ones.
 template <typename t_type>
 class wait_result final {
@@ -76,12 +76,12 @@ public:
 
     template <typename u_type>
         requires std::constructible_from<t_type, u_type&&>
-    [[nodiscard]] static wait_result with_value(u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type&&>) {
+    [[nodiscard]] static wait_result from_value(u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type&&>) {
         return wait_result(std::in_place_type<detail::wait_value<t_type>>, std::forward<u_type>(value));
     }
 
-    // Every status except value; value outcomes come only from with_value().
-    [[nodiscard]] static wait_result with_status(wait_status status) {
+    // Every status except value; value outcomes come only from from_value().
+    [[nodiscard]] static wait_result from_status(wait_status status) {
         if (status == wait_status::value) {
             throw std::invalid_argument("worker wait status result requires a non-value status");
         }

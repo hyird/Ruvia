@@ -578,8 +578,8 @@ private:
     public:
         operation_interrupt_registration(websocket_session_connection& connection, operation_lane lane, const operation_options& options) {
             if (options.timeout_.has_value()) {
-                (void)timer_.schedule(*connection.worker_, options.timeout_->deadline_from(std::chrono::steady_clock::now()), [&connection, lane](worker_timer_outcome outcome) noexcept {
-                    if (outcome == worker_timer_outcome::expired) {
+                (void)timer_.schedule(*connection.worker_, options.timeout_->deadline_from(std::chrono::steady_clock::now()), [&connection, lane](worker_timer_status outcome) noexcept {
+                    if (outcome == worker_timer_status::expired) {
                         connection.interrupt(lane, operation_interrupt::timed_out);
                     }
                 });
@@ -1193,8 +1193,8 @@ task<bool> websocket_session_connection<stream_type>::read_more() {
         auto read_completion = co_await ruvia::async_asio<std::size_t>([this, read_space](auto handler) mutable {
             stream_.async_read_some(asio::buffer(read_space), asio::bind_cancellation_slot(read_cancellation_.slot(), std::move(handler)));
         });
-        const auto ec = read_completion.error_code();
-        const auto bytes_read = read_completion.result();
+        const auto ec = read_completion.code();
+        const auto bytes_read = read_completion.value();
         // The protocol maps EOF without a Close frame to abnormal closure.
         if (is_stream_read_end(ec) || (!ec && bytes_read == 0)) {
             co_return false;
@@ -1440,7 +1440,7 @@ task<void> websocket_session_connection<stream_type>::flush_protocol_output_now(
                     // write_timeout inactivity clock.
                     asio::async_write(stream_, buffers, std::move(handler));
                 });
-                ec = write_result.error_code();
+                ec = write_result.code();
             } else {
                 // Only this boundary maps the protocol disposition onto the
                 // multiplexed transport's stream end.

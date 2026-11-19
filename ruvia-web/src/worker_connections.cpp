@@ -546,7 +546,7 @@ task<void> worker_connections::rotate_tls_ticket_keys() {
             }
             next = std::min(next, ring.next_rotation(now));
         }
-        if (next == std::chrono::steady_clock::time_point::max() || co_await sleep_until(worker_, next, stop_token_) == timer_sleep_result::stop_requested) {
+        if (next == std::chrono::steady_clock::time_point::max() || co_await sleep_until(worker_, next, stop_token_) == sleep_status::stop_requested) {
             break;
         }
     }
@@ -616,7 +616,7 @@ task<void> worker_connections::run_accept_loop(std::size_t index) {
             if (!http_server_worker_running(state_) || !configured.socket_.is_open()) {
                 break;
             }
-            const auto error = completion.error_code();
+            const auto error = completion.code();
             if (!error) {
                 accept_socket(index, std::move(socket));
                 continue;
@@ -633,7 +633,7 @@ task<void> worker_connections::run_accept_loop(std::size_t index) {
             } catch (...) {
                 report_accept_failure(std::current_exception(), false);
             }
-            if (co_await sleep_for(worker_, std::chrono::milliseconds(25), stop_token_) == timer_sleep_result::stop_requested) {
+            if (co_await sleep_for(worker_, std::chrono::milliseconds(25), stop_token_) == sleep_status::stop_requested) {
                 break;
             }
         }
@@ -717,8 +717,8 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
                 const auto completion = co_await ruvia::async_asio<std::size_t>([&socket, &first](auto handler) {
                     socket.async_receive(asio::buffer(&first, 1), asio::socket_base::message_peek, std::move(handler));
                 });
-                if (completion.error_code() || completion.result() == 0 || handshake_entry.close_requested()) {
-                    lifecycle.note_error(completion.error_code());
+                if (completion.code() || completion.value() == 0 || handshake_entry.close_requested()) {
+                    lifecycle.note_error(completion.code());
                     co_return;
                 }
             }
@@ -751,8 +751,8 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
         const auto handshake_completion = co_await ruvia::async_asio([&tls_stream](auto handler) {
             tls_stream.async_handshake(asio::ssl::stream_base::server, std::move(handler));
         });
-        if (handshake_completion.error_code() || handshake_entry.close_requested()) {
-            lifecycle.note_error(handshake_completion.error_code());
+        if (handshake_completion.code() || handshake_entry.close_requested()) {
+            lifecycle.note_error(handshake_completion.code());
             ruvia::close_socket(socket);
             co_return;
         }
@@ -883,11 +883,11 @@ task<void> worker_connections::prepare_connection(std::size_t index, tcp_socket_
                 socket.async_read_some(asio::buffer(buffer), std::move(handler));
             });
             interrupt.throw_if_interrupted();
-            if (completion.error_code() || completion.result() == 0) {
+            if (completion.code() || completion.value() == 0) {
                 co_return;
             }
-            bytes_read += completion.result();
-            input = std::span<const std::byte>(buffer.data(), completion.result());
+            bytes_read += completion.value();
+            input = std::span<const std::byte>(buffer.data(), completion.value());
         }
     } catch (const std::system_error&) {
         // EOF, timeout and shutdown close only this pending connection.

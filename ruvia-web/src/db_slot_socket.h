@@ -99,7 +99,8 @@ struct db_slot_socket final {
         [[nodiscard]] bool await_ready() const noexcept {
             return false;
         }
-        [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept;
+        void operator&() const = delete;
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation) noexcept;
         // Rethrows a failure to start a wait.
         [[nodiscard]] db_socket_wait_result await_resume() const;
 
@@ -121,9 +122,10 @@ struct db_slot_socket final {
     // checked, so a caller must close() before the driver can replace its
     // socket with one that reuses the value.
     [[nodiscard]] std::error_code attach(native_socket_type driver_socket) noexcept;
-    [[nodiscard]] readiness_awaiter wait(db_socket_readiness wanted) noexcept {
+    [[nodiscard]] readiness_awaiter wait(db_socket_readiness wanted) & noexcept {
         return readiness_awaiter(*this, wanted);
     }
+    readiness_awaiter wait(db_socket_readiness) && = delete;
     void cancel() noexcept;
     // Cancels pending waits and closes the duplicate, leaving the driver's
     // socket open and unregistered.

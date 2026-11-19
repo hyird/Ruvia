@@ -158,14 +158,14 @@ struct sql_token final {
         }
         const bool block_comment = character == '/' && sql.substr(index, 2) == "/*";
         if (block_comment || character == '#' || is_mariadb_double_dash_comment(sql, index)) {
-            index = skip_sql_atom(sql, index, backslash_escapes);
+            index = skip_mariadb_sql_atom(sql, index, backslash_escapes);
             if (block_comment && (sql.substr(start, 3) == "/*!" || sql.substr(start, 4) == "/*M!")) {
                 return {kind::hidden, sql.substr(start, index - start)};
             }
             continue;
         }
         if (character == '\'' || character == '"' || character == '`') {
-            index = skip_sql_atom(sql, index, backslash_escapes);
+            index = skip_mariadb_sql_atom(sql, index, backslash_escapes);
             return {kind::other, sql.substr(start, index - start)};
         }
         if (sql_word_byte(character)) {

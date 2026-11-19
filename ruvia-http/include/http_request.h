@@ -388,7 +388,7 @@ private:
 // http_field_section_budget rule (max_http_header_bytes, max_http_header_fields)
 // throws the 431 header_too_large error. Body framing fields are intentionally
 // not interpreted because this API represents an already-parsed request.
-[[nodiscard]] http_request make_parsed_http_request(borrowed_text method, borrowed_text target, std::span<const http_header_view> headers, borrowed_span<std::byte> body = {});
+[[nodiscard]] http_request make_http_request(borrowed_text method, borrowed_text target, std::span<const http_header_view> headers, borrowed_span<std::byte> body = {});
 
 // RFC 9110 CONNECT authority-form requires a nonempty host and explicit port.
 [[nodiscard]] bool is_valid_http_connect_authority(std::string_view authority) noexcept;

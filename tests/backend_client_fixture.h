@@ -1406,7 +1406,7 @@ inline task<void> observe_backend_completion(task<void> operation, bool& complet
 inline void drive_backend_task(event_loop_attachment& attachment, task<void> operation) {
     bool done = false;
     auto loop = attachment.loop();
-    auto completed = loop.start(observe_backend_completion(std::move(operation), done));
+    auto completed = loop.submit(observe_backend_completion(std::move(operation), done)).take_value();
     auto& io = loop.io_context();
     io.restart();
     // The observer runs before the root completion handler is retired. Keep the
@@ -1418,7 +1418,7 @@ inline void drive_backend_task(event_loop_attachment& attachment, task<void> ope
     completed.wait();
     io.stop();
     runner.join();
-    std::move(completed).get();
+    std::move(completed).take_value();
 }
 
 inline void retire_backend_attachment(event_loop_attachment& attachment) {

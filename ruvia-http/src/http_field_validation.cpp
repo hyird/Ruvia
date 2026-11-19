@@ -204,7 +204,7 @@ bool is_valid_http_request_application_field(std::string_view name, std::string_
     return detail::validate_request_field(kind, value, detail::http_field_list_role::sender, state) == detail::request_field_status::ok;
 }
 
-void http_request_expectations::parse_field(std::string_view value) noexcept {
+void http_request_expectations::update(std::string_view value) noexcept {
     detail::http_visit_comma_separated_quoted(value, [this](std::string_view member) noexcept {
         if (http_ascii_equals_ignore_case(member, detail::http_continue_expectation_token)) {
             flags_ |= continue_flag;
@@ -215,7 +215,7 @@ void http_request_expectations::parse_field(std::string_view value) noexcept {
     });
 }
 
-std::optional<std::uint64_t> http_parse_content_length(std::string_view field_value) noexcept {
+std::optional<std::uint64_t> parse_http_content_length(std::string_view field_value) noexcept {
     detail::http_content_length_state state;
     if (state.parse_field(field_value) != detail::http_content_length_parse_status::ok) {
         return std::nullopt;

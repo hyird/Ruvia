@@ -78,7 +78,7 @@ std::variant<std::size_t, http_capsule_codec_error> encode_http_capsule_header(s
 }
 http_capsule_decoder::http_capsule_decoder(http_capsule_options config) :
     config_(config) {
-    if (config.max_capsule_length_ > detail::quic_varint_max) {
+    if (config.max_capsule_bytes_ > detail::quic_varint_max) {
         throw std::invalid_argument("capsule length exceeds varint range");
     }
 }
@@ -157,7 +157,7 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
                     // datagram, so the limit waits for the Context ID.
                     mode_ = payload_mode::context_id;
                     context_id_size_ = 0;
-                } else if (remaining_ > config_.max_capsule_length_) {
+                } else if (remaining_ > config_.max_capsule_bytes_) {
                     return limit_reached();
                 } else {
                     mode_ = payload_mode::deliver;
@@ -191,7 +191,7 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
                     continue;
                 }
                 // Context ID 0, or a value too short to hold its Context ID.
-                if (context_id_size_ + remaining_ > config_.max_capsule_length_) {
+                if (context_id_size_ + remaining_ > config_.max_capsule_bytes_) {
                     return limit_reached();
                 }
                 mode_ = payload_mode::deliver;

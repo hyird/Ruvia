@@ -56,7 +56,7 @@ private:
         response.set<"age">(ruvia::uint32{user_value.get<"age">()});
     }
     ruvia::task<ruvia::http_response> create(ruvia::context& c) {
-        const auto& request = c.req().validated<create_cached_user>();
+        const auto& request = c.request().validated<create_cached_user>();
         cached_user user_value;
         user_value.set<"id">(request.get<"id">().view());
         user_value.set<"name">(request.get<"name">().view());
@@ -71,7 +71,7 @@ private:
         co_return c.json(response, {.status_ = ruvia::http_status::created});
     }
     ruvia::task<ruvia::http_response> find(ruvia::context& c) {
-        auto user_value = co_await c.redis().repository<cached_user>(cached_user_mapping()).find_first({.where_ = cached_user::column<"id">() == c.req().param("id").value_or("")});
+        auto user_value = co_await c.redis().repository<cached_user>(cached_user_mapping()).find_first({.where_ = cached_user::column<"id">() == c.request().param("id").value_or("")});
         if (!user_value) {
             co_return c.error({.status_ = ruvia::http_status::not_found, .message_ = "user not found"});
         }
@@ -107,7 +107,7 @@ int main(int argc, char** argv) {
             if (!create_index) {
                 return;
             }
-            const auto workers = ruvia::app().workers();
+            const auto workers = ruvia::app().worker_refs();
             std::promise<void> completion;
             auto result_value = completion.get_future();
             const auto posted = workers.front().post([completion = std::move(completion)](ruvia::web_worker_context& worker_value) mutable -> ruvia::task<void> {

@@ -277,9 +277,9 @@ redis_executor worker_client_registry_view::redis(std::string_view alias, operat
 }
 #endif
 
-http_client_ref worker_client_registry_view::client(operation_scope& operation_scope, const stop_token& stop_token_value) const {
+http_client_ref worker_client_registry_view::http_client(operation_scope& operation_scope, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
-        return client(default_capability_alias, operation_scope, stop_token_value);
+        return http_client(default_capability_alias, operation_scope, stop_token_value);
     }
     if (!attached()) {
         throw http_client_error(make_error_code(http_client_errc::not_configured), "http client is not configured");
@@ -287,9 +287,9 @@ http_client_ref worker_client_registry_view::client(operation_scope& operation_s
     return http_clients_->get(operation_scope, stop_token_value);
 }
 
-http_client_ref worker_client_registry_view::client(std::string_view alias, operation_scope& operation_scope, const stop_token& stop_token_value) const {
+http_client_ref worker_client_registry_view::http_client(std::string_view alias, operation_scope& operation_scope, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
-        return borrowed_http_clients(alias).client().bind_caller_scope(operation_scope, stop_token_value);
+        return borrowed_http_clients(alias).ref().bind_caller_scope(operation_scope, stop_token_value);
     }
     if (!attached()) {
         throw http_client_error(make_error_code(http_client_errc::not_configured), "http client is not configured");
@@ -317,12 +317,12 @@ const ruvia::env& worker_services::env() const noexcept {
     return env_ != nullptr ? *env_ : empty;
 }
 
-http_client_ref worker_services::client() const {
-    return clients_.client(*operation_scope_, *stop_token_);
+http_client_ref worker_services::http_client() const {
+    return clients_.http_client(*operation_scope_, *stop_token_);
 }
 
-http_client_ref worker_services::client(std::string_view alias) const {
-    return clients_.client(alias, *operation_scope_, *stop_token_);
+http_client_ref worker_services::http_client(std::string_view alias) const {
+    return clients_.http_client(alias, *operation_scope_, *stop_token_);
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
@@ -350,13 +350,13 @@ redis_executor worker_services::redis(std::string_view alias) const {
 namespace ruvia {
 
 template <typename host_type>
-http_client_ref worker_services_access<host_type>::client() const& {
-    return services().client();
+http_client_ref worker_services_access<host_type>::http_client() const& {
+    return services().http_client();
 }
 
 template <typename host_type>
-http_client_ref worker_services_access<host_type>::client(std::string_view alias) const& {
-    return services().client(alias);
+http_client_ref worker_services_access<host_type>::http_client(std::string_view alias) const& {
+    return services().http_client(alias);
 }
 
 #ifdef RUVIA_ENABLE_DATABASE

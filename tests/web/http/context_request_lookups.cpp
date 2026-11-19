@@ -61,7 +61,7 @@ std::optional<std::string_view> negotiate_encoding(std::initializer_list<http_he
     auto request = make_request("/", headers);
     std::optional<std::string_view> chosen;
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        chosen = context_value.req().negotiate(ruvia::context_request::negotiable_field::encoding, supported);
+        chosen = context_value.request().negotiate(ruvia::context_request::negotiable_field::encoding, supported);
         co_return;
     });
     return chosen;
@@ -73,8 +73,8 @@ TEST(Ruvia, context_request_priority_combines_repeated_field_values_before_parsi
     auto request = make_request("/", {http_header_view{"Priority", "extra=\"alpha"}, http_header_view{"X-Other", "ignored"}, http_header_view{"priority", "beta\", u=1, i"}});
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        EXPECT_TRUE(context_value.req().priority().urgency_ == 1);
-        EXPECT_TRUE(context_value.req().priority().incremental_);
+        EXPECT_TRUE(context_value.request().priority().urgency_ == 1);
+        EXPECT_TRUE(context_value.request().priority().incremental_);
         co_return;
     });
 }
@@ -83,7 +83,7 @@ TEST(Ruvia, context_request_cookie_single_lookup_uses_first_duplicate) {
     auto request = make_request("/", {http_header_view{"Cookie", "a=1; b=2; a=3"}});
 
     const auto response = ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto cookie = context_value.req().cookie("a");
+        const auto cookie = context_value.request().cookie("a");
         EXPECT_TRUE(cookie.has_value());
         EXPECT_EQ(cookie.value_or("missing"), std::string_view("1"));
         context_value.respond(context_value.text(ruvia::static_text("ok")));
@@ -96,7 +96,7 @@ TEST(Ruvia, context_request_cookie_single_lookup_scans_repeated_cookie_fields) {
     auto request = make_request("/", {http_header_view{"Cookie", "a=1"}, http_header_view{"Cookie", "b=2"}});
 
     const auto response = ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto cookie = context_value.req().cookie("a");
+        const auto cookie = context_value.request().cookie("a");
         EXPECT_TRUE(cookie.has_value());
         EXPECT_EQ(cookie.value_or("missing"), std::string_view("1"));
         context_value.respond(context_value.text(ruvia::static_text("ok")));
@@ -109,7 +109,7 @@ TEST(Ruvia, context_request_cookie_fields_include_repeated_cookie_headers) {
     auto request = make_request("/", {http_header_view{"Cookie", "a=1"}, http_header_view{"Cookie", "b=2; a=3"}});
 
     const auto response = ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto& cookies = context_value.req().cookie_fields();
+        const auto& cookies = context_value.request().cookie_fields();
         EXPECT_EQ(cookies.size(), std::size_t{3});
         if (cookies.size() == 3) {
             EXPECT_EQ(cookies[0].name(), std::string_view("a"));
@@ -131,9 +131,9 @@ TEST(Ruvia, context_request_cookie_fields_include_repeated_cookie_headers) {
 TEST(Ruvia, context_request_cookie_fields_preserve_literal_syntax_and_case_sensitive_names) {
     auto request = make_request("/", {http_header_view{"Cookie", "x=first; ignored; = unnamed; q=\"a;b\""}, http_header_view{"X-Other", "unrelated=value"}, http_header_view{"cOoKiE", "X=upper; x = last ; empty=; token = a=b=c ;"}});
     const auto response = ruvia::test::with_context(request, [](ruvia::context& context) -> ruvia::task<void> {
-        EXPECT_EQ(context.req().cookie("x").value_or("missing"), "first");
-        EXPECT_EQ(context.req().cookie("X").value_or("missing"), "upper");
-        const auto& fields = context.req().cookie_fields();
+        EXPECT_EQ(context.request().cookie("x").value_or("missing"), "first");
+        EXPECT_EQ(context.request().cookie("X").value_or("missing"), "upper");
+        const auto& fields = context.request().cookie_fields();
         const http_header_view expected[] = {{"x", "first"}, {"", "unnamed"}, {"q", "\"a"}, {"X", "upper"}, {"x", "last"}, {"empty", ""}, {"token", "a=b=c"}};
         EXPECT_EQ(fields.size(), std::size(expected));
         if (fields.size() == std::size(expected)) {
@@ -146,9 +146,9 @@ TEST(Ruvia, context_request_cookie_fields_preserve_literal_syntax_and_case_sensi
         EXPECT_EQ(fields.get("x").value_or("missing"), "first");
         EXPECT_EQ(fields.get("X").value_or("missing"), "upper");
         EXPECT_EQ(fields.get("").value_or("missing"), "unnamed");
-        EXPECT_EQ(context.req().cookie("q").value_or("missing"), "\"a");
-        EXPECT_EQ(context.req().cookie("empty").value_or("missing"), "");
-        EXPECT_EQ(context.req().cookie("token").value_or("missing"), "a=b=c");
+        EXPECT_EQ(context.request().cookie("q").value_or("missing"), "\"a");
+        EXPECT_EQ(context.request().cookie("empty").value_or("missing"), "");
+        EXPECT_EQ(context.request().cookie("token").value_or("missing"), "a=b=c");
         context.respond(context.text(ruvia::static_text("ok")));
         co_return;
     });
@@ -166,8 +166,8 @@ TEST(Ruvia, context_request_cookie_fields_keep_all_values_across_growth_and_cach
     auto request = make_request("/", {http_header_view{"Cookie", value}, http_header_view{"Cookie", "c0=latest; tail=end"}});
     const auto response = ruvia::test::with_context(request, [](ruvia::context& context) -> ruvia::task<void> {
         {
-            const auto before = context.req().cookie("c0");
-            const auto& fields = context.req().cookie_fields();
+            const auto before = context.request().cookie("c0");
+            const auto& fields = context.request().cookie_fields();
             EXPECT_EQ(fields.size(), std::size_t{130});
             if (fields.size() == 130) {
                 for (std::size_t i = 0; i != 128; ++i) {
@@ -179,8 +179,8 @@ TEST(Ruvia, context_request_cookie_fields_keep_all_values_across_growth_and_cach
                 EXPECT_EQ(fields[129].name(), "tail");
                 EXPECT_EQ(fields[129].value(), "end");
                 const auto first = fields[0].value();
-                EXPECT_EQ(context.req().cookie("c0"), before);
-                EXPECT_EQ(context.req().cookie_fields().get("tail").value_or("missing"), "end");
+                EXPECT_EQ(context.request().cookie("c0"), before);
+                EXPECT_EQ(context.request().cookie_fields().get("tail").value_or("missing"), "end");
                 EXPECT_EQ(first, "v0");
             }
             EXPECT_EQ(fields.count("c0"), std::size_t{2});
@@ -199,9 +199,9 @@ TEST(Ruvia, context_request_cookie_fields_distinguish_no_pairs_from_missing_valu
             request.header("Cookie", "; ignored ; flag ;");
         }
         const auto response = ruvia::test::with_context(request, [](ruvia::context& context) -> ruvia::task<void> {
-            EXPECT_TRUE(context.req().cookie_fields().empty());
-            EXPECT_FALSE(context.req().cookie("missing").has_value());
-            EXPECT_FALSE(context.req().cookie_fields().get("flag").has_value());
+            EXPECT_TRUE(context.request().cookie_fields().empty());
+            EXPECT_FALSE(context.request().cookie("missing").has_value());
+            EXPECT_FALSE(context.request().cookie_fields().get("flag").has_value());
             context.respond(context.text(ruvia::static_text("empty")));
             co_return;
         });
@@ -214,16 +214,16 @@ TEST(Ruvia, context_request_query_accessors_agree_on_decoded_values) {
     auto request = make_request("/?a=first&b=2&a=one+two");
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto query = context_value.req().query("a");
+        const auto query = context_value.request().query("a");
         EXPECT_TRUE(query.has_value());
         EXPECT_EQ(*query, std::string_view("first"));
 
-        const auto all = context_value.req().queries("a");
+        const auto all = context_value.request().queries("a");
         EXPECT_EQ(all.size(), std::size_t{2});
         EXPECT_EQ(all.back(), std::string_view("one two"));
-        const auto& fields_value = context_value.req().query_fields();
+        const auto& fields_value = context_value.request().query_fields();
         EXPECT_EQ(*fields_value.get("a"), std::string_view("first"));
-        const auto repeated = context_value.req().query("a");
+        const auto repeated = context_value.request().query("a");
         EXPECT_TRUE(repeated.has_value());
         co_return;
     });
@@ -232,14 +232,14 @@ TEST(Ruvia, context_request_query_accessors_agree_on_decoded_values) {
 TEST(Ruvia, context_request_query_views_survive_multivalue_lookups) {
     auto request = make_request("/?z=first&%61=one+two&z=last&a=three&empty=&=unnamed");
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto scalar = context_value.req().query("a");
-        const auto& fields = context_value.req().query_fields();
+        const auto scalar = context_value.request().query("a");
+        const auto& fields = context_value.request().query_fields();
         const auto decoded = fields[1].value();
-        const auto z = context_value.req().queries("z");
-        const auto a = context_value.req().queries("a");
-        EXPECT_TRUE(context_value.req().queries("missing").empty());
-        const auto empty = context_value.req().queries("empty");
-        const auto unnamed = context_value.req().queries("");
+        const auto z = context_value.request().queries("z");
+        const auto a = context_value.request().queries("a");
+        EXPECT_TRUE(context_value.request().queries("missing").empty());
+        const auto empty = context_value.request().queries("empty");
+        const auto unnamed = context_value.request().queries("");
         EXPECT_EQ(scalar.value_or("missing"), "one two");
         EXPECT_EQ(decoded, "one two");
         EXPECT_EQ(fields.size(), std::size_t{6});
@@ -267,10 +267,10 @@ TEST(Ruvia, context_request_query_reads_unencoded_fields) {
     auto request = make_request("/?tag=x&page=2");
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto tag = context_value.req().query("tag");
+        const auto tag = context_value.request().query("tag");
         EXPECT_TRUE(tag.has_value());
         EXPECT_EQ(*tag, std::string_view("x"));
-        const auto page = context_value.req().query("page");
+        const auto page = context_value.request().query("page");
         EXPECT_TRUE(page.has_value());
         co_return;
     });
@@ -280,7 +280,7 @@ TEST(Ruvia, context_request_query_preserves_short_decoded_names_and_values) {
     auto request = make_request("/?%61=%31&%62=%32&%61=%33");
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto& fields_value = context_value.req().query_fields();
+        const auto& fields_value = context_value.request().query_fields();
         EXPECT_EQ(fields_value.size(), std::size_t{3});
         EXPECT_EQ(fields_value[0].name(), std::string_view("a"));
         EXPECT_EQ(fields_value[0].value(), std::string_view("1"));
@@ -288,9 +288,9 @@ TEST(Ruvia, context_request_query_preserves_short_decoded_names_and_values) {
         EXPECT_EQ(fields_value[1].value(), std::string_view("2"));
         EXPECT_EQ(fields_value[2].name(), std::string_view("a"));
         EXPECT_EQ(fields_value[2].value(), std::string_view("3"));
-        EXPECT_EQ(context_value.req().query("a").value_or("missing"), std::string_view("1"));
-        EXPECT_EQ(context_value.req().query("b").value_or("missing"), std::string_view("2"));
-        const auto values = context_value.req().queries("a");
+        EXPECT_EQ(context_value.request().query("a").value_or("missing"), std::string_view("1"));
+        EXPECT_EQ(context_value.request().query("b").value_or("missing"), std::string_view("2"));
+        const auto values = context_value.request().queries("a");
         EXPECT_EQ(values.size(), std::size_t{2});
         if (values.size() == 2) {
             EXPECT_EQ(values[0], std::string_view("1"));
@@ -305,12 +305,12 @@ TEST(Ruvia, context_request_query_list_uses_first_duplicate_like_single_lookup) 
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         // Single-value lookup resolves a duplicate name to its FIRST value.
-        EXPECT_EQ(*context_value.req().query("a"), std::string_view("1"));
+        EXPECT_EQ(*context_value.request().query("a"), std::string_view("1"));
 
         // The query field list (used by controller field binding) preserves every
         // decoded occurrence, while its scalar get() agrees with query("a") by
         // taking the first value.
-        const auto& list = context_value.req().query_fields();
+        const auto& list = context_value.request().query_fields();
         EXPECT_EQ(list.size(), std::size_t{3});
         EXPECT_EQ(list[0].name(), std::string_view("a"));
         EXPECT_EQ(list[0].value(), std::string_view("1"));
@@ -324,7 +324,7 @@ TEST(Ruvia, context_request_query_list_uses_first_duplicate_like_single_lookup) 
         EXPECT_EQ(*list.get("b"), std::string_view("2"));
 
         // queries() still exposes every value in order (getAll semantics).
-        const auto all = context_value.req().queries("a");
+        const auto all = context_value.request().queries("a");
         EXPECT_EQ(all.size(), std::size_t{2});
         EXPECT_EQ(all[0], std::string_view("1"));
         EXPECT_EQ(all[1], std::string_view("3"));
@@ -336,15 +336,15 @@ TEST(Ruvia, context_request_queries_use_empty_span_only_for_missing_name) {
     auto request = make_request("/?empty=&flag&value=x");
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto empty_value = context_value.req().queries("empty");
+        const auto empty_value = context_value.request().queries("empty");
         EXPECT_EQ(empty_value.size(), std::size_t{1});
         EXPECT_TRUE(empty_value.front().empty());
 
-        const auto valueless = context_value.req().queries("flag");
+        const auto valueless = context_value.request().queries("flag");
         EXPECT_EQ(valueless.size(), std::size_t{1});
         EXPECT_TRUE(valueless.front().empty());
 
-        EXPECT_TRUE(context_value.req().queries("missing").empty());
+        EXPECT_TRUE(context_value.request().queries("missing").empty());
         co_return;
     });
 }
@@ -359,7 +359,7 @@ TEST(Ruvia, context_request_negotiate_merges_multiple_accept_field_lines) {
         auto request = make_request("/", headers);
         bool accepted = false;
         (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-            accepted = context_value.req().negotiate(ruvia::context_request::negotiable_field::media_type, {media_type}).has_value();
+            accepted = context_value.request().negotiate(ruvia::context_request::negotiable_field::media_type, {media_type}).has_value();
             co_return;
         });
         return accepted;
@@ -394,8 +394,8 @@ TEST(Ruvia, context_request_header_lookup_uses_first_match) {
     auto request = make_request("/", {http_header_view{"X-Trace", "first"}, http_header_view{"x-trace", "second"}});
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        EXPECT_EQ(context_value.req().header("X-Trace"), std::string_view("first"));
-        const auto unique = context_value.req().unique_header("x-trace");
+        EXPECT_EQ(context_value.request().header("X-Trace"), std::string_view("first"));
+        const auto unique = context_value.request().unique_header("x-trace");
         EXPECT_TRUE(unique.status_ == ruvia::unique_lookup_status::repeated);
         co_return;
     });
@@ -405,10 +405,10 @@ TEST(Ruvia, context_request_header_lookup_is_case_insensitive_and_presence_aware
     auto request = make_request("/", {http_header_view{"X-Empty", ""}});
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto present_empty = context_value.req().header("x-EMPTY");
+        const auto present_empty = context_value.request().header("x-EMPTY");
         EXPECT_TRUE(present_empty.has_value());
         EXPECT_TRUE(present_empty.value_or("missing").empty());
-        EXPECT_TRUE(!context_value.req().header("X-Missing").has_value());
+        EXPECT_TRUE(!context_value.request().header("X-Missing").has_value());
         co_return;
     });
 }
@@ -417,8 +417,8 @@ TEST(Ruvia, context_request_preserves_exact_extension_method_token) {
     auto request = make_request("/", {}, "PROPFIND");
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        EXPECT_EQ(context_value.req().method(), std::string_view("PROPFIND"));
-        EXPECT_TRUE(context_value.req().known_method() == ruvia::http_known_method::unknown);
+        EXPECT_EQ(context_value.request().method(), std::string_view("PROPFIND"));
+        EXPECT_TRUE(context_value.request().known_method() == ruvia::http_known_method::unknown);
         co_return;
     });
 }
@@ -427,7 +427,7 @@ TEST(Ruvia, context_request_header_fields_enumerate_every_field_in_order) {
     auto request = make_request("/", {http_header_view{"X-Trace", "a"}, http_header_view{"X-Trace", "b"}, http_header_view{"X-Other", "c"}});
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto& headers = context_value.req().header_fields();
+        const auto& headers = context_value.request().header_fields();
         // Enumeration preserves spelling; both lookup surfaces ignore ASCII case.
         EXPECT_EQ(headers.count("x-trace"), std::size_t(2));
         EXPECT_EQ(headers.count("X-Trace"), std::size_t(2));
@@ -439,7 +439,7 @@ TEST(Ruvia, context_request_header_fields_enumerate_every_field_in_order) {
         EXPECT_EQ(*headers.get("x-trace"), std::string_view("a"));
         // ...while the named lookup still accepts the sent spelling, and both paths
         // agree on first-occurrence-wins for a repeated name.
-        EXPECT_EQ(*context_value.req().header("X-Trace"), std::string_view("a"));
+        EXPECT_EQ(*context_value.request().header("X-Trace"), std::string_view("a"));
         co_return;
     });
 }
@@ -448,7 +448,7 @@ TEST(Ruvia, context_request_query_fields_enumerate_repeated_names) {
     auto request = make_request("/?tag=x&tag=y&page=2");
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto& queries = context_value.req().query_fields();
+        const auto& queries = context_value.request().query_fields();
         EXPECT_EQ(queries.size(), std::size_t(3));
         EXPECT_EQ(queries.count("tag"), std::size_t(2));
         EXPECT_EQ(queries[0].value(), std::string_view("x"));
@@ -488,13 +488,13 @@ TEST(Ruvia, context_request_negotiate_picks_the_client_preferred_media_type) {
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         // Server order lists html first, but the client prefers json.
         const std::string_view supported[] = {"text/html", "application/json"};
-        const auto chosen = context_value.req().negotiate(ruvia::context_request::negotiable_field::media_type, supported);
+        const auto chosen = context_value.request().negotiate(ruvia::context_request::negotiable_field::media_type, supported);
         EXPECT_TRUE(chosen.has_value());
         EXPECT_EQ(*chosen, std::string_view("application/json"));
 
         // A first-acceptable-offer check would have taken html; negotiation
         // ranks the offers by the client's weights instead.
-        EXPECT_TRUE(context_value.req().negotiate(ruvia::context_request::negotiable_field::media_type, {"text/html"}).has_value());
+        EXPECT_TRUE(context_value.request().negotiate(ruvia::context_request::negotiable_field::media_type, {"text/html"}).has_value());
         co_return;
     });
 }
@@ -505,7 +505,7 @@ TEST(Ruvia, context_request_negotiate_reports_no_acceptable_representation) {
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const std::string_view supported[] = {"text/html", "application/json"};
         // nullopt is the 406 signal, which is why this cannot fall back to front().
-        EXPECT_TRUE(!context_value.req().negotiate(ruvia::context_request::negotiable_field::media_type, supported).has_value());
+        EXPECT_TRUE(!context_value.request().negotiate(ruvia::context_request::negotiable_field::media_type, supported).has_value());
         co_return;
     });
 }
@@ -515,7 +515,7 @@ TEST(Ruvia, context_request_negotiate_without_the_field_takes_server_preference)
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const std::string_view supported[] = {"application/json", "text/html"};
-        const auto chosen = context_value.req().negotiate(ruvia::context_request::negotiable_field::media_type, supported);
+        const auto chosen = context_value.request().negotiate(ruvia::context_request::negotiable_field::media_type, supported);
         EXPECT_TRUE(chosen.has_value());
         EXPECT_EQ(*chosen, std::string_view("application/json"));
         co_return;
@@ -528,7 +528,7 @@ TEST(Ruvia, context_request_negotiate_language_uses_basic_prefix_filtering) {
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         // RFC 4647 basic filtering: the range "en" matches the tag "en-US".
         const std::string_view supported[] = {"fr-CA", "en-US"};
-        const auto chosen = context_value.req().negotiate(ruvia::context_request::negotiable_field::language, supported);
+        const auto chosen = context_value.request().negotiate(ruvia::context_request::negotiable_field::language, supported);
         EXPECT_TRUE(chosen.has_value());
         EXPECT_EQ(*chosen, std::string_view("en-US"));
         co_return;
@@ -541,7 +541,7 @@ TEST(Ruvia, context_request_negotiate_honours_explicit_zero_quality_exclusion) {
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const std::string_view supported[] = {"gzip", "br"};
-        const auto chosen = context_value.req().negotiate(ruvia::context_request::negotiable_field::encoding, supported);
+        const auto chosen = context_value.request().negotiate(ruvia::context_request::negotiable_field::encoding, supported);
         EXPECT_TRUE(chosen.has_value());
         EXPECT_EQ(*chosen, std::string_view("br"));
         co_return;
@@ -554,7 +554,7 @@ TEST(Ruvia, context_request_negotiate_folds_repeated_field_lines) {
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const std::string_view supported[] = {"de", "ja"};
-        const auto chosen = context_value.req().negotiate(ruvia::context_request::negotiable_field::language, supported);
+        const auto chosen = context_value.request().negotiate(ruvia::context_request::negotiable_field::language, supported);
         EXPECT_TRUE(chosen.has_value());
         EXPECT_EQ(*chosen, std::string_view("ja"));
         co_return;
@@ -565,7 +565,7 @@ TEST(Ruvia, context_request_query_decodes_names_and_values_in_wire_order) {
     auto request = make_request("/?%61=one+two&%62=three%20four&%61=five+six&plain=borrowed");
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto& fields_value = context_value.req().query_fields();
+        const auto& fields_value = context_value.request().query_fields();
         EXPECT_EQ(fields_value.size(), std::size_t{4});
         EXPECT_EQ(fields_value[0].name(), std::string_view("a"));
         EXPECT_EQ(fields_value[0].value(), std::string_view("one two"));
@@ -575,13 +575,13 @@ TEST(Ruvia, context_request_query_decodes_names_and_values_in_wire_order) {
         EXPECT_EQ(fields_value[2].value(), std::string_view("five six"));
         EXPECT_EQ(fields_value[3].value(), std::string_view("borrowed"));
 
-        const auto values = context_value.req().queries("a");
+        const auto values = context_value.request().queries("a");
         EXPECT_EQ(values.size(), std::size_t{2});
         if (values.size() == 2) {
             EXPECT_EQ(values[0], std::string_view("one two"));
             EXPECT_EQ(values[1], std::string_view("five six"));
         }
-        const auto value = context_value.req().query("a");
+        const auto value = context_value.request().query("a");
         EXPECT_TRUE(value.has_value());
         if (value) {
             EXPECT_EQ(*value, std::string_view("one two"));
@@ -603,8 +603,8 @@ TEST(Ruvia, context_request_query_preserves_many_decoded_values) {
     auto request = make_request(target);
 
     (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto& fields_value = context_value.req().query_fields();
-        const auto values = context_value.req().queries("tag");
+        const auto& fields_value = context_value.request().query_fields();
+        const auto values = context_value.request().queries("tag");
         EXPECT_EQ(fields_value.size(), count);
         EXPECT_EQ(values.size(), count);
         if (fields_value.size() == count && values.size() == count) {
@@ -736,7 +736,7 @@ TEST(Ruvia, context_signed_cookie_handles_large_values_in_request_storage) {
     (void)ruvia::test::with_context(read, [&](ruvia::context& context) -> ruvia::task<void> {
         std::optional<std::string_view> verified;
         try {
-            verified = context.req().signed_cookie({.name_ = "session", .secret_ = "secret"});
+            verified = context.request().signed_cookie({.name_ = "session", .secret_ = "secret"});
         } catch (const std::bad_alloc&) {
         }
         EXPECT_TRUE(verified.has_value());
@@ -806,7 +806,7 @@ TEST(Ruvia, context_signed_cookie_with_prefix_verifies_round_trip) {
     auto read_request = ruvia::test_request::get("/").header("Cookie", cookie_field);
 
     (void)ruvia::test::with_context(read_request, [&](ruvia::context& read_context) -> ruvia::task<void> {
-        const auto verified = read_context.req().signed_cookie({.name_ = "__Host-session", .secret_ = "secret"});
+        const auto verified = read_context.request().signed_cookie({.name_ = "__Host-session", .secret_ = "secret"});
         EXPECT_TRUE(verified.has_value());
         EXPECT_EQ(*verified, std::string_view("user-1"));
 
@@ -826,7 +826,7 @@ TEST(Ruvia, context_signed_cookie_with_prefix_verifies_round_trip) {
     auto bare_request = ruvia::test_request::get("/").header("Cookie", bare_field);
 
     (void)ruvia::test::with_context(bare_request, [&](ruvia::context& bare_context) -> ruvia::task<void> {
-        const auto bare_verified = bare_context.req().signed_cookie({.name_ = "plain", .secret_ = "secret"});
+        const auto bare_verified = bare_context.request().signed_cookie({.name_ = "plain", .secret_ = "secret"});
         EXPECT_TRUE(bare_verified.has_value());
         EXPECT_EQ(*bare_verified, std::string_view("user-2"));
         co_return;
@@ -847,7 +847,7 @@ TEST(Ruvia, context_signed_cookie_rejects_a_repeated_name) {
 
     auto single_request = ruvia::test_request::get("/").header("Cookie", pair);
     (void)ruvia::test::with_context(single_request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        EXPECT_EQ(context_value.req().signed_cookie({.name_ = "session", .secret_ = "secret"}), std::optional<std::string_view>("user-1"));
+        EXPECT_EQ(context_value.request().signed_cookie({.name_ = "session", .secret_ = "secret"}), std::optional<std::string_view>("user-1"));
         co_return;
     });
 
@@ -855,14 +855,14 @@ TEST(Ruvia, context_signed_cookie_rejects_a_repeated_name) {
     // one the signature vouches for.
     auto same_field_request = ruvia::test_request::get("/").header("Cookie", pair + "; " + pair);
     (void)ruvia::test::with_context(same_field_request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        EXPECT_FALSE(context_value.req().signed_cookie({.name_ = "session", .secret_ = "secret"}).has_value());
+        EXPECT_FALSE(context_value.request().signed_cookie({.name_ = "session", .secret_ = "secret"}).has_value());
         co_return;
     });
 
     // A first- or last-wins lookup would have verified one of the occurrences.
     auto split_fields_request = ruvia::test_request::get("/").header("Cookie", "session=forged").header("Cookie", pair);
     (void)ruvia::test::with_context(split_fields_request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        EXPECT_FALSE(context_value.req().signed_cookie({.name_ = "session", .secret_ = "secret"}).has_value());
+        EXPECT_FALSE(context_value.request().signed_cookie({.name_ = "session", .secret_ = "secret"}).has_value());
         co_return;
     });
 }
@@ -882,7 +882,7 @@ TEST(Ruvia, context_cookie_deletion_with_prefix_writes_exact_bytes) {
         const std::array cookies{ruvia::set_cookie_options{.name_ = "session", .attributes_ = options}};
         const auto response = context_value.text("deleted", {.cookies_ = cookies});
         EXPECT_EQ(response.header("Set-Cookie"), std::string_view("__Host-session=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Secure"));
-        EXPECT_EQ(context_value.req().cookie("__Host-session"), std::optional<std::string_view>("user-1"));
+        EXPECT_EQ(context_value.request().cookie("__Host-session"), std::optional<std::string_view>("user-1"));
         co_return;
     });
 }
@@ -1057,7 +1057,7 @@ TEST(Ruvia, context_body_sets_body_and_status) {
     (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         const auto response = context.body("hello world", {.status_ = ruvia::http_status::created});
         EXPECT_EQ(response.status(), ruvia::http_status::created);
-        EXPECT_EQ(response.body_bytes(), std::string_view("hello world"));
+        EXPECT_EQ(response.body(), std::string_view("hello world"));
         co_return;
     });
 }
@@ -1069,7 +1069,7 @@ TEST(Ruvia, context_dynamic_body_owns_input_and_preserves_lvalue) {
         const auto response = context.body(std::string_view(source_value));
         source_value[0] = 'X';
 
-        EXPECT_EQ(response.body_bytes(), std::string_view("dynamic body"));
+        EXPECT_EQ(response.body(), std::string_view("dynamic body"));
         EXPECT_EQ(source_value, std::string_view("Xynamic body"));
         co_return;
     });
@@ -1083,12 +1083,12 @@ TEST(Ruvia, context_static_text_builders_borrow_static_storage) {
         const auto text_response = context.text(ruvia::static_text("text"));
         const auto html_response = context.html(ruvia::static_text(page));
 
-        EXPECT_TRUE(body_response.body_bytes() == std::string_view("bo\0dy", 5));
-        EXPECT_TRUE(body_response.body_bytes().data() == body_text.view().data());
-        EXPECT_TRUE(text_response.body_bytes() == std::string_view("text"));
+        EXPECT_TRUE(body_response.body() == std::string_view("bo\0dy", 5));
+        EXPECT_TRUE(body_response.body().data() == body_text.view().data());
+        EXPECT_TRUE(text_response.body() == std::string_view("text"));
         EXPECT_EQ(text_response.header("Content-Type"), std::string_view("text/plain; charset=UTF-8"));
-        EXPECT_TRUE(html_response.body_bytes() == page);
-        EXPECT_TRUE(html_response.body_bytes().data() == page.data());
+        EXPECT_TRUE(html_response.body() == page);
+        EXPECT_TRUE(html_response.body().data() == page.data());
         EXPECT_EQ(html_response.header("Content-Type"), std::string_view("text/html; charset=UTF-8"));
         co_return;
     });
@@ -1106,14 +1106,14 @@ TEST(Ruvia, context_character_array_builders_copy_until_terminator) {
         owned_string[0] = 'Z';
         buffer[0] = 'X';
 
-        EXPECT_EQ(text_response.body_bytes(), std::string_view("count=7"));
-        EXPECT_TRUE(text_response.body_bytes().data() != buffer);
-        EXPECT_EQ(html_response.body_bytes(), std::string_view("count=7"));
-        EXPECT_EQ(body_response.body_bytes(), std::string_view("abc"));
-        EXPECT_TRUE(body_response.body_bytes().data() != owned_string.data());
+        EXPECT_EQ(text_response.body(), std::string_view("count=7"));
+        EXPECT_TRUE(text_response.body().data() != buffer);
+        EXPECT_EQ(html_response.body(), std::string_view("count=7"));
+        EXPECT_EQ(body_response.body(), std::string_view("abc"));
+        EXPECT_TRUE(body_response.body().data() != owned_string.data());
 
         const auto literal_response = context.text("literal");
-        EXPECT_EQ(literal_response.body_bytes(), std::string_view("literal"));
+        EXPECT_EQ(literal_response.body(), std::string_view("literal"));
         co_return;
     });
 }
@@ -1177,7 +1177,7 @@ TEST(Ruvia, context_body_applies_context_headers) {
         };
         const auto response = context.body("data", {.status_ = ruvia::http_status::ok, .headers_ = headers});
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
-        EXPECT_EQ(response.body_bytes(), std::string_view("data"));
+        EXPECT_EQ(response.body(), std::string_view("data"));
         EXPECT_EQ(response.header("Content-Type"), std::string_view("text/plain"));
         EXPECT_EQ(response.header("X-Custom"), std::string_view("v"));
         co_return;
@@ -1212,7 +1212,7 @@ TEST(Ruvia, context_response_header_transactions_preserve_owned_body_storage) {
         context.respond(std::move(response));
         context.edit_response().header("X-Added", "context");
         context.edit_response().header("X-Tag", "same", {.mode_ = ruvia::http_response_header_mode::append});
-        EXPECT_EQ(context.response()->body_bytes(), std::string(4096, 'x'));
+        EXPECT_EQ(context.response()->body(), std::string(4096, 'x'));
         EXPECT_EQ(context.response()->header("X-Added"), std::string_view("context"));
         EXPECT_EQ(context.response()->headers().size(), std::size_t{4});
         co_return;
@@ -1379,7 +1379,7 @@ TEST(Ruvia, context_body_null_gives_empty_body_with_status) {
     (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         const auto response = context.body({.status_ = ruvia::http_status::no_content});
         EXPECT_EQ(response.status(), ruvia::http_status::no_content);
-        EXPECT_TRUE(response.body_bytes().empty());
+        EXPECT_TRUE(response.body().empty());
         co_return;
     });
 }
@@ -1392,7 +1392,7 @@ TEST(Ruvia, context_body_byte_span_copies_into_response_storage) {
             std::byte{0xff},
         };
         const auto response = context.body(std::span<const std::byte>(bytes_value));
-        const auto body = response.body_bytes();
+        const auto body = response.body();
 
         EXPECT_EQ(body.size(), std::size(bytes_value));
         EXPECT_EQ(body[0], '\0');
@@ -1407,7 +1407,7 @@ TEST(Ruvia, context_text_sets_plain_content_type) {
         const auto response = context.text("hello");
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
         EXPECT_EQ(response.header("Content-Type"), std::string_view("text/plain; charset=UTF-8"));
-        EXPECT_EQ(response.body_bytes(), std::string_view("hello"));
+        EXPECT_EQ(response.body(), std::string_view("hello"));
         co_return;
     });
 }
@@ -1417,7 +1417,7 @@ TEST(Ruvia, context_html_sets_html_content_type) {
         const auto response = context.html("<h1>hi</h1>");
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
         EXPECT_EQ(response.header("Content-Type"), std::string_view("text/html; charset=UTF-8"));
-        EXPECT_EQ(response.body_bytes(), std::string_view("<h1>hi</h1>"));
+        EXPECT_EQ(response.body(), std::string_view("<h1>hi</h1>"));
         co_return;
     });
 }
@@ -1431,7 +1431,7 @@ TEST(Ruvia, context_json_serializes_response_model_with_json_content_type) {
         const auto response = context.json(model);
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
         EXPECT_EQ(response.header("Content-Type"), std::string_view("application/json"));
-        EXPECT_EQ(response.body_bytes(), std::string_view(R"({"number":42,"boolean":true,"real":3.5})"));
+        EXPECT_EQ(response.body(), std::string_view(R"({"number":42,"boolean":true,"real":3.5})"));
         co_return;
     });
 }
@@ -1464,7 +1464,7 @@ TEST(Ruvia, health_responses_apply_response_options) {
         EXPECT_EQ(response.header("Content-Type"), std::string_view("application/json"));
         EXPECT_EQ(response.header("X-Trace"), std::string_view("health"));
         EXPECT_TRUE(response.header("Set-Cookie").value_or(std::string_view{}).starts_with("probe=ok;"));
-        EXPECT_EQ(response.body_bytes(), std::string_view("{\"status\":\"ok\"}"));
+        EXPECT_EQ(response.body(), std::string_view("{\"status\":\"ok\"}"));
         co_return;
     });
 }
@@ -1474,7 +1474,7 @@ TEST(Ruvia, readiness_response_defaults_to_ready) {
         const auto response = ruvia::make_readiness_response(context_value);
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
         EXPECT_EQ(response.header("Content-Type"), std::string_view("application/json"));
-        EXPECT_EQ(response.body_bytes(), std::string_view("{\"status\":\"ready\"}"));
+        EXPECT_EQ(response.body(), std::string_view("{\"status\":\"ready\"}"));
         co_return;
     });
 }
@@ -1496,7 +1496,7 @@ TEST(Ruvia, readiness_response_owns_its_failure_status) {
         const auto response = ruvia::make_readiness_response(context_value, unavailable);
         EXPECT_EQ(response.status(), ruvia::http_status::service_unavailable);
         EXPECT_EQ(response.header("Content-Type"), std::string_view("application/json"));
-        EXPECT_EQ(response.body_bytes(), std::string_view("{\"status\":\"not_ready\",\"reason\":\"database is unavailable\"}"));
+        EXPECT_EQ(response.body(), std::string_view("{\"status\":\"not_ready\",\"reason\":\"database is unavailable\"}"));
         co_return;
     });
 }
@@ -1635,7 +1635,7 @@ class invalid_final_response_routes final {
 
 TEST(Ruvia, server_answers_an_uncommittable_route_response_with_a_closing_error) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     ruvia::test::http_server_fixture server(io);
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
@@ -1654,21 +1654,21 @@ TEST(Ruvia, server_answers_an_uncommittable_route_response_with_a_closing_error)
             const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                 asio::async_write(client, asio::buffer(request), std::move(handler));
             });
-            if (sent.error_code()) {
-                throw std::system_error(sent.error_code());
+            if (sent.code()) {
+                throw std::system_error(sent.code());
             }
             std::array<char, 1024> buffer;
             for (;;) {
                 const auto received = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                     client.async_read_some(asio::buffer(buffer), std::move(handler));
                 });
-                if (received.error_code() == asio::error::eof) {
+                if (received.code() == asio::error::eof) {
                     break;
                 }
-                if (received.error_code()) {
-                    throw std::system_error(received.error_code());
+                if (received.code()) {
+                    throw std::system_error(received.code());
                 }
-                response.append(buffer.data(), received.result());
+                response.append(buffer.data(), received.value());
             }
         } catch (...) {
             failure = std::current_exception();
@@ -1677,9 +1677,9 @@ TEST(Ruvia, server_answers_an_uncommittable_route_response_with_a_closing_error)
         ruvia::close_socket(client);
         attachment.request_stop();
     };
-    auto done = attachment.loop().start(run());
+    auto done = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(done).get();
+    std::move(done).take_value();
     server.finish();
     if (failure) {
         std::rethrow_exception(failure);

@@ -69,12 +69,12 @@ public:
 
     querying_callback_target(querying_callback_target&& other) noexcept :
         destroyed_(std::exchange(other.destroyed_, nullptr)) {
-        (void)ruvia::app().workers();
+        (void)ruvia::app().worker_refs();
     }
 
     ~querying_callback_target() {
         if (destroyed_ != nullptr) {
-            (void)ruvia::app().workers();
+            (void)ruvia::app().worker_refs();
             ++*destroyed_;
         }
     }
@@ -100,7 +100,7 @@ public:
     ~reentrant_hook_target() {
         if (destroyed_ != nullptr) {
             (void)ruvia::app().stats();
-            (void)ruvia::app().workers();
+            (void)ruvia::app().worker_refs();
             ++*destroyed_;
         }
     }
@@ -585,7 +585,7 @@ private:
         co_return c.text("limited");
     }
     ruvia::task<ruvia::http_response> small(ruvia::context& c) {
-        const auto body = co_await c.req().body_text();
+        const auto body = co_await c.request().body_text();
         co_return c.body(body);
     }
 
@@ -594,7 +594,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> default_body(ruvia::context& c) {
-        const auto body = co_await c.req().body_text();
+        const auto body = co_await c.request().body_text();
         co_return c.body(body);
     }
 };
@@ -620,14 +620,14 @@ using namespace route_middleware_config_test;  // NOLINT(google-build-using-name
 TEST(Ruvia, route_middleware_carries_its_configuration_in_the_type) {
     ruvia::test_app app;
     app.controllers<configured_by_type_controller>();
-    const auto one = app.request(ruvia::test_request::get("/route-config/one"));
+    const auto one = app.dispatch(ruvia::test_request::get("/route-config/one"));
     EXPECT_EQ(one.status(), ruvia::http_status::ok);
     EXPECT_EQ(one.header("X-Config").value_or(std::string_view{}), std::string_view("two"));
 
     // Two template arguments: the route macro is variadic, so the comma splits
     // its argument list -- but pasting __VA_ARGS__ back into the template
     // argument list rejoins them, which is why no wrapper type is needed.
-    const auto two = app.request(ruvia::test_request::get("/route-config/two"));
+    const auto two = app.dispatch(ruvia::test_request::get("/route-config/two"));
     EXPECT_EQ(two.header("X-Config-Pair").value_or(std::string_view{}), std::string_view("ok"));
 }
 
@@ -637,11 +637,11 @@ TEST(Ruvia, route_rate_limit_is_configured_without_a_generated_type) {
     // rate_limit<max, window> replaces the RUVIA_ROUTE_RATE_LIMIT macro,
     // whose only purpose was minting a named type to carry these two numbers.
     for (int i = 0; i < 10; ++i) {
-        const auto limited = app.request(ruvia::test_request::get("/route-config/limited"));
+        const auto limited = app.dispatch(ruvia::test_request::get("/route-config/limited"));
         EXPECT_EQ(limited.status(), ruvia::http_status::ok);
         EXPECT_EQ(limited.body(), std::string_view("limited"));
     }
-    const auto rejected = app.request(ruvia::test_request::get("/route-config/limited"));
+    const auto rejected = app.dispatch(ruvia::test_request::get("/route-config/limited"));
     EXPECT_EQ(rejected.status(), ruvia::http_status::too_many_requests);
     EXPECT_EQ(rejected.header("X-RateLimit-Limit").value_or(std::string_view{}), std::string_view("10"));
 }
@@ -655,10 +655,10 @@ TEST(Ruvia, route_rate_limit_rejection_reaches_the_error_handler) {
         co_return c.text(error.code(), {.status_ = error.status()});
     });
     for (int i = 0; i < 10; ++i) {
-        (void)app.request(ruvia::test_request::get("/route-config/limited"));
+        (void)app.dispatch(ruvia::test_request::get("/route-config/limited"));
     }
     EXPECT_EQ(calls, 0);
-    const auto rejected = app.request(ruvia::test_request::get("/route-config/limited"));
+    const auto rejected = app.dispatch(ruvia::test_request::get("/route-config/limited"));
     EXPECT_EQ(calls, 1);
     EXPECT_EQ(rejected.status(), ruvia::http_status::too_many_requests);
     EXPECT_EQ(rejected.body(), std::string_view("too_many_requests"));
@@ -673,10 +673,10 @@ TEST(Ruvia, stacked_route_rate_limits_count_each_declaration_once_per_request) {
         // The group rule allows four requests; a shared counter would be
         // consumed twice per request and reject the third.
         for (int i = 0; i < 4; ++i) {
-            const auto admitted = app.request(ruvia::test_request::get(target));
+            const auto admitted = app.dispatch(ruvia::test_request::get(target));
             EXPECT_EQ(admitted.status(), ruvia::http_status::ok);
         }
-        const auto rejected = app.request(ruvia::test_request::get(target));
+        const auto rejected = app.dispatch(ruvia::test_request::get(target));
         EXPECT_EQ(rejected.status(), ruvia::http_status::too_many_requests);
         EXPECT_EQ(rejected.header("X-RateLimit-Limit").value_or(std::string_view{}), std::string_view("4"));
     }
@@ -687,18 +687,18 @@ TEST(Ruvia, route_body_limit_is_declared_through_the_type) {
     app.controllers<configured_by_type_controller>();
 
     // Within the route's ceiling.
-    const auto small = app.request(ruvia::test_request::post("/route-config/small").body("0123456789"));
+    const auto small = app.dispatch(ruvia::test_request::post("/route-config/small").body("0123456789"));
     EXPECT_EQ(small.status(), ruvia::http_status::ok);
     EXPECT_EQ(small.body(), std::string_view("0123456789"));
 
     // A sibling route without the declaration keeps the app-wide ceiling, so
     // the same body that the limited route would reject is fine here.
     const auto oversize_for_route = std::string(64, 'x');
-    const auto unlimited = app.request(ruvia::test_request::post("/route-config/default").body(oversize_for_route));
+    const auto unlimited = app.dispatch(ruvia::test_request::post("/route-config/default").body(oversize_for_route));
     EXPECT_EQ(unlimited.status(), ruvia::http_status::ok);
     EXPECT_EQ(unlimited.body().size(), std::size_t{64});
 
-    const auto rejected = app.request(ruvia::test_request::post("/route-config/small").body(oversize_for_route));
+    const auto rejected = app.dispatch(ruvia::test_request::post("/route-config/small").body(oversize_for_route));
     EXPECT_EQ(rejected.status(), ruvia::http_status::content_too_large);
 }
 
@@ -714,11 +714,11 @@ TEST(Ruvia, route_body_limit_bounds_the_decoded_representation) {
 
     // The compressed body fits the route's ceiling on the wire, but the
     // route reads the decoded representation, which is far larger.
-    const auto rejected = app.request(ruvia::test_request::post("/route-config/small-decoded").header("Content-Encoding", "gzip").body(*encoded));
+    const auto rejected = app.dispatch(ruvia::test_request::post("/route-config/small-decoded").header("Content-Encoding", "gzip").body(*encoded));
     EXPECT_EQ(rejected.status(), ruvia::http_status::content_too_large);
 
     // A sibling without the declaration decodes up to the app-wide ceiling.
-    const auto accepted = app.request(ruvia::test_request::post("/route-config/default").header("Content-Encoding", "gzip").body(*encoded));
+    const auto accepted = app.dispatch(ruvia::test_request::post("/route-config/default").header("Content-Encoding", "gzip").body(*encoded));
     EXPECT_EQ(accepted.status(), ruvia::http_status::ok);
     EXPECT_EQ(accepted.body(), std::string_view(plain));
 }
@@ -738,7 +738,7 @@ TEST(Ruvia, app_rejects_route_only_body_limit_middleware) {
 TEST(Ruvia, route_middleware_list_mixes_bare_and_parameterized_types) {
     ruvia::test_app app;
     app.controllers<configured_by_type_controller>();
-    const auto response = app.request(ruvia::test_request::post("/route-config/mixed").body("x"));
+    const auto response = app.dispatch(ruvia::test_request::post("/route-config/mixed").body("x"));
     EXPECT_EQ(response.status(), ruvia::http_status::ok);
     EXPECT_EQ(response.body(), std::string_view("mixed"));
     // The bare entry ran alongside the parameterized ones.
@@ -749,7 +749,7 @@ TEST(Ruvia, route_middleware_list_mixes_bare_and_parameterized_types) {
 TEST(Ruvia, route_middleware_returning_a_response_answers_without_the_handler) {
     ruvia::test_app app;
     app.controllers<configured_by_type_controller>();
-    const auto response = app.request(ruvia::test_request::get("/route-config/answered"));
+    const auto response = app.dispatch(ruvia::test_request::get("/route-config/answered"));
     EXPECT_EQ(response.status(), ruvia::http_status::accepted);
     EXPECT_EQ(response.body(), std::string_view("returned by middleware"));
 }
@@ -762,7 +762,7 @@ TEST(Ruvia, test_app_releases_worker_middleware_after_startup_failure_and_normal
         app.use<lifetime_middleware>(observation, false).use<lifetime_middleware>(observation, true);
         bool failed = false;
         try {
-            (void)app.request(ruvia::test_request::get("/route-config/one"));
+            (void)app.dispatch(ruvia::test_request::get("/route-config/one"));
         } catch (const std::runtime_error&) {
             failed = true;
         }
@@ -775,7 +775,7 @@ TEST(Ruvia, test_app_releases_worker_middleware_after_startup_failure_and_normal
         ruvia::test_app app;
         app.controllers<configured_by_type_controller>();
         app.use<lifetime_middleware>(observation, false);
-        const auto response = app.request(ruvia::test_request::get("/route-config/one"));
+        const auto response = app.dispatch(ruvia::test_request::get("/route-config/one"));
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
         EXPECT_EQ(observation->live_, 1U);
     }
@@ -794,7 +794,7 @@ TEST(Ruvia, test_app_releases_registered_middleware_arguments_with_the_app) {
         // Each registration retains its own copy of the arguments.
         EXPECT_EQ(observation.use_count(), 3L);
 
-        const auto response = app.request(ruvia::test_request::get("/route-config/one"));
+        const auto response = app.dispatch(ruvia::test_request::get("/route-config/one"));
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
         EXPECT_EQ(observation->live_, 2U);
 
@@ -833,7 +833,7 @@ TEST(Ruvia, app_wide_route_declarations_are_rejected_instead_of_ignored) {
         app.use_at<invalid_app_body_limit_middleware>({.prefix_ = "/route-config"});
     }));
 
-    const auto response = app.request(ruvia::test_request::post("/route-config/default").body(std::string(64, 'x')));
+    const auto response = app.dispatch(ruvia::test_request::post("/route-config/default").body(std::string(64, 'x')));
     EXPECT_EQ(response.status(), ruvia::http_status::ok);
 }
 
@@ -845,8 +845,8 @@ using tls_stream = asio::ssl::stream<asio::ip::tcp::socket>;
 struct runtime final {
     ruvia::blocking_pool pool_{{.thread_count_ = 1, .queue_capacity_ = 64}};
     asio::io_context first_io_, second_io_;
-    ruvia::event_loop_attachment first_{ruvia::attach_event_loop(first_io_, {.blocking_pool_ = &pool_})};
-    ruvia::event_loop_attachment second_{ruvia::attach_event_loop(second_io_, {.blocking_pool_ = &pool_})};
+    ruvia::event_loop_attachment first_{ruvia::event_loop_attachment(first_io_, {.blocking_pool_ = &pool_})};
+    ruvia::event_loop_attachment second_{ruvia::event_loop_attachment(second_io_, {.blocking_pool_ = &pool_})};
     std::array<ruvia::event_loop, 2> loops_{first_.loop(), second_.loop()};
     std::jthread first_thread_{[this] {
         first_.run();
@@ -1026,7 +1026,7 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
     });
     const auto original = configuration(false);
     server.listen({.address_ = "0.0.0.0", .https_ = port, .tls_ = original, .dispatch_ = ruvia::listener_dispatch::request_stream});
-    caller.start(server.start(caller.worker())).get();
+    caller.submit(server.start(caller.worker())).take_value().take_value();
     auto retained = connect(io, TLS1_3_VERSION, first, nullptr);
     const auto& original_identities = std::get<ruvia::tls_fixed_identities>(original.identities_);
     expect_status(retained->native_handle(), primary, original_identities.primary_.ocsp_response_);
@@ -1045,7 +1045,7 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
     };
     check(original, false);
     auto replacement = configuration(true);
-    caller.start(server.replace_tls_identities(caller.worker(), listener, replacement)).get();
+    caller.submit(server.replace_tls_identities(caller.worker(), listener, replacement)).take_value().take_value();
     check(replacement, true);
     expect_status(retained->native_handle(), primary, original_identities.primary_.ocsp_response_);
 
@@ -1058,7 +1058,7 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
             auto& identities = std::get<ruvia::tls_fixed_identities>(rejected.identities_);
             auto& target = entry == 0 ? identities.primary_.ocsp_response_ : (entry == 1 ? identities.sni_[0].identity_.ocsp_response_ : identities.local_addresses_[0].identity_.ocsp_response_);
             target = bytes;
-            EXPECT_THROW(caller.start(server.replace_tls_identities(caller.worker(), listener, std::move(rejected))).get(), std::invalid_argument);
+            EXPECT_THROW(caller.submit(server.replace_tls_identities(caller.worker(), listener, std::move(rejected))).take_value().take_value(), std::invalid_argument);
         }
     }
     auto library = std::make_shared<ruvia::tls_certificate_store>();
@@ -1070,8 +1070,8 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
     auto& replacement_identities = std::get<ruvia::tls_fixed_identities>(replacement.identities_);
     replacement_identities.primary_.ocsp_response_.clear();
     replacement_identities.sni_[0].identity_.ocsp_response_.clear();
-    caller.start(server.replace_tls_identities(caller.worker(), listener, replacement)).get();
+    caller.submit(server.replace_tls_identities(caller.worker(), listener, replacement)).take_value().take_value();
     check(replacement, true);
     retained.reset();
-    caller.start(server.shutdown(caller.worker())).get();
+    caller.submit(server.shutdown(caller.worker())).take_value().take_value();
 }

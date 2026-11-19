@@ -29,7 +29,7 @@ namespace fs = std::filesystem;
 class document_root_guard final {
 public:
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
-        if (!c.req().header("X-Test-Credential").has_value()) {
+        if (!c.request().header("X-Test-Credential").has_value()) {
             throw ruvia::http_error({.status_ = ruvia::http_status::unauthorized});
         }
         co_await next_value();
@@ -51,7 +51,7 @@ class document_root_routes final {
     }
 
     ruvia::task<ruvia::http_response> post_slug(ruvia::context& c) {
-        co_return c.text("posted:" + std::string(c.req().param("slug").value_or("")));
+        co_return c.text("posted:" + std::string(c.request().param("slug").value_or("")));
     }
 
     ruvia::task<ruvia::http_response> get_space_route(ruvia::context& c) {

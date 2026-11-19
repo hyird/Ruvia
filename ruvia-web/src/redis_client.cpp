@@ -39,9 +39,9 @@ redis_registry::redis_registry(asio::io_context& io_context, std::span<const red
 
 redis_registry::~redis_registry() = default;
 
-task<void> redis_registry::connect() {
+task<void> redis_registry::connect(operation_options options) {
     for (auto& entry : runtimes_) {
-        co_await entry->connect();
+        co_await entry->connect(options);
     }
     co_return;
 }

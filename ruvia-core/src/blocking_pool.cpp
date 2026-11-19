@@ -484,7 +484,7 @@ auto blocking_pool::impl_type::post(prepare_type prepare, settle_type settle) {
     return settle(post_status::accepted, nullptr);
 }
 
-post_outcome<> blocking_pool::post(move_only_function<void()> task_value) {
+post_result<> blocking_pool::post(move_only_function<void()> task_value) {
     if (!task_value) {
         throw std::invalid_argument("blocking pool requires a callable task");
     }
@@ -493,9 +493,9 @@ post_outcome<> blocking_pool::post(move_only_function<void()> task_value) {
         slot = std::move(task_value);
     }, [&task_value](post_status status, move_only_function<void()>* rejected) {
         if (status == post_status::accepted) {
-            return detail::delivery_access::accept<post_outcome<>>();
+            return detail::delivery_access::accept<post_result<>>();
         }
-        return detail::delivery_access::reject<post_outcome<>>(status, std::move(rejected == nullptr ? task_value : *rejected));
+        return detail::delivery_access::reject<post_result<>>(status, std::move(rejected == nullptr ? task_value : *rejected));
     });
 }
 

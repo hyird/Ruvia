@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
         auto observe = [&] {
             for (auto& task : tasks) {
                 try {
-                    std::move(task).get();
+                    std::move(task).take_value();
                 } catch (...) {
                     if (!failure) {
                         failure = std::current_exception();
@@ -125,20 +125,20 @@ int main(int argc, char** argv) {
         };
         try {
             for (auto& backend : backends) {
-                tasks.push_back(backend->loop_.start(backend->connect()));
+                tasks.push_back(backend->loop_.submit(backend->connect()).take_value());
             }
             // All clients must be ready before publishing any business work.
             observe();
             if (!failure) {
                 for (auto& backend : backends) {
-                    tasks.push_back(backend->loop_.start(backend->read()));
+                    tasks.push_back(backend->loop_.submit(backend->read()).take_value());
                 }
                 observe();
             }
             // Stop business admission first; loop threads must remain running
             // until every client has cancelled and joined its operations.
             for (auto& backend : backends) {
-                tasks.push_back(backend->loop_.start(backend->shutdown()));
+                tasks.push_back(backend->loop_.submit(backend->shutdown()).take_value());
             }
             observe();
         } catch (...) {

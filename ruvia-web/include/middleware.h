@@ -42,7 +42,7 @@ using route_middleware = callback_ref<task<void>(context&, next&)>;
 namespace ruvia::detail {
 
 // Two kinds share one intrusive list but never answer each other's lookups.
-// c.req().validated<T>() means "a validator produced and checked this"; if a
+// c.request().validated<T>() means "a validator produced and checked this"; if a
 // hand-bound request-state value of the same type could satisfy it, that
 // guarantee would silently become a lie. Keeping the kinds disjoint preserves
 // both contracts on one mechanism.

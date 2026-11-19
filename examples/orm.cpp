@@ -53,8 +53,8 @@ auto migrations() {
 }
 
 task<void> demonstrate(db_client& db) {
-    auto handle = db.db();
-    auto devices = handle.repository<device>();
+    auto executor = db.db();
+    auto devices = executor.repository<device>();
     device input;
     input.set<"id">(1);
     input.set<"name">("Pump station");
@@ -111,10 +111,10 @@ task<void> demonstrate(db_client& db) {
         std::cout << "updated=" << changed->get<"label">() << '\n';
     }
 
-    auto transaction = co_await handle.begin_transaction();
+    auto transaction = co_await executor.begin_transaction();
     auto transactional = transaction.repository<device>();
     auto candidates = transactional.query_builder("candidate");
-    candidates.where(device::column<"id">() == 1).limit(1).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
+    candidates.where(device::column<"id">() == 1).limit(1).lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
     auto claim = transactional.update_builder("target");
     claim.update_from_cte("candidates", "candidate").set(device::column<"name">().set("Claimed device")).where(device::column<"id">("target") == device::column<"id">("candidate")).returning();
     auto claimed = transactional.query_builder("claimed");
@@ -134,8 +134,8 @@ task<void> demonstrate(db_client& db) {
 
 #ifdef RUVIA_ENABLE_REDIS
 task<void> demonstrate_cache(db_client& db) {
-    auto handle = db.db();
-    auto devices = handle.repository<device>();
+    auto executor = db.db();
+    auto devices = executor.repository<device>();
     const std::array cache_order{device::column<"id">().asc()};
     const db_find_options options{.order_ = cache_order, .limit_ = 20, .cache_ = db_cache_options{.id_ = "device-page", .duration_ = std::chrono::seconds(30)}};
     auto [page, total] = co_await devices.find_and_count(options);
@@ -145,7 +145,7 @@ task<void> demonstrate_cache(db_client& db) {
     std::cout << "cached count=" << co_await query.get_count() << '\n';
     // The id covers the page and the count find_and_count derived from it.
     const std::array<std::string_view, 1> ids{"device-page"};
-    co_await handle.query_result_cache().remove(ids);
+    co_await executor.query_result_cache().remove(ids);
 }
 #endif
 
@@ -227,10 +227,10 @@ int main(int argc, char** argv) {
         }
         if (execute) {
             asio::io_context context_value(asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));
-            auto attachment = attach_event_loop(context_value);
-            auto root = attachment.loop().start(run(settings, attachment, env));
+            auto attachment = event_loop_attachment(context_value);
+            auto root = attachment.loop().submit(run(settings, attachment, env)).take_value();
             attachment.run();
-            std::move(root).get();
+            std::move(root).take_value();
         }
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';

@@ -93,7 +93,7 @@ application::application(std::shared_ptr<detail::app_state> state) :
 
 application::~application() = default;
 
-const env& application::env() const noexcept {
+const env& application::env() const& noexcept {
     return state_->env_;
 }
 
@@ -106,7 +106,7 @@ blocking_pool_stats application::blocking_pool_stats() const {
     return state_value.runtime_->blocking_pool_->stats();
 }
 
-std::vector<web_worker_ref> application::workers() const {
+std::vector<web_worker_ref> application::worker_refs() const {
     auto& state_value = *state_;
     std::lock_guard lock(state_value.mutex_);
     std::vector<web_worker_ref> result;
@@ -137,7 +137,7 @@ void application::run() & {
     detail::run_app(*this, *state_);
 }
 
-void application::request_stop() & {
+void application::request_stop() & noexcept {
     auto& state_value = *state_;
     detail::app_runtime_graph* rollback = nullptr;
     {
@@ -353,13 +353,13 @@ application& application::redis(std::nullptr_t) & {
 }
 #endif
 
-application& application::client(http_client_config config) & {
+application& application::http_client(http_client_config config) & {
     return detail::mutate_stopped_app(*this, *state_, "cannot configure HTTP client while app is running", [&](detail::app_state& state_value) {
         detail::upsert_named_capability_definition(state_value.http_clients_, config.alias_.view(), config, "HTTP client alias must not be empty");
     });
 }
 
-application& application::client(std::nullptr_t) & {
+application& application::http_client(std::nullptr_t) & {
     return detail::mutate_stopped_app(*this, *state_, "cannot configure HTTP client while app is running", [](detail::app_state& state_value) {
         state_value.http_clients_.clear();
     });

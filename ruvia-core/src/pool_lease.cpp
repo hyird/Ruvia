@@ -33,11 +33,11 @@ public:
     // needs no synchronization.
     class waiter_queue_type final {
     public:
-        void enqueue(pool_lease_acquire& waiter) noexcept {
+        void enqueue(pool_lease_acquire_operation& waiter) noexcept {
             waiters_.push_back(waiter);
         }
 
-        void remove(pool_lease_acquire& waiter) noexcept {
+        void remove(pool_lease_acquire_operation& waiter) noexcept {
             (void)waiters_.remove(waiter);
         }
 
@@ -49,20 +49,20 @@ public:
             if (waiter == nullptr) {
                 return false;
             }
-            continuation = waiter->resolve(acquire_result_type::with_value(index));
+            continuation = waiter->resolve(acquire_result_type::from_value(index));
             return true;
         }
 
         // Commits the cancellation of a still-queued acquire and resumes it in
         // a later worker turn.
         void cancel(const worker_ref& worker, std::uint64_t id) noexcept {
-            auto* waiter = waiters_.find_if([id](const pool_lease_acquire& queued) noexcept {
+            auto* waiter = waiters_.find_if([id](const pool_lease_acquire_operation& queued) noexcept {
                 return queued.waiter_id_ == id;
             });
             if (waiter == nullptr) {
                 return;
             }
-            if (auto continuation = waiter->resolve(acquire_result_type::with_status(wait_status::cancelled))) {
+            if (auto continuation = waiter->resolve(acquire_result_type::from_status(wait_status::cancelled))) {
                 worker.defer_resume(continuation);
             }
         }
@@ -73,14 +73,14 @@ public:
         // observes it.
         void complete_all(const worker_ref& worker, wait_status status) noexcept {
             while (auto* waiter = waiters_.front()) {
-                if (auto continuation = waiter->resolve(acquire_result_type::with_status(status))) {
+                if (auto continuation = waiter->resolve(acquire_result_type::from_status(status))) {
                     worker.defer_resume(continuation);
                 }
             }
         }
 
     private:
-        detail::waiter_list<pool_lease_acquire> waiters_;
+        detail::waiter_list<pool_lease_acquire_operation> waiters_;
     };
 
     impl_type(std::size_t pool_size, const worker_ref& worker_value) :
@@ -153,24 +153,24 @@ public:
     // Checks in order: closed, cancelled, a free slot, worker stopping, deadline.
     [[nodiscard]] std::optional<acquire_result_type> try_acquire(const wait_bounds& bounds) {
         if (closing_) {
-            return acquire_result_type::with_status(wait_status::closed);
+            return acquire_result_type::from_status(wait_status::closed);
         }
         if (bounds.stop_requested()) {
-            return acquire_result_type::with_status(wait_status::cancelled);
+            return acquire_result_type::from_status(wait_status::cancelled);
         }
         if (free_head_ == no_free_slot) {
             const auto* const dispatcher = detail::worker_dispatcher::of(worker_);
             if (waiter_state_->stopping_ || !worker_.accepting() || dispatcher == nullptr || dispatcher->timers_stopping()) {
-                return acquire_result_type::with_status(wait_status::worker_stopping);
+                return acquire_result_type::from_status(wait_status::worker_stopping);
             }
             if (bounds.deadline_passed()) {
-                return acquire_result_type::with_status(wait_status::timed_out);
+                return acquire_result_type::from_status(wait_status::timed_out);
             }
             return std::nullopt;
         }
         const auto slot = free_head_;
         free_head_ = std::exchange(next_free_[slot], slot_leased);
-        return acquire_result_type::with_value(slot);
+        return acquire_result_type::from_value(slot);
     }
 
     void release(std::size_t slot) noexcept {
@@ -214,17 +214,17 @@ pool_lease_scheduler::pool_lease_scheduler(std::size_t pool_size, const worker_r
 
 pool_lease_scheduler::~pool_lease_scheduler() = default;
 
-pool_lease_acquire pool_lease_scheduler::acquire(operation_options options) & {
-    return pool_lease_acquire(*impl_, std::move(options));
+pool_lease_acquire_operation pool_lease_scheduler::acquire(operation_options options) & {
+    return pool_lease_acquire_operation(*impl_, std::move(options));
 }
 
-pool_lease_acquire::pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value, operation_options options) noexcept :
+pool_lease_acquire_operation::pool_lease_acquire_operation(pool_lease_scheduler::impl_type& owner_value, operation_options options) noexcept :
     owner_(&owner_value),
     bounds_(std::move(options)) {
     ++owner_->reserved_acquires_;
 }
 
-pool_lease_acquire::pool_lease_acquire(pool_lease_acquire&& other) noexcept :
+pool_lease_acquire_operation::pool_lease_acquire_operation(pool_lease_acquire_operation&& other) noexcept :
     owner_(other.awaited_ ? nullptr : std::exchange(other.owner_, nullptr)),
     bounds_(std::move(other.bounds_)) {
     if (other.awaited_) {
@@ -232,7 +232,7 @@ pool_lease_acquire::pool_lease_acquire(pool_lease_acquire&& other) noexcept :
     }
 }
 
-pool_lease_acquire::~pool_lease_acquire() {
+pool_lease_acquire_operation::~pool_lease_acquire_operation() {
     if (owner_ != nullptr) {
         if (queued()) {
             cancel_registrations();
@@ -241,7 +241,7 @@ pool_lease_acquire::~pool_lease_acquire() {
     }
 }
 
-void pool_lease_acquire::cancel_registrations() noexcept {
+void pool_lease_acquire_operation::cancel_registrations() noexcept {
     if (owner_ != nullptr) {
         owner_->waiter_state_->queue_.remove(*this);
     }
@@ -249,7 +249,7 @@ void pool_lease_acquire::cancel_registrations() noexcept {
     stop_registration_.reset();
 }
 
-std::coroutine_handle<> pool_lease_acquire::resolve(wait_result<std::size_t> result_value) noexcept {
+std::coroutine_handle<> pool_lease_acquire_operation::resolve(wait_result<std::size_t> result_value) noexcept {
     cancel_registrations();
     if (completion_.complete(std::move(result_value))) {
         return completion_.continuation();
@@ -257,15 +257,15 @@ std::coroutine_handle<> pool_lease_acquire::resolve(wait_result<std::size_t> res
     return {};
 }
 
-void pool_lease_acquire::on_end(wait_status status) noexcept {
+void pool_lease_acquire_operation::on_end(wait_status status) noexcept {
     if (queued()) {
-        if (auto continuation = resolve(wait_result<std::size_t>::with_status(status))) {
+        if (auto continuation = resolve(wait_result<std::size_t>::from_status(status))) {
             owner_->worker_.defer_resume(continuation);
         }
     }
 }
 
-bool pool_lease_acquire::await_ready() {
+bool pool_lease_acquire_operation::await_ready() {
     if (owner_ == nullptr || awaited_) {
         throw std::logic_error("pool lease acquire cannot be awaited");
     }
@@ -279,7 +279,7 @@ bool pool_lease_acquire::await_ready() {
     return true;
 }
 
-bool pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
+bool pool_lease_acquire_operation::await_suspend(std::coroutine_handle<> continuation) {
     // Nothing ran between await_ready and here, so the pool is still saturated.
     auto& waiter_state = *owner_->waiter_state_;
     waiter_state.queue_.enqueue(*this);
@@ -288,13 +288,13 @@ bool pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
     // queue that stops, before or after arming, ends the wait as worker_stopping.
     bool armed = false;
     try {
-        armed = bounds_.arm_deadline<pool_lease_acquire, &pool_lease_acquire::on_end>(*this);
+        armed = bounds_.arm_deadline<pool_lease_acquire_operation, &pool_lease_acquire_operation::on_end>(*this);
     } catch (...) {
         cancel_registrations();
         throw;
     }
     if (!armed) {
-        (void)resolve(wait_result<std::size_t>::with_status(wait_status::worker_stopping));
+        (void)resolve(wait_result<std::size_t>::from_status(wait_status::worker_stopping));
     } else if (bounds_.token().stoppable()) {
         // A stop on any thread hops to the worker by waiter id; one already
         // requested, or requested on the worker, commits before returning.
@@ -306,7 +306,7 @@ bool pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
     return completion_.suspend(continuation);
 }
 
-wait_result<std::size_t> pool_lease_acquire::await_resume() {
+wait_result<std::size_t> pool_lease_acquire_operation::await_resume() {
     return completion_.take_value();
 }
 
@@ -318,7 +318,7 @@ bool pool_lease_scheduler::close() noexcept {
     return impl_->close();
 }
 
-bool pool_lease_scheduler::closing() const noexcept {
+bool pool_lease_scheduler::closed() const noexcept {
     return impl_->closing_;
 }
 

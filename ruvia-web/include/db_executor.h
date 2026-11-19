@@ -315,6 +315,8 @@ public:
     [[nodiscard]] db_value_type type() const noexcept;
     [[nodiscard]] std::string_view text() const& RUVIA_LIFETIMEBOUND;
     std::string_view text() const&& = delete;
+    [[nodiscard]] inline std::string take_text() &&;
+    std::string take_text() & = delete;
     [[nodiscard]] std::int64_t signed_value() const;
     [[nodiscard]] std::uint64_t unsigned_value() const;
     [[nodiscard]] double double_value() const;
@@ -406,6 +408,11 @@ template <typename param_type>
 }
 
 }  // namespace detail
+
+inline std::string db_value::take_text() && {
+    return detail::db_value_access::take_text(std::move(*this));
+}
+
 class db_field final {
 private:
     using storage_type = std::variant<std::monostate, std::string, borrowed_text>;
@@ -426,12 +433,18 @@ public:
     // string_view is a raw borrow, valid only while this field's row storage
     // remains alive. Repository mapped results instead require db_mapped_value.
     template <detail::text_scalar t_type>
+        requires(!std::same_as<t_type, std::string_view>)
     [[nodiscard]] std::optional<t_type> as() const& {
         const auto source_value = value();
         if (!source_value) {
             return std::nullopt;
         }
         return detail::convert_text<t_type>(*source_value);
+    }
+
+    template <std::same_as<std::string_view> t_type>
+    [[nodiscard]] std::optional<t_type> as() const& RUVIA_LIFETIMEBOUND {
+        return value();
     }
 
     template <detail::text_scalar t_type>
@@ -1051,7 +1064,7 @@ struct db_sql_parameter_count {
         if (sql[index] == '\0') {
             return {0, false};
         }
-        const auto next_value = driver == db_driver::mariadb ? skip_sql_atom(sql, index, true) : skip_postgresql_sql_atom(sql, index);
+        const auto next_value = driver == db_driver::mariadb ? skip_mariadb_sql_atom(sql, index, true) : skip_postgresql_sql_atom(sql, index);
         if (next_value != index + 1) {
             index = next_value;
             continue;
@@ -1522,6 +1535,7 @@ public:
         const std::string_view views[]{std::string_view(ids)...};
         return remove(std::span<const std::string_view>(views));
     }
+    task<void> remove(std::initializer_list<std::string_view>) const = delete;
     [[nodiscard]] task<void> clear() const;
 
 private:

@@ -396,10 +396,10 @@ bool http1_chunked_body_decoder::publish_trailers(std::string_view trailers) {
         if (const auto fold = detail::find_field_line_fold(value); fold != std::string_view::npos) {
             unfolded.clear();
             detail::copy_unfolded_field_lines(value, fold, detail::field_line_folding_policy::http, unfolded);
-            trailers_.push_back(http_header::copy_with_lowercase_name(name, unfolded));
+            trailers_.push_back(http_header::with_lowercase_name(name, unfolded));
             return;
         }
-        trailers_.push_back(http_header::copy_with_lowercase_name(name, value));
+        trailers_.push_back(http_header::with_lowercase_name(name, value));
     };
     try {
         return visit_http1_trailer_block(trailers, obs_fold_, publish);

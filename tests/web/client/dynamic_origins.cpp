@@ -149,7 +149,7 @@ private:
 
 TEST(Ruvia, http_client_dynamic_origins_own_inputs_and_atomically_replace_one_alias) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(attachment.loop(), std::span<const ruvia::http_client_config>{});
         std::exception_ptr failure;
@@ -160,21 +160,21 @@ TEST(Ruvia, http_client_dynamic_origins_own_inputs_and_atomically_replace_one_al
             alias.assign("changed");
             url.assign("http://127.0.0.1:8999");
             co_await std::move(update);
-            auto original = client.client();
+            auto original = client.ref();
             EXPECT_EQ(original.port(), 8001);
             auto cold_send = original.get("/cold").send();
             auto cold_upload = original.post("/cold-upload").upload();
 
             EXPECT_THROW((void)client.upsert({.base_url_ = "http://127.0.0.1:8002/path"}), std::invalid_argument);
-            EXPECT_EQ(client.client().port(), 8001);
+            EXPECT_EQ(client.ref().port(), 8001);
             EXPECT_THROW((void)client.upsert({.alias_ = "", .base_url_ = "http://127.0.0.1:8002"}), std::invalid_argument);
             EXPECT_THROW((void)client.remove(""), std::invalid_argument);
             EXPECT_FALSE(client.remove("missing"));
 
             co_await client.upsert({.alias_ = "unchanged", .base_url_ = "http://127.0.0.1:8003"});
-            auto unchanged = client.client("unchanged");
+            auto unchanged = client.ref("unchanged");
             co_await client.upsert({.base_url_ = "http://127.0.0.1:8002"});
-            EXPECT_EQ(client.client().port(), 8002);
+            EXPECT_EQ(client.ref().port(), 8002);
             EXPECT_EQ(original.port(), 8001);
             EXPECT_EQ(unchanged.port(), 8003);
             co_await ruvia::test::dynamic_origin_tests::expect_closed(std::move(cold_send));
@@ -185,22 +185,22 @@ TEST(Ruvia, http_client_dynamic_origins_own_inputs_and_atomically_replace_one_al
                 EXPECT_EQ(error.code(), ruvia::make_error_code(ruvia::http_client_errc::closing));
             }
 
-            auto removed = client.client();
+            auto removed = client.ref();
             auto removed_send = removed.get("/removed").send();
             EXPECT_TRUE(client.remove("default"));
             EXPECT_FALSE(client.remove("default"));
             try {
-                (void)client.client("default");
+                (void)client.ref("default");
                 ADD_FAILURE() << "removed alias remained visible";
             } catch (const ruvia::http_client_error& error) {
                 EXPECT_EQ(error.code(), ruvia::make_error_code(ruvia::http_client_errc::not_configured));
             }
             EXPECT_EQ(removed.port(), 8002);
-            EXPECT_EQ(client.client().port(), 8003);
+            EXPECT_EQ(client.ref().port(), 8003);
             co_await ruvia::test::dynamic_origin_tests::expect_closed(std::move(removed_send));
             co_await client.upsert({.base_url_ = "http://127.0.0.1:8004"});
-            EXPECT_EQ(client.client().port(), 8004);
-            EXPECT_EQ(client.client("unchanged").port(), 8003);
+            EXPECT_EQ(client.ref().port(), 8004);
+            EXPECT_EQ(client.ref("unchanged").port(), 8003);
         } catch (...) {
             failure = std::current_exception();
         }
@@ -216,7 +216,7 @@ TEST(Ruvia, http_client_dynamic_origins_own_inputs_and_atomically_replace_one_al
 
 TEST(Ruvia, http_client_dynamic_origins_preserve_other_pool_connections_and_cookies) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const auto loop = attachment.loop();
     constexpr std::string_view reply = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nSet-Cookie: stable=1; Path=/\r\n\r\n";
     const std::array replies{reply, reply};
@@ -226,15 +226,15 @@ TEST(Ruvia, http_client_dynamic_origins_preserve_other_pool_connections_and_cook
         ruvia::http_client client(loop, {.alias_ = "stable", .base_url_ = url, .request_timeout_ = std::chrono::seconds(2), .versions_ = ruvia::http_client_versions{.http2_ = false}, .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send});
         std::exception_ptr failure;
         try {
-            auto stable = client.client("stable");
+            auto stable = client.ref("stable");
             auto first = co_await stable.get("/first").send();
-            EXPECT_TRUE(first.stream().complete());
+            EXPECT_TRUE(first.body().complete());
             const auto before = stable.stats().completed_requests_;
             co_await client.upsert({.alias_ = "other", .base_url_ = "http://127.0.0.1:8001"});
             co_await client.upsert({.alias_ = "other", .base_url_ = "http://127.0.0.1:8002"});
             EXPECT_TRUE(client.remove("other"));
-            auto second = co_await client.client("stable").get("/second").send();
-            EXPECT_TRUE(second.stream().complete());
+            auto second = co_await client.ref("stable").get("/second").send();
+            EXPECT_TRUE(second.body().complete());
             EXPECT_EQ(stable.stats().completed_requests_, before + 1);
             EXPECT_EQ(peer.requests_.size(), 2U);
             if (peer.requests_.size() == 2) {
@@ -258,7 +258,7 @@ TEST(Ruvia, http_client_dynamic_origins_preserve_other_pool_connections_and_cook
 
 TEST(Ruvia, http_client_dynamic_origin_replacement_cancels_and_joins_live_requests) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const auto loop = attachment.loop();
     constexpr std::array replies{std::string_view{}};
     ruvia::test::dynamic_origin_tests::peer peer(io, loop.worker(), replies);
@@ -266,13 +266,13 @@ TEST(Ruvia, http_client_dynamic_origin_replacement_cancels_and_joins_live_reques
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(loop, {.base_url_ = url, .request_timeout_ = std::chrono::seconds(2)});
         ruvia::task_scope requests(loop.worker());
-        requests.spawn(ruvia::test::dynamic_origin_tests::expect_closed(client.client().get("/pending").send()));
+        requests.spawn(ruvia::test::dynamic_origin_tests::expect_closed(client.ref().get("/pending").send()));
         co_await peer.received();
         co_await client.upsert({.base_url_ = "http://127.0.0.1:8002"});
         co_await requests.join();
         co_await peer.join();
         EXPECT_TRUE(peer.client_closed_);
-        EXPECT_EQ(client.client().port(), 8002);
+        EXPECT_EQ(client.ref().port(), 8002);
         co_await client.shutdown();
     };
     ruvia::test::run_worker_tasks(attachment, run());
@@ -280,7 +280,7 @@ TEST(Ruvia, http_client_dynamic_origin_replacement_cancels_and_joins_live_reques
 
 TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_closed) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const auto loop = attachment.loop();
     constexpr std::array target_replies{std::string_view("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")};
     ruvia::test::dynamic_origin_tests::peer target(io, loop.worker(), target_replies);
@@ -293,11 +293,11 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
         ruvia::http_client client(loop, {.base_url_ = source_url, .request_timeout_ = std::chrono::seconds(2), .versions_ = ruvia::http_client_versions{.http2_ = false}});
         std::exception_ptr failure;
         try {
-            auto denied = co_await client.client().get("/without-policy").send();
+            auto denied = co_await client.ref().get("/without-policy").send();
             EXPECT_EQ(denied.status().value(), 302);
             EXPECT_TRUE(target.requests_.empty());
 
-            auto unconfigured = client.client().get("/policy-without-origin");
+            auto unconfigured = client.ref().get("/policy-without-origin");
             unconfigured.on_redirect([](const ruvia::http_client_redirect_hop&, ruvia::stop_token) -> ruvia::task<bool> {
                 co_return true;
             });
@@ -306,7 +306,7 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
             EXPECT_TRUE(target.requests_.empty());
 
             std::size_t decisions = 0;
-            auto request = client.client().get("/with-policy");
+            auto request = client.ref().get("/with-policy");
             request.header("Authorization", "Bearer private");
             request.header("Proxy-Authorization", "Basic private");
             request.header("Cookie", "source=private");
@@ -326,7 +326,7 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
                 EXPECT_EQ(wire.find("private"), std::string_view::npos);
             }
 
-            auto rejected = client.client().get("/policy-denies-registered");
+            auto rejected = client.ref().get("/policy-denies-registered");
             rejected.on_redirect([&](const ruvia::http_client_redirect_hop&, ruvia::stop_token) -> ruvia::task<bool> {
                 ++decisions;
                 co_return false;
@@ -354,7 +354,7 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
 
 TEST(Ruvia, http_client_retired_origin_handles_and_cold_operations_expire_with_owner) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const auto run = [&]() -> ruvia::task<void> {
         std::optional<ruvia::http_client_ref> retired;
         std::optional<ruvia::task<ruvia::http_client_response>> cold;
@@ -362,10 +362,10 @@ TEST(Ruvia, http_client_retired_origin_handles_and_cold_operations_expire_with_o
         std::optional<ruvia::task<ruvia::http_client_tunnel_result>> tunnel;
         {
             ruvia::http_client client(attachment.loop(), {.base_url_ = "http://127.0.0.1:8001"});
-            retired.emplace(client.client());
+            retired.emplace(client.ref());
             cold.emplace(retired->get("/cold").send());
-            upload.emplace(client.client().post("/cold-upload").upload());
-            tunnel.emplace(client.client().connect("127.0.0.1:8001").connect());
+            upload.emplace(client.ref().post("/cold-upload").upload());
+            tunnel.emplace(client.ref().connect("127.0.0.1:8001").open());
             co_await client.upsert({.base_url_ = "http://127.0.0.1:8002"});
             co_await client.shutdown();
         }
@@ -391,12 +391,12 @@ TEST(Ruvia, http_client_retired_origin_handles_and_cold_operations_expire_with_o
 
 TEST(Ruvia, http_client_dynamic_origins_reject_non_worker_mutation) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     ruvia::http_client client(attachment.loop(), {.base_url_ = "http://127.0.0.1:8001"});
     EXPECT_THROW((void)client.upsert({.base_url_ = "http://127.0.0.1:8002"}), std::logic_error);
     EXPECT_THROW((void)client.remove("default"), std::logic_error);
     const auto run = [&]() -> ruvia::task<void> {
-        EXPECT_EQ(client.client().port(), 8001);
+        EXPECT_EQ(client.ref().port(), 8001);
         co_await client.shutdown();
     };
     ruvia::test::run_worker_tasks(attachment, run());
@@ -404,12 +404,12 @@ TEST(Ruvia, http_client_dynamic_origins_reject_non_worker_mutation) {
 
 TEST(Ruvia, http_client_cold_upload_and_tunnel_pin_replaced_origins_without_handles) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(attachment.loop(), {.base_url_ = "http://127.0.0.1:8001"});
         std::exception_ptr failure;
         try {
-            auto upload = client.client().post("/cold-upload").upload();
+            auto upload = client.ref().post("/cold-upload").upload();
             co_await client.upsert({.base_url_ = "http://127.0.0.1:8002"});
             try {
                 (void)co_await std::move(upload);
@@ -417,7 +417,7 @@ TEST(Ruvia, http_client_cold_upload_and_tunnel_pin_replaced_origins_without_hand
             } catch (const ruvia::http_client_error& error) {
                 EXPECT_EQ(error.code(), ruvia::make_error_code(ruvia::http_client_errc::closing));
             }
-            auto tunnel = client.client().connect("127.0.0.1:8002").connect();
+            auto tunnel = client.ref().connect("127.0.0.1:8002").open();
             co_await client.upsert({.base_url_ = "http://127.0.0.1:8003"});
             try {
                 (void)co_await std::move(tunnel);
@@ -425,7 +425,7 @@ TEST(Ruvia, http_client_cold_upload_and_tunnel_pin_replaced_origins_without_hand
             } catch (const ruvia::http_client_error& error) {
                 EXPECT_EQ(error.code(), ruvia::make_error_code(ruvia::http_client_errc::closing));
             }
-            auto send = client.client().get("/cold-send").send();
+            auto send = client.ref().get("/cold-send").send();
             EXPECT_TRUE(client.remove("default"));
             co_await ruvia::test::dynamic_origin_tests::expect_closed(std::move(send));
         } catch (...) {
@@ -441,8 +441,9 @@ TEST(Ruvia, http_client_cold_upload_and_tunnel_pin_replaced_origins_without_hand
 
 TEST(Ruvia, http_client_retired_origin_resources_release_after_last_cold_borrow) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
-    const auto worker = attachment.loop().worker();
+    auto attachment = ruvia::event_loop_attachment(io);
+    const auto loop_for_worker = attachment.loop();
+    const auto worker = loop_for_worker.worker();
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(attachment.loop(), std::span<const ruvia::http_client_config>{});
         ruvia::worker_signal retired(worker);
@@ -456,7 +457,7 @@ TEST(Ruvia, http_client_retired_origin_resources_release_after_last_cold_borrow)
                 return marker != nullptr;
             })});
         }
-        std::optional<ruvia::http_client_ref> old(client.client());
+        std::optional<ruvia::http_client_ref> old(client.ref());
         std::optional<ruvia::task<ruvia::http_client_exchange>> cold(old->post("/cold").upload());
         EXPECT_TRUE(client.remove("default"));
         EXPECT_FALSE(observed.expired());
@@ -464,8 +465,8 @@ TEST(Ruvia, http_client_retired_origin_resources_release_after_last_cold_borrow)
         EXPECT_FALSE(observed.expired());
         cold.reset();
         ruvia::worker_timer_registration deadline;
-        (void)deadline.schedule(worker, ruvia::deadline_after(std::chrono::seconds(2)), [&](ruvia::worker_timer_outcome outcome) noexcept {
-            if (outcome == ruvia::worker_timer_outcome::expired) {
+        (void)deadline.schedule(worker, ruvia::deadline_after(std::chrono::seconds(2)), [&](ruvia::worker_timer_status outcome) noexcept {
+            if (outcome == ruvia::worker_timer_status::expired) {
                 expired = true;
                 retired.notify();
             }
@@ -492,7 +493,7 @@ TEST(Ruvia, http_client_tls_upsert_prepares_owned_paths_and_password_off_worker)
     }
     auto& io = ruvia::test::new_test_io_context();
     ruvia::blocking_pool blocking({.thread_count_ = 1});
-    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &blocking});
+    auto attachment = ruvia::event_loop_attachment(io, {.blocking_pool_ = &blocking});
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(attachment.loop(), {.base_url_ = "http://127.0.0.1:8001"});
         std::exception_ptr failure;
@@ -512,10 +513,10 @@ TEST(Ruvia, http_client_tls_upsert_prepares_owned_paths_and_password_off_worker)
             config.tls_.identity_->private_key_file_ = encrypted_key.parent_path() / "missing-key.pem";
             config.tls_.identity_->private_key_password_.assign("incorrect");
             co_await std::move(update);
-            auto secure = client.client("secure");
+            auto secure = client.ref("secure");
             EXPECT_EQ(secure.scheme(), ruvia::http_scheme::https);
             EXPECT_EQ(secure.port(), 8443);
-            EXPECT_EQ(client.client().port(), 8001);
+            EXPECT_EQ(client.ref().port(), 8001);
 
             config.alias_ = "secure";
             config.base_url_ = "https://localhost:9443";
@@ -527,7 +528,7 @@ TEST(Ruvia, http_client_tls_upsert_prepares_owned_paths_and_password_off_worker)
                 failed = true;
             }
             EXPECT_TRUE(failed);
-            EXPECT_EQ(client.client("secure").port(), 8443);
+            EXPECT_EQ(client.ref("secure").port(), 8443);
         } catch (...) {
             failure = std::current_exception();
         }
@@ -542,7 +543,7 @@ TEST(Ruvia, http_client_tls_upsert_prepares_owned_paths_and_password_off_worker)
 
 TEST(Ruvia, http_client_tls_upsert_without_blocking_pool_fails_without_publication) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = nullptr});
+    auto attachment = ruvia::event_loop_attachment(io, {.blocking_pool_ = nullptr});
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(attachment.loop(), {.base_url_ = "http://127.0.0.1:8001"});
         try {
@@ -551,7 +552,7 @@ TEST(Ruvia, http_client_tls_upsert_without_blocking_pool_fails_without_publicati
         } catch (const ruvia::blocking_operation_rejected& error) {
             EXPECT_EQ(error.status(), ruvia::blocking_status::unavailable);
         }
-        EXPECT_EQ(client.client().port(), 8001);
+        EXPECT_EQ(client.ref().port(), 8001);
         auto cold = client.upsert({.base_url_ = "https://localhost:9443"});
         co_await client.shutdown();
         try {
@@ -579,8 +580,9 @@ void exercise_origin_preparation_cancellation(cancellation_case mode) {
         gate.wait();
     }),
         post_status::accepted);
-    auto attachment = attach_event_loop(io, {.blocking_pool_ = &blocking});
-    const auto worker = attachment.loop().worker();
+    auto attachment = event_loop_attachment(io, {.blocking_pool_ = &blocking});
+    const auto loop_for_worker = attachment.loop();
+    const auto worker = loop_for_worker.worker();
     const auto run = [&]() -> task<void> {
         http_client client(attachment.loop(), {.base_url_ = "http://127.0.0.1:8001"});
         http_client_config config{.base_url_ = "https://localhost:8443"};
@@ -619,7 +621,7 @@ void exercise_origin_preparation_cancellation(cancellation_case mode) {
         co_await tasks.join();
         EXPECT_TRUE(update_finished);
         if (mode != cancellation_case::owner_close) {
-            EXPECT_EQ(client.client().port(), 8001);
+            EXPECT_EQ(client.ref().port(), 8001);
         } else {
             EXPECT_TRUE(shutdown_finished);
         }
@@ -634,8 +636,9 @@ void exercise_origin_preparation_cancellation(cancellation_case mode) {
 
 void exercise_redirect_policy_cancellation(cancellation_case mode) {
     auto& io = new_test_io_context();
-    auto attachment = attach_event_loop(io);
-    const auto worker = attachment.loop().worker();
+    auto attachment = event_loop_attachment(io);
+    const auto loop_for_worker = attachment.loop();
+    const auto worker = loop_for_worker.worker();
     constexpr std::array replies{std::string_view("HTTP/1.1 302 Found\r\nContent-Length: 0\r\nLocation: http://127.0.0.1:8123/next\r\n\r\n")};
     peer source(io, worker, replies);
     const auto url = source.url();
@@ -647,12 +650,12 @@ void exercise_redirect_policy_cancellation(cancellation_case mode) {
         bool exited = false;
         bool send_finished = false;
         std::exception_ptr failure;
-        auto request = client.client().with_options({.timeout_ = mode == cancellation_case::timeout ? timeout_duration{200} : timeout_duration{2000}, .stop_token_ = stop.token()}).get("/redirect");
+        auto request = client.ref().with_options({.timeout_ = mode == cancellation_case::timeout ? timeout_duration{200} : timeout_duration{2000}, .stop_token_ = stop.token()}).get("/redirect");
         request.on_redirect([&](const http_client_redirect_hop& hop, stop_token token) -> task<bool> {
             entered = true;
             changed.notify();
             EXPECT_EQ(hop.target_origin().host(), "127.0.0.1");
-            EXPECT_EQ(co_await sleep_for(worker, std::chrono::seconds(10), token), timer_sleep_result::stop_requested);
+            EXPECT_EQ(co_await sleep_for(worker, std::chrono::seconds(10), token), sleep_status::stop_requested);
             EXPECT_EQ(hop.target_origin().host(), "127.0.0.1");
             EXPECT_EQ(hop.target_origin().port(), 8123);
             exited = true;
@@ -970,7 +973,7 @@ TEST(Ruvia, tcp_client_exchanges_owned_bytes_with_concurrent_read_and_eof) {
     byte_peer peer(10000);
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     pool.start();
-    pool.loop(0).start(byte_exchange(pool.loop(0), peer.config())).get();
+    pool.loop(0).submit(byte_exchange(pool.loop(0), peer.config())).take_value().take_value();
     pool.join();
 }
 
@@ -994,7 +997,7 @@ TEST(Ruvia, tcp_client_tls_and_mutual_tls_authenticate_san_and_exchange_bytes) {
         }
         ruvia::event_loop_pool pool({.loop_count_ = 1});
         pool.start();
-        pool.loop(0).start(byte_exchange(pool.loop(0), config)).get();
+        pool.loop(0).submit(byte_exchange(pool.loop(0), config)).take_value().take_value();
         pool.join();
     }
 }
@@ -1017,13 +1020,13 @@ TEST(Ruvia, tcp_client_minimum_tls_version_rejects_downgrade_before_application_
             ruvia::event_loop_pool pool({.loop_count_ = 1});
             pool.start();
             if (version >= static_cast<int>(minimum)) {
-                pool.loop(0).start(byte_exchange(pool.loop(0), config)).get();
+                pool.loop(0).submit(byte_exchange(pool.loop(0), config)).take_value().take_value();
                 EXPECT_EQ(peer.tls_version(), version);
                 EXPECT_EQ(peer.received_bytes(), 10000U);
             } else {
                 ruvia::tcp_client client(pool.loop(0), config);
-                EXPECT_THROW(pool.loop(0).start(client.connect()).get(), std::system_error);
-                pool.loop(0).start(client.shutdown()).get();
+                EXPECT_THROW(pool.loop(0).submit(client.connect()).take_value().take_value(), std::system_error);
+                pool.loop(0).submit(client.shutdown()).take_value().take_value();
                 EXPECT_EQ(peer.received_bytes(), 0U);
             }
             pool.join();
@@ -1059,8 +1062,8 @@ TEST(Ruvia, tcp_client_rejects_tls10_and_tls11_before_application_bytes) {
         ruvia::event_loop_pool pool({.loop_count_ = 1});
         ruvia::tcp_client client(pool.loop(0), config);
         pool.start();
-        EXPECT_THROW(pool.loop(0).start(client.connect()).get(), std::system_error);
-        pool.loop(0).start(client.shutdown()).get();
+        EXPECT_THROW(pool.loop(0).submit(client.connect()).take_value().take_value(), std::system_error);
+        pool.loop(0).submit(client.shutdown()).take_value().take_value();
         pool.join();
         peer.finish();
         EXPECT_EQ(peer.received_bytes(), 0U);
@@ -1077,8 +1080,8 @@ TEST(Ruvia, tcp_client_tls_rejects_wrong_san_even_when_common_name_matches) {
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     ruvia::tcp_client client(pool.loop(0), config);
     pool.start();
-    EXPECT_THROW(pool.loop(0).start(client.connect()).get(), std::system_error);
-    pool.loop(0).start(client.shutdown()).get();
+    EXPECT_THROW(pool.loop(0).submit(client.connect()).take_value().take_value(), std::system_error);
+    pool.loop(0).submit(client.shutdown()).take_value().take_value();
     pool.join();
 }
 
@@ -1105,7 +1108,7 @@ TEST(Ruvia, tcp_client_owns_opaque_alpn_offers_and_reports_server_selection) {
         config.alpn_.emplace_back(protocol);
         ruvia::event_loop_pool pool({.loop_count_ = 1});
         pool.start();
-        pool.loop(0).start(alpn_exchange(pool.loop(0), config, protocol)).get();
+        pool.loop(0).submit(alpn_exchange(pool.loop(0), config, protocol)).take_value().take_value();
         pool.join();
     }
 }
@@ -1133,7 +1136,7 @@ TEST(Ruvia, tcp_client_bounds_read_and_backpressured_write_independently) {
         byte_peer peer;
         ruvia::event_loop_pool pool({.loop_count_ = 1});
         pool.start();
-        pool.loop(0).start(deadline_case(pool.loop(0), peer.config(), writing)).get();
+        pool.loop(0).submit(deadline_case(pool.loop(0), peer.config(), writing)).take_value().take_value();
         pool.join();
     }
 }
@@ -1143,7 +1146,7 @@ TEST(Ruvia, tcp_client_rejects_overlapping_reads_and_writes_without_aborting_fir
         byte_peer peer;
         ruvia::event_loop_pool pool({.loop_count_ = 1});
         pool.start();
-        pool.loop(0).start(overlap_case(pool.loop(0), peer.config(), writing)).get();
+        pool.loop(0).submit(overlap_case(pool.loop(0), peer.config(), writing)).take_value().take_value();
         pool.join();
     }
 }
@@ -1156,7 +1159,7 @@ TEST(Ruvia, tcp_client_honors_precancellation_for_connect_read_and_write) {
         ruvia::stop_source stop;
         stop.request_stop();
         pool.start();
-        pool.loop(0).start(cancellation_case(client, stop.token(), direction == 2, direction == 0)).get();
+        pool.loop(0).submit(cancellation_case(client, stop.token(), direction == 2, direction == 0)).take_value().take_value();
         pool.join();
     }
 }
@@ -1168,19 +1171,19 @@ TEST(Ruvia, tcp_client_cancels_inflight_reads_and_writes_from_another_thread) {
         ruvia::tcp_client client(pool.loop(0), peer.config());
         ruvia::stop_source stop;
         pool.start();
-        pool.loop(0).start(client.connect()).get();
+        pool.loop(0).submit(client.connect()).take_value().take_value();
         std::promise<void> started;
         std::promise<void> other_started;
-        auto operation = pool.loop(0).start(expect_io_failure(client, writing, {.stop_token_ = stop.token()}, std::errc::operation_canceled, &started));
-        auto other = pool.loop(0).start(expect_io_failure(client, !writing, {}, std::errc::operation_canceled, &other_started));
+        auto operation = pool.loop(0).submit(expect_io_failure(client, writing, {.stop_token_ = stop.token()}, std::errc::operation_canceled, &started)).take_value();
+        auto other = pool.loop(0).submit(expect_io_failure(client, !writing, {}, std::errc::operation_canceled, &other_started)).take_value();
         started.get_future().get();
         other_started.get_future().get();
         // Only one direction owns this token. Its cancellation must also end
         // the opposite in-flight operation when the connection is retired.
         stop.request_stop();
-        std::move(operation).get();
-        std::move(other).get();
-        pool.loop(0).start(client.shutdown()).get();
+        std::move(operation).take_value();
+        std::move(other).take_value();
+        pool.loop(0).submit(client.shutdown()).take_value().take_value();
         pool.join();
     }
 }
@@ -1189,7 +1192,7 @@ TEST(Ruvia, tcp_client_shutdown_retires_cold_buffers_after_owner_destruction) {
     byte_peer peer;
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     pool.start();
-    pool.loop(0).start(retired_cold_case(pool.loop(0), peer.config())).get();
+    pool.loop(0).submit(retired_cold_case(pool.loop(0), peer.config())).take_value().take_value();
     pool.join();
 }
 
@@ -1199,12 +1202,12 @@ TEST(Ruvia, tcp_client_loop_stop_joins_pending_reads_and_writes) {
         ruvia::event_loop_pool pool({.loop_count_ = 1});
         ruvia::tcp_client client(pool.loop(0), peer.config());
         pool.start();
-        pool.loop(0).start(client.connect()).get();
+        pool.loop(0).submit(client.connect()).take_value().take_value();
         std::promise<void> started;
-        auto operation = pool.loop(0).start(expect_io_failure(client, writing, {}, std::errc::operation_canceled, &started));
+        auto operation = pool.loop(0).submit(expect_io_failure(client, writing, {}, std::errc::operation_canceled, &started)).take_value();
         started.get_future().get();
         pool.request_stop();
-        std::move(operation).get();
+        std::move(operation).take_value();
         pool.join();
     }
 }
@@ -1222,23 +1225,23 @@ TEST(Ruvia, tcp_client_tls_handshake_has_deadline_and_inflight_cancellation) {
         ruvia::tcp_client client(pool.loop(0), config);
         ruvia::stop_source stop;
         pool.start();
-        auto operation = pool.loop(0).start(client.connect({.stop_token_ = stop.token()}));
+        auto operation = pool.loop(0).submit(client.connect({.stop_token_ = stop.token()})).take_value();
         if (cancelling) {
             const auto barrier = [&]() -> ruvia::task<void> {
                 (void)co_await ruvia::sleep_for(client.worker(), std::chrono::milliseconds(10));
             };
-            pool.loop(0).start(barrier()).get();
+            pool.loop(0).submit(barrier()).take_value().take_value();
             stop.request_stop();
         }
         bool failed = false;
         try {
-            std::move(operation).get();
+            std::move(operation).take_value();
         } catch (const std::system_error& error) {
             EXPECT_EQ(error.code(), std::make_error_code(cancelling ? std::errc::operation_canceled : std::errc::timed_out));
             failed = true;
         }
         EXPECT_TRUE(failed);
-        pool.loop(0).start(client.shutdown()).get();
+        pool.loop(0).submit(client.shutdown()).take_value().take_value();
         pool.join();
     }
 }
@@ -1249,7 +1252,7 @@ TEST(Ruvia, tcp_client_resolves_dns_through_its_event_loop_blocking_pool) {
     config.host_ = "localhost";
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     pool.start();
-    pool.loop(0).start(byte_exchange(pool.loop(0), config)).get();
+    pool.loop(0).submit(byte_exchange(pool.loop(0), config)).take_value().take_value();
     pool.join();
 }
 
@@ -1269,6 +1272,6 @@ TEST(Ruvia, tcp_client_cold_connect_remains_safe_after_public_owner_destruction)
     auto cold = client->connect();
     client.reset();
     pool.start();
-    EXPECT_THROW(pool.loop(0).start(std::move(cold)).get(), std::runtime_error);
+    EXPECT_THROW(pool.loop(0).submit(std::move(cold)).take_value().take_value(), std::runtime_error);
     pool.join();
 }

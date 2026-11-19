@@ -285,10 +285,10 @@ inline std::uint64_t next_nonzero_id(std::uint64_t& value) noexcept {
 class http_client_output_queue final {
 public:
     http_client_output_queue(const worker_ref& worker_value) :
-        data_(worker_value),
+        chunk_signal_(worker_value),
         space_(worker_value) {}
-    void notify_data() noexcept {
-        data_.notify();
+    void notify_chunk() noexcept {
+        chunk_signal_.notify();
         if (wake_ != nullptr) {
             wake_(wake_target_);
         }
@@ -332,7 +332,7 @@ public:
             return;
         }
         stopped_ = true;
-        notify_data();
+        notify_chunk();
         space_.notify();
         if (auto* stop_relay = relay_stop_) {
             stop_relay->request_stop();
@@ -340,7 +340,7 @@ public:
     }
     void* wake_target_{};
     void (*wake_)(void*) noexcept {};
-    worker_signal data_;
+    worker_signal chunk_signal_;
     worker_signal space_;
     std::string chunk_;
     std::optional<std::string_view> borrowed_chunk_;
@@ -479,8 +479,8 @@ struct http_client_stream_timer final {
         }
         timer_.cancel();
         timer_at_.reset();
-        if (timer_.schedule(worker, *deadline, [on_expired = std::forward<callback_type>(on_expired)](worker_timer_outcome outcome) mutable noexcept {
-            if (outcome == worker_timer_outcome::expired) {
+        if (timer_.schedule(worker, *deadline, [on_expired = std::forward<callback_type>(on_expired)](worker_timer_status outcome) mutable noexcept {
+            if (outcome == worker_timer_status::expired) {
                 on_expired();
             }
         })) {
@@ -527,10 +527,10 @@ template <typename wake_fn_type, typename stop_predicate_type, typename release_
     } wake_guard{upload};
     worker_timer_registration continue_timer;
     if (request.upload() != nullptr && !request.upload()->content_released_) {
-        (void)continue_timer.schedule(worker, deadline_after(request.upload()->config_.continue_timeout_.value()), [&upload, policy = request.upload()](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired && !upload.stopped_) {
+        (void)continue_timer.schedule(worker, deadline_after(request.upload()->config_.continue_timeout_.value()), [&upload, policy = request.upload()](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired && !upload.stopped_) {
                 policy->content_released_ = true;
-                upload.notify_data();
+                upload.notify_chunk();
             }
         });
     }
@@ -647,7 +647,7 @@ public:
         }
     }
     void release_consumed_body_prefix();
-    void promote_pending_data();
+    void promote_pending_body();
     [[nodiscard]] bool exceeds_body_limit(std::size_t limit) const noexcept {
         return pending_.size() > limit || buffered_.size() - offset_ > limit - pending_.size();
     }
@@ -663,7 +663,7 @@ public:
         // The consumer's last borrowed view lives in buffered, not pending.
         // Appending producer output must never relocate that view.
         pending_.append(bytes_value);
-        data_signal_.notify();
+        body_signal_.notify();
         return true;
     }
     // Keeps the receive credit of DATA appended for a consumer that takes it
@@ -710,7 +710,7 @@ public:
         informational_budget_ = budget;
         if (upload_ && request_content_signal == http_client_request_content_signal::continue_) {
             upload_->content_released_ = true;
-            upload_->output_.notify_data();
+            upload_->output_.notify_chunk();
         }
     }
 
@@ -723,7 +723,7 @@ public:
     std::optional<http_client_tunnel_state> tunnel_;
     std::optional<http_client_upload_state> upload_;
     worker_signal head_signal_;
-    worker_signal data_signal_;
+    worker_signal body_signal_;
     worker_signal space_signal_;
     http_client_pool* pool_{nullptr};
     http_received_status status_{http_status::ok};
@@ -798,7 +798,7 @@ public:
     std::uint64_t request_id_{0};
     std::uint64_t cancellation_id_{0};
     std::uint64_t stream_id_{0};
-    std::optional<http_push_request> promised_request_{};
+    std::optional<http2_push_request> promised_request_{};
     http_client_response_handoff push_response_;
     operation_interrupt_source interrupt_source_;
     // Declared after every field a body coroutine borrows, so the operation

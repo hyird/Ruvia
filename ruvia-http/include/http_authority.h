@@ -120,14 +120,14 @@ public:
     // brackets (for example, "[::1]"). Factories reject an empty or malformed
     // host before an origin can be observed. An absent port resolves to the
     // scheme default.
-    [[nodiscard]] static http_origin_view for_scheme(http_scheme scheme, http_origin_options options);
+    http_origin_view(http_scheme scheme, http_origin_options options);
 
     [[nodiscard]] static http_origin_view http(http_origin_options options) {
-        return for_scheme(http_scheme::http, options);
+        return http_origin_view(http_scheme::http, options);
     }
 
     [[nodiscard]] static http_origin_view https(http_origin_options options) {
-        return for_scheme(http_scheme::https, options);
+        return http_origin_view(http_scheme::https, options);
     }
 
     [[nodiscard]] constexpr http_scheme scheme() const noexcept {
@@ -144,11 +144,6 @@ public:
     }
 
 private:
-    constexpr http_origin_view(http_scheme scheme, std::string_view host, std::uint16_t port) noexcept :
-        host_(host),
-        port_(port),
-        scheme_(scheme) {}
-
     std::string_view host_;
     std::uint16_t port_;
     http_scheme scheme_;
@@ -157,6 +152,6 @@ private:
 // RFC 3986 authority for this origin: preserves IP-literal brackets and
 // includes the port only when it differs from the scheme's default. The
 // returned string owns its bytes; the origin remains borrowed.
-[[nodiscard]] std::string make_http_origin_authority(const http_origin_view& origin);
+[[nodiscard]] std::string format_http_origin_authority(const http_origin_view& origin);
 
 }  // namespace ruvia

@@ -137,7 +137,7 @@ class response_policy_routes final {
     RUVIA_ROUTES_END
 
     ruvia::task<void> stream(ruvia::context& context_value) {
-        if (context_value.req().query("fail").has_value()) {
+        if (context_value.request().query("fail").has_value()) {
             // 已暂存但未提交的流头不进入错误响应。
             const std::array headers{ruvia::http_header_view{"Content-Range", "bytes 0-2/10"}};
             static_cast<void>(context_value.stream({.headers_ = headers}));
@@ -163,7 +163,7 @@ class response_policy_routes final {
 
     // 完成态不是取消：不启动正文生产，误用 write/sleep 必须明确拒绝。
     ruvia::task<void> head_loop(ruvia::context& context_value) {
-        const auto status = context_value.req().query("not-modified").has_value() ? std::optional(ruvia::http_status::not_modified) : std::nullopt;
+        const auto status = context_value.request().query("not-modified").has_value() ? std::optional(ruvia::http_status::not_modified) : std::nullopt;
         auto& output = context_value.stream_text({.status_ = status});
         const auto token = context_value.stop_token();
         const auto phase = co_await output.commit();
@@ -216,7 +216,7 @@ class response_policy_routes final {
             if (phase == ruvia::stream_commit_result::body) {
                 co_await output.write("first");
             }
-            const auto body = co_await context_value.req().body_text();
+            const auto body = co_await context_value.request().body_text();
             {
                 std::lock_guard lock(read_after_write_mutex);
                 read_after_write_body.assign(body);

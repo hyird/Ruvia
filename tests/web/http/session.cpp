@@ -140,7 +140,7 @@ public:
 
     ruvia::task<ruvia::http_response> stale(ruvia::context& c) {
         // Revoke after middleware loaded the session but before response commit.
-        const auto id = c.req().cookie("sid_b");
+        const auto id = c.request().cookie("sid_b");
         if (id) {
             const std::string key = "sess:a" + std::string(*id);
             (void)co_await c.redis().del(key);
@@ -150,7 +150,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> stored(ruvia::context& c) {
-        const auto id = c.req().query("id");
+        const auto id = c.request().query("id");
         const std::string key = "sess:" + std::string(id.value_or(""));
         const auto value = co_await c.redis().get(key);
         co_return c.text(value ? std::string_view(*value) : "empty");
@@ -213,7 +213,7 @@ TEST(Ruvia, session_cookie_replaces_a_same_name_cookie_set_by_the_handler) {
         app.use<ruvia::session_middleware>(config);
     }
 
-    const auto response = app.request(ruvia::test_request::get("/session-test/same-name-cookie"));
+    const auto response = app.dispatch(ruvia::test_request::get("/session-test/same-name-cookie"));
     EXPECT_EQ(response.status(), ruvia::http_status::ok);
     std::size_t session_cookies = 0;
     bool expired = false;
@@ -359,7 +359,7 @@ TEST(Ruvia, csrf_rejects_repeated_token_cookie_or_header) {
         ruvia::test_app app;
         app.use<forward_csrf>(&csrf);
         app.use<csrf_accepted>();
-        return app.request(request).status();
+        return app.dispatch(request).status();
     };
 
     auto single = ruvia::test_request::post("/");

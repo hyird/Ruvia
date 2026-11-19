@@ -131,8 +131,9 @@ public:
         [[nodiscard]] bool await_ready() const noexcept {
             return member_.event_ != db_pipeline_event::none;
         }
-        void await_suspend(std::coroutine_handle<> handle) noexcept {
-            member_.continuation_ = handle;
+        void operator&() const = delete;
+        void await_suspend(std::coroutine_handle<> continuation) noexcept {
+            member_.continuation_ = continuation;
         }
         [[nodiscard]] db_pipeline_event await_resume() noexcept {
             return member_.take_event();
@@ -537,8 +538,8 @@ void db_pipeline_state<io_type>::park(member_type& member, const operation_deadl
         }
         // A stopped timer queue arms nothing; the statement still leaves
         // through admission, its stop token or close().
-        (void)member.admission_timer_.schedule(worker_, *deadline_value, [this, &member](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired && member.phase_ == db_pipeline_phase::parked) {
+        (void)member.admission_timer_.schedule(worker_, *deadline_value, [this, &member](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired && member.phase_ == db_pipeline_phase::parked) {
                 unpark(member);
                 member.phase_ = db_pipeline_phase::admitting;
                 settle(member, db_pipeline_event::timed_out);
@@ -1028,6 +1029,7 @@ public:
         }
         socket_wait(const socket_wait&) = delete;
         socket_wait& operator=(const socket_wait&) = delete;
+        void operator&() const = delete;
 
         [[nodiscard]] bool await_ready() {
             if (!wait_.has_value()) {
@@ -1039,12 +1041,12 @@ public:
                 reader_.fail(std::current_exception());
             }
         }
-        [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept {
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation) noexcept {
             if (!wait_.has_value()) {
-                reader_.pool_.state().worker().defer_resume(handle);
+                reader_.pool_.state().worker().defer_resume(continuation);
                 return true;
             }
-            return wait_->await_suspend(handle);
+            return wait_->await_suspend(continuation);
         }
         void await_resume() {
             if (!wait_.has_value()) {

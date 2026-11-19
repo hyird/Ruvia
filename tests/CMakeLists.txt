@@ -225,7 +225,7 @@ if(RUVIA_BUILD_WEB)
         web/http/file_response_failure.cpp)
     # Owns named fixed origins and redirect policies on the process application.
     ruvia_add_web_test(ruvia_http_client_api_tests 60
-        web/client/handle_and_response.cpp)
+        web/client/client_ref_and_response.cpp)
     # Owns the process application whose routes stall each client operation.
     ruvia_add_web_test(ruvia_http_client_operation_tests 60
         web/client/operation_interruption.cpp)

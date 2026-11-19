@@ -39,7 +39,7 @@ bool is_valid_request_target_bytes(std::string_view target) noexcept {
     for (std::size_t i = 0; i < target.size(); ++i) {
         const auto byte = static_cast<unsigned char>(target[i]);
         if (byte == '%') {
-            if (!http_try_decode_percent_byte(target, i)) {
+            if (!decode_percent_byte(target, i)) {
                 return false;
             }
             i += 2;

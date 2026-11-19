@@ -46,7 +46,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> peer(ruvia::context& c) {
-        const auto connection = c.conn();
+        const auto connection = c.connection();
         std::string text;
         text.append("proxy=").append(connection.via_trusted_proxy() ? "trusted" : "none");
         // scheme() describes the client's connection, including an explicitly
@@ -70,7 +70,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> ready(ruvia::context& c) {
-        const bool database_ready = c.req().query("db").value_or("up") != "down";
+        const bool database_ready = c.request().query("db").value_or("up") != "down";
         co_return ruvia::make_readiness_response(c,
             {
                 .state_ = database_ready ? ruvia::readiness_state::ready : ruvia::readiness_state::unavailable,

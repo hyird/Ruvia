@@ -13,12 +13,12 @@ namespace ruvia {
 // Accepting a promise does
 // not establish transport authority: the driver validates the URI origin using
 // its authenticated connection before consuming the pushed response.
-struct http_push_request final {
-    http_push_request() noexcept = default;
-    http_push_request(const http_push_request&) = delete;
-    http_push_request& operator=(const http_push_request&) = delete;
-    http_push_request(http_push_request&&) noexcept = default;
-    http_push_request& operator=(http_push_request&&) = delete;
+struct http2_push_request final {
+    http2_push_request() noexcept = default;
+    http2_push_request(const http2_push_request&) = delete;
+    http2_push_request& operator=(const http2_push_request&) = delete;
+    http2_push_request(http2_push_request&&) noexcept = default;
+    http2_push_request& operator=(http2_push_request&&) = delete;
     std::string method_;
     std::string scheme_;
     std::string authority_;
@@ -29,7 +29,7 @@ struct http_push_request final {
 struct http2_push_promise_event final {
     std::uint32_t associated_stream_id_;
     std::uint32_t promised_stream_id_;
-    http_push_request request_;
+    http2_push_request request_;
 };
 
 enum class http2_push_submit_error : std::uint8_t {

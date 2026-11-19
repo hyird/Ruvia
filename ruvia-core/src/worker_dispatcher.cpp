@@ -811,7 +811,7 @@ post_status worker_ref::post_factory(move_only_function<move_only_function<void(
     return dispatcher ? dispatcher->post_factory(std::move(factory)) : post_status::stopping;
 }
 
-post_outcome<> worker_ref::post_task(move_only_function<void()> task_value) const {
+post_result<> worker_ref::post_task(move_only_function<void()> task_value) const {
     if (!task_value) {
         throw std::invalid_argument("worker post requires a callable task");
     }
@@ -823,9 +823,9 @@ post_outcome<> worker_ref::post_task(move_only_function<void()> task_value) cons
     })
                                     : post_status::stopping;
     if (status != post_status::accepted) {
-        return detail::delivery_access::reject<post_outcome<>>(status, std::move(task_value));
+        return detail::delivery_access::reject<post_result<>>(status, std::move(task_value));
     }
-    return detail::delivery_access::accept<post_outcome<>>();
+    return detail::delivery_access::accept<post_result<>>();
 }
 
 void worker_ref::defer_resume(std::coroutine_handle<> continuation) const noexcept {
@@ -862,7 +862,7 @@ bool detail::worker_ref_access::link_shutdown(const worker_ref& worker_value, wo
     return dispatcher->register_shutdown(registration, std::move(owner), operations);
 }
 
-bool worker_timer_registration::schedule(const worker_ref& worker_value, std::chrono::steady_clock::time_point deadline_value, move_only_function<void(worker_timer_outcome)> completion) & {
+bool worker_timer_registration::schedule(const worker_ref& worker_value, std::chrono::steady_clock::time_point deadline_value, move_only_function<void(worker_timer_status)> completion) & {
     auto* const dispatcher = detail::worker_dispatcher::of(worker_value);
     if (dispatcher == nullptr) {
         throw std::invalid_argument("worker timer requires a valid worker");

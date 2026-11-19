@@ -79,7 +79,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> get_value(ruvia::context& c) {
-        auto value = co_await c.redis().get(c.req().param("key").value_or(""));
+        auto value = co_await c.redis().get(c.request().param("key").value_or(""));
         if (!value) {
             co_return c.error({.status_ = ruvia::http_status::not_found, .code_ = "not_found", .message_ = "redis key not found"});
         }
@@ -87,13 +87,13 @@ public:
     }
 
     ruvia::task<ruvia::http_response> set_value(ruvia::context& c) {
-        auto body = co_await c.req().body_text();
-        (void)(co_await c.redis().set(c.req().param("key").value_or(""), body));
+        auto body = co_await c.request().body_text();
+        (void)(co_await c.redis().set(c.request().param("key").value_or(""), body));
         co_return c.text("OK\n");
     }
 
     ruvia::task<ruvia::http_response> increment(ruvia::context& c) {
-        const auto value = co_await c.redis().incr(c.req().param("key").value_or(""));
+        const auto value = co_await c.redis().incr(c.request().param("key").value_or(""));
         std::string body;
         ruvia::append_decimal(body, value);
         body.push_back('\n');
@@ -101,7 +101,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> key_metadata(ruvia::context& c) {
-        const auto key = c.req().param("key").value_or("");
+        const auto key = c.request().param("key").value_or("");
         auto redis = c.redis();
         const auto exists = co_await redis.exists(key);
         const auto touched = co_await redis.touch(key);
@@ -128,8 +128,8 @@ public:
     }
 
     ruvia::task<ruvia::http_response> strings(ruvia::context& c) {
-        const auto key = c.req().param("key").value_or("");
-        const auto value = co_await c.req().body_text();
+        const auto key = c.request().param("key").value_or("");
+        const auto value = co_await c.request().body_text();
         auto redis = c.redis();
         (void)(co_await redis.set(key, value));
         ruvia::redis_set_options set_options;
@@ -183,7 +183,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> hashes(ruvia::context& c) {
-        const auto key = c.req().param("key").value_or("");
+        const auto key = c.request().param("key").value_or("");
         const auto changed = co_await c.redis().hset(key, "name", "ruvia", "kind", "framework");
         const auto extra = co_await c.redis().hset(key, "count", "1");
         const auto count = co_await c.redis().hincr_by(key, "count", 1);
@@ -222,7 +222,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> lists(ruvia::context& c) {
-        const auto key = c.req().param("key").value_or("");
+        const auto key = c.request().param("key").value_or("");
         const auto left = co_await c.redis().lpush(key, "left");
         const auto right = co_await c.redis().rpush(key, "right");
         const auto length = co_await c.redis().llen(key);
@@ -256,12 +256,12 @@ public:
     }
 
     ruvia::task<ruvia::http_response> sets(ruvia::context& c) {
-        const auto key = c.req().param("key").value_or("");
+        const auto key = c.request().param("key").value_or("");
         const auto added = co_await c.redis().sadd(key, "one");
         const auto also_added = co_await c.redis().sadd("ruvia:example:set:other", "one");
         auto members = co_await c.redis().smembers(key);
         const auto size = co_await c.redis().scard(key);
-        const auto member = co_await c.redis().sismember(key, "one");
+        const auto member = co_await c.redis().sis_member(key, "one");
         auto random = co_await c.redis().srand_member(key);
         // Three commands over the same key set: a prepared sequence still passes
         // as a span, while one-off calls read better as plain arguments.
@@ -298,7 +298,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> sorted_sets(ruvia::context& c) {
-        const auto key = c.req().param("key").value_or("");
+        const auto key = c.request().param("key").value_or("");
         const auto added = co_await c.redis().zadd(key, 1.0, "one");
         const auto added_two = co_await c.redis().zadd(key, 2.0, "two");
         auto values = co_await c.redis().zrange(key, 0, -1);
@@ -409,7 +409,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> alias_value(ruvia::context& c) {
-        auto value = co_await c.redis("cache").get(c.req().param("key").value_or(""));
+        auto value = co_await c.redis("cache").get(c.request().param("key").value_or(""));
         std::string body;
         if (value) {
             body.append(*value);

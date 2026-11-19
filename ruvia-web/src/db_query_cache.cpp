@@ -549,7 +549,7 @@ task<db_rows> db_query_cache_state::query(std::string key, std::chrono::millisec
         }
         const auto joined = *running;
         joined->awaited_ = true;
-        timer_sleep_result woken{};
+        sleep_status woken{};
         {
             stop_group wake{options.stop_token_, joined->done_.token()};
             woken = co_await sleep_until(worker_, deadline.deadline().value_or(std::chrono::steady_clock::time_point::max()), wake.token());
@@ -567,7 +567,7 @@ task<db_rows> db_query_cache_state::query(std::string key, std::chrono::millisec
             throw_db_cache_timeout();
         }
         // Cut short with the fill still running: the worker is stopping.
-        if (woken == timer_sleep_result::stop_requested && !joined->done_.stop_requested()) {
+        if (woken == sleep_status::stop_requested && !joined->done_.stop_requested()) {
             throw db_error(backend_error_code::closing, std::nullopt, "database query cache is closing");
         }
     }

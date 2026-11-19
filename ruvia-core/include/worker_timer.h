@@ -49,7 +49,7 @@ private:
     friend class worker_timer_registration;
 };
 
-enum class worker_timer_outcome : std::uint8_t {
+enum class worker_timer_status : std::uint8_t {
     expired,
     // cancel_and_notify(), a worker_timer_cancellation, or worker shutdown
     // (stop_timers) ended the pending timer.
@@ -79,19 +79,19 @@ public:
     // while the completion is being moved in), returns false, stores nothing,
     // never invokes the completion, and leaves the registration unbound -- the
     // same terminal point stop_timers() reaches for a pending timer by
-    // delivers worker_timer_outcome::cancelled. Rescheduling a still-pending
+    // delivers worker_timer_status::cancelled. Rescheduling a still-pending
     // registration throws std::logic_error; an empty worker_ref throws
     // std::invalid_argument.
-    bool schedule(const worker_ref& worker, std::chrono::steady_clock::time_point deadline, move_only_function<void(worker_timer_outcome)> completion) &;
-    bool schedule(const worker_ref&, std::chrono::steady_clock::time_point, move_only_function<void(worker_timer_outcome)>) && = delete;
-    bool schedule(worker_ref&&, std::chrono::steady_clock::time_point, move_only_function<void(worker_timer_outcome)>) & = delete;
-    bool schedule(const worker_ref&&, std::chrono::steady_clock::time_point, move_only_function<void(worker_timer_outcome)>) & = delete;
+    bool schedule(const worker_ref& worker, std::chrono::steady_clock::time_point deadline, move_only_function<void(worker_timer_status)> completion) &;
+    bool schedule(const worker_ref&, std::chrono::steady_clock::time_point, move_only_function<void(worker_timer_status)>) && = delete;
+    bool schedule(worker_ref&&, std::chrono::steady_clock::time_point, move_only_function<void(worker_timer_status)>) & = delete;
+    bool schedule(const worker_ref&&, std::chrono::steady_clock::time_point, move_only_function<void(worker_timer_status)>) & = delete;
 
     // Removes the registration without delivering its completion: the owner
     // that cancels has stopped observing the outcome (a finished operation,
     // a re-arm, setup rollback). Destruction does the same.
     void cancel() noexcept;
-    // Removes the registration and delivers worker_timer_outcome::cancelled,
+    // Removes the registration and delivers worker_timer_status::cancelled,
     // for a completion that must run to resume or release its waiter. On the
     // worker's own thread the completion is posted rather than re-entered.
     void cancel_and_notify() noexcept;
@@ -200,7 +200,7 @@ private:
     worker_timer_registration timer_;
 };
 
-enum class timer_sleep_result : std::uint8_t {
+enum class sleep_status : std::uint8_t {
     elapsed,
     // The sleep was cut short because a stop was requested: the worker is
     // shutting down, or -- when a stop_token was passed -- whatever else owns
@@ -256,7 +256,7 @@ public:
 
     [[nodiscard]] bool await_ready();
     [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation);
-    [[nodiscard]] timer_sleep_result await_resume() const noexcept;
+    [[nodiscard]] sleep_status await_resume() const noexcept;
 
 private:
     friend sleep_operation sleep_for(const worker_ref&, timeout_duration, stop_token);
@@ -271,7 +271,7 @@ private:
     const worker_ref* worker_;
     wait_bounds bounds_;
     std::coroutine_handle<> continuation_{};
-    timer_sleep_result result_{timer_sleep_result::elapsed};
+    sleep_status result_{sleep_status::elapsed};
     // Declared last so callback teardown completes before the timer
     // registration and the borrowed worker begin destruction.
     stop_registration stop_registration_;

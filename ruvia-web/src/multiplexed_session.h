@@ -158,9 +158,9 @@ public:
     template <typename duration_type, typename expired_type, typename failure_type>
     void arm(const worker_ref& worker_value, duration_type bound, expired_type on_expired, failure_type on_failure) noexcept {
         try {
-            const bool scheduled = timer_.schedule(worker_value, deadline_after(bound), [on_expired](worker_timer_outcome outcome) {
+            const bool scheduled = timer_.schedule(worker_value, deadline_after(bound), [on_expired](worker_timer_status outcome) {
                 // Cancellation belongs to worker shutdown, which closes the session.
-                if (outcome == worker_timer_outcome::expired) {
+                if (outcome == worker_timer_status::expired) {
                     on_expired();
                 }
             });
@@ -380,16 +380,16 @@ public:
     // Never too_large: the total limit belongs to the stream. Credit moves in
     // only after the append succeeded; otherwise it stays with the caller,
     // whose token returns it.
-    [[nodiscard]] multiplexed_body_store_status enqueue_bounded(std::string_view data, http_received_data_credit&& credit, std::size_t backlog_limit) {
+    [[nodiscard]] multiplexed_body_store_status enqueue_bounded(std::string_view bytes, http_received_data_credit&& credit, std::size_t backlog_limit) {
         const auto queued_bytes = queued_chunk_.size();
-        if (queued_bytes > backlog_limit || data.size() > backlog_limit - queued_bytes) {
+        if (queued_bytes > backlog_limit || bytes.size() > backlog_limit - queued_bytes) {
             return multiplexed_body_store_status::backlog_overflow;
         }
-        if (data.empty()) {
+        if (bytes.empty()) {
             return multiplexed_body_store_status::stored;
         }
         try {
-            inbound_append(queued_chunk_, queued_reservation_, data);
+            inbound_append(queued_chunk_, queued_reservation_, bytes);
         } catch (const inbound_buffer_limit_error&) {
             return multiplexed_body_store_status::buffer_limit;
         }
@@ -444,7 +444,7 @@ public:
 
     // Every queued byte as storage the consumer owns from here on; its credit
     // returns now.
-    [[nodiscard]] std::string take() noexcept {
+    [[nodiscard]] std::string take_queued() noexcept {
         std::string taken;
         taken.swap(queued_chunk_);
         queued_reservation_.clear();
@@ -826,7 +826,7 @@ public:
         }
     }
 
-    task<timer_sleep_result> sleep(timeout_duration duration, const stop_token& stop_token_value) {
+    task<sleep_status> sleep(timeout_duration duration, const stop_token& stop_token_value) {
         state_.ensure_body_allowed();
         // Connection termination wakes the sleep through the combined token and
         // then fails it; the caller's own stop still reports stop_requested.

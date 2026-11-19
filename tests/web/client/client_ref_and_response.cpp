@@ -156,7 +156,7 @@ void exercise_legacy_http_peer(int version, ruvia::http_client_versions protocol
     bool exchanged = false;
     const auto run = [&]() -> ruvia::task<void> {
         try {
-            auto response = co_await client.client().get("/legacy").send();
+            auto response = co_await client.ref().get("/legacy").send();
             EXPECT_TRUE(response.protocol_version() == ruvia::http_protocol_version::http11);
             EXPECT_TRUE(response.status() == ruvia::http_status::ok);
             const auto body = co_await response.collect_body();
@@ -170,7 +170,7 @@ void exercise_legacy_http_peer(int version, ruvia::http_client_versions protocol
         co_await client.shutdown();
     };
     pool.start();
-    pool.loop(0).start(run()).get();
+    pool.loop(0).submit(run()).take_value().take_value();
     pool.join();
     peer.finish();
     if (unexpected) {
@@ -195,11 +195,11 @@ TEST(Ruvia, http_client_rejects_tls10_and_tls11_without_request_bytes) {
 
 TEST(Ruvia, http_client_ref_origin_and_expired_send_reject_after_shutdown) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(attachment.loop(), {.base_url_ = "http://127.0.0.1:8089"});
-        auto handle = client.client();
+        auto handle = client.ref();
         try {
             EXPECT_TRUE(handle.scheme() == ruvia::http_scheme::http);
             EXPECT_EQ(handle.host(), std::string_view("127.0.0.1"));
@@ -221,10 +221,10 @@ TEST(Ruvia, http_client_ref_origin_and_expired_send_reject_after_shutdown) {
                     (void)handle.get("/").upload({});
                 }));
                 EXPECT_TRUE(throws_logic_error([&] {
-                    (void)handle.connect("127.0.0.1:8089").connect();
+                    (void)handle.connect("127.0.0.1:8089").open();
                 }));
                 EXPECT_TRUE(throws_logic_error([&] {
-                    (void)handle.udp("/udp").connect();
+                    (void)handle.connect_udp("/udp").open();
                 }));
                 EXPECT_TRUE(throws_logic_error([&] {
                     (void)handle.with_options({});
@@ -256,9 +256,9 @@ TEST(Ruvia, http_client_ref_origin_and_expired_send_reject_after_shutdown) {
         }
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -266,7 +266,7 @@ TEST(Ruvia, http_client_ref_origin_and_expired_send_reject_after_shutdown) {
 
 TEST(Ruvia, http_client_response_and_body_moved_from_throw_logic_error) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::exception_ptr peer_failure;
     const auto serve = [&]() -> asio::awaitable<void> {
@@ -285,10 +285,10 @@ TEST(Ruvia, http_client_response_and_body_moved_from_throw_logic_error) {
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .request_timeout_ = std::chrono::seconds(5)});
         try {
-            auto original = co_await client.client().get("/moved").send();
+            auto original = co_await client.ref().get("/moved").send();
             auto active = std::move(original);
 
-            EXPECT_TRUE(original.stream().complete());
+            EXPECT_TRUE(original.body().complete());
             EXPECT_TRUE(throws_logic_error([&] {
                 (void)original.status();
             }));
@@ -317,10 +317,10 @@ TEST(Ruvia, http_client_response_and_body_moved_from_throw_logic_error) {
                 original.reprioritize({});
             }));
             EXPECT_TRUE(throws_logic_error([&] {
-                (void)original.stream().read();
+                (void)original.body().read();
             }));
             EXPECT_TRUE(throws_logic_error([&] {
-                (void)original.stream().read_text();
+                (void)original.body().read_text();
             }));
             EXPECT_TRUE(throws_logic_error([&] {
                 (void)original.collect_body();
@@ -337,9 +337,9 @@ TEST(Ruvia, http_client_response_and_body_moved_from_throw_logic_error) {
         peer.close();
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -394,18 +394,18 @@ public:
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> inspect(ruvia::context& c) {
-        const auto body = co_await c.req().body_bytes();
+        const auto body = co_await c.request().body_bytes();
         fluent_client_observation observed;
-        observed.set<"method">(c.req().method()).set<"body">(std::string_view(reinterpret_cast<const char*>(body.data()), body.size())).set<"query">(c.req().query("escaped name").value_or("")).set<"single_header">(c.req().header("x-owned").value_or("")).set<"span_header">(c.req().header("x-span").value_or("")).set<"authorization">(c.req().header("authorization").value_or("")).set<"proxy_authorization">(c.req().header("proxy-authorization").value_or("")).set<"cookie">(c.req().header("cookie").value_or("")).set<"content_type">(c.req().header("content-type").value_or("")).set<"authority">(c.req().authority().empty() ? c.req().header("host").value_or("") : c.req().authority());
-        const auto cookie = c.req().query("set-cookie");
-        const std::array headers{ruvia::http_header_view{"x-observed-method", c.req().method()}, ruvia::http_header_view{"x-observed-user-agent", c.req().header("user-agent").value_or("")}, ruvia::http_header_view{"set-cookie", cookie.value_or("")}};
+        observed.set<"method">(c.request().method()).set<"body">(std::string_view(reinterpret_cast<const char*>(body.data()), body.size())).set<"query">(c.request().query("escaped name").value_or("")).set<"single_header">(c.request().header("x-owned").value_or("")).set<"span_header">(c.request().header("x-span").value_or("")).set<"authorization">(c.request().header("authorization").value_or("")).set<"proxy_authorization">(c.request().header("proxy-authorization").value_or("")).set<"cookie">(c.request().header("cookie").value_or("")).set<"content_type">(c.request().header("content-type").value_or("")).set<"authority">(c.request().authority().empty() ? c.request().header("host").value_or("") : c.request().authority());
+        const auto cookie = c.request().query("set-cookie");
+        const std::array headers{ruvia::http_header_view{"x-observed-method", c.request().method()}, ruvia::http_header_view{"x-observed-user-agent", c.request().header("user-agent").value_or("")}, ruvia::http_header_view{"set-cookie", cookie.value_or("")}};
         co_return c.json(observed, {.headers_ = std::span(headers).first(cookie ? 3 : 2)});
     }
 
     ruvia::task<ruvia::http_response> redirect(ruvia::context& c) {
-        (void)co_await c.req().body_bytes();
-        const std::array headers{ruvia::http_header_view{"location", c.req().query("location").value_or("/fluent/inspect")}};
-        co_return c.text("redirect", {.status_ = ruvia::http_status_code(c.req().query<std::uint16_t>("status").value_or(302)), .headers_ = headers});
+        (void)co_await c.request().body_bytes();
+        const std::array headers{ruvia::http_header_view{"location", c.request().query("location").value_or("/fluent/inspect")}};
+        co_return c.text("redirect", {.status_ = ruvia::http_status_code(c.request().query<std::uint16_t>("status").value_or(302)), .headers_ = headers});
     }
 
     ruvia::task<ruvia::http_response> hold(ruvia::context& c) {
@@ -418,7 +418,7 @@ public:
     ruvia::task<void> host_cancel(ruvia::context& c) {
         ruvia::stop_source independent;
         try {
-            auto response = co_await c.client("source").with_options({.timeout_ = std::chrono::milliseconds(500), .stop_token_ = independent.token()}).get("/fluent/hold").send();
+            auto response = co_await c.http_client("source").with_options({.timeout_ = std::chrono::milliseconds(500), .stop_token_ = independent.token()}).get("/fluent/hold").send();
             (void)co_await response.collect_body();
         } catch (const ruvia::http_client_error& error) {
             if (error.code() == std::make_error_code(std::errc::operation_canceled) && !independent.stop_requested()) {
@@ -437,9 +437,9 @@ public:
 
     ruvia::task<ruvia::http_response> registered_redirect(ruvia::context& c) {
         const auto& targets = *c.worker_state<std::shared_ptr<redirect_destinations>>();
-        const auto mode = c.req().query("mode").value_or("cross");
+        const auto mode = c.request().query("mode").value_or("cross");
         const auto& target = mode == "unregistered" ? targets.unregistered_ : targets.destination_;
-        auto origin = c.client(mode == "downgrade" ? "secure" : "source");
+        auto origin = c.http_client(mode == "downgrade" ? "secure" : "source");
         auto response = co_await origin.post("/fluent/redirect").query("location", std::string(target) + "/fluent/inspect").header("authorization", "Bearer source-secret").header("proxy-authorization", "Basic proxy-secret").header("cookie", "explicit=source-secret").header("content-type", "text/plain").body("source-body").send();
         const auto status = response.status();
         auto body = co_await response.collect_body();
@@ -458,7 +458,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> framed_source(ruvia::context& c) {
-        const auto mode = c.req().query("mode").value_or("");
+        const auto mode = c.request().query("mode").value_or("");
         if (mode == "decoded") {
             static constexpr char encoded[] = "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x4b\x49\x4d\xce\x4f\x49\x4d\x51\x28\x4a\x2d\x28\x4a\x2d\x4e\xcd\x2b\x49\x2c\xc9\xcc\xcf\x03\x00\xde\xa6\x1e\x06\x16\x00\x00\x00";
             ruvia::http_response response;
@@ -479,8 +479,8 @@ public:
     }
 
     ruvia::task<void> pipe_fixed(ruvia::context& c) {
-        const auto mode = c.req().query("mode").value_or("");
-        auto origin = c.client("source");
+        const auto mode = c.request().query("mode").value_or("");
+        auto origin = c.http_client("source");
         auto request = mode == "head" ? origin.head("/fluent/framed-source") : origin.get("/fluent/framed-source");
         request.query("mode", mode);
         auto response = co_await std::move(request).send();
@@ -501,9 +501,9 @@ public:
         }
         std::size_t consumed = 0;
         if (mode == "partial") {
-            const auto first = co_await response.stream().read_text();
+            const auto first = co_await response.body().read_text();
             consumed += first ? first->size() : 0;
-            const auto second = co_await response.stream().read();
+            const auto second = co_await response.body().read();
             consumed += second ? second->size() : 0;
         } else if (mode == "all") {
             const auto body = co_await response.collect_body();
@@ -517,11 +517,11 @@ public:
     }
 
     ruvia::task<void> pipe(ruvia::context& c) {
-        auto response = co_await c.client("source").get("/fluent/stream-source").send();
+        auto response = co_await c.http_client("source").get("/fluent/stream-source").send();
         auto forwarding = response.pipe_to(c);
         auto moved = std::move(response);
         co_await std::move(forwarding);
-        if (!moved.stream().complete()) {
+        if (!moved.body().complete()) {
             throw std::runtime_error("response pipe did not consume the moved source");
         }
     }
@@ -529,7 +529,7 @@ public:
     // An already-stopped token forwards nothing, so the bounded forward that
     // follows still commits the whole response.
     ruvia::task<void> pipe_bounded(ruvia::context& c) {
-        auto response = co_await c.client("source").get("/fluent/stream-source").send();
+        auto response = co_await c.http_client("source").get("/fluent/stream-source").send();
         ruvia::stop_source stop;
         stop.request_stop();
         bool cancelled = false;
@@ -538,7 +538,7 @@ public:
         } catch (const ruvia::http_client_error& error) {
             cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
         }
-        if (!cancelled || response.stream().complete()) {
+        if (!cancelled || response.body().complete()) {
             throw std::runtime_error("stopped response pipe did not fail before forwarding");
         }
         bool rejected = false;
@@ -554,10 +554,10 @@ public:
     }
 
     ruvia::task<void> websocket_echo(ruvia::context& c) {
-        if (c.req().header("x-owned") != "pooled") {
+        if (c.request().header("x-owned") != "pooled") {
             throw std::runtime_error("WebSocket builder did not retain its fields");
         }
-        if (c.req().query("oversize")) {
+        if (c.request().query("oversize")) {
             const std::string payload(64, 'm');
             co_await c.websocket().text(payload);
         }
@@ -583,7 +583,7 @@ public:
         const auto& key = identity_.private_key_file();
         const std::array listeners{ruvia::listen_config{.address_ = "127.0.0.1", .http_ = source_port_.endpoint().port(), .https_ = secure_port_.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity_.ca_file_, .private_key_file_ = key}}}}, ruvia::listen_config{.address_ = "127.0.0.1", .http_ = destination_port_.endpoint().port()}};
         auto& app = ruvia::app();
-        app.workers({.worker_count_ = 1}).listen(std::span<const ruvia::listen_config>(listeners)).client({.alias_ = "source", .base_url_ = targets_->source_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}, .cookies_ = {{"configured", "source-secret"}}}).client({.alias_ = "destination", .base_url_ = targets_->destination_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}}).client({.alias_ = "secure", .base_url_ = targets_->secure_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}, .tls_ = {.ca_file_ = identity_.ca_file_, .server_name_ = "localhost"}});
+        app.workers({.worker_count_ = 1}).listen(std::span<const ruvia::listen_config>(listeners)).http_client({.alias_ = "source", .base_url_ = targets_->source_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}, .cookies_ = {{"configured", "source-secret"}}}).http_client({.alias_ = "destination", .base_url_ = targets_->destination_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}}).http_client({.alias_ = "secure", .base_url_ = targets_->secure_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}, .tls_ = {.ca_file_ = identity_.ca_file_, .server_name_ = "localhost"}});
         app.use_worker_state<std::shared_ptr<redirect_destinations>>([targets = targets_] {
             return targets;
         });
@@ -638,12 +638,12 @@ void verify_request_host_cancellation(server& server);
 TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) {
     fluent_client_tests::server server;
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     std::exception_ptr failure;
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(attachment.loop(), {.base_url_ = server.targets().source_, .request_timeout_ = std::chrono::seconds(5), .versions_ = ruvia::http_client_versions{.http2_ = false}});
         try {
-            const auto origin = client.client();
+            const auto origin = client.ref();
             auto cold = [&] {
                 std::string path("/fluent/inspect");
                 std::string name("x-owned");
@@ -673,7 +673,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
             EXPECT_EQ(observed.get<"single_header">().view(), "owned-value");
             EXPECT_EQ(observed.get<"span_header">().view(), "span-value");
             EXPECT_TRUE((co_await response.collect_body()).empty());
-            EXPECT_TRUE(!(co_await response.stream().read()));
+            EXPECT_TRUE(!(co_await response.body().read()));
             const auto replay = co_await response.json<fluent_client_observation>();
             EXPECT_FALSE(replay.has_value());
             EXPECT_EQ(replay.error().code(), ruvia::model_parse_error::code_type::invalid_format);
@@ -686,7 +686,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 auto invalid_rules = co_await origin.post("/fluent/inspect").body("x").send();
                 const auto rejected = co_await invalid_rules.json<fluent_client_body_rule>();
                 EXPECT_FALSE(rejected.has_value());
-                EXPECT_TRUE(invalid_rules.stream().complete());
+                EXPECT_TRUE(invalid_rules.body().complete());
                 EXPECT_EQ(rejected.error().code(), ruvia::model_parse_error::code_type::validation_failed);
                 EXPECT_EQ(rejected.error().issues().size(), std::size_t{1});
                 if (rejected.error().issues().size() == 1) {
@@ -866,14 +866,14 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                         const std::string value("pooled");
                         const std::string subprotocol("echo.v1");
                         const std::array fields{ruvia::http_header_view{"x-owned", value}};
-                        return websocket_client.client().websocket(path).headers(fields).subprotocol(subprotocol).deflate({.compression_ = {.enabled_ = true}}).connect();
+                        return websocket_client.ref().websocket(path).headers(fields).subprotocol(subprotocol).deflate({.compression_ = {.enabled_ = true}}).connect();
                     }();
                     auto connected = co_await std::move(connecting);
                     auto session = std::move(connected);
                     EXPECT_EQ(session.subprotocol(), "echo.v1");
                     // Accepted WebSockets are not ordinary finite HTTP responses.
                     // The HTTP exchange deadline must not become their lifetime.
-                    EXPECT_TRUE(co_await ruvia::sleep_for(session.worker(), std::chrono::milliseconds(1250)) == ruvia::timer_sleep_result::elapsed);
+                    EXPECT_TRUE(co_await ruvia::sleep_for(session.worker(), std::chrono::milliseconds(1250)) == ruvia::sleep_status::elapsed);
                     EXPECT_TRUE(session.connected());
                     const std::string payload(32768, 'w');
                     for (const bool compress : {false, true}) {
@@ -893,7 +893,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                     co_await session.close({.code_ = ruvia::websocket_close_status::normal_closure, .reason_ = "pooled"});
                     EXPECT_TRUE(!(co_await session.read()));
                     {
-                        auto timed = co_await websocket_client.client().websocket("/fluent/websocket").header("x-owned", "pooled").subprotocol("echo.v1").connect();
+                        auto timed = co_await websocket_client.ref().websocket("/fluent/websocket").header("x-owned", "pooled").subprotocol("echo.v1").connect();
                         bool timed_out = false;
                         try {
                             (void)co_await timed.read({.timeout_ = std::chrono::milliseconds(20)});
@@ -912,7 +912,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                         EXPECT_TRUE(timed.termination() == ruvia::websocket_termination::local_close);
                     }
                     {
-                        auto limited = co_await websocket_client.client().websocket("/fluent/websocket").header("x-owned", "pooled").subprotocol("echo.v1").max_message_bytes(32).connect();
+                        auto limited = co_await websocket_client.ref().websocket("/fluent/websocket").header("x-owned", "pooled").subprotocol("echo.v1").max_message_bytes(32).connect();
                         bool rejected = false;
                         try {
                             co_await limited.text(std::string(33, 'm'));
@@ -924,13 +924,14 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                         limited.abort();
                     }
                     {
-                        auto limited = co_await websocket_client.client().websocket("/fluent/websocket?oversize=1").header("x-owned", "pooled").subprotocol("echo.v1").max_message_bytes(32).connect();
+                        auto limited = co_await websocket_client.ref().websocket("/fluent/websocket?oversize=1").header("x-owned", "pooled").subprotocol("echo.v1").max_message_bytes(32).connect();
                         EXPECT_FALSE((co_await limited.read()).has_value());
                         EXPECT_TRUE(limited.termination() == ruvia::websocket_termination::message_too_large);
                         limited.abort();
                     }
-                    auto active = co_await websocket_client.client().websocket("/fluent/websocket").header("x-owned", "pooled").subprotocol("echo.v1").connect();
-                    const auto worker = attachment.loop().worker();
+                    auto active = co_await websocket_client.ref().websocket("/fluent/websocket").header("x-owned", "pooled").subprotocol("echo.v1").connect();
+                    const auto loop_for_worker = attachment.loop();
+                    const auto worker = loop_for_worker.worker();
                     ruvia::task_scope readers(worker);
                     bool cancelled = false;
                     const auto receive = [&]() -> ruvia::task<void> {
@@ -962,9 +963,9 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
         co_await client.shutdown();
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (!failure) {
         fluent_client_tests::verify_standalone_origins(server);
         fluent_client_tests::verify_request_host_cancellation(server);
@@ -978,7 +979,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
 void fluent_client_tests::verify_standalone_origins(server& server) {
     SCOPED_TRACE("standalone origins, isolated policies and shared budget");
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     std::exception_ptr failure;
     const auto run = [&]() -> ruvia::task<void> {
         auto secure = server.secure_config();
@@ -988,8 +989,8 @@ void fluent_client_tests::verify_standalone_origins(server& server) {
         const std::array configs{ruvia::http_client_config{.base_url_ = server.targets().source_, .versions_ = ruvia::http_client_versions{.http2_ = false}, .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send, .user_agent_ = "source-agent", .cookies_ = {{"configured", "source"}}}, ruvia::http_client_config{.alias_ = "destination", .base_url_ = server.targets().destination_, .versions_ = ruvia::http_client_versions{.http2_ = false}, .user_agent_ = "destination-agent", .cookies_ = {{"configured", "destination"}}}, secure, untrusted};
         ruvia::http_client client(attachment.loop(), std::span<const ruvia::http_client_config>(configs));
         try {
-            const auto source = client.client();
-            const auto destination = client.client("destination");
+            const auto source = client.ref();
+            const auto destination = client.ref("destination");
             for (const auto status : {"302", "307"}) {
                 auto result = co_await source.post("/fluent/redirect").query("status", status).query("location", std::string(server.targets().destination_) + "/fluent/inspect").header("authorization", "Bearer source-secret").header("proxy-authorization", "Basic proxy-secret").header("cookie", "explicit=source-secret").header("content-type", "text/plain").body("source-body").send();
                 EXPECT_TRUE(result.ok());
@@ -1025,21 +1026,21 @@ void fluent_client_tests::verify_standalone_origins(server& server) {
                 EXPECT_EQ(text.text(), "redirect");
             }
             {
-                auto result = co_await client.client("secure").get("/fluent/redirect").query("location", std::string(server.targets().destination_) + "/fluent/inspect").send();
+                auto result = co_await client.ref("secure").get("/fluent/redirect").query("location", std::string(server.targets().destination_) + "/fluent/inspect").send();
                 EXPECT_TRUE(result.status() == ruvia::http_status::found);
                 const auto text = co_await result.collect_body();
                 EXPECT_EQ(text.text(), "redirect");
             }
             bool tls_rejected = false;
             try {
-                (void)co_await client.client("untrusted").get("/fluent/inspect").send();
+                (void)co_await client.ref("untrusted").get("/fluent/inspect").send();
             } catch (const ruvia::http_client_error& error) {
                 tls_rejected = error.code() == ruvia::make_error_code(ruvia::http_client_errc::tls_failed);
             }
             EXPECT_TRUE(tls_rejected);
             bool unknown_rejected = false;
             try {
-                (void)client.client("unknown");
+                (void)client.ref("unknown");
             } catch (const ruvia::http_client_error& error) {
                 unknown_rejected = error.code() == ruvia::make_error_code(ruvia::http_client_errc::not_configured);
             }
@@ -1052,10 +1053,10 @@ void fluent_client_tests::verify_standalone_origins(server& server) {
             const std::span<const ruvia::http_client_config> origins(configs.data(), 2);
             ruvia::http_client bounded(attachment.loop(), origins, {.result_budget_ = {.max_retained_bytes_ = 16}});
             try {
-                auto first = co_await bounded.client().get("/fluent/stream-source").send();
+                auto first = co_await bounded.ref().get("/fluent/stream-source").send();
                 const auto retained = co_await first.collect_body(11);
                 EXPECT_EQ(retained.text(), "firstsecond");
-                auto second = co_await bounded.client("destination").get("/fluent/stream-source").send();
+                auto second = co_await bounded.ref("destination").get("/fluent/stream-source").send();
                 bool exhausted = false;
                 try {
                     (void)co_await second.collect_body(11);
@@ -1078,7 +1079,7 @@ void fluent_client_tests::verify_standalone_origins(server& server) {
 void fluent_client_tests::verify_request_host_cancellation(server& server) {
     SCOPED_TRACE("user options preserve request-host cancellation");
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     std::exception_ptr failure;
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client owner(attachment.loop(), {.base_url_ = server.targets().source_, .request_timeout_ = std::chrono::seconds(2), .versions_ = ruvia::http_client_versions{.http2_ = false}});
@@ -1089,7 +1090,7 @@ void fluent_client_tests::verify_request_host_cancellation(server& server) {
             bool cancelled = false;
             const auto request = [&]() -> ruvia::task<void> {
                 try {
-                    (void)co_await owner.client().with_options({.stop_token_ = stop.token()}).get("/fluent/host-cancel").send();
+                    (void)co_await owner.ref().with_options({.stop_token_ = stop.token()}).get("/fluent/host-cancel").send();
                 } catch (const ruvia::http_client_error& error) {
                     cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
                 }
@@ -1122,7 +1123,7 @@ void fluent_client_tests::verify_request_host_cancellation(server& server) {
 
 TEST(Ruvia, http_client_unconsumed_builders_outlive_shutdown_and_client_storage) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     std::exception_ptr failure;
     const auto run = [&]() -> ruvia::task<void> {
         std::optional<ruvia::http_client_request> request;
@@ -1135,7 +1136,7 @@ TEST(Ruvia, http_client_unconsumed_builders_outlive_shutdown_and_client_storage)
                 const std::string value(16384, 'v');
                 const std::string body(32768, 'b');
                 const std::string authority(std::string(63, 'a') + "." + std::string(63, 'b') + ".test:443");
-                const auto origin = client.client();
+                const auto origin = client.ref();
                 request.emplace(origin.post(path));
                 request->header("x-owned", value).query("owned", path).body(body);
                 connect.emplace(origin.connect(authority));
@@ -1150,7 +1151,7 @@ TEST(Ruvia, http_client_unconsumed_builders_outlive_shutdown_and_client_storage)
                 (void)std::move(*request).send();
             }));
             EXPECT_TRUE(throws_logic_error([&] {
-                (void)std::move(*connect).connect();
+                (void)std::move(*connect).open();
             }));
             EXPECT_TRUE(throws_logic_error([&] {
                 (void)std::move(*websocket).connect();
@@ -1163,9 +1164,9 @@ TEST(Ruvia, http_client_unconsumed_builders_outlive_shutdown_and_client_storage)
         }
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (failure) {
         std::rethrow_exception(failure);
     }

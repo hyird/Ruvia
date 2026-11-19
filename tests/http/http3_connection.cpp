@@ -65,7 +65,7 @@ template <typename event_consumer_type>
         if (produced.status_ == http3_transport_status::would_block) {
             return true;
         }
-        const auto output_size = output.size();
+        const auto output_size = output.byte_size();
         if (produced.status_ != http3_transport_status::accepted || source.commit_output(output.stream_id_, output_size) != http3_transport_status::accepted) {
             return false;
         }
@@ -580,9 +580,9 @@ TEST(Ruvia, http3_received_data_credit_returns_once_when_released) {
         ASSERT_EQ(peers.client_.submit_data(0, chunk).consumed_bytes_, chunk.size());
         ASSERT_TRUE(peers.to_server([&](ruvia::http3_event& event) {
             if (auto* data = event.data()) {
-                credits.push_back(data->take_credit());
+                credits.push_back(std::move(*data).take_credit());
                 // A taken credit leaves none behind in the event.
-                EXPECT_FALSE(data->take_credit().valid());
+                EXPECT_FALSE(std::move(*data).take_credit().valid());
             }
         }));
     }
@@ -616,7 +616,7 @@ TEST(Ruvia, http3_received_data_credits_of_different_streams_do_not_merge) {
         ASSERT_TRUE(submit_post(peers, 4, "cde"));
         ASSERT_TRUE(peers.to_server([&](ruvia::http3_event& event) {
             if (auto* data = event.data()) {
-                (data->stream_id() == 0 ? first : second).emplace(data->take_credit());
+                (data->stream_id() == 0 ? first : second).emplace(std::move(*data).take_credit());
             }
         }));
         ASSERT_TRUE(first.has_value() && second.has_value());
@@ -660,7 +660,7 @@ TEST(Ruvia, http3_received_data_credits_of_different_streams_do_not_merge) {
     }
     while (auto event = server.next_event()) {
         if (auto* data = event->data()) {
-            return data->take_credit();
+            return std::move(*data).take_credit();
         }
     }
     throw std::logic_error("HTTP/2 test request carried no DATA");
@@ -675,7 +675,7 @@ TEST(Ruvia, http_received_data_credits_of_different_protocols_do_not_merge) {
     std::optional<ruvia::http_received_data_credit> h3_credit;
     ASSERT_TRUE(peers.to_server([&](ruvia::http3_event& event) {
         if (auto* data = event.data()) {
-            h3_credit.emplace(data->take_credit());
+            h3_credit.emplace(std::move(*data).take_credit());
         }
     }));
     ASSERT_TRUE(h3_credit && h3_credit->valid());
@@ -1231,7 +1231,7 @@ TEST(Ruvia, http3_concurrent_streams_interleave_partial_header_blocks) {
     std::vector<std::byte> stream4;
     ruvia::http3_stream_output out;
     while (peers.client_.peek_output(64 * 1024, out).status_ == ruvia::http3_transport_status::accepted) {
-        const auto size = out.size();
+        const auto size = out.byte_size();
         if (out.stream_id_ == 0 || out.stream_id_ == 4) {
             auto& dst = out.stream_id_ == 0 ? stream0 : stream4;
             for (std::size_t idx = 0; idx < out.buffer_count_; ++idx) {

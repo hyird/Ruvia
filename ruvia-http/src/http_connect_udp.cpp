@@ -137,7 +137,7 @@ std::variant<handshake_fields, http_connect_udp_error> scan_handshake_fields(con
     return found;
 }
 }  // namespace
-std::variant<std::string, http_connect_udp_error> encode_http_connect_udp_path(http_connect_udp_target_view target) {
+std::variant<std::string, http_connect_udp_error> format_http_connect_udp_path(http_connect_udp_target_view target) {
     if (!valid_host(target.host_) || target.port_ == 0) {
         return http_connect_udp_error::invalid_target;
     }
@@ -154,7 +154,7 @@ std::variant<std::string, http_connect_udp_error> encode_http_connect_udp_path(h
         if (is_uri_unreserved_byte(c)) {
             result_value.push_back(static_cast<char>(c));
         } else {
-            http_append_percent_byte(result_value, c);
+            append_percent_byte(result_value, c);
         }
     }
     result_value.push_back('/');

@@ -58,7 +58,7 @@ struct authenticated_user final {
 class jwt_auth_middleware final {
 public:
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
-        const auto token = ruvia::jwt_bearer_token(c.req().header("Authorization").value_or(""));
+        const auto token = ruvia::extract_bearer_token(c.request().header("Authorization").value_or(""));
         if (!token) {
             // RFC 9110 15.5.2: a 401 names the scheme that would succeed.
             c.policy().header("WWW-Authenticate", "Bearer");
@@ -68,7 +68,7 @@ public:
 
         // A rejected token is a routine value, not an exception, so a downstream
         // handler's exception still reaches on_error unchanged.
-        auto verified = ruvia::jwt_verify(verify_options(*token));
+        auto verified = ruvia::verify_jwt(verify_options(*token));
         if (!verified.has_value()) {
             // RFC 6750 3.1: a presented but unusable token is invalid_token.
             c.policy().header("WWW-Authenticate", R"(Bearer error="invalid_token")");
@@ -98,8 +98,8 @@ public:
 private:
     ruvia::task<ruvia::http_response> token(ruvia::context& c) {
         auto options = sign_options();
-        options.subject_ = c.req().query("sub").value_or("example-user");
-        auto jwt = ruvia::jwt_sign(options);
+        options.subject_ = c.request().query("sub").value_or("example-user");
+        auto jwt = ruvia::sign_jwt(options);
         co_return c.text(std::move(jwt));
     }
 

@@ -588,8 +588,8 @@ TEST(Ruvia, scoped_operation_direct_spawn_retires_frame_before_join_and_capabili
     for (auto outcome : {direct_child_outcome::immediate, direct_child_outcome::suspended, direct_child_outcome::failed, direct_child_outcome::cancelled}) {
         SCOPED_TRACE(static_cast<int>(outcome));
         ruvia::test::scoped_operation_tests::direct_retirement_observation observation;
-        auto root = loop.start(ruvia::test::scoped_operation_tests::exercise_direct_retirement(loop.worker(), outcome, observation));
-        std::move(root).get();
+        auto root = loop.submit(ruvia::test::scoped_operation_tests::exercise_direct_retirement(loop.worker(), outcome, observation)).take_value();
+        std::move(root).take_value();
         EXPECT_EQ(observation.value_, 42);
         EXPECT_EQ(observation.expirations_, 1);
         EXPECT_TRUE(observation.expired_after_release_);
@@ -646,16 +646,16 @@ TEST(Ruvia, scoped_operation_close_and_join_releases_frame_before_expiring_capab
     auto started = started_promise.get_future();
     // Only the coroutine frame owns payload storage during the observation.
     auto operation = scope.attach(wait_with_payload(tracked_payload(1024, 'p', &parameter_resource), signal, started_promise, frame_lease(lease_active)));
-    auto operation_root = loop.start(await_scoped_operation(operation));
+    auto operation_root = loop.submit(await_scoped_operation(operation)).take_value();
     loops.start();
     started.get();
 
-    auto join_root = loop.start(join_and_observe_bytes(scope, parameter_resource));
+    auto join_root = loop.submit(join_and_observe_bytes(scope, parameter_resource)).take_value();
     const auto notified = loop.worker().post([&] {
         signal.notify();
     });
-    const auto bytes_at_join = std::move(join_root).get();
-    std::move(operation_root).get();
+    const auto bytes_at_join = std::move(join_root).take_value();
+    std::move(operation_root).take_value();
 
     EXPECT_TRUE(notified == ruvia::post_status::accepted);
     EXPECT_EQ(expired_count, 1);
@@ -682,17 +682,17 @@ TEST(Ruvia, scoped_operation_exception_releases_frame_before_expiring_capabiliti
     std::promise<void> started_promise;
     auto started = started_promise.get_future();
     auto operation = scope.attach(wait_then_throw(tracked_payload(1024, 'x', &resource), signal, started_promise));
-    auto operation_root = loop.start(await_scoped_operation(operation));
+    auto operation_root = loop.submit(await_scoped_operation(operation)).take_value();
     loops.start();
     started.get();
 
-    auto join_root = loop.start(join_and_observe_bytes(scope, resource));
+    auto join_root = loop.submit(join_and_observe_bytes(scope, resource)).take_value();
     const auto notified = loop.worker().post([&] {
         signal.notify();
     });
-    EXPECT_EQ(std::move(join_root).get(), 0U);
+    EXPECT_EQ(std::move(join_root).take_value(), 0U);
     EXPECT_TRUE(ruvia::test::throws_on([&] {
-        std::move(operation_root).get();
+        std::move(operation_root).take_value();
     }));
     EXPECT_TRUE(notified == ruvia::post_status::accepted);
     EXPECT_EQ(expired_count, 1);
@@ -717,17 +717,17 @@ TEST(Ruvia, scoped_operation_cooperative_cancellation_releases_frame_before_expi
     auto started = started_promise.get_future();
     std::atomic_bool stop_requested{false};
     auto operation = scope.attach(wait_then_observe_cancellation(tracked_payload(1024, 'x', &resource), signal, started_promise, stop_requested));
-    auto operation_root = loop.start(await_scoped_bool(operation));
+    auto operation_root = loop.submit(await_scoped_bool(operation)).take_value();
     loops.start();
     started.get();
 
-    auto join_root = loop.start(join_and_observe_bytes(scope, resource));
+    auto join_root = loop.submit(join_and_observe_bytes(scope, resource)).take_value();
     stop_requested.store(true);
     const auto notified = loop.worker().post([&] {
         signal.notify();
     });
-    EXPECT_EQ(std::move(join_root).get(), 0U);
-    EXPECT_TRUE(std::move(operation_root).get());
+    EXPECT_EQ(std::move(join_root).take_value(), 0U);
+    EXPECT_TRUE(std::move(operation_root).take_value());
     EXPECT_TRUE(notified == ruvia::post_status::accepted);
     EXPECT_EQ(expired_count, 1);
     EXPECT_EQ(bytes_at_expire, 0U);
@@ -755,17 +755,17 @@ TEST(Ruvia, scoped_operation_result_survives_join_after_frame_release) {
     std::promise<void> started_promise;
     auto started = started_promise.get_future();
     auto operation = scope.attach(wait_and_return(tracked_payload(1024, 'p', &parameter_resource), result_resource, signal, started_promise));
-    auto operation_root = loop.start(await_scoped_result(operation));
+    auto operation_root = loop.submit(await_scoped_result(operation)).take_value();
     loops.start();
     started.get();
 
-    auto join_root = loop.start(join_and_observe_bytes(scope, parameter_resource));
+    auto join_root = loop.submit(join_and_observe_bytes(scope, parameter_resource)).take_value();
     const auto notified = loop.worker().post([&] {
         signal.notify();
     });
-    EXPECT_EQ(std::move(join_root).get(), 0U);
+    EXPECT_EQ(std::move(join_root).take_value(), 0U);
     {
-        owned_result result_value = std::move(operation_root).get();
+        owned_result result_value = std::move(operation_root).take_value();
         EXPECT_TRUE(notified == ruvia::post_status::accepted);
         EXPECT_EQ(expired_count, 1);
         EXPECT_EQ(bytes_at_expire, 0U);
@@ -775,8 +775,8 @@ TEST(Ruvia, scoped_operation_result_survives_join_after_frame_release) {
         {
             ruvia::detail::operation_scope repeated_scope;
             auto repeated = repeated_scope.attach(return_with_payload(tracked_payload(1024, 'q', &parameter_resource), result_resource));
-            auto repeated_root = loop.start(await_scoped_result(repeated));
-            auto repeated_result = std::move(repeated_root).get();
+            auto repeated_root = loop.submit(await_scoped_result(repeated)).take_value();
+            auto repeated_result = std::move(repeated_root).take_value();
             EXPECT_EQ(parameter_resource.live_allocations(), 0U);
             EXPECT_EQ(result_resource.live_allocations(), 2 * allocations_per_result);
             EXPECT_EQ(result_value.bytes_.find_first_not_of('r'), std::string::npos);
@@ -796,15 +796,15 @@ TEST(Ruvia, root_result_publication_retires_delivery_borrows_before_get_returns)
     loops.start();
     std::atomic_uint borrows{0};
     for (unsigned repeat = 0; repeat != 64; ++repeat) {
-        auto root = loop.start(return_delivery_borrow(borrows, false));
+        auto root = loop.submit(return_delivery_borrow(borrows, false)).take_value();
         {
-            auto result_value = std::move(root).get();
+            auto result_value = std::move(root).take_value();
             EXPECT_EQ(borrows.load(), 1U);
         }
         EXPECT_EQ(borrows.load(), 0U);
-        auto failed = loop.start(return_delivery_borrow(borrows, true));
+        auto failed = loop.submit(return_delivery_borrow(borrows, true)).take_value();
         EXPECT_TRUE(ruvia::test::throws_on([&] {
-            (void)std::move(failed).get();
+            (void)std::move(failed).take_value();
         }));
         EXPECT_EQ(borrows.load(), 0U);
     }
@@ -819,11 +819,11 @@ TEST(Ruvia, root_rejected_launch_retires_cold_input_before_publishing_failure) {
     EXPECT_TRUE(loop.worker().post([] {
         throw std::runtime_error("stop launch queue");
     }) == ruvia::post_status::accepted);
-    auto root = loop.start(return_cold_delivery_borrow(delivery_borrow(borrows)));
+    auto root = loop.submit(return_cold_delivery_borrow(delivery_borrow(borrows))).take_value();
     EXPECT_EQ(borrows.load(), 1U);
     loops.start();
     EXPECT_TRUE(ruvia::test::throws_on([&] {
-        (void)std::move(root).get();
+        (void)std::move(root).take_value();
     }));
     EXPECT_EQ(borrows.load(), 0U);
     EXPECT_TRUE(ruvia::test::throws_on([&] {
@@ -846,18 +846,18 @@ TEST(Ruvia, scoped_operation_result_move_failure_releases_frame_before_join) {
     std::promise<void> started_promise;
     auto started = started_promise.get_future();
     auto operation = scope.attach(wait_and_return_throwing_result(tracked_payload(1024, 'p', &parameter_resource), result_resource, moves, signal, started_promise));
-    auto operation_root = loop.start(await_throwing_result(operation));
+    auto operation_root = loop.submit(await_throwing_result(operation)).take_value();
     loops.start();
     started.get();
 
-    auto join_root = loop.start(join_and_observe_bytes(scope, parameter_resource));
+    auto join_root = loop.submit(join_and_observe_bytes(scope, parameter_resource)).take_value();
     const auto notified = loop.worker().post([&] {
         signal.notify();
     });
-    EXPECT_EQ(std::move(join_root).get(), 0U);
+    EXPECT_EQ(std::move(join_root).take_value(), 0U);
     bool failed_at_extraction = false;
     try {
-        std::move(operation_root).get();
+        std::move(operation_root).take_value();
     } catch (const std::runtime_error& error) {
         failed_at_extraction = std::string_view(error.what()) == "result extraction failed";
     }
@@ -901,11 +901,11 @@ TEST(Ruvia, scoped_operation_expired_by_scope_close_rejects_start) {
 
         ruvia::event_loop_pool loops({.loop_count_ = 1});
         const auto loop = loops.loop(0);
-        auto expired_root = loop.start(await_scoped_operation(operation));
+        auto expired_root = loop.submit(await_scoped_operation(operation)).take_value();
         loops.start();
         bool rejected_as_expired = false;
         try {
-            std::move(expired_root).get();
+            std::move(expired_root).take_value();
         } catch (const std::logic_error&) {
             rejected_as_expired = true;
         }
@@ -961,11 +961,11 @@ TEST(Ruvia, scoped_operation_created_after_scope_close_discards_cold_frame) {
 
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
-    auto expired_root = loop.start(await_scoped_operation(operation));
+    auto expired_root = loop.submit(await_scoped_operation(operation)).take_value();
     loops.start();
     bool rejected_as_expired = false;
     try {
-        std::move(expired_root).get();
+        std::move(expired_root).take_value();
     } catch (const std::logic_error&) {
         rejected_as_expired = true;
     }
@@ -989,9 +989,9 @@ TEST(Ruvia, scoped_operation_cold_frame_drop_allows_reentrant_parent_join) {
     static_cast<void>(capability);
     reentrant_retirement_stats stats;
 
-    auto root = loop.start(run_reentrant_cold_drop(worker_value, parent_scope, resource, expired_count, stats));
+    auto root = loop.submit(run_reentrant_cold_drop(worker_value, parent_scope, resource, expired_count, stats)).take_value();
     loops.start();
-    std::move(root).get();
+    std::move(root).take_value();
 
     EXPECT_TRUE(stats.child_spawned_);
     EXPECT_TRUE(stats.pending_operations_at_spawn_);
@@ -1016,14 +1016,14 @@ TEST(Ruvia, scoped_operation_completed_operation_rejects_second_await) {
     ruvia::detail::operation_scope scope;
     scope.bind_worker(worker_value);
     auto operation = scope.attach(complete_immediately());
-    auto first_root = loop.start(await_scoped_operation(operation));
+    auto first_root = loop.submit(await_scoped_operation(operation)).take_value();
     loops.start();
-    std::move(first_root).get();
+    std::move(first_root).take_value();
 
-    auto repeated_root = loop.start(await_scoped_operation(operation));
+    auto repeated_root = loop.submit(await_scoped_operation(operation)).take_value();
     bool rejected_as_completed = false;
     try {
-        std::move(repeated_root).get();
+        std::move(repeated_root).take_value();
     } catch (const std::logic_error&) {
         rejected_as_completed = true;
     }
@@ -1041,13 +1041,13 @@ TEST(Ruvia, scoped_operation_rejects_empty_task_without_starting) {
         auto operation = scope.attach(std::move(source));
         ruvia::event_loop_pool loops({.loop_count_ = 1});
         const auto loop = loops.loop(0);
-        auto first_root = loop.start(await_scoped_operation(operation));
-        auto repeated_root = loop.start(await_scoped_operation(operation));
+        auto first_root = loop.submit(await_scoped_operation(operation)).take_value();
+        auto repeated_root = loop.submit(await_scoped_operation(operation)).take_value();
         loops.start();
         for (auto* root : {&first_root, &repeated_root}) {
             bool rejected = false;
             try {
-                std::move(*root).get();
+                std::move(*root).take_value();
             } catch (const std::logic_error&) {
                 rejected = true;
             }
@@ -1071,9 +1071,9 @@ TEST(Ruvia, scoped_operation_scope_drain_allows_reentrant_join_after_all_frames_
     std::size_t bytes_at_expire = std::numeric_limits<std::size_t>::max();
     test_scoped_capability capability(scope, expired_count, &resource, &bytes_at_expire);
     reentrant_retirement_stats stats;
-    auto root = loop.start(run_reentrant_cold_drop(worker_value, scope, resource, expired_count, stats, true));
+    auto root = loop.submit(run_reentrant_cold_drop(worker_value, scope, resource, expired_count, stats, true)).take_value();
     loops.start();
-    std::move(root).get();
+    std::move(root).take_value();
     EXPECT_TRUE(stats.child_spawned_);
     EXPECT_TRUE(stats.pending_operations_at_spawn_);
     EXPECT_EQ(stats.expirations_at_spawn_, 0);
@@ -1101,9 +1101,9 @@ TEST(Ruvia, scoped_operation_join_rescans_after_frame_cleanup_drops_a_sibling) {
     EXPECT_EQ(resource.live_allocations(), 2 * sibling_allocations);
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
-    auto joined = loop.start(join_and_observe_bytes(scope, resource));
+    auto joined = loop.submit(join_and_observe_bytes(scope, resource)).take_value();
     loops.start();
-    EXPECT_EQ(std::move(joined).get(), 0U);
+    EXPECT_EQ(std::move(joined).take_value(), 0U);
     EXPECT_TRUE(sibling == nullptr);
     EXPECT_EQ(expired_count, 1);
     EXPECT_EQ(bytes_at_expire, 0U);
@@ -1208,9 +1208,9 @@ TEST(Ruvia, scoped_capability_reentrant_join_waits_for_cleanup) {
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
     bool joined_during_cleanup = false;
-    auto root = loop.start(reentrant_join_case::drive(loop.worker(), joined_during_cleanup));
+    auto root = loop.submit(reentrant_join_case::drive(loop.worker(), joined_during_cleanup)).take_value();
     loops.start();
-    std::move(root).get();
+    std::move(root).take_value();
     EXPECT_TRUE(!joined_during_cleanup);
     loops.request_stop();
     loops.join();
@@ -1254,9 +1254,9 @@ TEST(Ruvia, scoped_capability_cleanup_can_reenter_scope_close_during_join_resume
     };
     auto operation = scope.attach(concurrent_join_case::wait_for_signal(signal));
     bool joined_completed = false;
-    auto root = loop.start(concurrent_join_case::drive(worker_value, signal, scope, operation, joined_completed));
+    auto root = loop.submit(concurrent_join_case::drive(worker_value, signal, scope, operation, joined_completed)).take_value();
     loops.start();
-    std::move(root).get();
+    std::move(root).take_value();
     EXPECT_TRUE(joined_completed);
     EXPECT_EQ(expired, 1);
     loops.request_stop();
@@ -1319,9 +1319,9 @@ TEST(Ruvia, scoped_operation_close_drain_allows_reentrant_join_to_destroy_scope_
             co_await children.join();
         }
     };
-    auto root = loop.start(inline_destroy_case::drive(worker_value, resource, expired_count, join_destroyed_scope));
+    auto root = loop.submit(inline_destroy_case::drive(worker_value, resource, expired_count, join_destroyed_scope)).take_value();
     loops.start();
-    std::move(root).get();
+    std::move(root).take_value();
     EXPECT_TRUE(join_destroyed_scope);
     EXPECT_EQ(expired_count, 1);
     EXPECT_EQ(resource.live_allocations(), 0U);

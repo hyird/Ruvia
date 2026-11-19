@@ -261,16 +261,16 @@ task<client_tls_config_storage> prepare_client_tls_config(worker_ref worker, cli
         if (const auto running = material->running_flight(); running.has_state()) {
             // A follower holds no blocking-pool admission and owns no read, so
             // its own stop token and deadline end its wait.
-            timer_sleep_result woken{};
+            sleep_status woken{};
             {
                 stop_group wake{options.stop_token_, running};
                 woken = co_await sleep_until(worker, deadline.deadline().value_or(std::chrono::steady_clock::time_point::max()), wake.token());
             }
             check();
-            if (woken == timer_sleep_result::stop_requested && !running.stop_requested()) {
+            if (woken == sleep_status::stop_requested && !running.stop_requested()) {
                 // The worker's timers stopped with the read still in flight:
                 // the status the leader's own offload reports for that.
-                blocking_result<void>::with_status(blocking_status::worker_stopping).take_value();
+                blocking_result<void>::from_status(blocking_status::worker_stopping).take_value();
             }
             continue;
         }

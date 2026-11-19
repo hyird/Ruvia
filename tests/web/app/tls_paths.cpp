@@ -57,7 +57,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> peer_identity(ruvia::context& context) {
-        const auto connection = context.conn();
+        const auto connection = context.connection();
         const auto subject = connection.tls()->client_certificate_subject();
         co_return context.text(!subject ? std::string_view("absent") : (subject->empty() ? std::string_view("present-empty") : *subject));
     }

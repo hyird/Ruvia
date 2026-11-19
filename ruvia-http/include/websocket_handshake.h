@@ -158,7 +158,7 @@ private:
     std::array<char, 160> bytes_{};
     std::size_t size_{0};
 };
-class http2_connection;
+class http2_engine;
 class websocket_request_header_validator;
 inline constexpr std::string_view websocket_switching_protocols_head_prefix = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ";
 }  // namespace detail
@@ -182,7 +182,7 @@ public:
 
 private:
     friend class http2_connection;
-    friend class detail::http2_connection;
+    friend class detail::http2_engine;
     friend class http3_connection;
     websocket_extended_connect_negotiation(std::string subprotocol, websocket_compression compression) noexcept :
         subprotocol_(std::move(subprotocol)),

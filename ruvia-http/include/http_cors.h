@@ -111,10 +111,10 @@ public:
     // Removes controlled Access-Control-* headers from the existing response,
     // writes computed CORS headers when the origin is permitted, and merges
     // Vary tokens (such as Origin) without duplicates.
-    bool rewrite_response_headers(borrowed_text request_origin, editable_http_headers response_headers) const;
+    [[nodiscard]] bool rewrite_response_headers(borrowed_text request_origin, editable_http_headers response_headers) const;
     // Applies server-side CORS headers (including OPTIONS preflight and Allow
     // promotion) without overwriting headers already set by the route handler.
-    bool apply_response_headers(const http_request& request, http_response& response) const;
+    [[nodiscard]] bool apply_response_headers(const http_request& request, http_response& response) const;
 
 private:
     template <typename config_type>

@@ -39,7 +39,7 @@ std::string text(std::span<const std::byte> bytes) {
 }
 
 ruvia::ip_address ip(std::string_view literal) {
-    return ruvia::ip_address::parse(literal).value();
+    return ruvia::ip_address::try_parse(literal).value();
 }
 
 ruvia::ip_endpoint endpoint(std::string_view literal, std::uint16_t port) {

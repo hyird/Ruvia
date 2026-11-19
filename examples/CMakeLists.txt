@@ -38,7 +38,7 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
 endif()
 
 if(RUVIA_ENABLE_POSTGRESQL AND RUVIA_ENABLE_REDIS)
-    ruvia_add_example(ruvia_example_event_loop_data event_loop_data.cpp)
+    ruvia_add_example(ruvia_example_event_loop_backends event_loop_backends.cpp)
 endif()
 
 if(RUVIA_ENABLE_POSTGRESQL)

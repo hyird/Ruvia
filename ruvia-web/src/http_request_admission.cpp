@@ -43,7 +43,7 @@ namespace {
 // RFC 9110 §7.4 against the transport connection's facts. A secured
 // connection without a recorded certificate cannot vouch for any host.
 [[nodiscard]] bool connection_carries_target(const http_request& request, const context_services& services) noexcept {
-    const auto origin = plan_http_target_origin(request, {.secured_ = services.get_conn_info().tls() != nullptr, .trusted_gateway_ = services.peer_trusted()});
+    const auto origin = plan_http_target_origin(request, {.secured_ = services.get_connection_info().tls() != nullptr, .trusted_gateway_ = services.peer_trusted()});
     switch (origin.action()) {
         case http_target_origin_action::accept:
             return true;
@@ -149,9 +149,9 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     const auto* resolved = input.resolution_.resolved();
     http_request_admission admission(http_response_tail(request, coding_policy, {}, {}, input.start_), services);
     if (services.peer_trusted()) {
-        admission.services_.bind_conn_info(services.resolve_conn_info(request));
+        admission.services_.bind_connection_info(services.resolve_connection_info(request));
     }
-    const auto& connection = admission.services_.get_conn_info();
+    const auto& connection = admission.services_.get_connection_info();
     const auto remote_address = connection.remote().address();
     const auto client_address = connection.client().address();
     admission.tail_.bind_addresses(remote_address, client_address);
@@ -183,7 +183,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // semantic fact; this product implements only 100-continue and chooses the
     // RFC 9110-permitted 417 before reading request content.
     if (input.expectation_ != nullptr && *input.expectation_ == http_server_expectation_plan::reject_unsupported) {
-        return reject(http_request_rejection::error(http_unsupported_expectation_error()));
+        return reject(http_request_rejection::error(make_http_unsupported_expectation_error()));
     }
     if (policy.apply_rate_limit_ && !request_stream) {
         if (const auto rejection = decide_request_rate_limit(admission.services_.rate_limiter(), client_address, input.pinned_arrival_)) {

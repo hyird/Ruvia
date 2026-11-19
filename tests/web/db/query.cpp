@@ -2077,7 +2077,7 @@ TEST(Ruvia, db_expr_and_db_tuple_compose_without_external_query) {
     EXPECT_TRUE(compiled.sql().find("ROW(\"alert_state\".\"device_id\", \"alert_state\".\"message_id\") IN (ROW(") != std::string_view::npos);
 }
 
-TEST(Ruvia, db_expr_from_expression_outlives_source_query_and_maps_table_qualifier) {
+TEST(Ruvia, db_expr_clone_expression_outlives_source_query_and_maps_table_qualifier) {
     db_expr owned_expr;
     db_expr aliased_expr;
     db_predicate owned_pred;
@@ -2086,9 +2086,9 @@ TEST(Ruvia, db_expr_from_expression_outlives_source_query_and_maps_table_qualifi
             db_query source;
             const auto col = db_expr::column("nickname", "users").expression(source);
             const auto pred = db_expr::binary(col, db_binary_operator::equal, db_expr::value(std::string(200, 'a'))).expression(source);
-            owned_expr = db_expr::from_expression(col, std::string("users"), false);
-            aliased_expr = db_expr::from_expression(db_expr::column("nickname", "u").expression(source), std::string("u"), true);
-            owned_pred = db_predicate::from_expression(pred);
+            owned_expr = db_expr::clone_expression(col, std::string("users"), false);
+            aliased_expr = db_expr::clone_expression(db_expr::column("nickname", "u").expression(source), std::string("u"), true);
+            owned_pred = db_predicate::clone_expression(pred);
         }
 
         db_query target;
@@ -2219,7 +2219,7 @@ TEST(Ruvia, db_query_postgresql_numbers_each_parameter_node_once_and_caps_the_co
 TEST(Ruvia, db_expr_stored_table_never_rebinds_a_foreign_table_to_the_caller_alias) {
     db_query source;
     const auto tenant = db_expr::binary(db_expr::column("tenant_id", "orders"), op_type::equal, db_expr::value(7)).expression(source);
-    const auto owned = db_expr::from_expression(tenant, "orders");
+    const auto owned = db_expr::clone_expression(tenant, "orders");
     const db_expr borrowed(tenant, "orders");
     for (const auto* expression : {&owned, &borrowed}) {
         db_query users;

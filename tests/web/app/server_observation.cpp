@@ -57,7 +57,7 @@ public:
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> id(ruvia::context& context) {
-        co_return context.text(std::to_string(context.conn().connection_id()));
+        co_return context.text(std::to_string(context.connection().connection_id()));
     }
 };
 
@@ -290,7 +290,7 @@ using namespace server_observation_test;
 // One application with cleartext, HTTPS and HTTP/3 services on two workers.
 // The first run observes: every ClientHello (TLS over TCP, including the
 // second one after a HelloRetryRequest, and QUIC) arrives as the exact bytes
-// the client sent, tagged with the conn_info::connection_id() its requests see, and the
+// the client sent, tagged with the connection_info::connection_id() its requests see, and the
 // HTTP/2 input of each connection (TLS ALPN h2 and cleartext prior knowledge)
 // concatenates to exactly what the client wrote, preface first. The second
 // run, with both observers cleared, serves the same requests and records
@@ -442,7 +442,7 @@ TEST(Ruvia, standalone_sliding_window_rate_limiter_and_address_key_canonicalizat
         .capacity_per_worker_ = 64,
     });
     const auto t0 = std::chrono::steady_clock::now();
-    const auto ip = *ruvia::ip_address::parse("203.0.113.5");
+    const auto ip = *ruvia::ip_address::try_parse("203.0.113.5");
     const auto d1 = limiter.decide(ip, t0);
     EXPECT_TRUE(d1.allowed());
     EXPECT_EQ(d1.limit(), 2U);

@@ -68,7 +68,7 @@ struct response_file_snapshot final {
 // One open handle plus the metadata read from it. context::file frames the
 // response from this snapshot and hands the same handle to the transport.
 struct opened_response_file final {
-    http_response_file_descriptor handle_;
+    http_response_file_descriptor descriptor_;
     response_file_snapshot snapshot_;
 };
 
@@ -138,7 +138,7 @@ private:
     return std::error_code(errno, std::system_category());
 }
 
-[[nodiscard]] inline response_file_snapshot snapshot_native_file_handle(int fd, std::error_code& ec) noexcept {
+[[nodiscard]] inline response_file_snapshot snapshot_native_file(int fd, std::error_code& ec) noexcept {
     struct stat status{};
     if (::fstat(fd, &status) != 0) {
         ec = last_native_file_error();
@@ -170,23 +170,23 @@ inline constexpr int native_file_open_flags = O_RDONLY | O_CLOEXEC | O_NONBLOCK;
     return input;
 }
 
-inline void release_response_file_handle(http_response_file_descriptor::native_type value) noexcept {
+inline void close_response_file_descriptor(http_response_file_descriptor::native_type value) noexcept {
     ::close(static_cast<int>(value));
 }
 
-[[nodiscard]] inline int borrowed_native_file(const http_response_file_descriptor& handle) noexcept {
-    return static_cast<int>(handle.native());
+[[nodiscard]] inline int borrowed_native_file(const http_response_file_descriptor& descriptor) noexcept {
+    return static_cast<int>(descriptor.native());
 }
 
-[[nodiscard]] inline http_response_file_descriptor adopt_response_file_handle(native_file_descriptor input) noexcept {
-    return http_response_file_descriptor(static_cast<http_response_file_descriptor::native_type>(input.release()), &release_response_file_handle);
+[[nodiscard]] inline http_response_file_descriptor adopt_response_file_descriptor(native_file_descriptor input) noexcept {
+    return http_response_file_descriptor(static_cast<http_response_file_descriptor::native_type>(input.release()), &close_response_file_descriptor);
 }
 
 // An independent handle to the same open file, so a read state that outlives
 // the response (an abandoned pool read) never borrows the response's handle.
 // Reads are positional, so the shared file offset is never relied on.
-[[nodiscard]] inline native_file_descriptor duplicate_native_file(const http_response_file_descriptor& handle, std::error_code& ec) noexcept {
-    native_file_descriptor duplicate(::fcntl(borrowed_native_file(handle), F_DUPFD_CLOEXEC, 0));
+[[nodiscard]] inline native_file_descriptor duplicate_native_file(const http_response_file_descriptor& descriptor, std::error_code& ec) noexcept {
+    native_file_descriptor duplicate(::fcntl(borrowed_native_file(descriptor), F_DUPFD_CLOEXEC, 0));
     ec = duplicate ? std::error_code{} : last_native_file_error();
     return duplicate;
 }
@@ -439,11 +439,11 @@ private:
     return unix_seconds_from_windows_file_time_ticks(windows_file_time_token(value));
 }
 
-[[nodiscard]] inline response_file_snapshot snapshot_native_file_handle(HANDLE handle, std::error_code& ec) noexcept {
+[[nodiscard]] inline response_file_snapshot snapshot_native_file(HANDLE descriptor, std::error_code& ec) noexcept {
     FILE_ID_INFO id{};
     FILE_STANDARD_INFO standard{};
     FILE_BASIC_INFO basic{};
-    if (::GetFileInformationByHandleEx(handle, FileIdInfo, &id, sizeof(id)) == 0 || ::GetFileInformationByHandleEx(handle, FileStandardInfo, &standard, sizeof(standard)) == 0 || ::GetFileInformationByHandleEx(handle, FileBasicInfo, &basic, sizeof(basic)) == 0) {
+    if (::GetFileInformationByHandleEx(descriptor, FileIdInfo, &id, sizeof(id)) == 0 || ::GetFileInformationByHandleEx(descriptor, FileStandardInfo, &standard, sizeof(standard)) == 0 || ::GetFileInformationByHandleEx(descriptor, FileBasicInfo, &basic, sizeof(basic)) == 0) {
         ec = last_native_file_error();
         return {};
     }
@@ -474,24 +474,24 @@ inline constexpr DWORD native_file_open_flags = FILE_ATTRIBUTE_NORMAL | FILE_FLA
     return input;
 }
 
-inline void release_response_file_handle(http_response_file_descriptor::native_type value) noexcept {
+inline void close_response_file_descriptor(http_response_file_descriptor::native_type value) noexcept {
     ::CloseHandle(reinterpret_cast<HANDLE>(value));
 }
 
-[[nodiscard]] inline HANDLE borrowed_native_file(const http_response_file_descriptor& handle) noexcept {
-    return reinterpret_cast<HANDLE>(handle.native());
+[[nodiscard]] inline HANDLE borrowed_native_file(const http_response_file_descriptor& descriptor) noexcept {
+    return reinterpret_cast<HANDLE>(descriptor.native());
 }
 
-[[nodiscard]] inline http_response_file_descriptor adopt_response_file_handle(native_file_descriptor input) noexcept {
-    return http_response_file_descriptor(reinterpret_cast<http_response_file_descriptor::native_type>(input.release()), &release_response_file_handle);
+[[nodiscard]] inline http_response_file_descriptor adopt_response_file_descriptor(native_file_descriptor input) noexcept {
+    return http_response_file_descriptor(reinterpret_cast<http_response_file_descriptor::native_type>(input.release()), &close_response_file_descriptor);
 }
 
 // An independent handle to the same open file, so a read state that outlives
 // the response (an abandoned pool read) never borrows the response's handle.
 // Reads carry their offset, so the shared file pointer is never relied on.
-[[nodiscard]] inline native_file_descriptor duplicate_native_file(const http_response_file_descriptor& handle, std::error_code& ec) noexcept {
+[[nodiscard]] inline native_file_descriptor duplicate_native_file(const http_response_file_descriptor& descriptor, std::error_code& ec) noexcept {
     HANDLE duplicate = nullptr;
-    if (::DuplicateHandle(::GetCurrentProcess(), borrowed_native_file(handle), ::GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS) == 0) {
+    if (::DuplicateHandle(::GetCurrentProcess(), borrowed_native_file(descriptor), ::GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS) == 0) {
         ec = last_native_file_error();
         return native_file_descriptor();
     }
@@ -531,11 +531,11 @@ inline void release_response_file_handle(http_response_file_descriptor::native_t
     if (ec) {
         return {};
     }
-    const auto snapshot = snapshot_native_file_handle(input.get(), ec);
+    const auto snapshot = snapshot_native_file(input.get(), ec);
     if (ec) {
         return {};
     }
-    return {adopt_response_file_handle(std::move(input)), snapshot};
+    return {adopt_response_file_descriptor(std::move(input)), snapshot};
 }
 
 // Whether `input` still holds the representation framed with `identity` and
@@ -547,7 +547,7 @@ inline void release_response_file_handle(http_response_file_descriptor::native_t
         return {};
     }
     std::error_code error;
-    const auto snapshot = snapshot_native_file_handle(input, error);
+    const auto snapshot = snapshot_native_file(input, error);
     if (error) {
         return error;
     }

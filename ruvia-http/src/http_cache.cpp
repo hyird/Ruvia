@@ -212,7 +212,7 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
 cache_control parse_cache_control(std::string_view value) noexcept {
     cache_control_field_parser parser;
     parser.update(value);
-    return parser.finish();
+    return std::move(parser).take_control();
 }
 
 cache_control parse_cache_control(const http_header_range_view& headers) noexcept {
@@ -222,14 +222,14 @@ cache_control parse_cache_control(const http_header_range_view& headers) noexcep
             parser.update(field.value());
         }
     }
-    return parser.finish();
+    return std::move(parser).take_control();
 }
 
-bool http_cache_control_has_no_transform(std::string_view field_value) noexcept {
+bool has_http_cache_no_transform(std::string_view field_value) noexcept {
     return parse_cache_control(field_value).no_transform();
 }
 
-bool http_cache_control_has_no_transform(const http_header_range_view& headers) noexcept {
+bool has_http_cache_no_transform(const http_header_range_view& headers) noexcept {
     return parse_cache_control(headers).no_transform();
 }
 
@@ -289,7 +289,7 @@ std::optional<cache_control> parse_targeted_cache_control_from_input(input_type 
             .kind_ = http_structured_item::kind_type::boolean,
             .boolean_ = true,
         };
-        if (parser.take('=')) {
+        if (parser.consume('=')) {
             item = {};
             if (!parser.member(item)) {
                 return std::nullopt;
@@ -413,7 +413,7 @@ std::optional<cache_control> parse_targeted_cache_control_from_input(input_type 
         if (parser.empty()) {
             break;
         }
-        if (!parser.take(',')) {
+        if (!parser.consume(',')) {
             return std::nullopt;
         }
         parser.ows();
@@ -691,12 +691,12 @@ std::string rewrite_http_cache_control_max_age(const http_header_range_view& hea
 
 void rewrite_http_response_cache_max_age(editable_http_headers response_headers, std::optional<std::uint64_t> client_max_age) {
     small_cache_text_sink<256> rewritten;
-    for (const auto field : response_headers.fields()) {
+    for (const auto field : response_headers.headers()) {
         if (http_ascii_equals_ignore_case(field.name(), "Cache-Control")) {
             rewritten.reserve_hint_ += field.value().size() + 2U;
         }
     }
-    for (const auto field : response_headers.fields()) {
+    for (const auto field : response_headers.headers()) {
         if (http_ascii_equals_ignore_case(field.name(), "Cache-Control")) {
             append_preserved_cache_control_directives(field.value(), rewritten);
         }
@@ -933,8 +933,8 @@ private:
     }
     while (true) {
         const auto left_token = left.next();
-        const auto left_coding = http_content_coding_from_token(left_token);
-        const auto right_coding = http_content_coding_from_token(right_token);
+        const auto left_coding = parse_http_content_coding_token(left_token);
+        const auto right_coding = parse_http_content_coding_token(right_token);
         const bool equal = http_ascii_equals_ignore_case(left_token, right_token) || (left_coding && right_coding && left_coding == right_coding);
         if (!left.valid_ || !right.valid_ || !equal) {
             return false;
@@ -1032,7 +1032,7 @@ http_cache_validator_match match_http_cache_validators(const http_header_range_v
 }
 
 bool weaken_http_cache_etag(editable_http_headers headers) {
-    const auto etag = find_unique_http_header(headers.fields(), "ETag");
+    const auto etag = find_unique_http_header(headers.headers(), "ETag");
     if (etag.status_ == unique_lookup_status::repeated || (etag.status_ == unique_lookup_status::found && !is_valid_http_entity_tag(etag.value_))) {
         return false;
     }
@@ -1050,7 +1050,7 @@ bool weaken_http_cache_etag(editable_http_headers headers) {
 }
 
 bool merge_http_304_response_headers(editable_http_headers cached_headers, const http_header_range_view& not_modified_headers) {
-    if (match_http_cache_validators(cached_headers.fields(), not_modified_headers) == http_cache_validator_match::none) {
+    if (match_http_cache_validators(cached_headers.headers(), not_modified_headers) == http_cache_validator_match::none) {
         return false;
     }
     const auto nominated = parse_http_connection_nominated_fields(not_modified_headers);
@@ -1085,7 +1085,7 @@ bool merge_http_304_response_headers(editable_http_headers cached_headers, const
     if (planned.empty()) {
         return true;
     }
-    if (header_range_overlaps(cached_headers.fields(), planned)) {
+    if (header_range_overlaps(cached_headers.headers(), planned)) {
         // The 304 views the cached block itself: own the source text before
         // the transaction mutates or frees any line of cached_headers.
         struct owned_304_line final {

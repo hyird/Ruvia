@@ -84,7 +84,7 @@ private:
 
 [[nodiscard]] std::string startup_error(ruvia::test_app& app, std::string_view target) {
     try {
-        (void)app.request(ruvia::test_request::get(target));
+        (void)app.dispatch(ruvia::test_request::get(target));
     } catch (const std::invalid_argument& error) {
         return error.what();
     }
@@ -129,6 +129,6 @@ TEST(Ruvia, route_test_apps_serve_only_their_named_controllers) {
     ruvia::test_app named;
     named.controllers<route_valid_controller>();
     ruvia::test_app unnamed;
-    EXPECT_EQ(named.request(ruvia::test_request::get("/valid")).status(), ruvia::http_status::ok);
-    EXPECT_EQ(unnamed.request(ruvia::test_request::get("/valid")).status(), ruvia::http_status::not_found);
+    EXPECT_EQ(named.dispatch(ruvia::test_request::get("/valid")).status(), ruvia::http_status::ok);
+    EXPECT_EQ(unnamed.dispatch(ruvia::test_request::get("/valid")).status(), ruvia::http_status::not_found);
 }

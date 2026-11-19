@@ -119,7 +119,7 @@ public:
 
     // Validation-only entry for parsing paths that must report failure as a
     // value rather than drive control flow through the throwing constructor.
-    [[nodiscard]] static std::optional<multipart_boundary> try_from_value(std::string_view value) noexcept {
+    [[nodiscard]] static std::optional<multipart_boundary> try_parse(std::string_view value) noexcept {
         if (!valid(value)) {
             return std::nullopt;
         }

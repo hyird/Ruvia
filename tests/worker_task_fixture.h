@@ -128,12 +128,12 @@ template <typename... Tasks>
 void run_worker_tasks(event_loop_attachment& attachment, Tasks&&... tasks) {
     bool joined = false;
     const auto loop = attachment.loop();
-    auto root = loop.start(join_worker_tasks_then_stop(attachment, loop.worker(), std::array<task<void>, sizeof...(Tasks)>{std::forward<Tasks>(tasks)...}, joined));
+    auto root = loop.submit(join_worker_tasks_then_stop(attachment, loop.worker(), std::array<task<void>, sizeof...(Tasks)>{std::forward<Tasks>(tasks)...}, joined)).take_value();
     attachment.run();
     if (!joined) {
         throw std::logic_error("worker owner stopped before root tasks joined");
     }
-    std::move(root).get();
+    std::move(root).take_value();
 }
 
 }  // namespace ruvia::test

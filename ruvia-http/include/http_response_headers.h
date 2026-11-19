@@ -35,7 +35,7 @@ enum class http_content_type : std::uint8_t {
     application_json,  // application/json
 };
 
-struct http_response_header_options {
+struct http_response_header_options final {
     http_response_header_mode mode_{http_response_header_mode::replace};
 };
 
@@ -47,7 +47,7 @@ struct http_response_header_state_access;
 
 }  // namespace detail
 
-struct http_response_header {
+struct http_response_header final {
 public:
     [[nodiscard]] std::string_view name() const noexcept {
         return bytes_ == nullptr ? std::string_view{} : std::string_view(bytes_, name_size_);
@@ -190,8 +190,8 @@ private:
     [[nodiscard]] const http_response_header* find_header_for_read(std::string_view key, std::uint32_t known_bit) const noexcept;
     // Owns lookup, duplicate collapse, and index publication for every upsert.
     // Mutation receives the retained slot, or nullptr when it must append.
-    template <typename Mutation>
-    http_response_header& upsert_header(std::string_view key, std::uint32_t known_bit, Mutation&& mutate);
+    template <typename mutation_type>
+    http_response_header& upsert_header(std::string_view key, std::uint32_t known_bit, mutation_type&& mutate);
     http_response_header& prepare_header_value_storage(std::string_view key, std::size_t value_size, std::uint32_t known_bit);
     void set_header_validated(std::string_view key, std::string_view value, std::uint32_t known_bit);
     void append_header_validated(std::string_view key, std::string_view value, std::uint32_t known_bit);

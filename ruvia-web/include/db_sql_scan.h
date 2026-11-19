@@ -111,7 +111,7 @@ namespace ruvia::detail {
 // The index just past the construct starting at `index`. For an ordinary byte
 // that is `index + 1`; for a literal, identifier or comment it is the first
 // index after its terminator, or `sql.size()` when the construct is unclosed.
-[[nodiscard]] constexpr std::size_t skip_sql_atom(std::string_view sql, std::size_t index, bool backslash_escapes) noexcept {
+[[nodiscard]] constexpr std::size_t skip_mariadb_sql_atom(std::string_view sql, std::size_t index, bool backslash_escapes) noexcept {
     const auto size = sql.size();
     if (index >= size) {
         return size;
@@ -158,7 +158,7 @@ namespace ruvia::detail {
 
 // PostgreSQL dollar-quoted strings are opaque SQL data just like ordinary
 // string literals, but their delimiter is either $$ or $tag$. Keep this scan
-// separate from skip_sql_atom(): MariaDB's '?' binder shares that generic helper
+// separate from skip_mariadb_sql_atom(): MariaDB's '?' binder shares that generic helper
 // and must not treat its ordinary '$' identifiers as quoted strings.
 [[nodiscard]] constexpr std::size_t skip_postgresql_dollar_quoted_atom(std::string_view sql, std::size_t index) noexcept {
     const auto size = sql.size();

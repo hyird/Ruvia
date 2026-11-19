@@ -346,9 +346,7 @@ public:
         bytes_ = {};
         return copied;
     }
-    [[nodiscard]] http_received_data_credit take_credit() & noexcept {
-        return std::move(credit_);
-    }
+    http_received_data_credit take_credit() & = delete;
     [[nodiscard]] http_received_data_credit take_credit() && noexcept {
         return std::move(credit_);
     }

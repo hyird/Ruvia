@@ -34,7 +34,7 @@ namespace ruvia {
 // (CORS, content-coding and error recovery) all behave as they do in a
 // running server. The private worker is brought up and retired by the same
 // worker capability chain a server worker uses.
-// No socket is opened; request() drives that worker to completion
+// No socket is opened; dispatch() drives that worker to completion
 // synchronously and returns an independently owned response.
 //
 // Scope: buffered-response routes (including 404/405/501/OPTIONS fallbacks).
@@ -94,7 +94,7 @@ public:
     }
 
     test_request& body(outbound_bytes bytes_value) & {
-        body_ = std::move(bytes_value).into_string();
+        body_ = std::move(bytes_value).take_string();
         return *this;
     }
     test_request&& body(outbound_bytes bytes_value) && {
@@ -102,7 +102,7 @@ public:
     }
 
     test_request& body(outbound_bytes bytes_value, std::string_view content_type_value) & {
-        body_ = std::move(bytes_value).into_string();
+        body_ = std::move(bytes_value).take_string();
         return header("Content-Type", content_type_value);
     }
     test_request&& body(outbound_bytes bytes_value, std::string_view content_type_value) && {
@@ -189,12 +189,12 @@ private:
 };
 
 // One in-memory application instance. Construction is cheap; controllers are
-// instantiated and the route table finalized on the first request(), so the
+// instantiated and the route table finalized on the first dispatch(), so the
 // configuration calls below may run in any order before that. Not thread-safe:
 // drive one test_app from one thread, like the single-threaded worker it
 // stands in for. Middleware, worker state, fallback handlers and the rate
 // limit are the dispatch_configuration members application shares, with the
-// same registration rules; here they are accepted until the first request().
+// same registration rules; here they are accepted until the first dispatch().
 class test_app final : public dispatch_configuration<test_app> {
 public:
     test_app();
@@ -228,8 +228,8 @@ public:
     // an independently owned response. Request-level failures become the same error
     // responses a server would send. Handlers execute on one real Ruvia worker,
     // including per-worker state semantics.
-    [[nodiscard]] dispatch_response request(const test_request& request) &;
-    dispatch_response request(const test_request&) && = delete;
+    [[nodiscard]] dispatch_response dispatch(const test_request& request) &;
+    dispatch_response dispatch(const test_request&) && = delete;
 
 private:
     friend class dispatch_configuration<test_app>;

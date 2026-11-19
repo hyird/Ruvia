@@ -81,14 +81,14 @@ namespace {
                 break;
         }
     }
-    return has_cache_control && cache_parser.finish().has(cache_control_directive::no_transform);
+    return has_cache_control && cache_parser.control().has(cache_control_directive::no_transform);
 }
 
 }  // namespace
 
 std::optional<std::uint64_t> declared_content_length(const http_response& response) noexcept {
     const auto field = response.header("Content-Length");
-    return field.has_value() ? http_parse_content_length(*field) : std::nullopt;
+    return field.has_value() ? parse_http_content_length(*field) : std::nullopt;
 }
 
 bool declared_length_permits_encoding(const http_response_coding_selection& selection, const compression_config& options, std::uint64_t declared) noexcept {
@@ -149,13 +149,13 @@ http_response_compression_decision prepare_response_compression(const http_respo
 
 http_buffered_compression_step apply_response_compression(const http_response_coding_selection& selection, http_known_method request_method, http_response& response, const compression_config& options, worker_codecs& codecs, bool offload_available) {
     constexpr http_buffered_compression_step not_applicable{http_response_compression_status::not_applicable, false};
-    const auto body = response.body_bytes();
+    const auto body = response.body();
 
     const auto decision = prepare_response_compression(selection, request_method, response, http_response_compression_source::buffered, http_response_coding_availability::identity_and_compression);
     // Negotiation errors above still propagate; only encoding and publication
     // failures become a typed compression result.
     try {
-        if (decision == http_response_compression_decision::encode && request_method == http_known_method::head && body.empty() && (response.has_head_metadata_body() || response.header("Content-Length").has_value())) {
+        if (decision == http_response_compression_decision::encode && request_method == http_known_method::head && body.empty() && (response.has_head_metadata_only() || response.header("Content-Length").has_value())) {
             const auto declared = declared_content_length(response);
             if (declared != std::uint64_t{0}) {
                 return apply_head_content_encoding(selection, response, options, declared);
@@ -185,7 +185,7 @@ task<http_response_compression_status> compress_response_offloaded(http_response
     try {
         const auto coding = selection.coding();
         const bool identity_accepted = selection.identity_accepted();
-        std::string plain(response.body_bytes());
+        std::string plain(response.body());
         auto result_value = co_await run_blocking(worker_value, [coding, identity_accepted, plain = std::move(plain)]() {
             return encode_http_content(coding, plain, compressed_body_options(plain, identity_accepted));
         }, {.stop_token_ = stop_token_value});

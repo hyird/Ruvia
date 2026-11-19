@@ -495,7 +495,7 @@ template <typename callback_type>
 [[nodiscard]] inline ruvia::dispatch_response with_context(const ruvia::test_request& request, callback_type&& callback) {
     ruvia::test_app app;
     app.use<context_callback<std::remove_reference_t<callback_type>>>(&callback);
-    return app.request(request);
+    return app.dispatch(request);
 }
 
 // Stateful, isolated RESP store. All map access and connection teardown run on
@@ -830,17 +830,17 @@ inline void append(std::string& target, const std::optional<std::span<const std:
 [[nodiscard]] inline ruvia::task<void> check_body_reads(ruvia::http_client_ref client, const ruvia::worker_ref& worker) {
     auto response = co_await client.get("/operation/stalled-body").send();
     std::string body;
-    append(body, co_await response.stream().read());
+    append(body, co_await response.body().read());
     EXPECT_EQ(body, "first-");
-    EXPECT_TRUE(co_await failure_of(response.stream().read({.timeout_ = interruption})) == timed_out);
+    EXPECT_TRUE(co_await failure_of(response.body().read({.timeout_ = interruption})) == timed_out);
     ruvia::stop_source stop;
     ruvia::task_scope stopper(worker);
     stopper.spawn(stop_after(worker, stop));
-    EXPECT_TRUE(co_await failure_of(response.stream().read_text({.stop_token_ = stop.token()})) == cancelled);
+    EXPECT_TRUE(co_await failure_of(response.body().read_text({.stop_token_ = stop.token()})) == cancelled);
     co_await stopper.join();
-    EXPECT_TRUE(co_await failure_of(response.stream().read({.stop_token_ = stop.token()})) == cancelled);
-    EXPECT_THROW((void)response.stream().read({.timeout_ = 0ms}), std::invalid_argument);
-    while (auto chunk = co_await response.stream().read()) {
+    EXPECT_TRUE(co_await failure_of(response.body().read({.stop_token_ = stop.token()})) == cancelled);
+    EXPECT_THROW((void)response.body().read({.timeout_ = 0ms}), std::invalid_argument);
+    while (auto chunk = co_await response.body().read()) {
         append(body, chunk);
     }
     EXPECT_EQ(body, "first-second");
@@ -898,7 +898,7 @@ inline void append(std::string& target, const std::optional<std::span<const std:
 
 // A tunnel read timeout keeps the tunnel; stopped output sends nothing.
 [[nodiscard]] inline ruvia::task<void> check_tunnel(ruvia::http_client_ref client) {
-    auto opened = co_await client.connect("operation.test:443").connect();
+    auto opened = co_await client.connect("operation.test:443").open();
     auto* tunnel = opened.tunnel();
     EXPECT_TRUE(tunnel != nullptr);
     if (tunnel == nullptr) {

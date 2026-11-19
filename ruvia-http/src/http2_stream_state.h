@@ -1085,7 +1085,7 @@ public:
     }
 
     void parse_request_expectation_field(std::string_view value) noexcept {
-        expectations_.parse_field(value);
+        expectations_.update(value);
     }
 
     [[nodiscard]] http_request_expectations request_expectations() const noexcept {

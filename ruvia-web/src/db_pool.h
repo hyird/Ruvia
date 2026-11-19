@@ -390,7 +390,8 @@ public:
         slot_wait& operator=(const slot_wait&) = delete;
 
         [[nodiscard]] bool await_ready();
-        [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept;
+        void operator&() const = delete;
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation) noexcept;
         [[nodiscard]] db_socket_wait_result await_resume();
 
     private:
@@ -405,12 +406,14 @@ public:
         bool borrowed_{false};
     };
 
-    [[nodiscard]] slot_wait wait_socket(std::size_t index, db_slot_socket::native_socket_type native, db_socket_readiness wanted, std::optional<std::chrono::steady_clock::time_point> wait_deadline, const operation_deadline& operation_deadline_value) noexcept {
+    [[nodiscard]] slot_wait wait_socket(std::size_t index, db_slot_socket::native_socket_type native, db_socket_readiness wanted, std::optional<std::chrono::steady_clock::time_point> wait_deadline, const operation_deadline& operation_deadline_value) & noexcept {
         return slot_wait(*this, index, db_deadline_kind::socket, native, wanted, wait_deadline, operation_deadline_value);
     }
-    [[nodiscard]] slot_wait sleep(std::size_t index, std::optional<std::chrono::steady_clock::time_point> wait_deadline, const operation_deadline& operation_deadline_value) noexcept {
+    slot_wait wait_socket(std::size_t, db_slot_socket::native_socket_type, db_socket_readiness, std::optional<std::chrono::steady_clock::time_point>, const operation_deadline&) && = delete;
+    [[nodiscard]] slot_wait sleep(std::size_t index, std::optional<std::chrono::steady_clock::time_point> wait_deadline, const operation_deadline& operation_deadline_value) & noexcept {
         return slot_wait(*this, index, db_deadline_kind::sleep, db_slot_socket::invalid_socket, db_socket_readiness::none, wait_deadline, operation_deadline_value);
     }
+    slot_wait sleep(std::size_t, std::optional<std::chrono::steady_clock::time_point>, const operation_deadline&) && = delete;
     [[nodiscard]] db_error timed_out() const;
     [[nodiscard]] db_error closing_error() const;
 
@@ -448,6 +451,7 @@ private:
             acquire_(pool.leases_.acquire(timeout, pool.config_.acquire_timeout_, stop)) {}
         lease_acquire(const lease_acquire&) = delete;
         lease_acquire& operator=(const lease_acquire&) = delete;
+        void operator&() const = delete;
 
         [[nodiscard]] bool await_ready() {
             return acquire_.await_ready();
@@ -578,8 +582,9 @@ struct db_driver_socket_wait final {
     [[nodiscard]] bool await_ready() {
         return wait_.await_ready();
     }
-    [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept {
-        return wait_.await_suspend(handle);
+    void operator&() const = delete;
+    [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation) noexcept {
+        return wait_.await_suspend(continuation);
     }
     [[nodiscard]] db_socket_wait_result resume_raw() {
         const auto wait_result = wait_.await_resume();

@@ -33,7 +33,7 @@ public:
 class admin_auth_middleware final {
 public:
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
-        if (c.req().header("X-Admin-Token").value_or("") != "secret") {
+        if (c.request().header("X-Admin-Token").value_or("") != "secret") {
             c.respond(c.error({.status_ = ruvia::http_status::unauthorized, .code_ = "unauthorized", .message_ = "missing admin token"}));
             co_return;
         }
@@ -89,14 +89,14 @@ private:
 
     ruvia::task<ruvia::http_response> user(ruvia::context& c) {
         user_response response;
-        response.set<"id">(c.req().param("id").value_or("unknown")).set<"name">("example-user").set<"active">(ruvia::bool_value{true});
+        response.set<"id">(c.request().param("id").value_or("unknown")).set<"name">("example-user").set<"active">(ruvia::bool_value{true});
         co_return c.json(response);
     }
 
     ruvia::task<ruvia::http_response> wildcard(ruvia::context& c) {
         std::string body;
         body.append("wildcard=");
-        body.append(c.req().param("*").value_or(""));
+        body.append(c.request().param("*").value_or(""));
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -104,20 +104,20 @@ private:
     ruvia::task<ruvia::http_response> inputs(ruvia::context& c) {
         std::string body;
         body.append("remote=");
-        body.append(c.conn().remote().address().to_string());
+        body.append(c.connection().remote().address().to_string());
         body.append("\nuser-agent=");
-        body.append(c.req().header("User-Agent").value_or(""));
+        body.append(c.request().header("User-Agent").value_or(""));
         body.append("\npage=");
-        const std::uint32_t page = std::max(std::uint32_t{1}, c.req().query<std::uint32_t>("page").value_or(1));
+        const std::uint32_t page = std::max(std::uint32_t{1}, c.request().query<std::uint32_t>("page").value_or(1));
         ruvia::append_decimal(body, page);
         body.append("\nsession=");
-        body.append(c.req().cookie("session").value_or(""));
+        body.append(c.request().cookie("session").value_or(""));
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
 
     ruvia::task<ruvia::http_response> echo(ruvia::context& c) {
-        auto owned = co_await c.req().collect_body();
+        auto owned = co_await c.request().collect_body();
         const std::array headers{ruvia::http_header_view{"X-Echo", "true"}};
         co_return c.text(std::move(owned), {.status_ = ruvia::http_status::created, .headers_ = headers});
     }
@@ -133,7 +133,7 @@ private:
     ruvia::task<ruvia::http_response> links(ruvia::context& c) {
         std::string body;
         body.append("user=");
-        body.append(c.url_for("/api/users/:id", {c.req().param("id").value_or("0")}));
+        body.append(c.url_for("/api/users/:id", {c.request().param("id").value_or("0")}));
         body.append("\nfile=");
         body.append(c.url_for("/api/files/*", {"docs/guide.md"}));
         body.push_back('\n');

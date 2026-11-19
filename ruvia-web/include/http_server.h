@@ -313,7 +313,7 @@ struct listen_config final {
     // smaller of header_completion_timeout_ and a configured
     // request_header_timeout_. A PROXY command's
     // source becomes the connection's remote endpoint for every consumer --
-    // admission, open/close events, conn_info, access logs, rate limiting and
+    // admission, open/close events, connection_info, access logs, rate limiting and
     // the trusted-proxy check; a LOCAL command, or an address family without
     // IP endpoints, keeps the real peer. The local endpoint stays the
     // socket's. Rejected (std::invalid_argument) with http3_, which has no

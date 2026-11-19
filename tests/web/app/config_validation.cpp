@@ -59,7 +59,7 @@ bool throws_invalid(fn_type&& fn) {
 // files, and is never handed PEM text it would silently ignore.
 TEST(Ruvia, client_tls_rejects_in_memory_pem_identity) {
     EXPECT_TRUE(throws_invalid([] {
-        ruvia::app().client({.alias_ = "tls-pem-identity", .base_url_ = "https://example.com", .tls_ = {.identity_ = ruvia::tls_identity_config{.certificate_chain_file_ = "client.pem", .private_key_file_ = "client.key", .certificate_chain_pem_ = "pem", .private_key_pem_ = "pem"}}});
+        ruvia::app().http_client({.alias_ = "tls-pem-identity", .base_url_ = "https://example.com", .tls_ = {.identity_ = ruvia::tls_identity_config{.certificate_chain_file_ = "client.pem", .private_key_file_ = "client.key", .certificate_chain_pem_ = "pem", .private_key_pem_ = "pem"}}});
     }));
 }
 
@@ -174,7 +174,7 @@ private:
         ruvia::stop_source stop;
         stop.request_stop();
         const auto result_value = co_await ruvia::sleep_for(c.worker(), std::chrono::hours(1), stop.token());
-        if (result_value != ruvia::timer_sleep_result::stop_requested) {
+        if (result_value != ruvia::sleep_status::stop_requested) {
             throw std::logic_error("explicit cancellation did not stop the operation");
         }
         co_return response;
@@ -189,18 +189,18 @@ TEST(Ruvia, testing_facade_retains_owned_response_memory_across_app_lifetime) {
         ruvia::test_app app;
         app.controllers<testing_memory_controller>();
 
-        retained.emplace(app.request(ruvia::test_request::get("/testing-memory/owned")));
+        retained.emplace(app.dispatch(ruvia::test_request::get("/testing-memory/owned")));
         EXPECT_EQ(retained->body().size(), std::size_t(256 * 1024));
         EXPECT_TRUE(retained->body().front() == 'm');
 
-        const auto cancelled = app.request(ruvia::test_request::get("/testing-memory/cancel"));
+        const auto cancelled = app.dispatch(ruvia::test_request::get("/testing-memory/cancel"));
         EXPECT_EQ(cancelled.body(), std::string(256 * 1024, 'c'));
 
-        const auto repeated = app.request(ruvia::test_request::get("/testing-memory/owned"));
+        const auto repeated = app.dispatch(ruvia::test_request::get("/testing-memory/owned"));
         EXPECT_EQ(repeated.body().size(), std::size_t(256 * 1024));
         EXPECT_TRUE(retained->body().front() == 'm');
 
-        const auto failed = app.request(ruvia::test_request::get("/testing-memory/throw"));
+        const auto failed = app.dispatch(ruvia::test_request::get("/testing-memory/throw"));
         EXPECT_TRUE(failed.status() == ruvia::http_status::internal_server_error);
     }
     EXPECT_EQ(retained->body().size(), std::size_t(256 * 1024));
@@ -538,31 +538,31 @@ private:
     }
 
     ruvia::task<ruvia::http_response> a_wildcard(ruvia::context& c) {
-        return labelled(c, "a-wild", c.req().param("*").value_or("?"));
+        return labelled(c, "a-wild", c.request().param("*").value_or("?"));
     }
 
     ruvia::task<ruvia::http_response> pair(ruvia::context& c) {
-        return labelled(c, "pair", c.req().param("x").value_or("?"), c.req().param("y").value_or("?"));
+        return labelled(c, "pair", c.request().param("x").value_or("?"), c.request().param("y").value_or("?"));
     }
 
     ruvia::task<ruvia::http_response> b_param(ruvia::context& c) {
-        return labelled(c, "b-param", c.req().param("z").value_or("?"));
+        return labelled(c, "b-param", c.request().param("z").value_or("?"));
     }
 
     ruvia::task<ruvia::http_response> w_param(ruvia::context& c) {
-        return labelled(c, "w-param", c.req().param("id").value_or("?"));
+        return labelled(c, "w-param", c.request().param("id").value_or("?"));
     }
 
     ruvia::task<ruvia::http_response> w_wildcard(ruvia::context& c) {
-        return labelled(c, "w-wild", c.req().param("*").value_or("?"));
+        return labelled(c, "w-wild", c.request().param("*").value_or("?"));
     }
 
     ruvia::task<ruvia::http_response> panel(ruvia::context& c) {
-        return labelled(c, "panel", c.req().param("section").value_or("?"));
+        return labelled(c, "panel", c.request().param("section").value_or("?"));
     }
 
     ruvia::task<ruvia::http_response> panel_slash(ruvia::context& c) {
-        return labelled(c, "panel-slash", c.req().param("section").value_or("?"));
+        return labelled(c, "panel-slash", c.request().param("section").value_or("?"));
     }
 
     ruvia::task<ruvia::http_response> settings(ruvia::context& c) {
@@ -570,7 +570,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> asset(ruvia::context& c) {
-        return labelled(c, "asset", c.req().param("*").value_or("?"));
+        return labelled(c, "asset", c.request().param("*").value_or("?"));
     }
 
     ruvia::task<ruvia::http_response> static_bare(ruvia::context& c) {
@@ -582,15 +582,15 @@ private:
     }
 
     ruvia::task<ruvia::http_response> dynamic_bare(ruvia::context& c) {
-        return labelled(c, "dyn", c.req().param("id").value_or("?"));
+        return labelled(c, "dyn", c.request().param("id").value_or("?"));
     }
 
     ruvia::task<ruvia::http_response> dynamic_slash(ruvia::context& c) {
-        return labelled(c, "dyn-slash", c.req().param("id").value_or("?"));
+        return labelled(c, "dyn-slash", c.request().param("id").value_or("?"));
     }
 
     ruvia::task<ruvia::http_response> only_dynamic(ruvia::context& c) {
-        return labelled(c, "only", c.req().param("id").value_or("?"));
+        return labelled(c, "only", c.request().param("id").value_or("?"));
     }
 
     ruvia::task<ruvia::http_response> only_static(ruvia::context& c) {
@@ -660,14 +660,14 @@ private:
     ruvia::task<ruvia::http_response> user(ruvia::context& c) {
         std::string body;
         body.append("user:");
-        body.append(c.req().param("id").value_or("-"));
+        body.append(c.request().param("id").value_or("-"));
         co_return c.body(std::move(body));
     }
 
     ruvia::task<ruvia::http_response> file(ruvia::context& c) {
         std::string body;
         body.append("file:");
-        body.append(c.req().param("name").value_or("-"));
+        body.append(c.request().param("name").value_or("-"));
         co_return c.body(std::move(body));
     }
 
@@ -701,7 +701,7 @@ private:
 
 // A non-200 answer reads as its own value so a mismatch is visible in the check.
 [[nodiscard]] std::string body_of(ruvia::test_app& app, std::string_view path) {
-    const auto response = app.request(ruvia::test_request::get(path));
+    const auto response = app.dispatch(ruvia::test_request::get(path));
     if (response.status() != ruvia::http_status::ok) {
         return std::string("unexpected status");
     }
@@ -709,7 +709,7 @@ private:
 }
 
 [[nodiscard]] std::string scope_of(ruvia::test_app& app, std::string_view path) {
-    const auto response = app.request(ruvia::test_request::get(path));
+    const auto response = app.dispatch(ruvia::test_request::get(path));
     if (response.status() != ruvia::http_status::ok) {
         return std::string("unexpected status");
     }
@@ -797,15 +797,15 @@ TEST(Ruvia, route_shapes_trailing_slash_is_a_distinct_path_for_every_route_kind)
     EXPECT_EQ(body_of(app, "/slash/42//"), std::string("unexpected status"));
 
     EXPECT_EQ(body_of(app, "/only/1"), std::string("only:1"));
-    EXPECT_EQ(app.request(ruvia::test_request::get("/only/1/")).status(), ruvia::http_status::not_found);
+    EXPECT_EQ(app.dispatch(ruvia::test_request::get("/only/1/")).status(), ruvia::http_status::not_found);
     EXPECT_EQ(body_of(app, "/only-static"), std::string("only:static"));
-    EXPECT_EQ(app.request(ruvia::test_request::get("/only-static/")).status(), ruvia::http_status::not_found);
+    EXPECT_EQ(app.dispatch(ruvia::test_request::get("/only-static/")).status(), ruvia::http_status::not_found);
 }
 
 TEST(Ruvia, route_shapes_url_for_keeps_the_registered_trailing_slash) {
     ruvia::test_app app;
     app.controllers<route_shapes_controller>();
-    const auto links = app.request(ruvia::test_request::get("/slash-links"));
+    const auto links = app.dispatch(ruvia::test_request::get("/slash-links"));
     EXPECT_EQ(links.status(), ruvia::http_status::ok);
     EXPECT_EQ(links.body(), "/slash/static/ /slash/7/ /slash/7");
     EXPECT_EQ(body_of(app, "/slash/7/"), std::string("dyn-slash:7"));
@@ -818,8 +818,8 @@ TEST(Ruvia, route_shapes_non_http_absolute_target_is_rejected) {
     ruvia::test_app app;
     app.controllers<route_shapes_controller>();
     app.use_at<route_shapes_scope>({.prefix_ = "/admin"}, "admin");
-    EXPECT_EQ(app.request(ruvia::test_request::get("x:admin/panel")).status(), ruvia::http_status::bad_request);
-    EXPECT_EQ(app.request(ruvia::test_request::get("x:/admin/panel")).status(), ruvia::http_status::bad_request);
+    EXPECT_EQ(app.dispatch(ruvia::test_request::get("x:admin/panel")).status(), ruvia::http_status::bad_request);
+    EXPECT_EQ(app.dispatch(ruvia::test_request::get("x:/admin/panel")).status(), ruvia::http_status::bad_request);
 }
 
 TEST(Ruvia, route_shapes_dot_segments_match_no_route) {
@@ -829,7 +829,7 @@ TEST(Ruvia, route_shapes_dot_segments_match_no_route) {
     app.controllers<route_shapes_controller>();
     app.use_at<route_shapes_scope>({.prefix_ = "/assets/private"}, "private");
     for (const std::string_view path : {"/assets/public/../private/key", "/assets/public/%2E%2E/private/key", "/assets/./private/key", "/admin/panel/.", "/assets/%2e"}) {
-        EXPECT_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::not_found);
+        EXPECT_EQ(app.dispatch(ruvia::test_request::get(path)).status(), ruvia::http_status::not_found);
     }
     // Dots inside a segment are ordinary names.
     EXPECT_EQ(body_of(app, "/assets/..key/.env"), std::string("asset:..key/.env"));
@@ -843,12 +843,12 @@ TEST(Ruvia, route_shapes_conditional_frames_keep_chain_order_and_neighbours) {
     app.use_at<route_shapes_scope>({.prefix_ = "/admin"}, "admin");
 
     // The app-wide frame after a skipped conditional frame still runs.
-    const auto outside = app.request(ruvia::test_request::get("/other/panel"));
+    const auto outside = app.dispatch(ruvia::test_request::get("/other/panel"));
     EXPECT_EQ(outside.status(), ruvia::http_status::ok);
     EXPECT_TRUE(outside.header("X-Route-Trace").has_value());
     EXPECT_TRUE(!outside.header("X-Route-Scope").has_value());
 
-    const auto inside = app.request(ruvia::test_request::get("/admin/panel"));
+    const auto inside = app.dispatch(ruvia::test_request::get("/admin/panel"));
     EXPECT_EQ(inside.status(), ruvia::http_status::ok);
     EXPECT_TRUE(inside.header("X-Route-Trace").has_value());
     EXPECT_TRUE(inside.header("X-Route-Scope").has_value());
@@ -859,9 +859,9 @@ TEST(Ruvia, route_shapes_conditional_frames_keep_single_shot_next) {
     app.controllers<route_shapes_controller>();
     app.use_at<route_shapes_double_next>({.prefix_ = "/admin"});
 
-    const auto inside = app.request(ruvia::test_request::get("/admin/panel"));
+    const auto inside = app.dispatch(ruvia::test_request::get("/admin/panel"));
     EXPECT_EQ(inside.status(), ruvia::http_status::internal_server_error);
-    const auto outside = app.request(ruvia::test_request::get("/other/panel"));
+    const auto outside = app.dispatch(ruvia::test_request::get("/other/panel"));
     EXPECT_EQ(outside.status(), ruvia::http_status::ok);
     EXPECT_EQ(outside.body(), std::string_view("panel:other"));
 }
@@ -873,7 +873,7 @@ TEST(Ruvia, route_shapes_error_responses_survive_an_unfinished_unmatched_chain) 
     // The 404 runs the unmatched chain, which never finalizes; it must still
     // yield a response rather than an exception escaping the server, and that
     // error response is not renegotiated into a 406 for the refused coding.
-    const auto response = app.request(ruvia::test_request::get("/missing").header("Accept-Encoding", "*;q=0"));
+    const auto response = app.dispatch(ruvia::test_request::get("/missing").header("Accept-Encoding", "*;q=0"));
     EXPECT_EQ(response.status(), ruvia::http_status::internal_server_error);
 }
 
@@ -890,7 +890,7 @@ TEST(Ruvia, route_shapes_fallback_prefixes_compare_percent_decoded) {
     }
     EXPECT_TRUE(rejected);
 
-    const auto escaped = app.request(ruvia::test_request::get("/%61pi/missing"));
+    const auto escaped = app.dispatch(ruvia::test_request::get("/%61pi/missing"));
     EXPECT_EQ(escaped.status(), ruvia::http_status::not_found);
     EXPECT_EQ(escaped.body(), std::string_view("api-miss"));
 }
@@ -902,7 +902,7 @@ TEST(Ruvia, route_shapes_encoded_spellings_select_the_literal_route_and_its_midd
     ruvia::test_app app;
     app.controllers<route_shapes_equivalence_controller>();
     for (const std::string_view path : {"/equiv/users/admin", "/equiv/users/%61dmin", "/equiv/users/adm%69n", "/equiv/users/%61%64%6D%69%6E", "/equiv/users/admin/x", "/equiv/users/%61dmin/x", "/equiv/users/adm%69n/x"}) {
-        EXPECT_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
+        EXPECT_EQ(app.dispatch(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
     }
     // Other names still reach the parameter route, decoded.
     EXPECT_EQ(body_of(app, "/equiv/users/%41dmin"), std::string("user:Admin"));
@@ -916,7 +916,7 @@ TEST(Ruvia, route_shapes_hex_case_does_not_change_the_route) {
     ruvia::test_app app;
     app.controllers<route_shapes_equivalence_controller>();
     for (const std::string_view path : {"/equiv/files/caf%C3%A9", "/equiv/files/caf%c3%a9", "/equiv/files/caf%C3%a9"}) {
-        EXPECT_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
+        EXPECT_EQ(app.dispatch(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
     }
     EXPECT_EQ(body_of(app, "/equiv/files/caf%C3%A8"), std::string("file:caf\xC3\xA8"));
 }
@@ -928,7 +928,7 @@ TEST(Ruvia, route_shapes_encoded_colon_or_star_literal_is_not_a_parameter_or_wil
     ruvia::test_app app;
     app.controllers<route_shapes_equivalence_controller>();
     for (const std::string_view path : {"/equiv/colon/%3Aid", "/equiv/colon/%3aid", "/equiv/star/%2A"}) {
-        EXPECT_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
+        EXPECT_EQ(app.dispatch(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
     }
     EXPECT_EQ(body_of(app, "/equiv/colon/42"), std::string("user:42"));
     EXPECT_EQ(body_of(app, "/equiv/star/x"), std::string("user:-"));
@@ -940,13 +940,13 @@ TEST(Ruvia, route_shapes_allow_names_every_extension_method_of_a_resource) {
     const std::multiset<std::string_view> expected{{"OPTIONS", "EXT-A", "EXT-B", "EXT-C", "EXT-D", "EXT-E", "EXT-F", "EXT-G", "EXT-H", "EXT-I", "EXT-J"}};
     ruvia::test_app app;
     app.controllers<route_shapes_equivalence_controller>();
-    const auto options = app.request(ruvia::test_request::options("/equiv/many"));
+    const auto options = app.dispatch(ruvia::test_request::options("/equiv/many"));
     EXPECT_EQ(options.status(), ruvia::http_status::no_content);
     EXPECT_EQ(allow_methods(options.header("Allow").value_or("")), expected);
-    const auto get = app.request(ruvia::test_request::get("/equiv/m%61ny"));
+    const auto get = app.dispatch(ruvia::test_request::get("/equiv/m%61ny"));
     EXPECT_EQ(get.status(), ruvia::http_status::method_not_allowed);
     EXPECT_EQ(allow_methods(get.header("Allow").value_or("")), expected);
-    const auto extension = app.request(ruvia::test_request::method("EXT-J", "/equiv/many"));
+    const auto extension = app.dispatch(ruvia::test_request::method("EXT-J", "/equiv/many"));
     EXPECT_EQ(extension.status(), ruvia::http_status::ok);
 }
 
@@ -954,10 +954,10 @@ TEST(Ruvia, route_shapes_response_stream_get_route_advertises_head) {
     // RFC 9110 9.1/9.3.2: a GET resource supports HEAD, streaming or not.
     ruvia::test_app app;
     app.controllers<route_shapes_equivalence_controller>();
-    const auto options = app.request(ruvia::test_request::options("/equiv/stream"));
+    const auto options = app.dispatch(ruvia::test_request::options("/equiv/stream"));
     EXPECT_EQ(options.status(), ruvia::http_status::no_content);
     EXPECT_EQ(options.header("Allow").value_or(""), std::string_view("GET, HEAD, OPTIONS"));
-    const auto post = app.request(ruvia::test_request::post("/equiv/stream"));
+    const auto post = app.dispatch(ruvia::test_request::post("/equiv/stream"));
     EXPECT_EQ(post.status(), ruvia::http_status::method_not_allowed);
     EXPECT_EQ(post.header("Allow").value_or(""), std::string_view("GET, HEAD, OPTIONS"));
 }
@@ -973,7 +973,7 @@ TEST(Ruvia, extension_routes_keep_method_and_canonical_path_identity) {
     app.controllers<route_shapes_equivalence_controller>();
     for (const auto& item : cases) {
         SCOPED_TRACE(std::string(item.method_) + " " + std::string(item.path_));
-        const auto response = app.request(ruvia::test_request::method(item.method_, item.path_));
+        const auto response = app.dispatch(ruvia::test_request::method(item.method_, item.path_));
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
         EXPECT_EQ(response.body(), item.body_);
     }
@@ -990,7 +990,7 @@ TEST(Ruvia, extension_route_misses_distinguish_method_and_resource_identity) {
     app.controllers<route_shapes_equivalence_controller>();
     for (const auto& item : cases) {
         SCOPED_TRACE(std::string(item.method_) + " " + std::string(item.path_));
-        const auto response = app.request(ruvia::test_request::method(item.method_, item.path_));
+        const auto response = app.dispatch(ruvia::test_request::method(item.method_, item.path_));
         EXPECT_EQ(response.status(), item.status_);
         if (item.status_ != ruvia::http_status::method_not_allowed) {
             EXPECT_FALSE(response.header("Allow").has_value());
@@ -1001,13 +1001,13 @@ TEST(Ruvia, extension_route_misses_distinguish_method_and_resource_identity) {
 TEST(Ruvia, extension_route_allow_groups_only_canonical_equivalent_paths) {
     ruvia::test_app app;
     app.controllers<route_shapes_equivalence_controller>();
-    const auto encoded = app.request(ruvia::test_request::options("/indexed/a%2Fb"));
+    const auto encoded = app.dispatch(ruvia::test_request::options("/indexed/a%2Fb"));
     EXPECT_EQ(encoded.status(), ruvia::http_status::no_content);
     EXPECT_EQ(allow_methods(encoded.header("Allow").value_or("")), (std::multiset<std::string_view>{"OPTIONS", "A-INDEX", "Z-INDEX"}));
-    const auto split = app.request(ruvia::test_request::method("A-INDEX", "/indexed/a/b"));
+    const auto split = app.dispatch(ruvia::test_request::method("A-INDEX", "/indexed/a/b"));
     EXPECT_EQ(split.status(), ruvia::http_status::method_not_allowed);
     EXPECT_EQ(allow_methods(split.header("Allow").value_or("")), (std::multiset<std::string_view>{"OPTIONS", "Z-INDEX"}));
-    const auto plain = app.request(ruvia::test_request::options("/indexed/%61"));
+    const auto plain = app.dispatch(ruvia::test_request::options("/indexed/%61"));
     EXPECT_EQ(plain.status(), ruvia::http_status::no_content);
     EXPECT_EQ(allow_methods(plain.header("Allow").value_or("")), (std::multiset<std::string_view>{"OPTIONS", "A-INDEX"}));
 }
@@ -1018,7 +1018,7 @@ using namespace std::chrono_literals;
 struct runtime final {
     asio::io_context io_;
     ruvia::blocking_pool pool_{{.thread_count_ = 1}};
-    ruvia::event_loop_attachment attachment_{ruvia::attach_event_loop(io_, {.blocking_pool_ = &pool_})};
+    ruvia::event_loop_attachment attachment_{ruvia::event_loop_attachment(io_, {.blocking_pool_ = &pool_})};
     ruvia::event_loop loop_{attachment_.loop()};
     std::jthread thread_{[this] {
         attachment_.run();
@@ -1031,12 +1031,12 @@ struct runtime final {
 };
 
 ruvia::task<void> identify(ruvia::request_stream& stream) {
-    const auto remote = stream.conn().remote();
+    const auto remote = stream.connection().remote();
     const auto text = remote.address().to_string();
     std::string body(text.data(), text.size());
     body += ":" + std::to_string(remote.port());
-    body += ":" + std::string(stream.conn().client().address().to_string());
-    body += stream.conn().via_trusted_proxy() ? ":trusted" : ":direct";
+    body += ":" + std::string(stream.connection().client().address().to_string());
+    body += stream.connection().via_trusted_proxy() ? ":trusted" : ":direct";
     if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {
         co_await stream.stream().write(body);
         co_await stream.stream().finish();
@@ -1072,16 +1072,16 @@ ruvia::task<void> adopt_read_prefix(ruvia::http_server& server, asio::ip::tcp::a
     auto accepted = co_await ruvia::async_asio<asio::ip::tcp::socket>([&](auto handler) {
         acceptor.async_accept(std::move(handler));
     });
-    if (accepted.error_code()) {
-        throw std::system_error(accepted.error_code());
+    if (accepted.code()) {
+        throw std::system_error(accepted.code());
     }
-    auto socket = std::move(accepted).take_result();
+    auto socket = std::move(accepted).take_value();
     std::vector<std::byte> prefix(bytes);
     const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
         asio::async_read(socket, asio::buffer(prefix), std::move(handler));
     });
-    if (read.error_code()) {
-        throw std::system_error(read.error_code());
+    if (read.code()) {
+        throw std::system_error(read.code());
     }
     server.adopt({.address_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port()}, socket.release(), {.prefix_ = prefix, .remote_ = remote});
     // The prefix owner dies before the session starts reading it.
@@ -1110,7 +1110,7 @@ TEST(Ruvia, proxy_listener_requires_preface_and_uses_source_for_every_peer_fact)
         server.trusted_proxies(std::move(trusted));
         co_await start(server, {.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .proxy_protocol_ = true});
     };
-    runtime.loop_.start(setup()).get();
+    runtime.loop_.submit(setup()).take_value().take_value();
     const auto request = head(port.endpoint().port(), "X-Forwarded-For: 192.0.2.77\r\n");
     auto response = ruvia::test::exchange(io, port.endpoint(), "PROXY TCP4 203.0.113.9 127.0.0.1 4567 " + std::to_string(port.endpoint().port()) + "\r\n" + request);
     // The socket peer 127.0.0.1 is not trusted, so its claimed source cannot
@@ -1128,12 +1128,12 @@ TEST(Ruvia, proxy_listener_requires_preface_and_uses_source_for_every_peer_fact)
         EXPECT_TRUE(ruvia::test::read_to_end(peer, error).empty());
         EXPECT_TRUE(error == asio::error::eof || error == asio::error::connection_reset);
     }
-    runtime.loop_.start(server.shutdown()).get();
+    runtime.loop_.submit(server.shutdown()).take_value().take_value();
     std::lock_guard lock(mutex);
     ASSERT_EQ(admitted.size(), 3u);
-    EXPECT_EQ(admitted[0], ruvia::ip_endpoint(*ruvia::ip_address::parse("203.0.113.9"), 4567));
-    EXPECT_EQ(admitted[1], ruvia::ip_endpoint(*ruvia::ip_address::parse("198.51.100.23"), 4660));
-    EXPECT_EQ(admitted[2].address(), *ruvia::ip_address::parse("127.0.0.1"));
+    EXPECT_EQ(admitted[0], ruvia::ip_endpoint(*ruvia::ip_address::try_parse("203.0.113.9"), 4567));
+    EXPECT_EQ(admitted[1], ruvia::ip_endpoint(*ruvia::ip_address::try_parse("198.51.100.23"), 4660));
+    EXPECT_EQ(admitted[2].address(), *ruvia::ip_address::try_parse("127.0.0.1"));
     EXPECT_EQ(logged, (std::vector<std::string>{"203.0.113.9", "198.51.100.23", "127.0.0.1"}));
 }
 
@@ -1153,14 +1153,14 @@ TEST(Ruvia, proxy_listener_requires_trusted_socket_peer_for_forwarding) {
             server.trusted_proxies(std::move(trusted));
             co_await start(server, {.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .proxy_protocol_ = true});
         };
-        runtime.loop_.start(setup()).get();
+        runtime.loop_.submit(setup()).take_value().take_value();
         const auto response = ruvia::test::exchange(io, port.endpoint(), "PROXY TCP4 10.0.0.1 127.0.0.1 4567 " + std::to_string(port.endpoint().port()) + "\r\n" + head(port.endpoint().port(), "X-Forwarded-For: 1.2.3.4\r\n"));
         if (trust_socket_peer) {
             EXPECT_NE(response.find("10.0.0.1:4567:1.2.3.4:trusted"), std::string::npos) << response;
         } else {
             EXPECT_NE(response.find("10.0.0.1:4567:10.0.0.1:direct"), std::string::npos) << response;
         }
-        runtime.loop_.start(server.shutdown()).get();
+        runtime.loop_.submit(server.shutdown()).take_value().take_value();
     }
 }
 
@@ -1170,7 +1170,7 @@ TEST(Ruvia, proxy_listener_bounds_header_completion_and_rejects_http3) {
     asio::io_context io;
     ruvia::test::tcp_port_reservation port(io);
     ruvia::http_server server(runtime.loop_, {.request_stream_ = &identify}, {.request_header_timeout_ = 40ms, .header_completion_timeout_ = 60ms});
-    runtime.loop_.start(start(server, {.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .proxy_protocol_ = true})).get();
+    runtime.loop_.submit(start(server, {.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .proxy_protocol_ = true})).take_value().take_value();
     asio::ip::tcp::socket peer(io);
     peer.connect(port.endpoint());
     asio::write(peer, asio::buffer("PROXY ", 6));
@@ -1179,11 +1179,11 @@ TEST(Ruvia, proxy_listener_bounds_header_completion_and_rejects_http3) {
     EXPECT_TRUE(ruvia::test::read_to_end(peer, error).empty());
     EXPECT_TRUE(error == asio::error::eof || error == asio::error::connection_reset);
     EXPECT_LT(std::chrono::steady_clock::now() - began, 2s);
-    runtime.loop_.start(server.shutdown()).get();
+    runtime.loop_.submit(server.shutdown()).take_value().take_value();
 #if defined(RUVIA_ENABLE_HTTP3)
     ruvia::http_server invalid(runtime.loop_, {.request_stream_ = &identify});
-    EXPECT_THROW(runtime.loop_.start(start(invalid, {.address_ = "127.0.0.1", .https_ = port.endpoint().port(), .http3_ = port.endpoint().port(), .proxy_protocol_ = true})).get(), std::invalid_argument);
-    runtime.loop_.start(invalid.shutdown()).get();
+    EXPECT_THROW(runtime.loop_.submit(start(invalid, {.address_ = "127.0.0.1", .https_ = port.endpoint().port(), .http3_ = port.endpoint().port(), .proxy_protocol_ = true})).take_value().take_value(), std::invalid_argument);
+    runtime.loop_.submit(invalid.shutdown()).take_value().take_value();
 #endif
 }
 
@@ -1206,19 +1206,19 @@ TEST(Ruvia, adopted_prefix_is_replayed_for_http_raw_and_tls_with_remote_override
         co_await raw_server.start();
         co_await tls_server.start();
     };
-    runtime.loop_.start(setup()).get();
-    auto adopted = runtime.loop_.start(adopt_read_prefix(http_server, http, 11, ruvia::ip_endpoint(*ruvia::ip_address::parse("192.0.2.123"), 444)));
+    runtime.loop_.submit(setup()).take_value().take_value();
+    auto adopted = runtime.loop_.submit(adopt_read_prefix(http_server, http, 11, ruvia::ip_endpoint(*ruvia::ip_address::try_parse("192.0.2.123"), 444))).take_value();
     auto response = ruvia::test::exchange(io, http.local_endpoint(), head(http.local_endpoint().port()));
-    std::move(adopted).get();
+    std::move(adopted).take_value();
     EXPECT_NE(response.find("192.0.2.123:444:192.0.2.123:direct"), std::string::npos);
-    auto raw_adopted = runtime.loop_.start(adopt_read_prefix(raw_server, raw, 4));
+    auto raw_adopted = runtime.loop_.submit(adopt_read_prefix(raw_server, raw, 4)).take_value();
     asio::ip::tcp::socket peer(io);
     peer.connect(raw.local_endpoint());
     asio::write(peer, asio::buffer("prefix-and-tail", 15));
     peer.shutdown(asio::ip::tcp::socket::shutdown_send);
     EXPECT_EQ(ruvia::test::read_to_end(peer), "prefix-and-tail");
-    std::move(raw_adopted).get();
-    auto tls_adopted = runtime.loop_.start(adopt_read_prefix(tls_server, tls, 7));
+    std::move(raw_adopted).take_value();
+    auto tls_adopted = runtime.loop_.submit(adopt_read_prefix(tls_server, tls, 7)).take_value();
     asio::ssl::context context(asio::ssl::context::tls_client);
     context.load_verify_file(identity.ca_file_.string());
     asio::ssl::stream<asio::ip::tcp::socket> secure(io, context);
@@ -1228,10 +1228,10 @@ TEST(Ruvia, adopted_prefix_is_replayed_for_http_raw_and_tls_with_remote_override
     asio::write(secure, asio::buffer(head(tls.local_endpoint().port())));
     response = ruvia::test::read_to_end(secure);
     EXPECT_NE(response.find("127.0.0.1"), std::string::npos);
-    std::move(tls_adopted).get();
-    runtime.loop_.start(http_server.shutdown()).get();
-    runtime.loop_.start(raw_server.shutdown()).get();
-    runtime.loop_.start(tls_server.shutdown()).get();
+    std::move(tls_adopted).take_value();
+    runtime.loop_.submit(http_server.shutdown()).take_value().take_value();
+    runtime.loop_.submit(raw_server.shutdown()).take_value().take_value();
+    runtime.loop_.submit(tls_server.shutdown()).take_value().take_value();
 }
 
 TEST(Ruvia, standalone_dispatch_rejects_missing_ambiguous_and_mismatched_callbacks) {
@@ -1243,11 +1243,11 @@ TEST(Ruvia, standalone_dispatch_rejects_missing_ambiguous_and_mismatched_callbac
     ruvia::http_server ambiguous(runtime.loop_, {.request_stream_ = &identify, .connection_ = &echo});
     ruvia::http_server mismatch(runtime.loop_, {.request_stream_ = &identify});
     for (auto* server : {&absent, &ambiguous}) {
-        EXPECT_THROW(runtime.loop_.start(start(*server, {.address_ = "127.0.0.1", .http_ = port.endpoint().port()})).get(), std::invalid_argument);
-        runtime.loop_.start(server->shutdown()).get();
+        EXPECT_THROW(runtime.loop_.submit(start(*server, {.address_ = "127.0.0.1", .http_ = port.endpoint().port()})).take_value().take_value(), std::invalid_argument);
+        runtime.loop_.submit(server->shutdown()).take_value().take_value();
     }
-    EXPECT_THROW(runtime.loop_.start(start(mismatch, {.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection})).get(), std::invalid_argument);
-    runtime.loop_.start(mismatch.shutdown()).get();
+    EXPECT_THROW(runtime.loop_.submit(start(mismatch, {.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection})).take_value().take_value(), std::invalid_argument);
+    runtime.loop_.submit(mismatch.shutdown()).take_value().take_value();
 }
 
 TEST(Ruvia, proxy_source_is_the_router_rate_limit_key) {
@@ -1268,14 +1268,14 @@ TEST(Ruvia, proxy_source_is_the_router_rate_limit_key) {
         }});
         co_await start(*server, {.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .proxy_protocol_ = true});
     };
-    runtime.loop_.start(setup()).get();
+    runtime.loop_.submit(setup()).take_value().take_value();
     const auto request = [&](std::string_view source) {
         return ruvia::test::exchange(io, port.endpoint(), "PROXY TCP4 " + std::string(source) + " 127.0.0.1 4567 " + std::to_string(port.endpoint().port()) + "\r\n" + head(port.endpoint().port()));
     };
     EXPECT_TRUE(request("198.51.100.10").starts_with("HTTP/1.1 200"));
     EXPECT_TRUE(request("198.51.100.10").starts_with("HTTP/1.1 429"));
     EXPECT_TRUE(request("198.51.100.11").starts_with("HTTP/1.1 200"));
-    runtime.loop_.start(server->shutdown()).get();
+    runtime.loop_.submit(server->shutdown()).take_value().take_value();
 }
 
 TEST(Ruvia, proxy_preface_precedes_tls_client_hello_and_preserves_effective_source) {
@@ -1285,7 +1285,7 @@ TEST(Ruvia, proxy_preface_precedes_tls_client_hello_and_preserves_effective_sour
     ruvia::test::tcp_port_reservation port(io);
     const ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
     ruvia::http_server server(runtime.loop_, {.request_stream_ = &identify});
-    runtime.loop_.start(start(server, {.address_ = "127.0.0.1", .https_ = port.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .proxy_protocol_ = true})).get();
+    runtime.loop_.submit(start(server, {.address_ = "127.0.0.1", .https_ = port.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .proxy_protocol_ = true})).take_value().take_value();
     asio::ssl::context context(asio::ssl::context::tls_client);
     context.load_verify_file(identity.ca_file_.string());
     asio::ssl::stream<asio::ip::tcp::socket> peer(io, context);
@@ -1297,5 +1297,5 @@ TEST(Ruvia, proxy_preface_precedes_tls_client_hello_and_preserves_effective_sour
     asio::write(peer, asio::buffer(head(port.endpoint().port())));
     const auto response = ruvia::test::read_to_end(peer);
     EXPECT_NE(response.find("2001:db8::123:9876:2001:db8::123:direct"), std::string::npos);
-    runtime.loop_.start(server.shutdown()).get();
+    runtime.loop_.submit(server.shutdown()).take_value().take_value();
 }

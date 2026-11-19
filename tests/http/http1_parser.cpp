@@ -1098,7 +1098,7 @@ TEST(Ruvia, http1_parse_coding_metadata_preserves_body_and_rejects_decoder_fallb
             }
             EXPECT_EQ(parsed.body_, "abc");
             EXPECT_EQ(std::string_view(wire).substr(*parsed.message_bytes_), "NEXT");
-            const auto coding = ruvia::request_content_coding(parsed.state_.request());
+            const auto coding = ruvia::parse_http_request_content_coding(parsed.state_.request());
             const bool unsupported = value == "future-coding";
             EXPECT_TRUE((coding.unsupported() != nullptr) == unsupported);
             EXPECT_TRUE((coding.invalid() != nullptr) == !unsupported);
@@ -1424,7 +1424,7 @@ TEST(Ruvia, http1_parse_header_block_too_large_rejected) {
 
 TEST(Ruvia, http1_parse_caps_header_field_count) {
     // max_http_header_fields bounds a head far below the byte cap's ~16 K
-    // smallest field lines; both the wire parser and make_parsed_http_request
+    // smallest field lines; both the wire parser and make_http_request
     // answer one field past it with 431.
     for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
         const auto field_count = ruvia::max_http_header_fields + excess;
@@ -1438,7 +1438,7 @@ TEST(Ruvia, http1_parse_caps_header_field_count) {
         const auto result_value = parse_http1_request_message(request);
         bool constructed_rejected = false;
         try {
-            const auto constructed = ruvia::make_parsed_http_request("GET", "/", fields, {});
+            const auto constructed = ruvia::make_http_request("GET", "/", fields, {});
             EXPECT_EQ(constructed.headers().size(), field_count);
         } catch (const ruvia::http_protocol_error& error) {
             constructed_rejected = error.status() == ruvia::http_status::request_header_fields_too_large;

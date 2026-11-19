@@ -401,7 +401,7 @@ void append_sorted_u16_hex_list(sha256_hasher& hasher, std::span<const std::uint
 
 }  // namespace
 
-std::uint16_t tls_client_hello_info::version() const noexcept {
+std::uint16_t tls_client_hello::version() const noexcept {
     if (!supported_versions_.empty()) {
         std::uint16_t highest = 0;
         for (const auto ver : supported_versions_) {
@@ -414,28 +414,28 @@ std::uint16_t tls_client_hello_info::version() const noexcept {
     return legacy_version_;
 }
 
-std::string tls_client_hello_info::ja3_raw() const {
+std::string tls_client_hello::ja3_raw() const {
     std::string out;
     out.reserve(16U + (cipher_suites_.size() + extensions_.size() + supported_groups_.size() + ec_point_formats_.size()) * 6U);
     emit_ja3_bytes(out, legacy_version_, cipher_suites_, extensions_, supported_groups_, ec_point_formats_);
     return out;
 }
 
-std::string tls_client_hello_info::ja3() const {
+std::string tls_client_hello::ja3() const {
     md5_hasher hasher;
     emit_ja3_bytes(hasher, legacy_version_, cipher_suites_, extensions_, supported_groups_, ec_point_formats_);
     const auto digest = hasher.finish_hex();
     return std::string(digest.data(), digest.size());
 }
 
-std::string tls_client_hello_info::ja4(bool quic) const {
+std::string tls_client_hello::ja4(bool quic) const {
     std::string out;
     out.reserve(36);
 
     out.push_back(quic ? 'q' : 't');
     out.append(ja4_version_code(version()));
 
-    const bool has_domain_sni = !server_name_.empty() && !ip_address::parse(server_name_).has_value();
+    const bool has_domain_sni = !server_name_.empty() && !ip_address::try_parse(server_name_).has_value();
     out.push_back(has_domain_sni ? 'd' : 'i');
 
     const auto append_two_digits = [&out](std::size_t count) {
@@ -518,21 +518,21 @@ std::string tls_client_hello_info::ja4(bool quic) const {
     return out;
 }
 
-std::string tls_client_hello_info::peetprint() const {
+std::string tls_client_hello::peetprint() const {
     std::string out;
     out.reserve(32U + (supported_versions_.size() + cipher_suites_.size() + extensions_.size() + supported_groups_.size() + ec_point_formats_.size() + signature_algorithms_.size()) * 6U);
     emit_peetprint_bytes(out, legacy_version_, supported_versions_, cipher_suites_, extensions_, supported_groups_, ec_point_formats_, alpn_, signature_algorithms_);
     return out;
 }
 
-std::string tls_client_hello_info::peetprint_hash() const {
+std::string tls_client_hello::peetprint_hash() const {
     md5_hasher hasher;
     emit_peetprint_bytes(hasher, legacy_version_, supported_versions_, cipher_suites_, extensions_, supported_groups_, ec_point_formats_, alpn_, signature_algorithms_);
     const auto digest = hasher.finish_hex();
     return std::string(digest.data(), digest.size());
 }
 
-tls_client_hello_fingerprints tls_client_hello_info::fingerprints(bool quic) const {
+tls_client_hello_fingerprints tls_client_hello::fingerprints(bool quic) const {
     tls_client_hello_fingerprints result;
     result.ja3_raw_ = ja3_raw();
     const auto ja3_md5 = md5_hex_lower(result.ja3_raw_);
@@ -544,7 +544,7 @@ tls_client_hello_fingerprints tls_client_hello_info::fingerprints(bool quic) con
     return result;
 }
 
-std::optional<tls_client_hello_info> parse_tls_client_hello(std::span<const std::byte> message) {
+std::optional<tls_client_hello> parse_tls_client_hello(std::span<const std::byte> message) {
     const auto* data = reinterpret_cast<const std::uint8_t*>(message.data());
     std::size_t size = message.size();
 
@@ -584,7 +584,7 @@ std::optional<tls_client_hello_info> parse_tls_client_hello(std::span<const std:
         return true;
     };
 
-    tls_client_hello_info info;
+    tls_client_hello info;
     if (!read_u16(info.legacy_version_)) {
         return std::nullopt;
     }
@@ -764,7 +764,7 @@ std::optional<tls_client_hello_info> parse_tls_client_hello(std::span<const std:
     return info;
 }
 
-std::optional<tls_client_hello_info> parse_tls_client_hello(std::string_view message) {
+std::optional<tls_client_hello> parse_tls_client_hello(std::string_view message) {
     return parse_tls_client_hello(std::span<const std::byte>(reinterpret_cast<const std::byte*>(message.data()), message.size()));
 }
 

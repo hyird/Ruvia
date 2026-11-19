@@ -386,18 +386,12 @@ public:
     entity_value_storage(entity_value_storage&&) noexcept = default;
     entity_value_storage& operator=(entity_value_storage&&) = delete;
     template <fixed_string name>
-    auto& get() & RUVIA_LIFETIMEBOUND {
-        auto& value = slot<name>();
+    [[nodiscard]] const auto& get() const& RUVIA_LIFETIMEBOUND {
+        const auto& value = slot<name>();
         if (value.state_ != decltype(value.state_)::value) {
             throw std::logic_error("entity value is not set");
         }
         return value.value_;
-    }
-    template <fixed_string name>
-    auto& get() && = delete;
-    template <fixed_string name>
-    const auto& get() const& RUVIA_LIFETIMEBOUND {
-        return const_cast<entity_value_storage*>(this)->template get<name>();
     }
     template <fixed_string name>
     const auto& get() const&& = delete;
@@ -433,14 +427,19 @@ public:
         value.state_ = decltype(value.state_)::unset;
     }
     template <fixed_string name>
-    bool is_set() const {
+    [[nodiscard]] bool is_set() const noexcept {
         const auto& value = slot<name>();
         return value.state_ != decltype(value.state_)::unset;
     }
     template <fixed_string name>
-    bool is_null() const {
+    [[nodiscard]] bool is_null() const noexcept {
         const auto& value = slot<name>();
         return value.state_ == decltype(value.state_)::null;
+    }
+    template <fixed_string name>
+    [[nodiscard]] bool has_value() const noexcept {
+        const auto& value = slot<name>();
+        return value.state_ == decltype(value.state_)::value;
     }
     slots_type slots_;
 };
@@ -477,13 +476,7 @@ public:                                                            \
 // Public value facades only forward; state transitions belong to the owner.
 #define RUVIA_DETAIL_ENTITY_VALUE_API(member)                       \
     template <::ruvia::fixed_string name>                           \
-    auto& get() & RUVIA_LIFETIMEBOUND {                             \
-        return member.template get<name>();                         \
-    }                                                               \
-    template <::ruvia::fixed_string name>                           \
-    auto& get() && = delete;                                        \
-    template <::ruvia::fixed_string name>                           \
-    const auto& get() const& RUVIA_LIFETIMEBOUND {                  \
+    [[nodiscard]] const auto& get() const& RUVIA_LIFETIMEBOUND {    \
         return member.template get<name>();                         \
     }                                                               \
     template <::ruvia::fixed_string name>                           \
@@ -518,12 +511,16 @@ public:                                                            \
     template <::ruvia::fixed_string name>                           \
     auto& reset() && = delete;                                      \
     template <::ruvia::fixed_string name>                           \
-    bool is_set() const {                                           \
+    [[nodiscard]] bool is_set() const noexcept {                    \
         return member.template is_set<name>();                      \
     }                                                               \
     template <::ruvia::fixed_string name>                           \
-    bool is_null() const {                                          \
+    [[nodiscard]] bool is_null() const noexcept {                   \
         return member.template is_null<name>();                     \
+    }                                                               \
+    template <::ruvia::fixed_string name>                           \
+    [[nodiscard]] bool has_value() const noexcept {                 \
+        return member.template has_value<name>();                   \
     }
 
 namespace ruvia {
@@ -631,6 +628,10 @@ public:
         rows_.push_back(std::move(entity));
     }
     void push_back(entity_type&&) && = delete;
+    [[nodiscard]] std::span<const entity_type> rows() const& noexcept RUVIA_LIFETIMEBOUND {
+        return rows_;
+    }
+    std::span<const entity_type> rows() const&& = delete;
     [[nodiscard]] std::vector<entity_type> take_rows() && noexcept {
         return std::exchange(rows_, {});
     }

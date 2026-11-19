@@ -873,35 +873,35 @@ TEST(Ruvia, byte_views_accept_named_owners_and_preserve_storage_addresses) {
 }
 
 TEST(Ruvia, ip_address_parsing_handles_ipv4_ipv6_and_view_bounds) {
-    const auto v4 = ruvia::parse_ip_address("192.0.2.1");
+    const auto v4 = ruvia::try_parse_asio_ip_address("192.0.2.1");
     EXPECT_TRUE(v4.has_value() && v4->is_v4());
-    const auto v6 = ruvia::parse_ip_address("2001:0db8:1234:5678:90ab:cdef:1234:5678");
+    const auto v6 = ruvia::try_parse_asio_ip_address("2001:0db8:1234:5678:90ab:cdef:1234:5678");
     EXPECT_TRUE(v6.has_value() && v6->is_v6());
-    const auto scoped = ruvia::parse_ip_address("fe80::1%12");
+    const auto scoped = ruvia::try_parse_asio_ip_address("fe80::1%12");
     EXPECT_TRUE(scoped.has_value() && scoped->is_v6() && scoped->to_v6().scope_id() == 12);
     constexpr std::string_view storage = "192.0.2.1suffix";
-    EXPECT_TRUE(ruvia::parse_ip_address(storage.substr(0, 9)).has_value());
-    EXPECT_TRUE(!ruvia::parse_ip_address(storage).has_value());
+    EXPECT_TRUE(ruvia::try_parse_asio_ip_address(storage.substr(0, 9)).has_value());
+    EXPECT_TRUE(!ruvia::try_parse_asio_ip_address(storage).has_value());
 }
 
 TEST(Ruvia, ip_address_parsing_rejects_malformed_and_embedded_nul_input) {
-    EXPECT_TRUE(!ruvia::parse_ip_address(std::string_view{}).has_value());
-    EXPECT_TRUE(!ruvia::parse_ip_address("not an address").has_value());
-    EXPECT_TRUE(!ruvia::parse_ip_address(std::string_view("192.0.2.1\0suffix", 16)).has_value());
+    EXPECT_TRUE(!ruvia::try_parse_asio_ip_address(std::string_view{}).has_value());
+    EXPECT_TRUE(!ruvia::try_parse_asio_ip_address("not an address").has_value());
+    EXPECT_TRUE(!ruvia::try_parse_asio_ip_address(std::string_view("192.0.2.1\0suffix", 16)).has_value());
 }
 
 TEST(Ruvia, ip_address_parsing_rejects_ports_brackets_and_partial_or_padded_ipv4) {
     for (const std::string_view text : {"192.0.2.1:80", "[::1]:80", "[::1]", "192.0.2", "01.2.3.4", "192.0.2.256", "192.0.2.1.", ".192.0.2.1", "192.0.2.1%1", "fe80::1%", "fe80::1%1%2", "::1 ", "1", "::ffff:01.2.3.4", "::ffff:192.0.2", "fe80::1%12:80", "fe80::1%12 ", "fe80::1%1]:80"}) {
-        EXPECT_TRUE(!ruvia::parse_ip_address(text).has_value());
+        EXPECT_TRUE(!ruvia::try_parse_asio_ip_address(text).has_value());
     }
-    EXPECT_TRUE(ruvia::parse_ip_address("0.0.0.0").has_value());
-    EXPECT_TRUE(ruvia::parse_ip_address("255.255.255.255").has_value());
-    const auto mapped = ruvia::parse_ip_address("::ffff:192.0.2.1");
+    EXPECT_TRUE(ruvia::try_parse_asio_ip_address("0.0.0.0").has_value());
+    EXPECT_TRUE(ruvia::try_parse_asio_ip_address("255.255.255.255").has_value());
+    const auto mapped = ruvia::try_parse_asio_ip_address("::ffff:192.0.2.1");
     EXPECT_TRUE(mapped.has_value() && mapped->is_v6());
 }
 
 TEST(Ruvia, ip_address_parsing_handles_long_input_storage) {
-    const auto result_value = ruvia::parse_ip_address("fe80::1%" + std::string(1024, 'x'));
+    const auto result_value = ruvia::try_parse_asio_ip_address("fe80::1%" + std::string(1024, 'x'));
     // An unknown zone name is a platform decision; the storage must round-trip either way.
     EXPECT_TRUE(!result_value.has_value() || result_value->is_v6());
 }
@@ -917,7 +917,7 @@ TEST(Ruvia, ip_address_parsing_rejects_invalid_ipv6_zone_identifiers) {
              "fe80::1%99999999999999999999",
              "fe80::1%nonexistent_ruvia_zone_id",
          }) {
-        EXPECT_TRUE(!ruvia::parse_ip_address(text).has_value());
+        EXPECT_TRUE(!ruvia::try_parse_asio_ip_address(text).has_value());
     }
 }
 
@@ -1120,33 +1120,33 @@ struct counting_allocator {
 
 TEST(Ruvia, AsioTaskLifecycle) {
     {
-        auto ok_void = ruvia::asio_completion<void>::completed({});
-        auto err_void = ruvia::asio_completion<void>::completed(std::make_error_code(std::errc::invalid_argument));
-        auto ok_val = ruvia::asio_completion<int>::completed({}, 17);
+        ruvia::asio_completion<void> ok_void(std::error_code{});
+        ruvia::asio_completion<void> err_void(std::make_error_code(std::errc::invalid_argument));
+        ruvia::asio_completion<int> ok_val({}, 17);
         const auto& const_val = ok_val;
-        EXPECT_TRUE(ok_void.succeeded());
+        EXPECT_TRUE(ok_void.ok());
         EXPECT_FALSE(ok_void.failed());
-        EXPECT_FALSE(err_void.succeeded());
+        EXPECT_FALSE(err_void.ok());
         EXPECT_TRUE(err_void.failed());
-        EXPECT_TRUE(ok_val.succeeded());
+        EXPECT_TRUE(ok_val.ok());
         EXPECT_FALSE(ok_val.failed());
-        EXPECT_EQ(const_val.result(), 17);
-        EXPECT_EQ(ok_val.result(), 17);
-        EXPECT_EQ(std::move(ok_val).take_result(), 17);
+        EXPECT_EQ(const_val.value(), 17);
+        EXPECT_EQ(ok_val.value(), 17);
+        EXPECT_EQ(std::move(ok_val).take_value(), 17);
     }
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
     const auto worker_value = loop.worker();
     bool void_completed = false;
 
-    auto value = loop.start(ruvia::test::asio_task_tests::make_value(worker_value, std::make_unique<ruvia::test::asio_task_tests::aligned_result>(42)));
-    auto no_value = loop.start(ruvia::test::asio_task_tests::complete_void(worker_value, void_completed));
-    auto failure = loop.start(ruvia::test::asio_task_tests::fail());
+    auto value = loop.submit(ruvia::test::asio_task_tests::make_value(worker_value, std::make_unique<ruvia::test::asio_task_tests::aligned_result>(42))).take_value();
+    auto no_value = loop.submit(ruvia::test::asio_task_tests::complete_void(worker_value, void_completed)).take_value();
+    auto failure = loop.submit(ruvia::test::asio_task_tests::fail()).take_value();
     std::promise<bool> same_loop_get_rejected;
     auto same_loop_get_result = same_loop_get_rejected.get_future();
     const auto probe_posted = loop.worker().post([&] {
         try {
-            static_cast<void>(std::move(value).get());
+            static_cast<void>(std::move(value).take_value());
             same_loop_get_rejected.set_value(false);
         } catch (const std::logic_error&) {
             same_loop_get_rejected.set_value(value.valid());
@@ -1159,11 +1159,11 @@ TEST(Ruvia, AsioTaskLifecycle) {
     std::optional<ruvia::test::asio_task_tests::aligned_result> result_value;
     try {
         const auto same_loop_guard_held = same_loop_get_result.get();
-        result_value.emplace(std::move(value).get());
-        std::move(no_value).get();
+        result_value.emplace(std::move(value).take_value());
+        std::move(no_value).take_value();
         bool failure_observed = false;
         try {
-            std::move(failure).get();
+            std::move(failure).take_value();
         } catch (const std::runtime_error& error) {
             failure_observed = std::string_view(error.what()) == "root task failure";
         }
@@ -1180,7 +1180,7 @@ TEST(Ruvia, AsioTaskLifecycle) {
 TEST(Ruvia, AsioTaskAbandonedFailureReachesJoin) {
     ruvia::event_loop_pool abandoned_pool({.loop_count_ = 1});
     {
-        auto unobserved = abandoned_pool.loop(0).start(ruvia::test::asio_task_tests::fail());
+        auto unobserved = abandoned_pool.loop(0).submit(ruvia::test::asio_task_tests::fail()).take_value();
     }
     abandoned_pool.start();
     abandoned_pool.request_stop();
@@ -1215,25 +1215,21 @@ TEST(Ruvia, AsyncStartUsesHandlerExecutorAndAllocator) {
     EXPECT_GT(allocations, 0U);
 }
 
-TEST(Ruvia, EventLoopTryStartReturnsRejectedTask) {
+TEST(Ruvia, EventLoopSubmitReturnsRejectedTask) {
     ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
     const auto loop = loops.loop(0);
-    auto accepted = loop.try_start(ruvia::test::asio_task_tests::answer());
+    auto accepted = loop.submit(ruvia::test::asio_task_tests::answer());
     ASSERT_TRUE(accepted.accepted());
     EXPECT_EQ(accepted.rejected(), nullptr);
     auto root = std::move(accepted).take_value();
 
-    auto full = loop.try_start(ruvia::test::asio_task_tests::answer());
+    auto full = loop.submit(ruvia::test::asio_task_tests::answer());
     EXPECT_EQ(full.status(), ruvia::post_status::queue_full);
     ASSERT_NE(full.rejected(), nullptr);
     EXPECT_THROW(static_cast<void>(full.value()), std::logic_error);
+    EXPECT_THROW(static_cast<void>(std::move(full).take_value()), std::logic_error);
+    ASSERT_NE(full.rejected(), nullptr);
     auto returned = std::move(full).take_rejected();
-    try {
-        static_cast<void>(loop.start(ruvia::test::asio_task_tests::answer()));
-        ADD_FAILURE() << "a full queue must reject start()";
-    } catch (const ruvia::event_loop_start_rejected& error) {
-        EXPECT_EQ(error.status(), ruvia::post_status::queue_full);
-    }
 
     EXPECT_FALSE(root.ready());
     EXPECT_FALSE(root.wait_for(ruvia::operation_timeout(std::chrono::steady_clock::now())));
@@ -1244,19 +1240,15 @@ TEST(Ruvia, EventLoopTryStartReturnsRejectedTask) {
     loops.start();
     EXPECT_TRUE(root.wait_for(std::chrono::seconds(30)));
     EXPECT_TRUE(root.ready());
-    EXPECT_EQ(std::move(root).get(), 7);
+    EXPECT_EQ(std::move(root).take_value(), 7);
     EXPECT_FALSE(root.ready());
-    EXPECT_EQ(std::move(loop.start(std::move(returned))).get(), 7);
+    EXPECT_EQ(loop.submit(std::move(returned)).take_value().take_value(), 7);
 
     loops.request_stop();
     loops.join();
-    auto stopped = loop.try_start(ruvia::test::asio_task_tests::answer());
+    auto stopped = loop.submit(ruvia::test::asio_task_tests::answer());
     EXPECT_EQ(stopped.status(), ruvia::post_status::stopping);
     EXPECT_NE(stopped.rejected(), nullptr);
-    try {
-        static_cast<void>(loop.start(std::move(stopped).take_rejected()));
-        ADD_FAILURE() << "a retired loop must reject start()";
-    } catch (const ruvia::event_loop_start_rejected& error) {
-        EXPECT_EQ(error.status(), ruvia::post_status::stopping);
-    }
+    EXPECT_THROW(static_cast<void>(std::move(stopped).take_value()), std::logic_error);
+    static_cast<void>(std::move(stopped).take_rejected());
 }

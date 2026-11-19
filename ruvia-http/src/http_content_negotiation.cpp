@@ -397,10 +397,10 @@ void visit_accept_encoding_members(std::string_view accept_encoding, visitor_typ
 }  // namespace
 
 void http_accepted_encoding_quality::update(std::string_view accept_encoding, std::string_view coding) noexcept {
-    const bool gzip_coding = http_is_gzip_coding_token(coding);
+    const bool gzip_coding = is_http_gzip_coding_token(coding);
     const bool compress_coding = is_compress_coding_token(coding);
     visit_accept_encoding_members(accept_encoding, [coding, gzip_coding, compress_coding, this](std::string_view token, int weight) noexcept {
-        const bool explicit_match = gzip_coding ? http_is_gzip_coding_token(token) : (compress_coding ? is_compress_coding_token(token) : http_ascii_equals_ignore_case(token, coding));
+        const bool explicit_match = gzip_coding ? is_http_gzip_coding_token(token) : (compress_coding ? is_compress_coding_token(token) : http_ascii_equals_ignore_case(token, coding));
         if (explicit_match) {
             explicit_quality_ = std::max(explicit_quality_, weight);
         } else if (token == "*") {
@@ -422,7 +422,7 @@ void http_response_coding_qualities::update(std::string_view accept_encoding) no
     field_present_ = true;
     visit_accept_encoding_members(accept_encoding, [this](std::string_view token, int weight) noexcept {
         has_non_empty_item_ = true;
-        if (const auto coding = http_content_coding_from_token(token)) {
+        if (const auto coding = parse_http_content_coding_token(token)) {
             auto& quality = explicit_quality(*this, *coding);
             quality = std::max(quality, weight);
         } else if (token == "*") {
@@ -445,7 +445,7 @@ bool http_accepts_encoding(const http_request& request, std::string_view coding)
 }
 
 bool http_response_coding_selection::accepts(std::string_view coding, const http_request& request) const noexcept {
-    if (const auto known = http_content_coding_from_token(coding)) {
+    if (const auto known = parse_http_content_coding_token(coding)) {
         return accepts(*known);
     }
     return http_accepts_encoding(request, coding);

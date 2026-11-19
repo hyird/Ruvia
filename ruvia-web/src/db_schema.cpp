@@ -266,7 +266,7 @@ void db_schema::append_type(std::string& s, const db_type_definition& t) const {
     detail::append_db_type_name(s, t.data_type_, t.custom_name_, t.length_, t.precision_, t.scale_, t.array_, driver_);
 }
 void db_schema::append_column(std::string& s, const db_schema_column& c) const {
-    if (c.generated_type_ != db_generated_type::none && c.generated_type_ != db_generated_type::stored && c.generated_type_ != db_generated_type::virtual_value) {
+    if (c.generated_type_ != db_generated_type::none && c.generated_type_ != db_generated_type::stored && c.generated_type_ != db_generated_type::virtual_) {
         throw std::invalid_argument("unsupported generated column storage mode");
     }
     if (c.name_.empty()) {
@@ -285,7 +285,7 @@ void db_schema::append_column(std::string& s, const db_schema_column& c) const {
         if (c.as_expression_.empty()) {
             throw std::invalid_argument("generated column expression is required");
         }
-        if (driver_ == db_driver::postgresql && c.generated_type_ == db_generated_type::virtual_value) {
+        if (driver_ == db_driver::postgresql && c.generated_type_ == db_generated_type::virtual_) {
             throw std::invalid_argument("PostgreSQL schema compilation supports stored generated columns only");
         }
         if (driver_ == db_driver::mariadb && (!c.nullable_ || c.primary_key_)) {

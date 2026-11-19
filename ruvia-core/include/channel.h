@@ -170,7 +170,7 @@ struct channel_state final {
         auto rejection = check_open_locked();
         if (!rejection) {
             if (wait_slot_.occupied()) {
-                wait_slot_.complete(wait_result<node*>::with_value(slot));
+                wait_slot_.complete(wait_result<node*>::from_value(slot));
                 // A direct handoff never occupied the queue.
                 grant_send_waiters();
             } else {
@@ -658,7 +658,7 @@ public:
             if (!owner_value.receiver_closed_) {
                 if (auto* item = owner_value.dequeue()) {
                     owner_value.grant_send_waiters();
-                    wait_.complete_ready(wait_result<node*>::with_value(item));
+                    wait_.complete_ready(wait_result<node*>::from_value(item));
                     return true;
                 }
             }
@@ -679,13 +679,13 @@ public:
         }
 
         [[nodiscard]] wait_result<t_type> await_resume() {
-            auto result = wait_.take_result();
+            auto result = wait_.take_value();
             if (!result.has_value()) {
-                return wait_result<t_type>::with_status(result.status());
+                return wait_result<t_type>::from_status(result.status());
             }
             auto* item = result.value();
             typename state_type::node_guard guard(wait_.state(), item);
-            return wait_result<t_type>::with_value(std::move(*item->value_));
+            return wait_result<t_type>::from_value(std::move(*item->value_));
         }
 
     private:
@@ -705,10 +705,10 @@ public:
     // receiver into an already-closed operation. A relative options.timeout_
     // bounds the wait from its start; a deadline that has passed reports
     // timed_out once nothing is buffered.
-    [[nodiscard]] receive_operation receive(operation_options options = {}) const& {
+    [[nodiscard]] receive_operation receive(operation_options options = {}) & {
         return receive_operation(state_, std::move(options));
     }
-    receive_operation receive(operation_options = {}) const&& = delete;
+    receive_operation receive(operation_options = {}) && = delete;
 
     // The worker every receive must run on. Makes the receive-side affinity
     // contract queryable instead of only failing at await time. A moved-from
@@ -725,7 +725,7 @@ public:
     // its thread. Reentrant calls do not restart the drain. Later receives
     // report closed, or worker_stopping if the worker has stopped. The state
     // itself lives until all endpoints and tasks owning it retire.
-    void close() const {
+    void close() {
         if (state_) {
             // A buffered payload destructor may destroy this receiver and the
             // last sender, so the drain runs on its own owner of the state.

@@ -24,7 +24,7 @@ ruvia::task<void> exchange(ruvia::event_loop loop, ruvia::http_client_config con
     ruvia::http_client client(loop, config);
     std::exception_ptr failure;
     try {
-        auto peer = co_await client.client().websocket("/features/ws").connect();
+        auto peer = co_await client.ref().websocket("/features/ws").connect();
         // The owning session and each received payload stay on this owner loop.
         co_await peer.text("hello", {}, {.timeout_ = std::chrono::seconds(5)});
         auto text = co_await peer.read({.timeout_ = std::chrono::seconds(5)});
@@ -72,8 +72,8 @@ int main(int argc, char** argv) {
         };
         ruvia::event_loop_pool loops({.loop_count_ = 1});
         loops.start();
-        auto done = loops.loop(0).start(exchange(loops.loop(0), std::move(config)));
-        std::move(done).get();
+        auto done = loops.loop(0).submit(exchange(loops.loop(0), std::move(config))).take_value();
+        std::move(done).take_value();
         loops.request_stop();
         loops.join();
     } catch (...) {

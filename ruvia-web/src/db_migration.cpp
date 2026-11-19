@@ -577,10 +577,10 @@ db_migration_report db_migrator::run(const db_config& config, std::span<const db
     const db_migrator migrator(loops.loop(0), config, options);
     auto migration = migrator.migrate(migrations, std::move(operation));
     loops.start();
-    auto root = loops.loop(0).start(std::move(migration));
+    auto root = loops.loop(0).submit(std::move(migration)).take_value();
     root.wait();
     loops.join();
-    return std::move(root).get();
+    return std::move(root).take_value();
 }
 
 }  // namespace ruvia

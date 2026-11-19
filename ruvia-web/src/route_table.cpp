@@ -136,7 +136,7 @@ void append_url_for_value(std::string& output, std::string_view value, bool keep
         if (escaped == value.end()) {
             return;
         }
-        http_append_percent_byte(output, static_cast<unsigned char>(*escaped));
+        append_percent_byte(output, static_cast<unsigned char>(*escaped));
         value.remove_prefix(plain_size + 1);
     }
 }
@@ -1189,7 +1189,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_bound_stream(co
             std::rethrow_exception(context_exception);
         }
     } else if (detail::context_access::has_response(context_value)) {
-        co_return detail::context_access::release_response(context_value);
+        co_return detail::context_access::take_response(context_value);
     }
     if (handler_invoked || output_committed) {
         // The bound context is local to this coroutine. Finish a response stream

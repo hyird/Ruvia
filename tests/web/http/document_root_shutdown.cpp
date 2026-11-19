@@ -33,9 +33,9 @@ public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 
     ruvia::task<void> invoke(ruvia::context& context_value, ruvia::next& next_value) {
-        if (context_value.req().header("X-Hold-Root").has_value()) {
+        if (context_value.request().header("X-Hold-Root").has_value()) {
             held_request_started.store(true, std::memory_order_release);
-            if (co_await ruvia::sleep_for(context_value.worker(), 1h, context_value.stop_token()) == ruvia::timer_sleep_result::stop_requested) {
+            if (co_await ruvia::sleep_for(context_value.worker(), 1h, context_value.stop_token()) == ruvia::sleep_status::stop_requested) {
                 held_request_cancelled.store(true, std::memory_order_release);
                 context_value.respond(context_value.text("cancelled"));
                 co_return;

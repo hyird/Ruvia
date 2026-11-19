@@ -27,14 +27,14 @@ TEST(Ruvia, multipart_boundary_value_enforces_rfc2046_grammar) {
         }
     };
     const auto rejected = [&throws_on](std::string_view value) {
-        return throws_on(value) && !ruvia::multipart_boundary::try_from_value(value).has_value();
+        return throws_on(value) && !ruvia::multipart_boundary::try_parse(value).has_value();
     };
 
     const auto spaced = ruvia::multipart_boundary("a b");
     EXPECT_EQ(spaced.value(), std::string_view("a b"));
     const auto maximum = ruvia::multipart_boundary(std::string(70, 'x'));
     EXPECT_EQ(maximum.value().size(), std::size_t{70});
-    const auto created = ruvia::multipart_boundary::try_from_value("a b");
+    const auto created = ruvia::multipart_boundary::try_parse("a b");
     EXPECT_TRUE(created.has_value());
     if (created) {
         EXPECT_EQ(created->value(), std::string_view("a b"));
@@ -954,14 +954,14 @@ TEST(Ruvia, parse_error_status_mapping) {
 
 TEST(Ruvia, http_connect_udp_default_template_roundtrip_and_target_rejection) {
     for (const auto host : {"example.test", "192.0.2.6", "2001:db8::42"}) {
-        const auto path = ruvia::encode_http_connect_udp_path({.host_ = host, .port_ = 443});
+        const auto path = ruvia::format_http_connect_udp_path({.host_ = host, .port_ = 443});
         EXPECT_TRUE((path.index() == 0));
         const auto target = ruvia::parse_http_connect_udp_path(std::get<0>(path));
         EXPECT_TRUE((target.index() == 0) && std::get<0>(target).host_ == host && std::get<0>(target).port_ == 443);
     }
-    EXPECT_TRUE((ruvia::encode_http_connect_udp_path({.host_ = "fe80::1%eth0", .port_ = 80}).index() != 0));
-    EXPECT_TRUE((ruvia::encode_http_connect_udp_path({.host_ = "[::1]", .port_ = 80}).index() != 0));
-    EXPECT_TRUE((ruvia::encode_http_connect_udp_path({.host_ = "example.test", .port_ = 0}).index() != 0));
+    EXPECT_TRUE((ruvia::format_http_connect_udp_path({.host_ = "fe80::1%eth0", .port_ = 80}).index() != 0));
+    EXPECT_TRUE((ruvia::format_http_connect_udp_path({.host_ = "[::1]", .port_ = 80}).index() != 0));
+    EXPECT_TRUE((ruvia::format_http_connect_udp_path({.host_ = "example.test", .port_ = 0}).index() != 0));
     EXPECT_TRUE((ruvia::parse_http_connect_udp_path("/.well-known/masque/udp/2001:db8::42/443/").index() != 0));
     EXPECT_TRUE((ruvia::parse_http_connect_udp_path("/.well-known/masque/udp/host/65536/").index() != 0));
 }
@@ -993,9 +993,9 @@ TEST(Ruvia, http_connect_udp_upgrade_handshake_requires_capsule_negotiation) {
     const std::array bad_resp{ruvia::http_header_view{"Upgrade", "websocket"}};
     const auto resp_err = ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, 101, bad_resp);
     EXPECT_TRUE(resp_err == ruvia::http_connect_udp_error::invalid_response);
-    const auto abs_req = ruvia::make_parsed_http_request("GET", "https://example.test/.well-known/masque/udp/192.0.2.1/443/", fields, {});
+    const auto abs_req = ruvia::make_http_request("GET", "https://example.test/.well-known/masque/udp/192.0.2.1/443/", fields, {});
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(abs_req).has_value());
-    const auto abs_query_req = ruvia::make_parsed_http_request("GET", "https://example.test/.well-known/masque/udp/192.0.2.1/443/?target=1", fields, {});
+    const auto abs_query_req = ruvia::make_http_request("GET", "https://example.test/.well-known/masque/udp/192.0.2.1/443/?target=1", fields, {});
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(abs_query_req).has_value());
 }
 TEST(Ruvia, http_udp_capsule_session_checks_context_size_and_half_close) {
@@ -1229,7 +1229,7 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
         ruvia::http_header_view{"Upgrade", ", connect-udp, fallback"},
         ruvia::http_header_view{"Capsule-Protocol", "?1"},
     };
-    const auto parsed_req = ruvia::make_parsed_http_request("GET", "/.well-known/masque/udp/192.0.2.1/443/", list_fields, {});
+    const auto parsed_req = ruvia::make_http_request("GET", "/.well-known/masque/udp/192.0.2.1/443/", list_fields, {});
     EXPECT_TRUE(ruvia::is_http_connect_udp_upgrade_request(parsed_req));
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(parsed_req).has_value());
 
@@ -1316,7 +1316,7 @@ TEST(Ruvia, http_connect_udp_views_accept_named_owners_and_preserve_addresses) {
     EXPECT_TRUE(request_view.scheme_.data() == scheme.data());
     EXPECT_TRUE(request_view.authority_.has_value() && request_view.authority_->data() == authority.data());
     EXPECT_TRUE(request_view.target_.data() == path.data());
-    const auto encoded = ruvia::encode_http_connect_udp_path(target_view);
+    const auto encoded = ruvia::format_http_connect_udp_path(target_view);
     EXPECT_TRUE(std::holds_alternative<std::string>(encoded));
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request_to_send(ruvia::http_protocol_version::http2, request_view).has_value());
 }
@@ -1424,7 +1424,7 @@ TEST(Ruvia, http_capsule_incremental_unknown_empty_and_datagram) {
 }
 TEST(Ruvia, http_capsule_truncated_and_length_limit_are_terminal) {
     const std::array prefix{char(0), char(3)};
-    ruvia::http_capsule_decoder limit({.max_capsule_length_ = 2});
+    ruvia::http_capsule_decoder limit({.max_capsule_bytes_ = 2});
     const auto limit_result = limit.feed(prefix, false, nullptr, nullptr);
     const auto* limit_failure = limit_result.get_if<ruvia::http_capsule_decode_failure>();
     EXPECT_TRUE(limit_failure != nullptr && limit_failure->error() == ruvia::http_capsule_decode_error::limit_exceeded);
@@ -1508,7 +1508,7 @@ TEST(Ruvia, http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_afte
 }
 
 // RFC 9297 section 3.2: capsules the reader does not keep are skipped at any
-// length; max_capsule_length_ bounds only kept capsules (for CONNECT-UDP, after
+// length; max_capsule_bytes_ bounds only kept capsules (for CONNECT-UDP, after
 // the RFC 9298 Context ID shows the datagram is kept).
 TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limit) {
     std::array<char, 16> header;
@@ -1524,7 +1524,7 @@ TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limi
     append_capsule(wire, 0, std::string("\0", 1) + "after");
     append_capsule(wire, 0, std::string("\x41", 1));
     for (const std::size_t block : {std::size_t{1}, std::size_t{7}, wire.size()}) {
-        ruvia::http_capsule_decoder decoder({.max_capsule_length_ = 100});
+        ruvia::http_capsule_decoder decoder({.max_capsule_bytes_ = 100});
         capture captured;
         std::vector<std::string> kept;
         std::size_t offset{};
@@ -1551,7 +1551,7 @@ TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limi
     std::string datagrams;
     append_capsule(datagrams, 0x17, std::string(200, 'u'));
     append_capsule(datagrams, 0, "\x03kept");
-    ruvia::http_capsule_decoder decoder({.max_capsule_length_ = 100});
+    ruvia::http_capsule_decoder decoder({.max_capsule_bytes_ = 100});
     capture captured;
     EXPECT_TRUE(decoder.feed(datagrams, true, capsule, &captured, ruvia::http_capsule_retention::datagrams).holds<ruvia::decode_complete>());
     EXPECT_EQ(captured.body_, std::string("\x03kept"));
@@ -1562,7 +1562,7 @@ TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limi
     for (const auto retention : {ruvia::http_capsule_retention::all, ruvia::http_capsule_retention::udp_payloads}) {
         std::string oversized;
         append_capsule(oversized, retention == ruvia::http_capsule_retention::all ? 0x17 : 0, std::string("\0", 1) + std::string(200, 'o'));
-        ruvia::http_capsule_decoder limited({.max_capsule_length_ = 100});
+        ruvia::http_capsule_decoder limited({.max_capsule_bytes_ = 100});
         const auto limited_result = limited.feed(oversized, false, nullptr, nullptr, retention);
         const auto* limited_failure = limited_result.get_if<ruvia::http_capsule_decode_failure>();
         EXPECT_TRUE(limited_failure != nullptr && limited_failure->error() == ruvia::http_capsule_decode_error::limit_exceeded);
@@ -1836,7 +1836,7 @@ TEST(Ruvia, sse_parser_fails_an_event_over_its_limit_and_reset_reuses_it) {
     EXPECT_TRUE(failure != nullptr && failure->error() == ruvia::sse_parse_error::event_limit_exceeded);
     EXPECT_EQ(parser.state(), ruvia::decoder_state::failed);
     EXPECT_THROW((void)parser.parse("data: x\n\n"), std::logic_error);
-    parser.finish();
+    parser.finish_input();
     EXPECT_EQ(parser.state(), ruvia::decoder_state::failed);
 
     parser.reset();
@@ -1870,7 +1870,7 @@ TEST(Ruvia, sse_parser_bounds_utf8_replacement_in_buffered_fields) {
 TEST(Ruvia, sse_parser_finish_discards_an_incomplete_event) {
     ruvia::sse_parser parser;
     EXPECT_EQ(parse_chunks(parser, {"id: 9\n\nretry: 50\ndata: pending\n", "data: partial"}), std::vector<parsed_event>{});
-    parser.finish();
+    parser.finish_input();
     EXPECT_EQ(parser.state(), ruvia::decoder_state::finished);
     EXPECT_EQ(parser.last_event_id(), "9");
     EXPECT_EQ(parser.reconnection_time(), std::chrono::milliseconds{50});

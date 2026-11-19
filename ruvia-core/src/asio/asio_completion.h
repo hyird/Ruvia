@@ -21,35 +21,35 @@ class worker_ref;
 // Asio completion signatures always provide an error code and may also provide
 // a result that remains meaningful on partial failure (for example transferred
 // bytes). The completion therefore owns both fields. Void completions carry
-// only the error code: the result accessors and the two-argument factory exist
-// only for a non-void result_type.
+// only the error code: the value accessors and the two-argument constructor
+// exist only for a non-void result_type.
 template <typename result_type>
 class asio_completion final {
     using result_storage_type = std::conditional_t<std::is_void_v<result_type>, std::monostate, result_type>;
 
 public:
+    explicit asio_completion(std::error_code code) noexcept
+        requires std::is_void_v<result_type>
+        :
+        error_code_(code),
+        result_{} {}
+
+    asio_completion(std::error_code code, result_storage_type value) noexcept(std::is_nothrow_move_constructible_v<result_storage_type>)
+        requires(!std::is_void_v<result_type>)
+        :
+        error_code_(code),
+        result_(std::move(value)) {}
+
     asio_completion(const asio_completion&) = default;
     asio_completion(asio_completion&&) = default;
     asio_completion& operator=(const asio_completion&) = delete;
     asio_completion& operator=(asio_completion&&) = delete;
 
-    [[nodiscard]] static asio_completion completed(std::error_code error_code) noexcept
-        requires std::is_void_v<result_type>
-    {
-        return asio_completion(error_code, result_storage_type{});
-    }
-
-    [[nodiscard]] static asio_completion completed(std::error_code error_code, result_storage_type result_value)
-        requires(!std::is_void_v<result_type>)
-    {
-        return asio_completion(error_code, std::move(result_value));
-    }
-
-    [[nodiscard]] std::error_code error_code() const noexcept {
+    [[nodiscard]] std::error_code code() const noexcept {
         return error_code_;
     }
 
-    [[nodiscard]] bool succeeded() const noexcept {
+    [[nodiscard]] bool ok() const noexcept {
         return !error_code_;
     }
 
@@ -57,24 +57,20 @@ public:
         return static_cast<bool>(error_code_);
     }
 
-    [[nodiscard]] const result_storage_type& result() const& noexcept RUVIA_LIFETIMEBOUND
+    [[nodiscard]] const result_storage_type& value() const& noexcept RUVIA_LIFETIMEBOUND
         requires(!std::is_void_v<result_type>)
     {
         return result_;
     }
-    const result_storage_type& result() const&& = delete;
+    const result_storage_type& value() const&& = delete;
 
-    [[nodiscard]] result_storage_type take_result() && noexcept(std::is_nothrow_move_constructible_v<result_storage_type>)
+    [[nodiscard]] result_storage_type take_value() && noexcept(std::is_nothrow_move_constructible_v<result_storage_type>)
         requires(!std::is_void_v<result_type>)
     {
         return std::move(result_);
     }
 
 private:
-    asio_completion(std::error_code error_code, result_storage_type&& result_value) noexcept(std::is_nothrow_move_constructible_v<result_storage_type>) :
-        error_code_(error_code),
-        result_(std::move(result_value)) {}
-
     std::error_code error_code_;
     [[no_unique_address]] result_storage_type result_;
 };
@@ -113,13 +109,13 @@ public:
     [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation) {
         if constexpr (std::is_void_v<result_type>) {
             initiate_([this, continuation](std::error_code ec, auto&&...) mutable {
-                if (state_.complete(asio_completion<void>::completed(ec))) {
+                if (state_.complete(asio_completion<void>(ec))) {
                     continuation.resume();
                 }
             });
         } else {
             initiate_([this, continuation](std::error_code ec, result_type result_value) mutable {
-                if (state_.complete(asio_completion<result_type>::completed(ec, std::move(result_value)))) {
+                if (state_.complete(asio_completion<result_type>(ec, std::move(result_value)))) {
                     continuation.resume();
                 }
             });

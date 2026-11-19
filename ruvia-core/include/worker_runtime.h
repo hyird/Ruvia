@@ -84,7 +84,7 @@ public:
     worker_runtime& operator=(worker_runtime&&) = delete;
 
     // Configure once, before publishing the runtime or starting/stopping it.
-    // Hook target moves may call take_failure() during configuration.
+    // Hook target moves may call observe_failure() during configuration.
     void configure(worker_runtime_hooks hooks);
     // Launches the owner thread. Returns false when a stop already closed the
     // runtime before launch; a second start throws std::logic_error.
@@ -153,15 +153,15 @@ public:
     thread_join_operation prepare_thread_join(worker_ref) && = delete;
 #endif
     // Takes reporting ownership of the first failure, if any: destruction no
-    // longer reports a failure taken here. Later calls return the same failure.
-    [[nodiscard]] std::exception_ptr take_failure() noexcept;
+    // longer reports a failure observed here. Later calls return the same failure.
+    [[nodiscard]] std::exception_ptr observe_failure() noexcept;
     [[nodiscard]] worker_runtime_state state() const noexcept;
     [[nodiscard]] asio::io_context& io_context() & noexcept RUVIA_LIFETIMEBOUND;
     asio::io_context& io_context() && = delete;
     [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND;
     const worker_ref& worker() const&& = delete;
     // The event loop over this runtime's worker, created on first use, for
-    // try_start()/start(), on_stop(), defer_cleanup() and report_failure()
+    // submit(), on_stop(), defer_cleanup() and report_failure()
     // (which fails this runtime). Once a loop exists, the runtime's stop
     // admission waits for the loop's root tasks, stop callbacks, and cleanup
     // to drain before stop_admission_ (or the default finalize) runs. The loop

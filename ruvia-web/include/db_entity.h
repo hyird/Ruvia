@@ -149,13 +149,13 @@ struct db_many_to_many final {
 
 enum class db_generated_type : unsigned char { none,
     stored,
-    virtual_value };
+    virtual_ };
 
 template <typename enum_name_type = fixed_string<1>, typename default_expression_type = fixed_string<1>>
 struct db_column_options final {
     db_data_type data_type_{db_data_type::inferred};
     bool primary_key_{false};
-    bool generated_{false};
+    bool identity_{false};
     db_generated_type generated_type_{db_generated_type::none};
     bool nullable_{false};
     bool read_only_{false};
@@ -239,7 +239,7 @@ consteval bool is_writable_db_column() noexcept {
 // Columns a conflict update writes from EXCLUDED when the caller names none.
 template <typename c_type>
 consteval bool is_conflict_updatable_db_column() noexcept {
-    return !c_type::options.primary_key_ && !c_type::options.generated_ && is_writable_db_column<c_type>();
+    return !c_type::options.primary_key_ && !c_type::options.identity_ && is_writable_db_column<c_type>();
 }
 template <typename c_type>
 consteval bool is_numeric_db_column() noexcept {
@@ -262,7 +262,7 @@ consteval bool valid_db_column_options(const auto& options) noexcept {
     const int lifecycle_flags = int{options.create_date_} + int{options.update_date_} + int{options.delete_date_} + int{options.version_};
     // create_date_ only selects a schema default; the repository writes the other three.
     const bool repository_stamped = options.update_date_ || options.delete_date_ || options.version_;
-    return !(options.generated_ && computed) && !(options.read_only_ && (options.generated_ || computed)) && (options.enum_name_.view().empty() || options.data_type_ == db_data_type::inferred || options.data_type_ == db_data_type::array) && (!options.generated_ || (integer && !options.nullable_)) && (!options.version_ || (integer && !options.nullable_)) && (!options.primary_key_ || (!options.nullable_ && !options.delete_date_)) && lifecycle_flags <= 1 && (!repository_stamped || writable);
+    return !(options.identity_ && computed) && !(options.read_only_ && (options.identity_ || computed)) && (options.enum_name_.view().empty() || options.data_type_ == db_data_type::inferred || options.data_type_ == db_data_type::array) && (!options.identity_ || (integer && !options.nullable_)) && (!options.version_ || (integer && !options.nullable_)) && (!options.primary_key_ || (!options.nullable_ && !options.delete_date_)) && lifecycle_flags <= 1 && (!repository_stamped || writable);
 }
 
 // Table names may be schema-qualified; generated aliases and constraint names
@@ -423,9 +423,9 @@ public:
     db_entity_storage& operator=(const db_entity_storage&) = delete;
     db_entity_storage(db_entity_storage&&) noexcept = default;
     template <fixed_string name>
-    auto& get() & RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const auto& get() const& RUVIA_LIFETIMEBOUND {
         if constexpr (is_relation<name>()) {
-            auto& s = relation_slot<name>();
+            const auto& s = relation_slot<name>();
             if (s.state_ != decltype(s.state_)::value) {
                 throw std::logic_error("database entity relation is not loaded");
             }
@@ -433,12 +433,6 @@ public:
         } else {
             return columns_.template get<name>();
         }
-    }
-    template <fixed_string name>
-    auto& get() && = delete;
-    template <fixed_string name>
-    const auto& get() const& RUVIA_LIFETIMEBOUND {
-        return const_cast<db_entity_storage*>(this)->get<name>();
     }
     template <fixed_string name>
     const auto& get() const&& = delete;
@@ -476,7 +470,7 @@ public:
         }
     }
     template <fixed_string name>
-    bool is_set() const {
+    [[nodiscard]] bool is_set() const noexcept {
         if constexpr (is_relation<name>()) {
             return relation_slot<name>().state_ != decltype(relation_slot<name>().state_)::unset;
         } else {
@@ -484,11 +478,19 @@ public:
         }
     }
     template <fixed_string name>
-    bool is_null() const {
+    [[nodiscard]] bool is_null() const noexcept {
         if constexpr (is_relation<name>()) {
             return relation_slot<name>().state_ == decltype(relation_slot<name>().state_)::null;
         } else {
             return columns_.template is_null<name>();
+        }
+    }
+    template <fixed_string name>
+    [[nodiscard]] bool has_value() const noexcept {
+        if constexpr (is_relation<name>()) {
+            return relation_slot<name>().state_ == decltype(relation_slot<name>().state_)::value;
+        } else {
+            return columns_.template has_value<name>();
         }
     }
 
@@ -504,6 +506,15 @@ struct db_entity_access final {
     static auto& storage(e_type& entity) noexcept {
         return entity.entity_;
     }
+    template <fixed_string name>
+    static auto& relation(e_type& entity) {
+        auto& slot = relation_slot<name, false>(entity);
+        if (slot.state_ != decltype(slot.state_)::value) {
+            throw std::logic_error("database entity relation is not loaded");
+        }
+        return *slot.value_;
+    }
+
     template <fixed_string name>
     static auto& emplace_relation(e_type& entity) {
         auto& slot = relation_slot<name, false>(entity);
@@ -555,17 +566,17 @@ inline constexpr bool sql_columns = []<std::size_t... indices>(std::index_sequen
 }  // namespace detail
 
 template <typename entity>
-concept sql_entity = requires(const entity& value) {
+concept db_entity = requires(const entity& value) {
     typename entity::columns_type;
     typename entity::relations_type;
-    typename entity::sql_entity_type;
-    requires std::same_as<entity, typename entity::sql_entity_type>;
+    typename entity::db_entity_type;
+    requires std::same_as<entity, typename entity::db_entity_type>;
     requires detail::sql_columns<typename entity::columns_type>;
     { entity::table_name() } -> std::convertible_to<std::string_view>;
 };
 
 template <typename projection>
-concept sql_projection = requires(const projection& value) {
+concept db_projection = requires(const projection& value) {
     typename projection::columns_type;
     typename projection::db_projection_type;
     requires std::same_as<projection, typename projection::db_projection_type>;
@@ -574,7 +585,7 @@ concept sql_projection = requires(const projection& value) {
 
 template <typename e_type, fixed_string field_name>
 class db_field_reference final {
-    static_assert(sql_entity<e_type>, "SQL field references require a SQL entity");
+    static_assert(db_entity<e_type>, "SQL field references require a DB entity");
     static_assert(e_type::template column_index<field_name>() < std::tuple_size_v<typename e_type::columns_type>);
     using column_type = std::tuple_element_t<e_type::template column_index<field_name>(), typename e_type::columns_type>;
     static constexpr bool is_writable = detail::is_writable_db_column<column_type>();
@@ -896,7 +907,6 @@ private:
 
 // set<field>() 检查整数范围与有限浮点溢出，数组及 optional 元素递归使用相同规则。
 // 整数列不隐式接受浮点输入；调用方须显式选择转换策略。失败保留原值和 unset/null 状态。
-// 此保证不拦截调用方通过可变 get() 或显式转换自行执行的数值赋值。
 #define RUVIA_DB_ENTITY(name, table, ...)                                                                                   \
     struct name final {                                                                                                     \
     private:                                                                                                                \
@@ -907,7 +917,7 @@ private:
         template <typename, bool>                                                                                           \
         friend struct ::ruvia::detail::db_relation_slot;                                                                    \
         RUVIA_DETAIL_ENTITY_OWNER_API(name, storage_type, entity_)                                                          \
-        using sql_entity_type = name;                                                                                       \
+        using db_entity_type = name;                                                                                        \
         using columns_type = typename storage_type::columns_type;                                                           \
         using relations_type = typename storage_type::relations_type;                                                       \
         static constexpr std::string_view table_name() noexcept {                                                           \

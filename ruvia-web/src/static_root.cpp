@@ -400,7 +400,7 @@ http_response_file_descriptor detail::static_root_entry_open::operator()() const
     if (ec || (checked_ && detail::validate_native_file(input.get(), identity_, size_))) {
         return {};
     }
-    return adopt_response_file_handle(std::move(input));
+    return adopt_response_file_descriptor(std::move(input));
 }
 
 bool detail::static_root_access::same_snapshot(const static_root& left, const static_root& right) noexcept {
@@ -512,7 +512,7 @@ namespace {
         ec.clear();
         const auto snapshot = [&] {
             const auto input = open_static_root_file(state_value, native_path.c_str(), ec);
-            return ec ? detail::response_file_snapshot{} : detail::snapshot_native_file_handle(input.get(), ec);
+            return ec ? detail::response_file_snapshot{} : detail::snapshot_native_file(input.get(), ec);
         }();
         if (ec) {
             throw std::filesystem::filesystem_error("snapshot static file root entry", file_path, ec);

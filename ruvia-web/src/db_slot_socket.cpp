@@ -31,8 +31,8 @@ db_slot_socket::waitable_type& db_slot_socket::waitable() noexcept {
 #endif
 }
 
-bool db_slot_socket::readiness_awaiter::await_suspend(std::coroutine_handle<> handle) noexcept {
-    continuation_ = handle;
+bool db_slot_socket::readiness_awaiter::await_suspend(std::coroutine_handle<> continuation) noexcept {
+    continuation_ = continuation;
     try {
         // Count an operation only after Asio accepts it. If a later initiation
         // throws, cancel and stay suspended until the already-published

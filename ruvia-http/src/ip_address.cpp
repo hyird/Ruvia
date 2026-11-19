@@ -35,7 +35,7 @@ namespace {
 
 }  // namespace
 
-std::optional<ip_address> ip_address::parse(std::string_view text) noexcept {
+std::optional<ip_address> ip_address::try_parse(std::string_view text) noexcept {
     if (text.find(':') == std::string_view::npos) {
         const auto octets = detail::parse_ipv4_address(text);
         if (!octets) {
@@ -170,10 +170,10 @@ std::string ip_address::to_string() const {
     return std::string(format_to(buffer));
 }
 
-std::optional<ip_cidr> ip_cidr::parse(std::string_view text) noexcept {
+std::optional<ip_cidr> ip_cidr::try_parse(std::string_view text) noexcept {
     const auto slash = text.find('/');
     const auto address_text = slash == std::string_view::npos ? text : text.substr(0, slash);
-    const auto parsed = ip_address::parse(address_text);
+    const auto parsed = ip_address::try_parse(address_text);
     if (!parsed || address_text.find('%') != std::string_view::npos) {
         return std::nullopt;
     }
@@ -248,7 +248,7 @@ bool ip_cidr::contains(const ip_address& address) const noexcept {
 }
 
 bool ip_cidr::contains(std::string_view address_text) const noexcept {
-    const auto parsed = ip_address::parse(address_text);
+    const auto parsed = ip_address::try_parse(address_text);
     return parsed.has_value() && contains(*parsed);
 }
 

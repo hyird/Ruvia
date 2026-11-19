@@ -110,7 +110,7 @@ namespace {
 
 // --- HEADERS / PUSH_PROMISE ---------------------------------------------------
 
-int http2_connection::on_begin_headers(const nghttp2_frame& frame) {
+int http2_engine::on_begin_headers(const nghttp2_frame& frame) {
     header_block_.reset();
     if (local_connection_state_.fatal_failure() != nullptr) {
         return 0;
@@ -124,7 +124,7 @@ int http2_connection::on_begin_headers(const nghttp2_frame& frame) {
     if (frame.hd.type == NGHTTP2_HEADERS && receive_frame_metadata_ && (frame.hd.flags & NGHTTP2_FLAG_PRIORITY) != 0) {
         // RFC 9113 §5.3.2 priority fields are advisory metadata, queued ahead
         // of every event the frame produces.
-        publish_event(http2_event(http2_received_priority{.stream_id_ = static_cast<std::uint32_t>(frame.hd.stream_id), .stream_dependency_ = static_cast<std::uint32_t>(frame.headers.pri_spec.stream_id), .weight_ = static_cast<std::uint16_t>(frame.headers.pri_spec.weight), .exclusive_ = frame.headers.pri_spec.exclusive != 0}));
+        publish_event(http2_queued_event(http2_received_priority{.stream_id_ = static_cast<std::uint32_t>(frame.hd.stream_id), .stream_dependency_ = static_cast<std::uint32_t>(frame.headers.pri_spec.stream_id), .weight_ = static_cast<std::uint16_t>(frame.headers.pri_spec.weight), .exclusive_ = frame.headers.pri_spec.exclusive != 0}));
     }
     if (role_ == http_connection_role::server) {
         return begin_request_headers(frame);
@@ -132,7 +132,7 @@ int http2_connection::on_begin_headers(const nghttp2_frame& frame) {
     return frame.hd.type == NGHTTP2_PUSH_PROMISE ? begin_push_promise(frame) : begin_response_headers(frame);
 }
 
-int http2_connection::begin_request_headers(const nghttp2_frame& frame) {
+int http2_engine::begin_request_headers(const nghttp2_frame& frame) {
     const auto stream_id = static_cast<std::uint32_t>(frame.hd.stream_id);
     const bool end_stream = (frame.hd.flags & NGHTTP2_FLAG_END_STREAM) != 0;
     if (frame.headers.cat == NGHTTP2_HCAT_REQUEST) {
@@ -174,7 +174,7 @@ int http2_connection::begin_request_headers(const nghttp2_frame& frame) {
     return 0;
 }
 
-int http2_connection::begin_response_headers(const nghttp2_frame& frame) {
+int http2_engine::begin_response_headers(const nghttp2_frame& frame) {
     const auto stream_id = static_cast<std::uint32_t>(frame.hd.stream_id);
     const bool end_stream = (frame.hd.flags & NGHTTP2_FLAG_END_STREAM) != 0;
     auto* stream = streams_.find(stream_id);
@@ -198,7 +198,7 @@ int http2_connection::begin_response_headers(const nghttp2_frame& frame) {
     return 0;
 }
 
-int http2_connection::begin_push_promise(const nghttp2_frame& frame) {
+int http2_engine::begin_push_promise(const nghttp2_frame& frame) {
     // RFC 9113 §8.4: push is only accepted when this client enabled it.
     if (!enable_push_) {
         fail_connection(http2_error_code::protocol_error);
@@ -220,7 +220,7 @@ int http2_connection::begin_push_promise(const nghttp2_frame& frame) {
     return 0;
 }
 
-int http2_connection::on_header(const nghttp2_frame& frame, std::string_view name, std::string_view value) {
+int http2_engine::on_header(const nghttp2_frame& frame, std::string_view name, std::string_view value) {
     if (!header_block_.has_value() || local_connection_state_.fatal_failure() != nullptr) {
         return 0;
     }
@@ -241,7 +241,7 @@ int http2_connection::on_header(const nghttp2_frame& frame, std::string_view nam
     return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
 }
 
-bool http2_connection::accept_header_field(std::string_view name, std::string_view value) {
+bool http2_engine::accept_header_field(std::string_view name, std::string_view value) {
     auto& block = *header_block_;
     switch (block.kind_) {
         case header_block_kind::request:
@@ -257,7 +257,7 @@ bool http2_connection::accept_header_field(std::string_view name, std::string_vi
     return false;
 }
 
-void http2_connection::reject_header_block(std::uint32_t stream_id, bool malformed_request_head) {
+void http2_engine::reject_header_block(std::uint32_t stream_id, bool malformed_request_head) {
     reset_stream_for_peer_error(stream_id, http2_error_code::protocol_error);
     if (!malformed_request_head) {
         return;
@@ -270,7 +270,7 @@ void http2_connection::reject_header_block(std::uint32_t stream_id, bool malform
     }
 }
 
-void http2_connection::finish_header_block(const nghttp2_frame& frame) {
+void http2_engine::finish_header_block(const nghttp2_frame& frame) {
     observe_header(http2_header_observation_phase::end);
     if (!header_block_.has_value()) {
         return;
@@ -303,7 +303,7 @@ void http2_connection::finish_header_block(const nghttp2_frame& frame) {
     }
 }
 
-bool http2_connection::finish_request_head(http2_stream_state& stream) {
+bool http2_engine::finish_request_head(http2_stream_state& stream) {
     if (!stream.has_method()) {
         return false;
     }
@@ -338,7 +338,7 @@ bool http2_connection::finish_request_head(http2_stream_state& stream) {
     return !http2_remote_peer_half_closed(stream) || stream.remote_content().terminal_length_valid();
 }
 
-bool http2_connection::finish_response_head(http2_stream_state& stream, header_block_type& block) {
+bool http2_engine::finish_response_head(http2_stream_state& stream, header_block_type& block) {
     if (!block.status_) {
         return false;
     }
@@ -358,7 +358,7 @@ bool http2_connection::finish_response_head(http2_stream_state& stream, header_b
         if (block.status_->status() == http_status::continue_ && stream.release_request_continue()) {
             signal = http_client_request_content_signal::continue_;
         }
-        publish_event(http2_event(http_stream_event_access::make<http2_informational_head_event>(stream.id(), std::move(head), signal)));
+        publish_event(http2_queued_event(http_stream_event_access::make<http2_informational_head_event>(stream.id(), std::move(head), signal)));
         return true;
     }
     (void)stream.cancel_pending_request_continue();
@@ -389,7 +389,7 @@ bool http2_connection::finish_response_head(http2_stream_state& stream, header_b
             // DATA(END_STREAM); nghttp2 holds it until flow control admits it.
             nghttp2_data_provider2 provider{};
             provider.source.ptr = nullptr;
-            provider.read_callback = &http2_connection::read_outbound_data;
+            provider.read_callback = &http2_engine::read_outbound_data;
             check_nghttp2(nghttp2_submit_data2(session_.get(), NGHTTP2_FLAG_END_STREAM, static_cast<std::int32_t>(stream.id()), &provider));
             if (can_send_empty_end_stream(stream.id())) {
                 (void)stream.reject_local_connect();
@@ -406,16 +406,16 @@ bool http2_connection::finish_response_head(http2_stream_state& stream, header_b
     return true;
 }
 
-bool http2_connection::finish_trailers(http2_stream_state& stream) {
+bool http2_engine::finish_trailers(http2_stream_state& stream) {
     if (!stream.remote_content().terminal_length_valid() || !stream.finish_remote_content()) {
         return false;
     }
-    publish_event(http2_event(http2_message_end_record{stream.id()}));
+    publish_event(http2_queued_event(http2_message_end_record{stream.id()}));
     release_local_request_stream_if_closed(stream);
     return true;
 }
 
-void http2_connection::finish_push_promise(const nghttp2_frame& frame, header_block_type& block) {
+void http2_engine::finish_push_promise(const nghttp2_frame& frame, header_block_type& block) {
     const auto promised_id = static_cast<std::uint32_t>(frame.push_promise.promised_stream_id);
     const auto associated_id = push_associated_stream_id_;
     struct scratch_guard final {
@@ -442,7 +442,7 @@ void http2_connection::finish_push_promise(const nghttp2_frame& frame, header_bl
         check_nghttp2(nghttp2_submit_rst_stream(session_.get(), NGHTTP2_FLAG_NONE, static_cast<std::int32_t>(promised_id), static_cast<std::uint32_t>(refusal.value_or(http2_error_code::enhance_your_calm))));
         return;
     }
-    http_push_request request;
+    http2_push_request request;
     request.method_ = scratch.request_method();
     request.scheme_ = scratch.request_scheme();
     request.authority_ = scratch.request_authority();
@@ -460,10 +460,10 @@ void http2_connection::finish_push_promise(const nghttp2_frame& frame, header_bl
     stream->begin_local_content_forbidden();
     (void)stream->commit_local_head_end_stream();
     stream->reserve_push(http2_push_reservation::remote);
-    publish_event(http2_event(http2_push_promise_event{associated_id, promised_id, std::move(request)}));
+    publish_event(http2_queued_event(http2_push_promise_event{associated_id, promised_id, std::move(request)}));
 }
 
-void http2_connection::cancel_push_promise_on(std::uint32_t associated_stream_id) {
+void http2_engine::cancel_push_promise_on(std::uint32_t associated_stream_id) {
     if (!header_block_.has_value() || header_block_->kind_ != header_block_kind::push_promise || push_associated_stream_id_ != associated_stream_id) {
         return;
     }
@@ -474,7 +474,7 @@ void http2_connection::cancel_push_promise_on(std::uint32_t associated_stream_id
     submit_owner_reset(promised_id, http2_error_code::cancel);
 }
 
-void http2_connection::emit_request_headers(http2_stream_state& stream) {
+void http2_engine::emit_request_headers(http2_stream_state& stream) {
     // A later frame in the same input batch can close this stream before the
     // public request event acquires its lease. Keep that event's storage alive.
     if (role_ == http_connection_role::server) {
@@ -491,7 +491,7 @@ void http2_connection::emit_request_headers(http2_stream_state& stream) {
     }
     const auto request_content_signal = stream.request_content_canceled() ? std::optional<http_client_request_content_signal>(http_client_request_content_signal::exchange_complete) : std::nullopt;
     const bool body_open = !http2_remote_peer_half_closed(stream) && (role_ == http_connection_role::client || stream.tunnel().pending() == nullptr);
-    publish_event(http2_event(http2_message_head_record{stream.id(), request_content_signal, body_open, http2_remote_peer_half_closed(stream)}));
+    publish_event(http2_queued_event(http2_message_head_record{stream.id(), request_content_signal, body_open, http2_remote_peer_half_closed(stream)}));
     if (role_ == http_connection_role::server && stream.tunnel().pending() != nullptr) {
         // CONNECT has no request content; the typed remote state owns any later
         // tunnel-end signal, so a generic message_end would be misleading.
@@ -499,20 +499,20 @@ void http2_connection::emit_request_headers(http2_stream_state& stream) {
     }
     if (role_ == http_connection_role::client && stream.tunnel().open() != nullptr) {
         if (http2_remote_peer_half_closed(stream)) {
-            publish_event(http2_event(http2_tunnel_end_event(stream.id())));
+            publish_event(http2_queued_event(http2_tunnel_end_event(stream.id())));
         }
         release_local_request_stream_if_closed(stream);
         return;
     }
     if (http2_remote_peer_half_closed(stream)) {
-        publish_event(http2_event(http2_message_end_record{stream.id()}));
+        publish_event(http2_queued_event(http2_message_end_record{stream.id()}));
     }
     release_local_request_stream_if_closed(stream);
 }
 
 // --- DATA ----------------------------------------------------------------------
 
-int http2_connection::on_data_chunk_recv(std::uint8_t, std::uint32_t stream_id, std::string_view data) {
+int http2_engine::on_data_chunk_recv(std::uint8_t, std::uint32_t stream_id, std::string_view data) {
     // Chunks of one DATA frame each renew the owner's clock; the budget refund
     // is per frame (on_frame_recv) so splitting a frame earns nothing.
     if (!data.empty()) {
@@ -541,7 +541,7 @@ int http2_connection::on_data_chunk_recv(std::uint8_t, std::uint32_t stream_id, 
         // accepting.
         (void)stream->mark_remote_connect_tunnel_data();
         stream->add_window_debt(static_cast<std::uint32_t>(data.size()));
-        publish_event(http2_event(http2_tunnel_data_record{stream_id, data, static_cast<std::uint32_t>(data.size())}));
+        publish_event(http2_queued_event(http2_tunnel_data_record{stream_id, data, static_cast<std::uint32_t>(data.size())}));
         return 0;
     }
     if (remote.connect_rejected_awaiting_end_stream() != nullptr) {
@@ -551,7 +551,7 @@ int http2_connection::on_data_chunk_recv(std::uint8_t, std::uint32_t stream_id, 
     }
     if (remote.tunnel_open() != nullptr) {
         stream->add_window_debt(static_cast<std::uint32_t>(data.size()));
-        publish_event(http2_event(http2_tunnel_data_record{stream_id, data, static_cast<std::uint32_t>(data.size())}));
+        publish_event(http2_queued_event(http2_tunnel_data_record{stream_id, data, static_cast<std::uint32_t>(data.size())}));
         return 0;
     }
     if (remote.content_open() == nullptr) {
@@ -577,11 +577,11 @@ int http2_connection::on_data_chunk_recv(std::uint8_t, std::uint32_t stream_id, 
     // New capacity is advertised only after the owner consumed or copied the
     // borrowed bytes, preserving backpressure.
     stream->add_window_debt(static_cast<std::uint32_t>(data.size()));
-    publish_event(http2_event(http2_message_data_record{stream_id, data, static_cast<std::uint32_t>(data.size())}));
+    publish_event(http2_queued_event(http2_message_data_record{stream_id, data, static_cast<std::uint32_t>(data.size())}));
     return 0;
 }
 
-void http2_connection::finish_data_frame(http2_stream_state& stream) {
+void http2_engine::finish_data_frame(http2_stream_state& stream) {
     const auto stream_id = stream.id();
     const auto& remote = stream.remote_receive();
     if (remote.connect_pending() != nullptr) {
@@ -590,7 +590,7 @@ void http2_connection::finish_data_frame(http2_stream_state& stream) {
         (void)stream.finish_remote_rejected_connect();
     } else if (remote.tunnel_open() != nullptr) {
         (void)stream.finish_remote_tunnel();
-        publish_event(http2_event(http2_tunnel_end_event(stream_id)));
+        publish_event(http2_queued_event(http2_tunnel_end_event(stream_id)));
     } else if (remote.content_open() != nullptr) {
         if (!stream.remote_content().terminal_length_valid()) {
             // Content-Length mismatch (RFC 9113 §8.1.1): the delivered chunks
@@ -599,7 +599,7 @@ void http2_connection::finish_data_frame(http2_stream_state& stream) {
             return;
         }
         (void)stream.finish_remote_content();
-        publish_event(http2_event(http2_message_end_record{stream_id}));
+        publish_event(http2_queued_event(http2_message_end_record{stream_id}));
     } else {
         reset_stream_for_peer_error(stream_id, http2_error_code::protocol_error);
         return;

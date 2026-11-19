@@ -82,7 +82,8 @@ task<void> verify_spawn_rollback(const worker_ref& worker) {
 
 TEST(Ruvia, TaskScopeRollsBackSpawnBeforeStartingChild) {
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
-    const auto worker = attachment.loop().worker();
+    auto attachment = ruvia::event_loop_attachment(io);
+    const auto loop_for_worker = attachment.loop();
+    const auto worker = loop_for_worker.worker();
     ruvia::test::run_worker_tasks(attachment, ruvia::test::scoped_spawn_allocation_tests::verify_spawn_rollback(worker));
 }

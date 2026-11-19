@@ -53,7 +53,7 @@ public:
 
     // What the request's TLS handshake negotiated.
     ruvia::task<ruvia::http_response> tls(ruvia::context& context) {
-        const auto* transport = context.conn().tls();
+        const auto* transport = context.connection().tls();
         co_return context.text(transport == nullptr ? std::string("plain") : std::string(transport->alpn()) + "|" + std::string(transport->server_name()));
     }
 };
@@ -321,7 +321,7 @@ TEST(Ruvia, connection_listeners_serve_byte_streams_beside_routes) {
     EXPECT_TRUE(pong.starts_with("HTTP/1.1 200 "));
     EXPECT_TRUE(pong.ends_with("pong"));
 
-    // Routed HTTPS requests see the same negotiated values through conn_info.
+    // Routed HTTPS requests see the same negotiated values through connection_info.
     {
         asio::ssl::context client(asio::ssl::context::tls_client);
         client.set_verify_mode(asio::ssl::verify_none);

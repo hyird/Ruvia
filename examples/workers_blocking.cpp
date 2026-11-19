@@ -68,7 +68,7 @@ private:
     // becomes a typed rejection; take_value() explicitly throws
     // blocking_operation_rejected, which the default error path answers with 503.
     ruvia::task<ruvia::http_response> offload(ruvia::context& c) {
-        auto result_value = co_await c.run_blocking([input = std::string(c.req().query("input").value_or("default"))] {
+        auto result_value = co_await c.run_blocking([input = std::string(c.request().query("input").value_or("default"))] {
             return slow_checksum(input);
         });
         const auto checksum = std::move(result_value).take_value();
@@ -101,7 +101,7 @@ private:
     // worker's HTTP requests see.
     ruvia::task<ruvia::http_response> fanout(ruvia::context& c) {
         std::size_t accepted = 0;
-        for (const auto& worker : ruvia::app().workers()) {
+        for (const auto& worker : ruvia::app().worker_refs()) {
             const auto posted = worker.post([](ruvia::web_worker_context& ctx) -> ruvia::task<void> {
                 ++ctx.worker_state<worker_stats>().dispatched_;
                 co_return;

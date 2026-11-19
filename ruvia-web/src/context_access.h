@@ -385,7 +385,7 @@ struct context_worker_services final {
 };
 
 struct context_connection_services final {
-    conn_info info_;
+    connection_info info_;
     inbound_buffer_account* inbound_buffers_{};
     const route_table* routes_{};
     rate_limiter* route_rate_limiter_{};
@@ -696,19 +696,19 @@ public:
         return connection_services_.router_states_ != nullptr ? connection_services_.router_states_ : worker_services_->states_;
     }
 
-    [[nodiscard]] constexpr const conn_info& get_conn_info() const noexcept {
+    [[nodiscard]] constexpr const connection_info& get_connection_info() const noexcept {
         return connection_services_.info_;
     }
 
-    // The connection metadata one request sees. Identical to get_conn_info() unless
+    // The connection metadata one request sees. Identical to get_connection_info() unless
     // the peer is a configured trusted proxy, in which case its forwarding
     // headers name the client. Resolved per request rather than per connection:
     // each keep-alive request may carry different forwarding headers. Admission
-    // resolves it once and binds the result with bind_conn_info, so every
-    // context created for the request reads get_conn_info().
-    [[nodiscard]] conn_info resolve_conn_info(const http_request& request) const noexcept;
+    // resolves it once and binds the result with bind_connection_info, so every
+    // context created for the request reads get_connection_info().
+    [[nodiscard]] connection_info resolve_connection_info(const http_request& request) const noexcept;
 
-    void bind_conn_info(const conn_info& resolved) noexcept {
+    void bind_connection_info(const connection_info& resolved) noexcept {
         connection_services_.info_ = resolved;
     }
 
@@ -765,10 +765,10 @@ public:
 
     // Views borrow connection-owned storage and remain valid for every context
     // created while that connection is dispatched. `connection_id` is the
-    // worker's conn_info::connection_id() for the connection, zero without one.
+    // worker's connection_info::connection_id() for the connection, zero without one.
     [[nodiscard]] context_services with_plain_transport(std::uint64_t connection_id, std::string_view remote_address, std::uint16_t remote_port) const noexcept {
         auto services = *this;
-        services.connection_services_.info_ = conn_info::plain(transport_endpoints(connection_id, remote_address, remote_port), remote_address);
+        services.connection_services_.info_ = connection_info::plain(transport_endpoints(connection_id, remote_address, remote_port), remote_address);
         services.connection_services_.peer_trusted_ = trusts_peer(services.connection_services_.info_.remote().address());
         services.connection_services_.served_certificate_ = nullptr;
         return services;
@@ -780,7 +780,7 @@ public:
     // The transport's views borrow the connection's SSL, which outlives it.
     [[nodiscard]] context_services with_tls_transport(std::uint64_t connection_id, std::string_view remote_address, std::uint16_t remote_port, const tls_connection_transport& transport, tls_served_certificate& served_certificate) const noexcept {
         auto services = *this;
-        services.connection_services_.info_ = conn_info::tls(transport_endpoints(connection_id, remote_address, remote_port), remote_address, transport);
+        services.connection_services_.info_ = connection_info::tls(transport_endpoints(connection_id, remote_address, remote_port), remote_address, transport);
         services.connection_services_.peer_trusted_ = trusts_peer(services.connection_services_.info_.remote().address());
         services.connection_services_.served_certificate_ = &served_certificate;
         return services;
@@ -821,11 +821,11 @@ private:
 
     // Provisional until with_connection_lifecycle() supplies the local side.
     [[nodiscard]] static connection_endpoints transport_endpoints(std::uint64_t connection_id, std::string_view remote_address, std::uint16_t remote_port) noexcept {
-        return connection_endpoints(connection_id, {}, ip_endpoint(ip_address::parse(remote_address).value_or(ip_address{}), remote_port));
+        return connection_endpoints(connection_id, {}, ip_endpoint(ip_address::try_parse(remote_address).value_or(ip_address{}), remote_port));
     }
 
     const context_worker_services* worker_services_;
-    context_connection_services connection_services_{.info_ = conn_info::plain({}, {})};
+    context_connection_services connection_services_{.info_ = connection_info::plain({}, {})};
     context_request_services request_services_;
 };
 
@@ -967,11 +967,11 @@ struct session_access final {
         context_value.session_state().observe_presented_id(id);
     }
 
-    static void load(context& context_value, std::string_view data) {
-        context_value.session_state().load_recognized(data);
+    static void load(context& context_value, std::string_view payload) {
+        context_value.session_state().load_recognized(payload);
     }
-    static void load(context& context_value, std::string&& data) {
-        context_value.session_state().load_recognized(std::move(data));
+    static void load(context& context_value, std::string&& payload) {
+        context_value.session_state().load_recognized(std::move(payload));
     }
 
     [[nodiscard]] static const context_session_state& state(const context& context_value) noexcept {
@@ -1403,12 +1403,12 @@ public:
         final_.emplace(std::move(response));
     }
 
-    [[nodiscard]] http_response&& release_final() & {
+    [[nodiscard]] http_response&& take_final() & {
         assert(final_);
         apply_policy(*final_);
         return std::move(*final_);
     }
-    http_response&& release_final() && = delete;
+    http_response&& take_final() && = delete;
 
 private:
     std::optional<http_response> stream_head_;
@@ -1688,9 +1688,9 @@ struct context_access final {
     }
 
     // The final response, for the dispatcher to return; see
-    // context_response_state::release_final.
-    [[nodiscard]] static http_response&& release_response(context& context_value) {
-        return context_value.response_state().release_final();
+    // context_response_state::take_final.
+    [[nodiscard]] static http_response&& take_response(context& context_value) {
+        return context_value.response_state().take_final();
     }
 
     [[nodiscard]] static http_response streaming_head(context& context_value) {

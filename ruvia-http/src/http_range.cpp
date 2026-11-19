@@ -93,7 +93,7 @@ struct multipart_range_size final {
 
 http_multipart_byte_range_plan make_http_multipart_byte_range_plan(const http_byte_range_set& ranges, http_content_length representation_length_value, std::string_view media_type, std::string_view boundary) {
     const auto representation_length = representation_length_value.value();
-    if (ranges.ignored() || ranges.unsatisfiable() || ranges.size() < 2 || ranges.size() > http_byte_range_set::capacity || representation_length == 0 || !is_valid_http_content_type_field_value(media_type) || !multipart_boundary::try_from_value(boundary).has_value()) {
+    if (ranges.ignored() || ranges.unsatisfiable() || ranges.size() < 2 || ranges.size() > http_byte_range_set::capacity || representation_length == 0 || !is_valid_http_content_type_field_value(media_type) || !multipart_boundary::try_parse(boundary).has_value()) {
         throw std::invalid_argument("invalid multipart byte-range plan input");
     }
 
@@ -338,7 +338,7 @@ std::optional<std::uint64_t> compute_http_byte_range_content_length(std::span<co
     if (ranges.size() == 1) {
         return ranges.front().length_;
     }
-    if (!is_valid_http_content_type_field_value(media_type) || !multipart_boundary::try_from_value(boundary).has_value()) {
+    if (!is_valid_http_content_type_field_value(media_type) || !multipart_boundary::try_parse(boundary).has_value()) {
         return std::nullopt;
     }
     multipart_range_size size(boundary.size(), representation_length);
@@ -437,7 +437,7 @@ http_byte_range_slicer::http_byte_range_slicer(std::span<const http_byte_range> 
         content_length_ = single_range_.length_;
         return;
     }
-    if (!is_valid_http_content_type_field_value(media_type) || !multipart_boundary::try_from_value(boundary).has_value()) {
+    if (!is_valid_http_content_type_field_value(media_type) || !multipart_boundary::try_parse(boundary).has_value()) {
         throw std::invalid_argument("invalid multipart media type or boundary for byte-range slicer");
     }
     multipart_range_size size(boundary.size(), representation_length_);

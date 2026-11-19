@@ -29,7 +29,7 @@ std::string_view http_content_coding_token(http_content_coding coding) noexcept 
     return {};
 }
 
-std::optional<http_content_coding> http_content_coding_from_token(std::string_view token) noexcept {
+std::optional<http_content_coding> parse_http_content_coding_token(std::string_view token) noexcept {
     switch (token.size()) {
         case 2:
             if (http_ascii_equals_ignore_case(token, "br")) {
@@ -134,7 +134,7 @@ http_content_coding_field_result parse_http_content_coding_headers(const http_he
     return parser.finish();
 }
 
-http_content_coding_field_result request_content_coding(const http_request& request) noexcept {
+http_content_coding_field_result parse_http_request_content_coding(const http_request& request) noexcept {
     detail::http_content_coding_field_parser parser;
     (void)detail::http_request_access::visit_known_headers(request, detail::http_field_kind::content_encoding, [&parser](std::string_view value) noexcept {
         parser.update(value);

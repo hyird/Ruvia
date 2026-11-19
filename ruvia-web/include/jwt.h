@@ -198,7 +198,7 @@ private:
     std::vector<jwt_claim> claims_;
 };
 
-// The outcome of jwt_verify / jwt_decode_unverified. The category is fixed at
+// The outcome of verify_jwt / decode_jwt_unverified. The category is fixed at
 // construction: a decoded payload, or a token data error code.
 class jwt_result final {
 public:
@@ -236,22 +236,22 @@ private:
 // Option misuse (negative leeway, invalid algorithm/policy, a secret outside the
 // RFC 7518 key bounds) throws even for malformed tokens. Allocation and crypto
 // initialization failures also throw; token data failures are returned.
-[[nodiscard]] std::string jwt_sign(const jwt_sign_options& options);
-[[nodiscard]] jwt_result jwt_verify(const jwt_verify_options& options);
+[[nodiscard]] std::string sign_jwt(const jwt_sign_options& options);
+[[nodiscard]] jwt_result verify_jwt(const jwt_verify_options& options);
 // Decodes and validates the three-part token structure, JOSE header (requiring
 // a non-empty "alg" string and rejecting duplicate keys / "crit" / "b64"), and
 // payload claims WITHOUT authenticating the signature or checking time claims.
 // The returned claims are untrusted and must never authorize a request.
-[[nodiscard]] jwt_result jwt_decode_unverified(const jwt_decode_unverified_options& options);
+[[nodiscard]] jwt_result decode_jwt_unverified(const jwt_decode_unverified_options& options);
 // Returns the b64token of an "Authorization: Bearer <token>" field value
 // (RFC 6750 §2.1: 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" / "+" / "/" )
 // *"="), or nullopt for another scheme or a malformed token. The scheme name
 // is case-insensitive and is followed by one or more SP.
-[[nodiscard]] std::optional<std::string_view> jwt_bearer_token(std::string_view authorization RUVIA_LIFETIMEBOUND) noexcept;
+[[nodiscard]] std::optional<std::string_view> extract_bearer_token(std::string_view authorization RUVIA_LIFETIMEBOUND) noexcept;
 
 template <typename authorization_type>
     requires(std::convertible_to<authorization_type&&, std::string_view> && !std::constructible_from<borrowed_text, authorization_type&&>)
-std::optional<std::string_view> jwt_bearer_token(authorization_type&&) = delete;
+std::optional<std::string_view> extract_bearer_token(authorization_type&&) = delete;
 
 }  // namespace ruvia
 

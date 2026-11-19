@@ -166,11 +166,11 @@ template <typename field_type>
     if (alias_offset.has_value()) {
         for (std::size_t i = 0; i < count; ++i) {
             const auto& field = retained[*alias_offset + i];
-            retained.push_back(http_header::copy_with_lowercase_name(field.name(), field.value()));
+            retained.push_back(http_header::with_lowercase_name(field.name(), field.value()));
         }
     } else {
         for (const auto& field : fields) {
-            retained.push_back(http_header::copy_with_lowercase_name(field.name(), field.value()));
+            retained.push_back(http_header::with_lowercase_name(field.name(), field.value()));
         }
     }
     rollback.active_ = false;

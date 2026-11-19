@@ -50,7 +50,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> publish(ruvia::context& c) {
-        const auto body = co_await c.req().body_text();
+        const auto body = co_await c.request().body_text();
         auto result_value = co_await c.redis().command("XADD", stream_key, "*", "body", body);
         co_return c.text(result_value.string());
     }

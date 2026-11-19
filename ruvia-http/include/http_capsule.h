@@ -48,7 +48,7 @@ using http_capsule_callback_type = void (*)(void*, http_capsule_event);
 enum class http_capsule_decode_error : std::uint8_t {
     // The stream ended inside a capsule header or payload.
     truncated,
-    // A kept capsule exceeds http_capsule_options::max_capsule_length_.
+    // A kept capsule exceeds http_capsule_options::max_capsule_bytes_.
     limit_exceeded,
 };
 using http_capsule_decode_failure = decode_failure<http_capsule_decode_error>;
@@ -57,14 +57,14 @@ struct http_capsule_boundary final {};
 // One feed() or feed_one() outcome: more input needed, a kept capsule ended
 // (feed_one() only), the stream ended at FIN, or a failure.
 using http_capsule_feed_result = decode_step<decode_need_input, http_capsule_boundary, decode_complete, http_capsule_decode_failure>;
-// max_capsule_length_ bounds the capsules a reader keeps (see
+// max_capsule_bytes_ bounds the capsules a reader keeps (see
 // http_capsule_retention); dropped capsules are skipped at any length.
 struct http_capsule_options final {
-    std::uint64_t max_capsule_length_{16 * 1024 * 1024};
+    std::uint64_t max_capsule_bytes_{16 * 1024 * 1024};
 };
 // Which capsules a reader keeps. RFC 9297 section 3.2: a recipient silently
 // drops a capsule it does not use and skips over it. Dropped capsules produce
-// no callback, are not buffered and are not subject to max_capsule_length_.
+// no callback, are not buffered and are not subject to max_capsule_bytes_.
 enum class http_capsule_retention : std::uint8_t {
     // Every capsule: a generic Capsule Protocol reader handles unknown types.
     all,

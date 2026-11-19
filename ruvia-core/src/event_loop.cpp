@@ -590,7 +590,7 @@ void report_root_task_failure(const std::weak_ptr<event_loop_state>& loop, std::
 event_loop_stop_registration::event_loop_stop_registration(std::shared_ptr<detail::event_loop_stop_listener> listener_value) noexcept :
     listener_(std::move(listener_value)) {}
 
-event_loop_start_rejected::event_loop_start_rejected(post_status status) :
+event_loop_submit_rejected::event_loop_submit_rejected(post_status status) :
     std::runtime_error(status == post_status::queue_full ? "event loop root task queue is full" : "event loop is stopping"),
     status_(status) {}
 
@@ -609,7 +609,7 @@ event_loop_stop_registration& event_loop_stop_registration::operator=(event_loop
     return *this;
 }
 
-bool event_loop_stop_registration::valid() const noexcept {
+bool event_loop_stop_registration::registered() const noexcept {
     return listener_ != nullptr;
 }
 
@@ -647,10 +647,6 @@ const worker_ref& event_loop::worker() const& noexcept {
     }
     static const worker_ref empty_worker;
     return empty_worker;
-}
-
-worker_ref event_loop::worker() const&& noexcept {
-    return worker();
 }
 
 void event_loop::report_failure(std::exception_ptr failure) const noexcept {
@@ -724,8 +720,22 @@ event_loop_stop_registration event_loop::register_stop_callback(move_only_functi
     return event_loop_stop_registration(std::move(listener_value));
 }
 
-event_loop_attachment::event_loop_attachment(std::shared_ptr<detail::event_loop_state> state_value) noexcept :
-    state_(std::move(state_value)) {}
+event_loop_attachment::event_loop_attachment(asio::io_context& io_context, event_loop_attachment_options options) {
+    auto state_value = std::make_shared<detail::event_loop_state>(io_context, options.queue_capacity_, resolve_blocking_pool(options.blocking_pool_), std::move(options.failure_));
+    const std::weak_ptr<detail::event_loop_state> weak_state = state_value;
+    // root_task uses this sink directly; it must not call event_loop_state::route_failure,
+    // which would route back through this same sink.
+    state_value->failure_sink_ = [weak_state](std::exception_ptr failure) {
+        if (const auto locked_state = weak_state.lock()) {
+            locked_state->report_attached_failure(std::move(failure));
+        } else {
+            report_unhandled_failure("attached event loop failure after retirement", std::move(failure));
+        }
+    };
+    state_value->install_shutdown_registration();
+    state_value->attach(state_value);
+    state_ = std::move(state_value);
+}
 
 event_loop_attachment::~event_loop_attachment() {
     request_stop();
@@ -757,23 +767,6 @@ void event_loop_attachment::request_stop() noexcept {
     if (state_) {
         state_->stop();
     }
-}
-
-event_loop_attachment attach_event_loop(asio::io_context& io_context, event_loop_attachment_options options) {
-    auto state_value = std::make_shared<detail::event_loop_state>(io_context, options.queue_capacity_, resolve_blocking_pool(options.blocking_pool_), std::move(options.failure_));
-    const std::weak_ptr<detail::event_loop_state> weak_state = state_value;
-    // root_task uses this sink directly; it must not call event_loop_state::route_failure,
-    // which would route back through this same sink.
-    state_value->failure_sink_ = [weak_state](std::exception_ptr failure) {
-        if (const auto locked_state = weak_state.lock()) {
-            locked_state->report_attached_failure(std::move(failure));
-        } else {
-            report_unhandled_failure("attached event loop failure after retirement", std::move(failure));
-        }
-    };
-    state_value->install_shutdown_registration();
-    state_value->attach(state_value);
-    return event_loop_attachment(std::move(state_value));
 }
 
 }  // namespace ruvia

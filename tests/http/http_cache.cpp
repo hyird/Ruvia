@@ -101,7 +101,7 @@ TEST(RuviaHttpPublicApi, rfc9111_shared_cache_primitives) {
         {"Content-Length", "0"},
         {"Connection", "keep-alive"},
     }};
-    ruvia::merge_http_304_response_headers(cached, not_modified);
+    EXPECT_TRUE(ruvia::merge_http_304_response_headers(cached, not_modified));
     EXPECT_EQ(ruvia::parse_cache_control(cached).max_age(), std::optional<std::uint64_t>(300));
     bool has_text_plain = false;
     bool has_len_1024 = false;
@@ -244,7 +244,7 @@ TEST(RuviaHttpPublicApi, header_rewrites_edit_header_blocks_and_responses_in_pla
         {"ETag", "\"v2\""},
         {"Content-Type", "text/html"},
     }};
-    ruvia::merge_http_304_response_headers(response, not_modified);
+    EXPECT_TRUE(ruvia::merge_http_304_response_headers(response, not_modified));
     EXPECT_EQ(response.header("ETag"), std::optional<std::string_view>("\"v2\""));
     EXPECT_EQ(response.header("Content-Type"), std::optional<std::string_view>("text/plain"));
 }
@@ -256,7 +256,7 @@ TEST(RuviaHttpPublicApi, merge_http_304_response_headers_reads_fields_that_view_
     cached.emplace_back("Cache-Control", "max-age=60");
 
     // The 304 fields are the last two cached lines themselves.
-    ruvia::merge_http_304_response_headers(cached, std::span<const ruvia::http_header>(cached).subspan(1));
+    EXPECT_TRUE(ruvia::merge_http_304_response_headers(cached, std::span<const ruvia::http_header>(cached).subspan(1)));
     ASSERT_EQ(cached.size(), 3U);
     EXPECT_EQ(ruvia::find_unique_http_header(cached, "X-First").value_, "1");
     EXPECT_EQ(ruvia::find_unique_http_header(cached, "ETag").value_, "\"v1\"");
@@ -276,7 +276,7 @@ TEST(RuviaHttpPublicApi, multi_write_header_edit_leaves_an_http_response_unchang
         {"Server", "edge-a"},
         {"Server", "edge-b"},
     }};
-    EXPECT_THROW(ruvia::merge_http_304_response_headers(response, repeated_singleton), std::invalid_argument);
+    EXPECT_THROW((void)ruvia::merge_http_304_response_headers(response, repeated_singleton), std::invalid_argument);
     EXPECT_EQ(response.header("ETag"), std::optional<std::string_view>("\"v1\""));
     EXPECT_FALSE(response.header("Server").has_value());
     EXPECT_EQ(response.headers().size(), field_count);
@@ -317,7 +317,7 @@ TEST(Ruvia, parse_cache_control_request_freshness_uses_first_occurrence) {
     ruvia::cache_control_field_parser parser;
     parser.update("min-fresh=5, max-stale=10");
     parser.update("min-fresh=50, max-stale");
-    const auto request = parser.finish();
+    const auto request = parser.control();
     EXPECT_EQ(request.min_fresh().value_or(0), std::uint64_t{5});
     EXPECT_EQ(request.max_stale().value_or(0), std::uint64_t{10});
     EXPECT_TRUE(!request.has(ruvia::cache_control_directive::max_stale_any));
@@ -404,7 +404,7 @@ TEST(Ruvia, cache_control_field_parser_combines_repeated_lines) {
     parser.update("public, max-age=invalid, s-maxage=120");
     parser.update(R"(extension="a, no-transform, b", no-transform, max-age=3600, s-maxage=7200)");
 
-    const auto cc = parser.finish();
+    const auto cc = parser.control();
     EXPECT_TRUE(cc.has(ruvia::cache_control_directive::public_));
     EXPECT_TRUE(cc.has(ruvia::cache_control_directive::no_transform));
     EXPECT_TRUE(!cc.max_age().has_value());

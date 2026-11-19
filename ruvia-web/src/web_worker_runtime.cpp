@@ -89,19 +89,19 @@ web_worker_post_result web_worker_ref::post_task(move_only_function<task<void>(w
     });
 }
 
-web_worker_start_result web_worker_ref::start_task(move_only_function<task<void>(web_worker_context&)> task_value) const {
+web_worker_submit_result web_worker_ref::submit_task(move_only_function<task<void>(web_worker_context&)> task_value) const {
     if (!task_value) {
-        throw std::invalid_argument("web worker start requires a callable");
+        throw std::invalid_argument("web worker submit requires a callable");
     }
     if (!dispatch_) {
-        return detail::delivery_access::reject<web_worker_start_result>(post_status::stopping, std::move(task_value));
+        return detail::delivery_access::reject<web_worker_submit_result>(post_status::stopping, std::move(task_value));
     }
     detail::web_worker_dispatch::completion_type completion;
     auto posted = dispatch_->post(std::move(task_value), &completion);
     if (!posted.accepted()) {
-        return detail::delivery_access::reject<web_worker_start_result>(posted.status(), std::move(posted).take_rejected());
+        return detail::delivery_access::reject<web_worker_submit_result>(posted.status(), std::move(posted).take_rejected());
     }
-    return detail::delivery_access::accept<web_worker_start_result>(detail::root_task_access::make(std::move(completion)));
+    return detail::delivery_access::accept<web_worker_submit_result>(detail::root_task_access::make(std::move(completion)));
 }
 
 }  // namespace ruvia

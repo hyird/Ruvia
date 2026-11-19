@@ -24,7 +24,7 @@ namespace ruvia::detail {
 // and is never reported as syntax.
 [[nodiscard]] constexpr std::size_t find_sql_syntax_byte(std::string_view sql, char wanted, bool backslash_escapes, std::size_t from = 0) noexcept {
     for (auto index = from; index < sql.size();) {
-        const auto next_value = skip_sql_atom(sql, index, backslash_escapes);
+        const auto next_value = skip_mariadb_sql_atom(sql, index, backslash_escapes);
         if (next_value == index + 1 && sql[index] == wanted) {
             return index;
         }

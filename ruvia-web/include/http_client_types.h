@@ -144,7 +144,7 @@ public:
     [[nodiscard]] constexpr std::size_t hop_index() const noexcept {
         return hop_index_;
     }
-    [[nodiscard]] constexpr http_origin_view source_origin() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] http_origin_view source_origin() const& noexcept RUVIA_LIFETIMEBOUND {
         return source_origin_;
     }
     [[nodiscard]] http_origin_view source_origin() const&& = delete;
@@ -167,7 +167,7 @@ public:
         return location_;
     }
     [[nodiscard]] std::string_view location() const&& = delete;
-    [[nodiscard]] constexpr http_origin_view target_origin() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] http_origin_view target_origin() const& noexcept RUVIA_LIFETIMEBOUND {
         return target_origin_;
     }
     [[nodiscard]] http_origin_view target_origin() const&& = delete;
@@ -214,7 +214,7 @@ struct http_client_endpoint_address final {
 
 private:
     [[nodiscard]] static ip_address parse_ip(std::string_view text) {
-        const auto parsed = ip_address::parse(text);
+        const auto parsed = ip_address::try_parse(text);
         if (!parsed.has_value()) {
             throw std::invalid_argument("HTTP client endpoint IP must be a valid IP literal");
         }
@@ -502,7 +502,7 @@ struct http_client_stats final {
     // record arrived while they idled, observed at once or before the next
     // request. A TLS record can carry close_notify, post-handshake control data
     // or an unsolicited response.
-    std::size_t idle_connections_with_pending_data_{0};
+    std::size_t idle_connections_with_pending_input_{0};
     // Connection owners of every route and protocol: dialing, in use, idle, or
     // closed while a request still unwinds; reclaimed once nothing borrows them.
     std::size_t open_connections_{0};

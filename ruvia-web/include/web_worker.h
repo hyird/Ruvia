@@ -66,8 +66,8 @@ private:
     mutable detail::operation_scope operation_scope_;
 };
 
-using web_worker_post_result = post_outcome<task<void>(web_worker_context&)>;
-using web_worker_start_result = delivery_result<move_only_function<task<void>(web_worker_context&)>, post_status, post_status::accepted, root_task<void>>;
+using web_worker_post_result = post_result<task<void>(web_worker_context&)>;
+using web_worker_submit_result = delivery_result<move_only_function<task<void>(web_worker_context&)>, post_status, post_status::accepted, root_task<void>>;
 
 struct web_worker_stats final {
     std::uint64_t accepted_{0};
@@ -99,9 +99,9 @@ public:
     // operation_canceled; a running job observes the worker's stop token.
     template <typename fn_type>
         requires std::invocable<std::decay_t<fn_type>&, web_worker_context&> && std::same_as<std::invoke_result_t<std::decay_t<fn_type>&, web_worker_context&>, task<void>>
-    [[nodiscard]] web_worker_start_result try_start(fn_type&& fn) const {
+    [[nodiscard]] web_worker_submit_result submit(fn_type&& fn) const {
         const auto worker = *this;
-        return worker.start_task(move_only_function<task<void>(web_worker_context&)>(std::forward<fn_type>(fn)));
+        return worker.submit_task(move_only_function<task<void>(web_worker_context&)>(std::forward<fn_type>(fn)));
     }
 
 private:
@@ -110,7 +110,7 @@ private:
     web_worker_ref(std::shared_ptr<detail::web_worker_dispatch> dispatch) noexcept;
 
     [[nodiscard]] web_worker_post_result post_task(move_only_function<task<void>(web_worker_context&)> task) const;
-    [[nodiscard]] web_worker_start_result start_task(move_only_function<task<void>(web_worker_context&)> task) const;
+    [[nodiscard]] web_worker_submit_result submit_task(move_only_function<task<void>(web_worker_context&)> task) const;
 
     // The handle owns a stable terminal endpoint. Server shutdown closes it;
     // retaining a handle cannot retain the server or its io_context.

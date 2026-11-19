@@ -149,7 +149,7 @@ namespace ruvia {
 // use_awaitable, use_future, deferred, or a custom token.
 template <typename t_type, typename completion_token_type>
     requires detail::asio_task_result<t_type>
-auto async_start(task<t_type>&& task_value, completion_token_type&& token) {
+auto async_start(task<t_type> task_value, completion_token_type&& token) {
     using completion_signature_type = std::conditional_t<std::is_void_v<t_type>, void(std::exception_ptr), void(task_completion_result<t_type>&&)>;
     return asio::async_initiate<completion_token_type, completion_signature_type>([](auto&& handler, task<t_type> started_task) {
         // A deferred token may initiate after the cold task's scope closes.

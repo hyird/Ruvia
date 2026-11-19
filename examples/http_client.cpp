@@ -55,17 +55,17 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> forward(ruvia::context& c) {
-        const auto incoming_body = co_await c.req().body_bytes();
-        auto client = c.client();
+        const auto incoming_body = co_await c.request().body_bytes();
+        auto client = c.http_client();
 
         try {
             std::array<ruvia::http_header_view, 2> headers{};
             std::size_t header_count = 0;
             headers[header_count++] = {
                 "content-type",
-                c.req().header("content-type").value_or("application/octet-stream"),
+                c.request().header("content-type").value_or("application/octet-stream"),
             };
-            if (const auto authorization = c.req().header("authorization")) {
+            if (const auto authorization = c.request().header("authorization")) {
                 headers[header_count++] = {"authorization", *authorization};
             }
             auto operation = client
@@ -96,10 +96,10 @@ private:
     }
 
     ruvia::task<void> forward_stream(ruvia::context& c) {
-        auto client = c.client();
+        auto client = c.http_client();
         std::array<ruvia::http_header_view, 1> headers{};
         std::size_t header_count = 0;
-        if (const auto authorization = c.req().header("authorization")) {
+        if (const auto authorization = c.request().header("authorization")) {
             headers[header_count++] = {"authorization", *authorization};
         }
         // Only a failure before the stream starts can still become an error
@@ -146,7 +146,7 @@ int main() {
         ruvia::append_decimal(base_url, env.get<std::uint16_t>("RUVIA_UPSTREAM_PORT").value_or(tls ? 8444 : 8093));
         app.listen({.address_ = "0.0.0.0", .http_ = 8099})
             .workers({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-            .client({
+            .http_client({
                 .base_url_ = base_url,
                 .connection_limits_ = {.max_open_ = 16, .max_idle_http1_ = 8, .max_idle_multiplexed_ = 2},
                 .tls_ = {.ca_file_ = env.path("RUVIA_TLS_CA")},

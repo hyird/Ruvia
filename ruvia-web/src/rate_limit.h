@@ -61,7 +61,7 @@ using ::ruvia::rate_limit_key_buffer_bytes;
 }
 
 [[nodiscard]] inline std::string_view rate_limit_key_for(std::string_view remote_address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept {
-    const auto parsed = ip_address::parse(remote_address);
+    const auto parsed = ip_address::try_parse(remote_address);
     if (!parsed.has_value()) {
         return remote_address;
     }

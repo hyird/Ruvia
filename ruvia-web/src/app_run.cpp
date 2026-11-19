@@ -119,7 +119,7 @@ public:
     }
 
     [[nodiscard]] std::exception_ptr failure() noexcept {
-        return runtime_.take_failure();
+        return runtime_.observe_failure();
     }
 
 private:

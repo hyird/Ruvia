@@ -86,11 +86,11 @@ private:
     std::size_t count_{0};
 };
 
-std::string_view http_response::body_bytes() const& noexcept {
+std::string_view http_response::body() const& noexcept {
     return detail::response_body(*this).bytes();
 }
 
-std::string http_response::take_body_bytes() && {
+std::string http_response::take_body() && {
     if (body_.file()) {
         throw std::logic_error("file response body requires a transport");
     }
@@ -112,11 +112,11 @@ bool http_response::has_file_representation() const noexcept {
     return detail::response_body(*this).file_representation();
 }
 
-void http_response::head_metadata_body() noexcept {
+void http_response::mark_head_metadata_only() noexcept {
     body_.set_head_metadata_only();
 }
 
-bool http_response::has_head_metadata_body() const noexcept {
+bool http_response::has_head_metadata_only() const noexcept {
     return body_.head_metadata_only();
 }
 
@@ -257,11 +257,11 @@ void http_response::static_body(static_text value) noexcept {
     body_.set_static(value.view());
 }
 
-void http_response::file_bytes_body(std::string&& value) noexcept {
+void http_response::file_representation_body(std::string&& value) noexcept {
     body_.set_file_bytes(std::move(value));
 }
 
-void http_response::file_bytes_body(std::shared_ptr<const std::string> value) {
+void http_response::file_representation_body(std::shared_ptr<const std::string> value) {
     if (!value || value.use_count() == 0) {
         throw std::invalid_argument("file response bytes require an owner");
     }
@@ -308,7 +308,7 @@ void http_response::apply_encoded_representation(std::string_view content_encodi
         body_.set_owned(std::move(*body));
     } else {
         if (body_.size() == 0 && !body_.file_representation()) {
-            head_metadata_body();
+            mark_head_metadata_only();
         }
         (void)headers_.remove_header_validated("Content-Length", detail::response_header_content_length);
     }

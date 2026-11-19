@@ -217,12 +217,12 @@ void decode_db_field(field_type& field, t_type& out) {
     } else if constexpr (std::is_same_v<u_type, string>) {
         if constexpr (!std::is_const_v<field_type>) {
             if (db_result_access::has_owned_string(field)) {
-                out.assign_owned(db_result_access::take_string(field));
+                out.assign(db_result_access::take_string(field));
                 return;
             }
         }
         if (auto value = field.template as<std::string_view>()) {
-            out.assign_owned(*value);
+            out.assign(*value);
         } else {
             throw conversion_error(conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
         }
@@ -423,7 +423,7 @@ template <db_mapped_value value_type>
 // A projection describes a subset of columns. Every declared column is required
 // and must be unique in the result; unrelated result columns are ignored.
 template <typename entity_type>
-    requires(sql_entity<entity_type> || sql_projection<entity_type>)
+    requires(db_entity<entity_type> || db_projection<entity_type>)
 [[nodiscard]] entity_type decode_db_row(const db_row& row) {
     std::array<bool, std::tuple_size_v<typename entity_type::columns_type>> selected;
     selected.fill(true);
@@ -432,7 +432,7 @@ template <typename entity_type>
 }
 
 template <typename entity_type>
-    requires(sql_entity<entity_type> || sql_projection<entity_type>)
+    requires(db_entity<entity_type> || db_projection<entity_type>)
 [[nodiscard]] entity_rows<entity_type> decode_db_rows(const db_rows& rows) {
     auto result = detail::db_result_access::make_entity_rows<entity_type>(rows.size());
     std::array<bool, std::tuple_size_v<typename entity_type::columns_type>> selected;
@@ -440,6 +440,19 @@ template <typename entity_type>
     detail::db_entity_row_decoder<entity_type> decoder(selected);
     for (const auto& row : rows) {
         result.push_back(decoder.decode(row));
+    }
+    return result;
+}
+
+template <typename entity_type>
+    requires(db_entity<entity_type> || db_projection<entity_type>)
+[[nodiscard]] entity_rows<entity_type> decode_db_rows(db_rows&& rows) {
+    auto result = detail::db_result_access::make_entity_rows<entity_type>(rows.size());
+    std::array<bool, std::tuple_size_v<typename entity_type::columns_type>> selected;
+    selected.fill(true);
+    detail::db_entity_row_decoder<entity_type> decoder(selected);
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        result.push_back(decoder.decode(rows, i));
     }
     return result;
 }

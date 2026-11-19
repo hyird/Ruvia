@@ -87,7 +87,7 @@ template <typename prepare_type>
             throw http_client_error(make_error_code(http_client_errc::invalid_request), "invalid CONNECT-UDP authority");
         }
         const http_origin_options options{.host_ = authority->host(), .port_ = authority->port()};
-        origin = http_origin_view::for_scheme(pool.config().scheme_, options);
+        origin = http_origin_view(pool.config().scheme_, options);
     }
     // One preparation entry; the head's method and protocol select the kind.
     const auto prepare = [&](std::span<char> buffer) {
@@ -169,7 +169,7 @@ void publish_body_progress(http_client_response_state& state_value, const http1_
             state_value.trailers_.emplace_back(field.name(), field.value());
         }
     } else if (const auto* failure = decoded.get_if<http1_body_decode_failure>()) {
-        throw http_client_error(make_error_code(http_client_errc::protocol_error), http1_response_body_error_message(failure->error()));
+        throw http_client_error(make_error_code(http_client_errc::protocol_error), http1_body_decode_error_message(failure->error()));
     }
 }
 
@@ -189,8 +189,8 @@ void http1_client_exchange::restart_inactivity() noexcept {
         return;
     }
     try {
-        (void)inactivity_timer_.schedule(pool_.worker(), deadline_after(inactivity_bound_->value()), [this, generation = connection_.generation_](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired) {
+        (void)inactivity_timer_.schedule(pool_.worker(), deadline_after(inactivity_bound_->value()), [this, generation = connection_.generation_](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired) {
                 connection_.cancel(generation, client_abort_reason::timeout);
             }
         });
@@ -310,7 +310,7 @@ task<void> http1_client_exchange::run(const http_client_request_storage& request
         // boundary independently, but keep the connection leased until the
         // writer finishes the request or is explicitly stopped.
         state_value.complete_ = true;
-        state_value.data_signal_.notify();
+        state_value.body_signal_.notify();
         if (immediate_content && !immediate_completed) {
             // A complete early response ends the buffered exchange. Never wait
             // for a peer that stopped consuming content, or pool its remainder.
@@ -322,8 +322,8 @@ task<void> http1_client_exchange::run(const http_client_request_storage& request
         if (timeout.expired()) {
             connection_.cancel(connection_.generation_, client_abort_reason::timeout);
         } else if (const auto deadline = timeout.deadline()) {
-            (void)upload_completion_timer.schedule(pool_.worker(), *deadline, [this, generation = connection_.generation_](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired) {
+            (void)upload_completion_timer.schedule(pool_.worker(), *deadline, [this, generation = connection_.generation_](worker_timer_status outcome) noexcept {
+                if (outcome == worker_timer_status::expired) {
                     connection_.cancel(generation, client_abort_reason::timeout);
                 }
             });
@@ -527,8 +527,8 @@ task<void> http1_client_exchange::wait_for_body_space(http_client_response_state
         bool expired = false;
         worker_timer_registration timer;
         if (deadline) {
-            (void)timer.schedule(pool_.worker(), *deadline, [&expired, &state_value](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired) {
+            (void)timer.schedule(pool_.worker(), *deadline, [&expired, &state_value](worker_timer_status outcome) noexcept {
+                if (outcome == worker_timer_status::expired) {
                     expired = true;
                     state_value.space_signal_.notify();
                 }
@@ -563,7 +563,7 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
         http_socket_tunnel_transport plain_transport(stream.next_layer().socket(), nullptr, nullptr);
         while (!output.ended_ && !output.stopped_) {
             if (!output.chunk_ready_ && !output.end_requested_) {
-                co_await output.data_.wait();
+                co_await output.chunk_signal_.wait();
                 continue;
             }
             const auto write_timeout = timeout.constrained_by(response_->effective_write_timeout_);
@@ -573,8 +573,8 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
             }
             worker_timer_registration write_timer;
             if (const auto deadline = write_timeout.deadline()) {
-                (void)write_timer.schedule(pool_.worker(), *deadline, [this](worker_timer_outcome outcome) noexcept {
-                    if (outcome == worker_timer_outcome::expired) {
+                (void)write_timer.schedule(pool_.worker(), *deadline, [this](worker_timer_status outcome) noexcept {
+                    if (outcome == worker_timer_status::expired) {
                         expire_tunnel();
                     }
                 });
@@ -631,8 +631,8 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
             connection.throw_if_aborted();
         }
         if (const auto deadline = timeout.deadline()) {
-            (void)lifetime_timer.schedule(pool_.worker(), *deadline, [this](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired) {
+            (void)lifetime_timer.schedule(pool_.worker(), *deadline, [this](worker_timer_status outcome) noexcept {
+                if (outcome == worker_timer_status::expired) {
                     expire_tunnel();
                 }
             });
@@ -658,7 +658,7 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
                 const auto count = std::min(read_buffer.size(), room);
                 state_value.pending_.append(read_buffer.data(), count);
                 read_buffer.consume(count);
-                state_value.data_signal_.notify();
+                state_value.body_signal_.notify();
                 continue;
             }
             // The consumer may swap pending_ away while a read is in flight, so
@@ -678,7 +678,7 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
                     throw http_client_error(make_error_code(http_client_errc::io_error), "upstream closed the TLS connection without close_notify");
                 }
                 state_value.tunnel_->receive_ended_ = true;
-                state_value.data_signal_.notify();
+                state_value.body_signal_.notify();
                 break;
             }
         }
@@ -727,11 +727,11 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
     auto& upload = *state_value.upload_;
     worker_timer_registration continue_timer;
     if (!upload.content_released_) {
-        (void)continue_timer.schedule(pool_.worker(), deadline_after(upload.config_.continue_timeout_.value()), [&upload, &parser](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired && !upload.output_.stopped_) {
+        (void)continue_timer.schedule(pool_.worker(), deadline_after(upload.config_.continue_timeout_.value()), [&upload, &parser](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired && !upload.output_.stopped_) {
                 parser.release_request_content();
                 upload.content_released_ = true;
-                upload.output_.notify_data();
+                upload.output_.notify_chunk();
             }
         });
     }
@@ -746,7 +746,7 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
                 throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP upload timed out");
             }
             if (!upload.content_released_ || (!upload.output_.chunk_ready_ && !upload.output_.end_requested_)) {
-                co_await upload.output_.data_.wait();
+                co_await upload.output_.chunk_signal_.wait();
                 continue;
             }
             writer.release_content();

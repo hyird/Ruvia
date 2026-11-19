@@ -156,7 +156,7 @@ public:
             return ::ruvia::http2_event(std::move(value));
         }
     }
-    detail::http2_connection connection_;
+    detail::http2_engine connection_;
 };
 
 }  // namespace detail
@@ -303,9 +303,9 @@ std::optional<http2_event> http2_connection::next_event() & {
     return std::optional<http2_event>(std::move(result_value));
 }
 
-http2_output_batch_result http2_connection::take_output_batch(std::size_t max_bytes, std::string& output, http2_data_output_observer_type observer, void* observer_context) {
+http2_output_batch_result http2_connection::drain_output_batch(std::size_t max_bytes, std::string& output, http2_data_output_observer_type observer, void* observer_context) {
     impl_->connection_.retry_deferred_stream_leases();
-    return impl_->connection_.take_output_batch(max_bytes, output, observer, observer_context);
+    return impl_->connection_.drain_output_batch(max_bytes, output, observer, observer_context);
 }
 bool http2_connection::wants_write() const noexcept {
     return impl_->connection_.wants_write();

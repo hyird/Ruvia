@@ -70,7 +70,7 @@ using ruvia::xss_protection_header_policy;
     ruvia::test_app app;
     app.use<ruvia::security_headers_middleware>(options);
     app.use<ruvia::test::context_callback<decltype(callback)>>(&callback);
-    return app.request(ruvia::test_request::get("/"));
+    return app.dispatch(ruvia::test_request::get("/"));
 }
 
 }  // namespace security_header_test
@@ -293,7 +293,7 @@ csrf_outcome run_csrf(ruvia::csrf_middleware& csrf, std::string_view cookie_name
     ruvia::test_app app;
     app.use<csrf_test_middleware>(&csrf);
     app.use<accepted_response>();
-    const auto response = app.request(request);
+    const auto response = app.dispatch(request);
     const auto cookie = response.header("Set-Cookie");
     return csrf_outcome{
         .accepted_ = response.body() == "accepted",
@@ -460,7 +460,7 @@ TEST(Ruvia, csrf_rejection_reaches_the_error_handler) {
     auto request = ruvia::test_request::method("POST", "/");
     request.cookie("XSRF-TOKEN", "abcdef123456");
     request.header("X-XSRF-TOKEN", "DIFFERENTtoken");
-    const auto response = app.request(request);
+    const auto response = app.dispatch(request);
     EXPECT_EQ(response.status(), ruvia::http_status::forbidden);
     EXPECT_EQ(response.body(), std::string_view("handled"));
     EXPECT_EQ(seen_code, std::string("csrf_token_mismatch"));
@@ -493,7 +493,7 @@ constexpr std::array<std::string_view, 4> held_addresses{"192.0.2.1", "192.0.2.2
 constexpr std::chrono::steady_clock::time_point window_origin{std::chrono::hours(1)};
 
 [[nodiscard]] ruvia::dispatch_response request_at(ruvia::test_app& app, std::string_view address, std::chrono::steady_clock::duration offset, std::string_view target = "/rate-limit-table/ok") {
-    return app.request(ruvia::test_request::get(target).remote(address).arrival(window_origin + offset));
+    return app.dispatch(ruvia::test_request::get(target).remote(address).arrival(window_origin + offset));
 }
 
 [[nodiscard]] ruvia::http_status_code request_from(ruvia::test_app& app, std::string_view address, std::chrono::steady_clock::duration offset = {}) {
@@ -834,7 +834,7 @@ private:
     ruvia::http_client client(attachment.loop(), {.base_url_ = base_url, .connect_timeout_ = connect_timeout, .request_timeout_ = 3s, .versions_ = ruvia::http_client_versions{.http2_ = false}});
     std::exception_ptr failure;
     try {
-        auto response = co_await client.client().get("/happy-eyeballs").send();
+        auto response = co_await client.ref().get("/happy-eyeballs").send();
         const auto body = co_await response.collect_body();
         const std::string_view body_text(reinterpret_cast<const char*>(body.bytes().data()), body.size());
         EXPECT_TRUE(body_text == "ok");
@@ -873,7 +873,7 @@ TEST(Ruvia, http_client_fast_address_failure_immediately_starts_the_next_family)
     // Looks "localhost" up on the pool the loop borrows; declared first, it
     // outlives the attachment.
     ruvia::blocking_pool lookups({.thread_count_ = 1});
-    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &lookups});
+    auto attachment = ruvia::event_loop_attachment(io, {.blocking_pool_ = &lookups});
     auto loop = attachment.loop();
     auto worker = loop.worker();
     opposite_family_peer peer(io, worker, *first_is_v6);
@@ -886,9 +886,9 @@ TEST(Ruvia, http_client_fast_address_failure_immediately_starts_the_next_family)
 #else
     constexpr auto connect_timeout = 150ms;
 #endif
-    auto root = loop.start(exercise(attachment, peer, "localhost", connect_timeout));
+    auto root = loop.submit(exercise(attachment, peer, "localhost", connect_timeout)).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     lookups.join();
 }
 
@@ -898,14 +898,14 @@ TEST(Ruvia, http_client_connects_to_an_ipv6_literal) {
         return;
     }
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     auto loop = attachment.loop();
     auto worker = loop.worker();
     opposite_family_peer peer(io, worker, false);
     peer.start();
-    auto root = loop.start(exercise(attachment, peer, "::1", 3s));
+    auto root = loop.submit(exercise(attachment, peer, "::1", 3s)).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
 }
 
 namespace resolve_cancellation_tests {
@@ -940,7 +940,7 @@ ruvia::task<void> hold_executor(ruvia::worker_ref worker, std::shared_ptr<held_q
 
 ruvia::task<void> send_query(ruvia::http_client& client, ruvia::stop_token stop, std::optional<std::error_code>& code) {
     try {
-        auto response = co_await client.client().with_options({.stop_token_ = std::move(stop)}).get("/resolve").send();
+        auto response = co_await client.ref().with_options({.stop_token_ = std::move(stop)}).get("/resolve").send();
         (void)co_await response.collect_body();
     } catch (const ruvia::http_client_error& error) {
         code = error.code();
@@ -1033,7 +1033,7 @@ TEST(Ruvia, host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_fi
         // 循环借用查询池，池须声明在循环之前并比它活得久。
         ruvia::blocking_pool lookups({.thread_count_ = 1});
         ruvia::event_loop_pool pool({.loop_count_ = 1, .queue_capacity_ = 64, .blocking_pool_ = &lookups});
-        auto root = pool.loop(0).start(exercise(pool.loop(0), lookups, kind, held, observed, ready, retired));
+        auto root = pool.loop(0).submit(exercise(pool.loop(0), lookups, kind, held, observed, ready, retired)).take_value();
         pool.start();
         if (kind == stop_kind::worker_stop) {
             const bool started = ready_result.wait_for(2s) == std::future_status::ready;
@@ -1056,7 +1056,7 @@ TEST(Ruvia, host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_fi
             pool.join();
         }
         lookups.join();
-        std::move(root).get();
+        std::move(root).take_value();
         EXPECT_TRUE(observed.retired_before_release_);
         const auto expected = kind == stop_kind::timeout ? std::make_error_code(std::errc::timed_out) : (kind == stop_kind::cancellation ? std::make_error_code(std::errc::operation_canceled) : ruvia::make_error_code(ruvia::http_client_errc::closing));
         EXPECT_TRUE(observed.code_ == expected);
@@ -1072,13 +1072,13 @@ ruvia::task<std::string> read_to_end(asio::ip::tcp::socket& stream) {
         const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
             stream.async_read_some(asio::buffer(bytes_value), std::move(handler));
         });
-        if (read.error_code() == asio::error::eof) {
+        if (read.code() == asio::error::eof) {
             co_return received;
         }
-        if (read.error_code()) {
-            throw std::system_error(read.error_code());
+        if (read.code()) {
+            throw std::system_error(read.code());
         }
-        received.append(bytes_value.data(), read.result());
+        received.append(bytes_value.data(), read.value());
     }
 }
 
@@ -1093,8 +1093,8 @@ ruvia::task<void> serve_client_connect(asio::ip::tcp::socket& stream, unsigned m
         const auto read = co_await ruvia::async_asio<std::size_t>([&](auto h) {
             stream.async_read_some(asio::buffer(&byte, 1), std::move(h));
         });
-        if (read.error_code()) {
-            throw std::system_error(read.error_code());
+        if (read.code()) {
+            throw std::system_error(read.code());
         }
         head.push_back(byte);
     }
@@ -1109,8 +1109,8 @@ ruvia::task<void> serve_client_connect(asio::ip::tcp::socket& stream, unsigned m
         const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
             asio::async_write(stream, asio::buffer(bytes_value), std::move(handler));
         });
-        if (written.error_code()) {
-            throw std::system_error(written.error_code());
+        if (written.code()) {
+            throw std::system_error(written.code());
         }
         if (end) {
             std::error_code error;
@@ -1136,21 +1136,22 @@ ruvia::task<void> serve_client_connect(asio::ip::tcp::socket& stream, unsigned m
 
 void exercise_client_connect(unsigned mode) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     std::string received{};
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
-        const auto& worker_value = attachment.loop().worker();
+        const auto loop_for_worker_value = attachment.loop();
+        const auto& worker_value = loop_for_worker_value.worker();
         asio::ip::tcp::acceptor acceptor(io, {asio::ip::address_v4::loopback(), 0});
         ruvia::task_scope tasks(worker_value);
         const auto serve = [&]() -> ruvia::task<void> {
             auto accepted = co_await ruvia::async_asio<asio::ip::tcp::socket>([&](auto h) {
                 acceptor.async_accept(std::move(h));
             });
-            if (accepted.error_code()) {
-                throw std::system_error(accepted.error_code());
+            if (accepted.code()) {
+                throw std::system_error(accepted.code());
             }
-            auto socket = std::move(accepted).take_result();
+            auto socket = std::move(accepted).take_value();
             co_await serve_client_connect(socket, mode, received);
         };
         tasks.spawn(serve());
@@ -1160,13 +1161,13 @@ void exercise_client_connect(unsigned mode) {
             if (mode == 3) {
                 bool unavailable = false;
                 try {
-                    auto result_value = co_await client.client().connect("target.test:443").protocol("test-datagram").target("/datagrams").connect();
+                    auto result_value = co_await client.ref().connect("target.test:443").protocol("test-datagram").target("/datagrams").open();
                 } catch (const ruvia::http_client_error& error) {
                     unavailable = error.code() == ruvia::make_error_code(ruvia::http_client_errc::protocol_unavailable);
                 }
                 EXPECT_TRUE(unavailable);
             } else {
-                auto result_value = co_await client.client().connect("target.test:443").connect();
+                auto result_value = co_await client.ref().connect("target.test:443").open();
                 if (mode == 2) {
                     EXPECT_TRUE(!result_value.tunnel() && result_value.response());
                     if (!result_value.response()) {
@@ -1174,7 +1175,7 @@ void exercise_client_connect(unsigned mode) {
                     }
                     EXPECT_TRUE(result_value.response()->status().value() == 407);
                     std::string text{};
-                    while (auto bytes = co_await result_value.response()->stream().read_text()) {
+                    while (auto bytes = co_await result_value.response()->body().read_text()) {
                         text.append(*bytes);
                     }
                     EXPECT_TRUE(text == "denied");
@@ -1223,9 +1224,9 @@ void exercise_client_connect(unsigned mode) {
         }
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -1253,8 +1254,8 @@ ruvia::task<std::string> read_head(asio::ip::tcp::socket& stream) {
         const auto read = co_await ruvia::async_asio<std::size_t>([&](auto h) {
             stream.async_read_some(asio::buffer(&byte, 1), std::move(h));
         });
-        if (read.error_code()) {
-            throw std::system_error(read.error_code());
+        if (read.code()) {
+            throw std::system_error(read.code());
         }
         head.push_back(byte);
     }
@@ -1265,8 +1266,8 @@ ruvia::task<void> write_all(asio::ip::tcp::socket& stream, std::string_view byte
     const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
         asio::async_write(stream, asio::buffer(bytes_value), std::move(handler));
     });
-    if (written.error_code()) {
-        throw std::system_error(written.error_code());
+    if (written.code()) {
+        throw std::system_error(written.code());
     }
 }
 
@@ -1277,12 +1278,13 @@ ruvia::task<void> write_all(asio::ip::tcp::socket& stream, std::string_view byte
 // but never reuses that connection: the next request opens a new one.
 TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connection) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     unsigned accepted = 0;
     std::string after_rejection{};
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
-        const auto& worker_value = attachment.loop().worker();
+        const auto loop_for_worker_value = attachment.loop();
+        const auto& worker_value = loop_for_worker_value.worker();
         asio::ip::tcp::acceptor acceptor(io, {asio::ip::address_v4::loopback(), 0});
         ruvia::task_scope tasks(worker_value);
         const auto serve = [&]() -> ruvia::task<void> {
@@ -1290,13 +1292,13 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
                 auto accepted_socket = co_await ruvia::async_asio<asio::ip::tcp::socket>([&](auto h) {
                     acceptor.async_accept(std::move(h));
                 });
-                if (accepted_socket.error_code() == asio::error::operation_aborted) {
+                if (accepted_socket.code() == asio::error::operation_aborted) {
                     co_return;
                 }
-                if (accepted_socket.error_code()) {
-                    throw std::system_error(accepted_socket.error_code());
+                if (accepted_socket.code()) {
+                    throw std::system_error(accepted_socket.code());
                 }
-                auto socket = std::move(accepted_socket).take_result();
+                auto socket = std::move(accepted_socket).take_value();
                 ++accepted;
                 const auto head = co_await read_head(socket);
                 ruvia::http1_server_request_parser parsed;
@@ -1321,22 +1323,22 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5)});
         try {
             {
-                auto result_value = co_await client.client().connect("target.test:443").connect();
+                auto result_value = co_await client.ref().connect("target.test:443").open();
                 EXPECT_TRUE(!result_value.tunnel() && result_value.response());
                 if (!result_value.response()) {
                     throw std::runtime_error("missing CONNECT rejection");
                 }
                 EXPECT_TRUE(result_value.response()->status().value() == 407);
                 std::string text{};
-                while (auto bytes = co_await result_value.response()->stream().read_text()) {
+                while (auto bytes = co_await result_value.response()->body().read_text()) {
                     text.append(*bytes);
                 }
                 EXPECT_TRUE(text == "denied");
             }
-            auto response = co_await client.client().get("/after").send();
+            auto response = co_await client.ref().get("/after").send();
             EXPECT_TRUE(response.status().value() == 200);
             std::string text{};
-            while (auto bytes = co_await response.stream().read_text()) {
+            while (auto bytes = co_await response.body().read_text()) {
                 text.append(*bytes);
             }
             EXPECT_TRUE(text == "ok");
@@ -1355,9 +1357,9 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
         }
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -1413,7 +1415,7 @@ struct served_body final {
             const auto response = co_await ctx.static_file(root, {.relative_path_ = path});
             result.status_ = response.status();
             result.file_backed_ = response.file_body().has_value();
-            result.bytes_.assign(response.body_bytes());
+            result.bytes_.assign(response.body());
         } catch (const ruvia::http_error& error) {
             result.status_ = error.info().status();
         }

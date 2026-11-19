@@ -127,7 +127,7 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> request_info(ruvia::context& c) {
-        const auto& request = c.req();
+        const auto& request = c.request();
         std::string body;
         body.append("method=");
         body.append(request.method());
@@ -136,22 +136,22 @@ private:
         body.append("\nroute-path=");
         body.append(request.route_path());
         body.append("\nshortcut-header-host=");
-        body.append(c.req().header("Host").value_or(""));
+        body.append(c.request().header("Host").value_or(""));
         // Singular getters return the first of repeated field lines; unique_header() reports repeats.
         body.append("\nshortcut-header-x-dupe=");
-        body.append(c.req().header("X-Dupe").value_or(""));
+        body.append(c.request().header("X-Dupe").value_or(""));
         body.append("\nrequest-header-x-dupe=");
         body.append(request.header("X-Dupe").value_or(""));
         body.append("\nrequest-header-missing=");
         body.append(request.header("X-Missing").has_value() ? "present" : "missing");
         body.append("\nrequest-query-tag=");
-        body.append(c.req().query("tag").value_or(""));
+        body.append(c.request().query("tag").value_or(""));
         body.append("\nrequest-cookie-surface=");
-        if (auto surface_cookie = c.req().cookie("surface")) {
+        if (auto surface_cookie = c.request().cookie("surface")) {
             body.append(*surface_cookie);
         }
         body.append("\nparam-id=");
-        body.append(c.req().param("id").value_or(""));
+        body.append(c.request().param("id").value_or(""));
         body.append("\ntag-values=");
         const auto tags = request.queries("tag");
         ruvia::append_decimal(body, tags.size());
@@ -243,7 +243,7 @@ private:
 
     ruvia::task<ruvia::http_response> missing(ruvia::context& c) {
         c.policy().header("X-Not-Found-Prepared", "true");
-        co_return co_await c.not_found();
+        co_return co_await c.invoke_not_found();
     }
 
     ruvia::task<ruvia::http_response> middleware_return_handler(ruvia::context& c) {
@@ -268,7 +268,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> buffered_multipart(ruvia::context& c) {
-        auto parts = co_await c.req().multipart();
+        auto parts = co_await c.request().multipart();
         std::string body;
         body.append("parts=");
         ruvia::append_decimal(body, parts.size());
@@ -287,19 +287,19 @@ private:
     }
 
     ruvia::task<ruvia::http_response> bytes_body(ruvia::context& c) {
-        const auto bytes_value = co_await c.req().body_bytes();
+        const auto bytes_value = co_await c.request().body_bytes();
         std::string body;
         body.append("bytes bytes=");
         ruvia::append_decimal(body, bytes_value.size());
         body.append("\ncontent-type=");
-        body.append(c.req().header("Content-Type").value_or(std::string_view{}));
+        body.append(c.request().header("Content-Type").value_or(std::string_view{}));
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
 
     ruvia::task<ruvia::http_response> json_message(ruvia::context& c) {
-        const auto& json = c.req().validated<surface_json_message>();
-        const auto raw = co_await c.req().body_text();
+        const auto& json = c.request().validated<surface_json_message>();
+        const auto raw = co_await c.request().body_text();
         std::string body;
         body.append("json-value bytes=");
         ruvia::append_decimal(body, raw.size());
@@ -312,15 +312,15 @@ private:
     }
 
     ruvia::task<ruvia::http_response> discard(ruvia::context& c) {
-        co_await c.req().discard_body();
+        co_await c.request().discard_body();
         co_return c.text("", {.status_ = ruvia::http_status::no_content});
     }
 
     ruvia::task<ruvia::http_response> replace_item(ruvia::context& c) {
-        const auto body = co_await c.req().body_text();
+        const auto body = co_await c.request().body_text();
         std::string output;
         output.append("replace id=");
-        output.append(c.req().param("id").value_or(""));
+        output.append(c.request().param("id").value_or(""));
         output.append(" bytes=");
         ruvia::append_decimal(output, body.size());
         output.push_back('\n');
@@ -328,10 +328,10 @@ private:
     }
 
     ruvia::task<ruvia::http_response> patch_item(ruvia::context& c) {
-        const auto body = co_await c.req().body_text();
+        const auto body = co_await c.request().body_text();
         std::string output;
         output.append("patch id=");
-        output.append(c.req().param("id").value_or(""));
+        output.append(c.request().param("id").value_or(""));
         output.append(" bytes=");
         ruvia::append_decimal(output, body.size());
         output.push_back('\n');
@@ -341,13 +341,13 @@ private:
     ruvia::task<ruvia::http_response> delete_item(ruvia::context& c) {
         std::string output;
         output.append("deleted id=");
-        output.append(c.req().param("id").value_or(""));
+        output.append(c.request().param("id").value_or(""));
         output.push_back('\n');
         co_return c.text(std::move(output));
     }
 
     ruvia::task<ruvia::http_response> cookies(ruvia::context& c) {
-        const auto deleted = c.req().cookie("legacy-session");
+        const auto deleted = c.request().cookie("legacy-session");
         const std::array cookies_value{
             ruvia::set_cookie_options{
                 .name_ = "session",
@@ -385,7 +385,7 @@ private:
     ruvia::task<ruvia::http_response> any_method(ruvia::context& c) {
         std::string body;
         body.append("all method=");
-        body.append(c.req().method());
+        body.append(c.request().method());
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -393,9 +393,9 @@ private:
     ruvia::task<ruvia::http_response> on_item(ruvia::context& c) {
         std::string body;
         body.append("on method=");
-        body.append(c.req().method());
+        body.append(c.request().method());
         body.append(" id=");
-        body.append(c.req().param("id").value_or(""));
+        body.append(c.request().param("id").value_or(""));
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -403,8 +403,8 @@ private:
     ruvia::task<ruvia::http_response> signed_cookies(ruvia::context& c) {
         static constexpr std::string_view secret = "surface-signing-secret";
         const std::array cookies_value{ruvia::set_cookie_options{.name_ = "signed-session", .value_ = "signed-value", .secret_ = secret}};
-        const auto verified = c.req().signed_cookie({.name_ = "signed-session", .secret_ = secret});
-        const auto absent = c.req().signed_cookie({.name_ = "absent", .secret_ = secret});
+        const auto verified = c.request().signed_cookie({.name_ = "signed-session", .secret_ = secret});
+        const auto absent = c.request().signed_cookie({.name_ = "absent", .secret_ = secret});
         std::string body;
         body.append("signed=");
         body.append(verified.value_or("missing"));
@@ -441,7 +441,7 @@ private:
         std::string body;
         body.append(verb);
         body.append(" stream id=");
-        body.append(c.req().param("id").value_or(""));
+        body.append(c.request().param("id").value_or(""));
         body.append(" bytes=");
         ruvia::append_decimal(body, bytes_value);
         body.push_back('\n');

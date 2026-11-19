@@ -179,12 +179,20 @@ task<std::optional<std::span<const std::byte>>> server_connection::read(operatio
     return operations_.attach(read_(target_, read_active_, std::move(operation)));
 }
 
+task<std::optional<std::string_view>> server_connection::read_text(operation_options operation) & {
+    const auto chunk = co_await read(std::move(operation));
+    if (!chunk) {
+        co_return std::nullopt;
+    }
+    co_return as_chars(*chunk);
+}
+
 task<void> server_connection::write(outbound_bytes bytes, operation_options operation) & {
     require_active();
     if (send_ended_) {
         throw std::logic_error("server connection send direction has ended");
     }
-    return operations_.attach(write_(target_, std::move(bytes).into_string(), write_active_, send_ended_, std::move(operation)));
+    return operations_.attach(write_(target_, std::move(bytes).take_string(), write_active_, send_ended_, std::move(operation)));
 }
 
 task<void> server_connection::finish(operation_options operation) & {

@@ -142,7 +142,7 @@ public:
         publish_completion();
     }
 
-    [[nodiscard]] std::exception_ptr consume_failure() {
+    [[nodiscard]] std::exception_ptr take_failure() {
         wait();
         std::lock_guard lock(mutex_);
         if (!owner_alive_) {
@@ -223,8 +223,8 @@ public:
 
     void abandon_unstarted() noexcept;
 
-    t_type get() {
-        auto failure = completion_.consume_failure();
+    t_type take_value() {
+        auto failure = completion_.take_failure();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -322,11 +322,13 @@ public:
     }
 
     // Consumes the result, so only an rvalue extracts it:
-    // std::move(root).get(). User result moves run without the state mutex
-    // and may re-enter this root_task. The object must remain alive for the
-    // entire synchronous call; replacing its owned state during a move is
+    // std::move(root).take_value(). User result moves run without the state
+    // mutex and may re-enter this root_task. The object must remain alive for
+    // the entire synchronous call; replacing its owned state during a move is
     // supported.
-    decltype(auto) get() && {
+    [[nodiscard]] t_type take_value() &&
+        requires(!std::is_void_v<t_type>)
+    {
         if (!state_) {
             throw std::logic_error("root task has no result");
         }
@@ -340,16 +342,29 @@ public:
                 }
             }
         } retire{state_, state_value};
-        if constexpr (std::is_void_v<t_type>) {
-            state_value->get();
-            return;
-        } else {
-            return state_value->get();
-        }
+        return state_value->take_value();
     }
-    void get() & = delete;
-    void get() const& = delete;
-    void get() const&& = delete;
+    void take_value() &&
+        requires std::is_void_v<t_type>
+    {
+        if (!state_) {
+            throw std::logic_error("root task has no result");
+        }
+        auto state_value = state_;
+        struct retire_state final {
+            std::shared_ptr<detail::root_task_state<t_type>>& state_;
+            const std::shared_ptr<detail::root_task_state<t_type>>& expected_;
+            ~retire_state() {
+                if (state_ == expected_ && !expected_->completion().valid()) {
+                    state_.reset();
+                }
+            }
+        } retire{state_, state_value};
+        state_value->take_value();
+    }
+    void take_value() & = delete;
+    void take_value() const& = delete;
+    void take_value() const&& = delete;
 
 private:
     explicit root_task(std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept :
@@ -385,11 +400,9 @@ template <typename t_type>
 struct root_task_launch_guard;
 }  // namespace detail
 
-// Thrown by event_loop::start() when the loop refuses a task: status()
-// distinguishes a full admission queue from a stopping or retired loop. Also
-// the failure of an admitted root task whose launch was discarded because
-// the loop stopped before running it.
-class event_loop_start_rejected final : public std::runtime_error {
+// Failure of an admitted root task whose launch was discarded because the
+// loop stopped before running it; status() carries its post_status.
+class event_loop_submit_rejected final : public std::runtime_error {
 public:
     [[nodiscard]] post_status status() const noexcept {
         return status_;
@@ -400,16 +413,16 @@ private:
     template <typename>
     friend class detail::root_task_state;
 
-    explicit event_loop_start_rejected(post_status status);
+    explicit event_loop_submit_rejected(post_status status);
 
     post_status status_;
 };
 
-// The outcome of event_loop::try_start(): accepted owns the started
+// The outcome of event_loop::submit(): accepted owns the started
 // root_task (value()/take_value()); a rejection owns the unconsumed cold task
 // (rejected()/take_rejected()) with its post_status.
 template <typename t_type>
-using event_loop_start_result = delivery_result<task<t_type>, post_status, post_status::accepted, root_task<t_type>>;
+using event_loop_submit_result = delivery_result<task<t_type>, post_status, post_status::accepted, root_task<t_type>>;
 
 namespace detail {
 
@@ -418,11 +431,11 @@ inline void root_task_state<t_type>::abandon_unstarted() noexcept {
     // Retire the cold frame and publish completion before letting the loop retire.
     const auto lease = std::move(retirement_lease_);
     task_.reset();
-    completion_.complete_failure(std::make_exception_ptr(event_loop_start_rejected(post_status::stopping)));
+    completion_.complete_failure(std::make_exception_ptr(event_loop_submit_rejected(post_status::stopping)));
 }
 
 // drain() destroys remaining queue closures without invoking them when
-// a posted task throws. Own that destructor path so wait()/get() cannot
+// a posted task throws. Own that destructor path so wait()/take_value() cannot
 // hang and an unobserved failure still reaches the loop sink.
 template <typename t_type>
 struct root_task_launch_guard final {
@@ -439,7 +452,7 @@ struct root_task_launch_guard final {
             completion_->abandon_unstarted();
         }
     }
-    [[nodiscard]] std::shared_ptr<detail::root_task_state<t_type>> release() noexcept {
+    [[nodiscard]] std::shared_ptr<detail::root_task_state<t_type>> take() noexcept {
         return std::exchange(completion_, nullptr);
     }
 };
@@ -456,7 +469,7 @@ public:
     event_loop_stop_registration(event_loop_stop_registration&&) noexcept = default;
     event_loop_stop_registration& operator=(event_loop_stop_registration&& other) noexcept;
 
-    [[nodiscard]] bool valid() const noexcept;
+    [[nodiscard]] bool registered() const noexcept;
     void reset() noexcept;
 
 private:
@@ -482,10 +495,9 @@ public:
     asio::io_context& io_context() const&& = delete;
     [[nodiscard]] asio::io_context::executor_type executor() const;
     // The loop's worker endpoint: admission state, identity, posting, timers,
-    // and the completion lane. Rvalue loops return a copy: the worker_ref must not
-    // outlive its loop owner.
+    // and the completion lane. The worker_ref must not outlive its loop owner.
     [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] worker_ref worker() const&& noexcept;
+    const worker_ref& worker() const&& = delete;
 
     // Reports a terminal runtime failure without throwing on the caller's
     // thread. Pool owners retain the first failure for join(); attachments
@@ -515,7 +527,7 @@ public:
         });
     }
 
-    // Starts one lazy task on this loop. Accepted: the loop owns the started
+    // Submits one lazy task on this loop. Accepted: the loop owns the started
     // coroutine until completion and the result holds its structured
     // completion owner; abandoning that root_task never destroys a suspended
     // frame, and an abandoned failure is routed to the loop failure sink.
@@ -524,8 +536,8 @@ public:
     // Allocation for an admitted task may throw.
     template <typename t_type>
         requires detail::asio_task_result<t_type>
-    [[nodiscard]] event_loop_start_result<t_type> try_start(task<t_type> task_value) const {
-        using result_type = event_loop_start_result<t_type>;
+    [[nodiscard]] event_loop_submit_result<t_type> submit(task<t_type> task_value) const {
+        using result_type = event_loop_submit_result<t_type>;
         detail::root_task_retirement retirement_lease(state_);
         if (!retirement_lease) {
             return detail::delivery_access::reject<result_type>(post_status::stopping, std::move(task_value));
@@ -536,7 +548,7 @@ public:
         auto launch_root = [&]() -> move_only_function<void()> {
             completion = std::make_shared<detail::root_task_state<t_type>>(bound_worker, loop, std::move(task_value), std::move(retirement_lease));
             return [launch = detail::root_task_launch_guard<t_type>(completion)]() mutable {
-                auto state_value = launch.release();
+                auto state_value = launch.take();
                 auto* raw_state = state_value.get();
                 raw_state->start(std::move(state_value));
             };
@@ -547,18 +559,6 @@ public:
             return detail::delivery_access::reject<result_type>(status, std::move(task_value));
         }
         return detail::delivery_access::accept<result_type>(detail::root_task_access::make(std::move(completion)));
-    }
-
-    // The local strict form of try_start(): a rejection destroys the cold task
-    // and throws event_loop_start_rejected carrying its status.
-    template <typename t_type>
-        requires detail::asio_task_result<t_type>
-    [[nodiscard]] root_task<t_type> start(task<t_type> task_value) const {
-        auto start_result = try_start(std::move(task_value));
-        if (!start_result.accepted()) {
-            throw event_loop_start_rejected(start_result.status());
-        }
-        return std::move(start_result).take_value();
     }
 
     // Stop cleanup is asynchronous and joined before runtime retirement. The
@@ -633,6 +633,11 @@ struct event_loop_attachment_options final {
 // by its caller.
 class event_loop_attachment final {
 public:
+    // Attach a Ruvia worker to a caller-owned io_context. The caller retains
+    // ownership of the context's unrelated work and stop/restart policy;
+    // request_stop() retires only Ruvia-managed work and never cancels
+    // unrelated operations.
+    explicit event_loop_attachment(asio::io_context& io_context, event_loop_attachment_options options = {});
     ~event_loop_attachment();
 
     event_loop_attachment(const event_loop_attachment&) = delete;
@@ -654,17 +659,8 @@ public:
     void request_stop() noexcept;
 
 private:
-    explicit event_loop_attachment(std::shared_ptr<detail::event_loop_state> state_value) noexcept;
-
     std::shared_ptr<detail::event_loop_state> state_;
-    friend event_loop_attachment attach_event_loop(asio::io_context&, event_loop_attachment_options);
 };
-
-// Attach a Ruvia worker to a caller-owned io_context. The caller retains
-// ownership of the context's unrelated work and stop/restart policy;
-// request_stop() retires only Ruvia-managed work and never cancels unrelated
-// operations.
-[[nodiscard]] event_loop_attachment attach_event_loop(asio::io_context& io_context, event_loop_attachment_options options = {});
 
 struct event_loop_pool_options final {
     std::size_t loop_count_{0};

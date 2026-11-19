@@ -162,12 +162,12 @@ public:
     [[nodiscard]] http_connection_role role() const noexcept;
     // For the QUIC-TLS adapter's connection reference
     // (ngtcp2_crypto_conn_ref::get_conn); every other capability has a member.
-    [[nodiscard]] ngtcp2_conn* native_handle() & noexcept RUVIA_LIFETIMEBOUND;
-    ngtcp2_conn* native_handle() && = delete;
-    [[nodiscard]] const ngtcp2_conn* native_handle() const& noexcept RUVIA_LIFETIMEBOUND;
-    const ngtcp2_conn* native_handle() const&& = delete;
+    [[nodiscard]] ngtcp2_conn* native() & noexcept RUVIA_LIFETIMEBOUND;
+    ngtcp2_conn* native() && = delete;
+    [[nodiscard]] const ngtcp2_conn* native() const& noexcept RUVIA_LIFETIMEBOUND;
+    const ngtcp2_conn* native() const&& = delete;
     [[nodiscard]] void* callback_context() const noexcept;
-    void set_tls_native_handle(void* tls_native_handle) noexcept;
+    void set_tls_session(void* tls_session) noexcept;
     [[nodiscard]] bool handshake_completed() const noexcept;
     [[nodiscard]] bool after_retry() const noexcept;
     [[nodiscard]] bool stateless_reset_received() const noexcept;

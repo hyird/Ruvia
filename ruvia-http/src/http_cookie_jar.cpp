@@ -28,7 +28,7 @@ namespace {
     if (!host.empty() && host.front() == '[' && host.back() == ']') {
         return true;
     }
-    return ip_address::parse(host).has_value();
+    return ip_address::try_parse(host).has_value();
 }
 
 [[nodiscard]] std::chrono::system_clock::time_point compute_cookie_expiration(std::chrono::system_clock::time_point now, std::int64_t max_age_seconds) noexcept {
@@ -157,11 +157,11 @@ void http_cookie_jar::clear() noexcept {
     cookie_bytes_ = 0;
 }
 
-void http_cookie_jar::add_configured_cookie(std::string_view name, std::string_view value) {
-    add_configured_cookie_impl(name, value, nullptr, nullptr);
+void http_cookie_jar::set_cookie(std::string_view name, std::string_view value) {
+    set_cookie_impl(name, value, nullptr, nullptr);
 }
 
-void http_cookie_jar::add_configured_cookie_impl(std::string_view name, std::string_view value, std::string* owned_name, std::string* owned_value) {
+void http_cookie_jar::set_cookie_impl(std::string_view name, std::string_view value, std::string* owned_name, std::string* owned_value) {
     if (!is_valid_http_header_name(name) || !is_valid_cookie_value(value)) {
         throw std::invalid_argument("configured cookie requires valid name and value");
     }
@@ -299,7 +299,7 @@ bool http_cookie_jar::store_received_cookie(const received_cookie& cookie) {
     return true;
 }
 
-bool http_cookie_jar::absorb_set_cookie(std::string_view request_target, std::string_view set_cookie_value, std::chrono::system_clock::time_point now) {
+bool http_cookie_jar::apply_set_cookie(std::string_view request_target, std::string_view set_cookie_value, std::chrono::system_clock::time_point now) {
     if (!cookies_.empty() && next_expiry_.has_value() && now >= *next_expiry_) {
         discard_expired(now);
     }
@@ -310,7 +310,7 @@ bool http_cookie_jar::absorb_set_cookie(std::string_view request_target, std::st
     return store_received_cookie(*accepted);
 }
 
-void http_cookie_jar::retain_response_cookies(std::string_view request_target, const http_header_range_view& headers, std::chrono::system_clock::time_point now) {
+void http_cookie_jar::apply_response_cookies(std::string_view request_target, const http_header_range_view& headers, std::chrono::system_clock::time_point now) {
     bool discarded_expired = cookies_.empty();
     for (const auto header : headers) {
         if (!http_ascii_equals_ignore_case(header.name(), "set-cookie")) {
@@ -328,7 +328,7 @@ void http_cookie_jar::retain_response_cookies(std::string_view request_target, c
     }
 }
 
-std::string http_cookie_jar::cookie_header(std::string_view request_target, bool include_received, std::chrono::system_clock::time_point now) {
+std::string http_cookie_jar::format_cookie_header(std::string_view request_target, bool include_received, std::chrono::system_clock::time_point now) {
     std::string output;
     visit_matching_cookies(request_target, include_received, now, [&output](std::string_view name, std::string_view value) {
         append_cookie_request_pair(output, name, value);

@@ -9,6 +9,7 @@
 namespace ruvia::detail {
 
 struct suspend_race_pending final {};
+struct suspend_race_consumed final {};
 
 // A completion can race the suspension of the awaiter's coroutine in two
 // orders: complete-then-suspend and suspend-then-complete. A caller that
@@ -76,15 +77,24 @@ public:
         return ready->continuation();
     }
 
-    [[nodiscard]] t_type take_value() noexcept(std::is_nothrow_move_constructible_v<t_type>) {
+    [[nodiscard]] t_type take_value() & noexcept(std::is_nothrow_move_constructible_v<t_type>) {
+        struct mark_consumed final {
+            state_type& state_;
+            ~mark_consumed() {
+                state_.template emplace<suspend_race_consumed>();
+            }
+        };
         if (auto* ready = std::get_if<suspend_race_ready_before_suspend_type>(&state_)) {
+            const mark_consumed consumed{state_};
             return std::move(*ready).take_value();
         }
         if (auto* ready = std::get_if<suspend_race_ready_after_suspend_type>(&state_)) {
+            const mark_consumed consumed{state_};
             return std::move(*ready).take_value();
         }
         std::terminate();
     }
+    t_type take_value() && = delete;
 
 private:
     class suspend_race_suspended_type final {
@@ -132,7 +142,7 @@ private:
         std::coroutine_handle<> continuation_;
     };
 
-    using state_type = std::variant<suspend_race_pending, suspend_race_suspended_type, suspend_race_ready_before_suspend_type, suspend_race_ready_after_suspend_type>;
+    using state_type = std::variant<suspend_race_pending, suspend_race_suspended_type, suspend_race_ready_before_suspend_type, suspend_race_ready_after_suspend_type, suspend_race_consumed>;
 
     state_type state_;
 };

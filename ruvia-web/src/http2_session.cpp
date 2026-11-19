@@ -1002,10 +1002,10 @@ http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor
     remote_address_(session_.services().remote_address()),
     connection_(ruvia::http2_connection::server({.frame_observer_ = session_.options().http2_frame_ ? +[](void* target, const http2_frame_metadata& metadata) noexcept {
                                                      auto& self = *static_cast<http2_sans_io_session_engine*>(target);
-                                                     self.session_.options().http2_frame_(server_observation_access::http2_frame(self.base_services_.get_conn_info().connection_id(), metadata));
+                                                     self.session_.options().http2_frame_(server_observation_access::http2_frame(self.base_services_.get_connection_info().connection_id(), metadata));
                                                  } : nullptr, .header_observer_ = session_.options().http2_headers_ ? +[](void* target, const http2_header_metadata& metadata) noexcept {
                                                      auto& self = *static_cast<http2_sans_io_session_engine*>(target);
-                                                     self.session_.options().http2_headers_(server_observation_access::http2_headers(self.base_services_.get_conn_info().connection_id(), metadata));
+                                                     self.session_.options().http2_headers_(server_observation_access::http2_headers(self.base_services_.get_connection_info().connection_id(), metadata));
                                                  } : nullptr, .observer_context_ = this})),
     write_signal_(session_.services().worker()),
     output_budget_(session_.services().worker()),
@@ -1035,7 +1035,7 @@ void http2_sans_io_session_engine::take_output(std::string& output) {
     // core batch operation only consumes output and invokes its observer after the
     // copy succeeds, so allocation failure leaves protocol bytes and budget intact.
     output.clear();
-    (void)connection_.take_output_batch(http2_data_output_credit_slots * http2_data_output_credit_bytes + 4096, output, [](void* context_value, std::uint32_t stream_id, std::size_t payload_bytes) noexcept {
+    (void)connection_.drain_output_batch(http2_data_output_credit_slots * http2_data_output_credit_bytes + 4096, output, [](void* context_value, std::uint32_t stream_id, std::size_t payload_bytes) noexcept {
         static_cast<http2_data_output_budget*>(context_value)->note_data_output(stream_id, payload_bytes);
     }, &output_budget_);
     output_write_in_flight_ = !output.empty();
@@ -1660,7 +1660,7 @@ void http2_sans_io_session_engine::on_body_chunk(http2_data_event& body_chunk) {
     auto* stream_runtime = stream_runtimes_.find(stream_id);
     if (stream_runtime == nullptr) {
         // Destroying the taken credit returns its bytes to the receive windows.
-        if (body_chunk.take_credit().valid()) {
+        if (std::move(body_chunk).take_credit().valid()) {
             wake_writer();
         }
         return;
@@ -1679,7 +1679,7 @@ void http2_sans_io_session_engine::on_body_chunk(http2_data_event& body_chunk) {
         // request borrows the buffered bytes as they were at dispatch.
         // Appending would reallocate under that borrowed view, so later DATA
         // is discarded and only its flow-control credit returned.
-        (void)body_chunk.take_credit();
+        (void)std::move(body_chunk).take_credit();
         wake_writer();
         return;
     }
@@ -1688,7 +1688,7 @@ void http2_sans_io_session_engine::on_body_chunk(http2_data_event& body_chunk) {
         reset_event_stream(stream_id, http2_error_code::internal_error);
         return;
     }
-    store_multiplexed_request_body_chunk(*stream_runtime, body_chunk.bytes(), body_chunk.take_credit(), http_request_body_limit(stream_runtime->resolution(), stream_runtime->body_mode(), admission_policy_), options.server_.max_buffered_body_bytes_, [this, stream_id](bool cancelled) noexcept {
+    store_multiplexed_request_body_chunk(*stream_runtime, body_chunk.bytes(), std::move(body_chunk).take_credit(), http_request_body_limit(stream_runtime->resolution(), stream_runtime->body_mode(), admission_policy_), options.server_.max_buffered_body_bytes_, [this, stream_id](bool cancelled) noexcept {
         reset_event_stream(stream_id, cancelled ? http2_error_code::cancel : http2_error_code::internal_error);
     }, [this]() noexcept {
         wake_writer();
@@ -1703,7 +1703,7 @@ void http2_sans_io_session_engine::on_tunnel_data(http2_tunnel_data_event& tunne
     auto* stream_runtime = stream_runtimes_.find(stream_id);
     auto* signal = stream_runtime != nullptr ? stream_runtime->signal() : nullptr;
     if (stream_runtime == nullptr || signal == nullptr) {
-        if (tunnel_data.take_credit().valid()) {
+        if (std::move(tunnel_data).take_credit().valid()) {
             wake_writer();
         }
         return;
@@ -1711,11 +1711,11 @@ void http2_sans_io_session_engine::on_tunnel_data(http2_tunnel_data_event& tunne
     if (!stream_runtime->route_selected() || stream_runtime->body_mode() != request_body_mode::stream) {
         // Only a CONNECT that no tunnel route will accept lacks a streaming body:
         // its optimistic DATA is never consumed, so return the credit at once.
-        (void)tunnel_data.take_credit();
+        (void)std::move(tunnel_data).take_credit();
         wake_writer();
         return;
     }
-    store_multiplexed_tunnel_bytes(*stream_runtime, tunnel_data.bytes(), tunnel_data.take_credit(), options.server_.max_buffered_body_bytes_, [this, stream_id]() noexcept {
+    store_multiplexed_tunnel_bytes(*stream_runtime, tunnel_data.bytes(), std::move(tunnel_data).take_credit(), options.server_.max_buffered_body_bytes_, [this, stream_id]() noexcept {
         reset_event_stream(stream_id, http2_error_code::cancel);
     });
 }
@@ -1811,7 +1811,7 @@ void http2_sans_io_session_engine::drain_events() {
 http2_feed_status http2_sans_io_session_engine::feed_and_drain(std::string_view bytes_value) {
     // Once per read, outside the retry loop below, which feeds the same bytes again.
     if (const auto observer = session_.options().http2_input_) {
-        observer(server_observation_access::http2_input(base_services_.get_conn_info().connection_id(), std::as_bytes(std::span(bytes_value.data(), bytes_value.size()))));
+        observer(server_observation_access::http2_input(base_services_.get_connection_info().connection_id(), std::as_bytes(std::span(bytes_value.data(), bytes_value.size()))));
     }
     for (;;) {
         const auto result_value = connection_.feed(bytes_value);
@@ -1907,8 +1907,8 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
                 auto read_completion = co_await ruvia::async_asio<std::size_t>([&stream, &read_buffer](auto handler) mutable {
                     stream.async_read_some(asio::buffer(read_buffer), std::move(handler));
                 });
-                const auto error = read_completion.error_code();
-                const auto bytes_read = read_completion.result();
+                const auto error = read_completion.code();
+                const auto bytes_read = read_completion.value();
                 if (error || bytes_read == 0) {
                     reader_terminal_error = error ? error : std::make_error_code(std::errc::connection_reset);
                     if (reader_terminal_error == asio::error::eof) {
@@ -2265,7 +2265,7 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
 
     // Keep the first DATA submission synchronous: a response fitting the
     // current window and one output credit needs no DATA coroutine.
-    auto body = response.body_bytes();
+    auto body = response.body();
     if (!body.empty() && signal != nullptr && !signal->terminated() && !connection_.stream_aborted(stream_id)) {
         const auto window = connection_.send_window_state(stream_id);
         if (window && window->available_ != 0 && output_budget_.try_acquire(stream_id, false)) {

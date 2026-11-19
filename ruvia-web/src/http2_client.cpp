@@ -91,7 +91,7 @@ task<http2_client_session_start_result> http2_client_session::start(http2_connec
     const auto input = read_buffer_.prepare(read_buffer_bytes);
     for (;;) {
         while (connection_->wants_write()) {
-            take_output_batch(write_buffer_);
+            drain_output_batch(write_buffer_);
             const auto written = co_await transport_.write(write_buffer_, timeout);
             http_clear_string_retaining_small(write_buffer_, write_batch_bytes);
             if (!written.ok()) {
@@ -223,8 +223,8 @@ bool http2_client_session::begin_close(const client_transport_result& transport)
         // A client drain queues its final GOAWAY at once; idempotent. closed:
         // the connection already failed and its termination path runs.
         (void)connection_->begin_drain();
-        if (!close_timer_.schedule(worker_, deadline_after(http2_client_goaway_flush_time), [this, generation](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired) {
+        if (!close_timer_.schedule(worker_, deadline_after(http2_client_goaway_flush_time), [this, generation](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired) {
                 fail(generation, close_result_, {});
             }
         })) {
@@ -273,8 +273,8 @@ bool http2_client_session::ended(std::uint64_t generation) const noexcept {
 }
 
 void http2_client_session::schedule_ping(std::uint64_t generation, std::chrono::steady_clock::time_point deadline) {
-    (void)ping_timer_.schedule(worker_, deadline, [this, generation](worker_timer_outcome outcome) noexcept {
-        if (outcome == worker_timer_outcome::expired) {
+    (void)ping_timer_.schedule(worker_, deadline, [this, generation](worker_timer_status outcome) noexcept {
+        if (outcome == worker_timer_status::expired) {
             check_liveness(generation);
         }
     });
@@ -315,9 +315,9 @@ void http2_client_session::check_liveness(std::uint64_t generation) noexcept {
     }
 }
 
-void http2_client_session::take_output_batch(std::string& output) {
+void http2_client_session::drain_output_batch(std::string& output) {
     output.clear();
-    (void)connection_->take_output_batch(write_batch_bytes, output);
+    (void)connection_->drain_output_batch(write_batch_bytes, output);
 }
 
 bool http2_client_session::feed(std::string_view bytes_value) {
@@ -402,7 +402,7 @@ task<void> http2_client_session::run_writer(std::uint64_t generation) {
     try {
         for (;;) {
             while (generation_ == generation && !failed_ && connection_->wants_write()) {
-                take_output_batch(write_buffer_);
+                drain_output_batch(write_buffer_);
                 writing_ = true;
                 const auto written = co_await transport_.write(write_buffer_, operation_deadline(handler_.http2_write_timeout()));
                 writing_ = false;
@@ -525,8 +525,8 @@ void http_client_connection::schedule_http2_stream_timer(http2_stream& stream) {
 
 void http_client_connection::arm_http2_write_timer(worker_timer_registration& write_timer, const http2_stream& stream) {
     if (const auto deadline = stream.timeout_->constrained_by(stream.state_->effective_write_timeout_).deadline()) {
-        (void)write_timer.schedule(pool_.worker(), *deadline, [this, request_id = stream.request_id_](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired) {
+        (void)write_timer.schedule(pool_.worker(), *deadline, [this, request_id = stream.request_id_](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired) {
                 cancel_http2_stream(request_id, client_abort_reason::timeout);
             }
         });
@@ -677,7 +677,7 @@ void http_client_connection::finish_http2_message(std::uint32_t stream_id, http2
         // Response EOF is independent of the request send half (RFC 9113 8.1).
         // A consumer can finish reading now and still write/end its upload.
         state_value.complete_ = true;
-        state_value.data_signal_.notify();
+        state_value.body_signal_.notify();
         stream->signal_.notify();
     } catch (...) {
         fail_http2_stream(*stream, std::current_exception(), false);
@@ -770,9 +770,9 @@ void http_client_connection::on_http2_event(http2_event& event) {
             fail_http2_stream(*stream, std::current_exception(), true);
         }
     } else if (auto* chunk = event.data()) {
-        consume_http2_data(chunk->stream_id(), chunk->bytes(), chunk->take_credit());
+        consume_http2_data(chunk->stream_id(), chunk->bytes(), std::move(*chunk).take_credit());
     } else if (auto* data = event.tunnel_data()) {
-        consume_http2_data(data->stream_id(), data->bytes(), data->take_credit());
+        consume_http2_data(data->stream_id(), data->bytes(), std::move(*data).take_credit());
     } else if (const auto* tunnel_end = event.tunnel_end()) {
         if (auto* stream = find_http2_stream(tunnel_end->stream_id()); stream != nullptr && !stream->failed()) {
             auto& state_value = *stream->state_;
@@ -780,7 +780,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
                 stream->error_ = make_error_code(http_client_errc::protocol_error);
             } else {
                 state_value.tunnel_->receive_ended_ = true;
-                state_value.data_signal_.notify();
+                state_value.body_signal_.notify();
             }
             stream->timer_.read_deadline_.reset();
             stream->signal_.notify();
@@ -817,9 +817,9 @@ void http_client_connection::on_http2_event(http2_event& event) {
                 stream->complete_ = true;
                 state_value.complete_ = true;
                 state_value.tunnel_->output_.ended_ = true;
-                state_value.tunnel_->output_.notify_data();
+                state_value.tunnel_->output_.notify_chunk();
                 state_value.tunnel_->output_.space_.notify();
-                state_value.data_signal_.notify();
+                state_value.body_signal_.notify();
                 stream->signal_.notify();
             } else if (!state_value.tunnel_ || !state_value.tunnel_->accepted_ || !state_value.tunnel_->receive_ended_ || !state_value.tunnel_->output_.end_requested_ || closed->error() != http2_error_code::no_error) {
                 stream->error_ = make_error_code(http_client_errc::protocol_error);
@@ -960,8 +960,8 @@ task<void> http_client_connection::wait_for_http2_session_stop(const operation_d
         if (*deadline <= std::chrono::steady_clock::now()) {
             throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP/2 session shutdown wait timed out");
         }
-        (void)deadline_timer.schedule(pool_.worker(), *deadline, [this](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired) {
+        (void)deadline_timer.schedule(pool_.worker(), *deadline, [this](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired) {
                 http2_.state_signal().notify();
             }
         });
@@ -1331,7 +1331,7 @@ task<void> http_client_pool::run_http2_push(std::unique_ptr<http2_push_driver> d
     }
     state_value.complete_ = true;
     state_value.head_signal_.notify();
-    state_value.data_signal_.notify();
+    state_value.body_signal_.notify();
     state_value.space_signal_.notify();
 }
 

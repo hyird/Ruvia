@@ -270,7 +270,7 @@ private:
 // callback.
 class http2_input_record final {
 public:
-    // conn_info::connection_id() of every request the connection carries.
+    // connection_info::connection_id() of every request the connection carries.
     [[nodiscard]] constexpr std::uint64_t connection_id() const noexcept {
         return connection_id_;
     }

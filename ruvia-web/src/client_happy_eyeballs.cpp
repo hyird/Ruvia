@@ -64,7 +64,7 @@ void client_happy_eyeballs::schedule_next() noexcept {
         return;
     }
     try {
-        if (delay_.schedule(worker_, deadline_after(client_connection_attempt_delay), [this](worker_timer_outcome outcome) noexcept {
+        if (delay_.schedule(worker_, deadline_after(client_connection_attempt_delay), [this](worker_timer_status outcome) noexcept {
             on_delay(outcome);
         })) {
             return;
@@ -98,8 +98,8 @@ void client_happy_eyeballs::start_next() noexcept {
     schedule_next();
 }
 
-void client_happy_eyeballs::on_delay(worker_timer_outcome outcome) noexcept {
-    if (outcome == worker_timer_outcome::cancelled) {
+void client_happy_eyeballs::on_delay(worker_timer_status outcome) noexcept {
+    if (outcome == worker_timer_status::cancelled) {
         cancel();
         return;
     }

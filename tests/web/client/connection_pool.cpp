@@ -126,12 +126,12 @@ TEST(Ruvia, http1_response_on_a_closing_connection_discards_trailing_bytes) {
     ruvia::http_client client(worker.attachment_.loop(), config);
     auto operation = [&]() -> ruvia::task<void> {
         {
-            auto response = co_await client.client().get("/closing").send();
+            auto response = co_await client.ref().get("/closing").send();
             const auto bytes_value = co_await response.collect_body();
             EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), "hello");
         }
         {
-            auto result = co_await client.client().connect("target.test:443").connect();
+            auto result = co_await client.ref().connect("target.test:443").open();
             auto* response = result.response();
             EXPECT_TRUE(response != nullptr);
             if (response != nullptr) {
@@ -141,7 +141,7 @@ TEST(Ruvia, http1_response_on_a_closing_connection_discards_trailing_bytes) {
             }
         }
         co_await peer.wait();
-        EXPECT_EQ(client.client().stats().failed_requests_, std::size_t{0});
+        EXPECT_EQ(client.ref().stats().failed_requests_, std::size_t{0});
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
@@ -187,7 +187,7 @@ TEST(Ruvia, http_client_replaces_a_keep_alive_connection_the_peer_closed_while_i
     auto operation = [&]() -> ruvia::task<void> {
         const acceptor_closer closer{acceptor};
         for (const std::string_view expected : {std::string_view("first"), std::string_view("second")}) {
-            auto response = co_await client.client().get("/idle").send();
+            auto response = co_await client.ref().get("/idle").send();
             const auto bytes_value = co_await response.collect_body();
             EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), expected);
             while (!idle_closed) {
@@ -202,9 +202,9 @@ TEST(Ruvia, http_client_replaces_a_keep_alive_connection_the_peer_closed_while_i
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
         }
-        const auto stats = client.client().stats();
+        const auto stats = client.ref().stats();
         EXPECT_EQ(stats.failed_requests_, std::size_t{0});
-        EXPECT_EQ(stats.idle_connections_with_pending_data_, std::size_t{0});
+        EXPECT_EQ(stats.idle_connections_with_pending_input_, std::size_t{0});
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
@@ -268,13 +268,13 @@ TEST(Ruvia, http_client_retries_only_idempotent_requests_after_a_reused_connecti
     ruvia::http_client client(worker.attachment_.loop(), config);
     auto operation = [&]() -> ruvia::task<void> {
         const acceptor_closer closer{acceptor};
-        auto first = co_await client.client().get("/prime").send();
+        auto first = co_await client.ref().get("/prime").send();
         const auto first_body = co_await first.collect_body();
         EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(first_body.bytes().data()), first_body.size()), "prime");
 
         std::optional<std::string> retry_body;
         try {
-            auto response = co_await client.client().get("/retry").send();
+            auto response = co_await client.ref().get("/retry").send();
             const auto bytes_value = co_await response.collect_body();
             retry_body.emplace(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size());
         } catch (const ruvia::http_client_error&) {
@@ -284,7 +284,7 @@ TEST(Ruvia, http_client_retries_only_idempotent_requests_after_a_reused_connecti
         std::optional<std::error_code> post_failure;
         if (retry_body.has_value()) {
             try {
-                (void)co_await client.client().request("POST", "/post").send();
+                (void)co_await client.ref().request("POST", "/post").send();
             } catch (const ruvia::http_client_error& error) {
                 post_failure = error.code();
             }
@@ -297,7 +297,7 @@ TEST(Ruvia, http_client_retries_only_idempotent_requests_after_a_reused_connecti
         }
         EXPECT_TRUE(retry_body == std::optional<std::string>(std::string("retried")));
         EXPECT_TRUE(post_failure == ruvia::make_error_code(ruvia::http_client_errc::io_error));
-        const auto stats = client.client().stats();
+        const auto stats = client.ref().stats();
         EXPECT_EQ(stats.completed_requests_, std::size_t{2});
         EXPECT_EQ(stats.failed_requests_, std::size_t{1});
         co_await client.shutdown();
@@ -349,12 +349,12 @@ TEST(Ruvia, http_client_abandoned_queued_request_is_never_written) {
         const acceptor_closer closer{acceptor};
         ruvia::task_scope first(worker.handle_);
         const auto send_first = [&]() -> ruvia::task<void> {
-            auto response = co_await client.client().get("/first").send();
+            auto response = co_await client.ref().get("/first").send();
             (void)co_await response.collect_body();
         };
         first.spawn(send_first());
         {
-            auto abandoned = co_await client.client().request("POST", "/abandoned").upload({});
+            auto abandoned = co_await client.ref().request("POST", "/abandoned").upload({});
             // Let the request driver queue behind the leased slot.
             for (unsigned turn = 0; turn != 4; ++turn) {
                 (void)co_await ruvia::async_asio([&io](auto done) {
@@ -365,7 +365,7 @@ TEST(Ruvia, http_client_abandoned_queued_request_is_never_written) {
             }
         }
         co_await first.join();
-        auto response = co_await client.client().get("/third").send();
+        auto response = co_await client.ref().get("/third").send();
         const auto bytes_value = co_await response.collect_body();
         EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), "ok");
         while (!peer_finished) {
@@ -413,15 +413,15 @@ TEST(Ruvia, http_client_abandoned_request_cancels_its_connect_in_progress) {
     auto operation = [&]() -> ruvia::task<void> {
         const acceptor_closer closer{acceptor};
         {
-            auto abandoned = co_await client.client().request("POST", "/abandoned").upload({});
+            auto abandoned = co_await client.ref().request("POST", "/abandoned").upload({});
             // Let the driver reach the TLS handshake.
             (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(100));
-            const auto stats = client.client().stats();
+            const auto stats = client.ref().stats();
             EXPECT_EQ(stats.in_flight_requests_ + stats.buffered_requests_, std::size_t{1});
         }
         const auto started = std::chrono::steady_clock::now();
         for (;;) {
-            const auto stats = client.client().stats();
+            const auto stats = client.ref().stats();
             if (stats.in_flight_requests_ + stats.buffered_requests_ == 0) {
                 break;
             }
@@ -430,7 +430,7 @@ TEST(Ruvia, http_client_abandoned_request_cancels_its_connect_in_progress) {
             }
             (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(10));
         }
-        EXPECT_EQ(client.client().stats().failed_requests_, std::size_t{1});
+        EXPECT_EQ(client.ref().stats().failed_requests_, std::size_t{1});
         while (!peer_finished) {
             co_await peer_done.wait();
         }
@@ -528,7 +528,7 @@ TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_befor
                 if (timeout_release) {
                     upload.continue_timeout_ = mode == release_mode::submillisecond_timeout ? std::chrono::microseconds(1) : std::chrono::microseconds(20000);
                 }
-                auto exchange = co_await client.client().request("POST", "/early").upload(upload);
+                auto exchange = co_await client.ref().request("POST", "/early").upload(upload);
                 if (timeout_release) {
                     co_await exchange.body().write("a");
                 }
@@ -536,13 +536,13 @@ TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_befor
                 EXPECT_EQ(response.status().value(), std::uint16_t{200});
                 const auto early_body = co_await response.collect_body();
                 EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(early_body.bytes().data()), early_body.size()), "ok");
-                EXPECT_TRUE(response.stream().complete());
+                EXPECT_TRUE(response.body().complete());
                 EXPECT_TRUE(!exchange.body().complete());
-                EXPECT_EQ(client.client().stats().in_flight_requests_, std::size_t{1});
+                EXPECT_EQ(client.ref().stats().in_flight_requests_, std::size_t{1});
                 co_await exchange.body().write(timeout_release ? "bc" : "abc");
                 const ruvia::http_header_view trailers[] = {{"X-End", "retained"}};
                 co_await exchange.body().finish(known_length ? std::span<const ruvia::http_header_view>{} : std::span<const ruvia::http_header_view>(trailers));
-                auto next = co_await client.client().get("/next").send();
+                auto next = co_await client.ref().get("/next").send();
                 const auto next_body = co_await next.collect_body();
                 EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(next_body.bytes().data()), next_body.size()), "next");
                 while (!peer_finished) {
@@ -605,9 +605,9 @@ TEST(Ruvia, http_client_abandoned_upload_cancels_its_retained_incomplete_respons
         const acceptor_closer closer{acceptor};
         std::optional<ruvia::http_client_response> response;
         {
-            auto exchange = co_await client.client().post("/abandoned").upload({.content_length_ = 6});
+            auto exchange = co_await client.ref().post("/abandoned").upload({.content_length_ = 6});
             response.emplace(co_await exchange.response());
-            EXPECT_TRUE(!response->stream().complete());
+            EXPECT_TRUE(!response->body().complete());
         }
         bool cancelled = false;
         try {
@@ -616,7 +616,7 @@ TEST(Ruvia, http_client_abandoned_upload_cancels_its_retained_incomplete_respons
             cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
         }
         EXPECT_TRUE(cancelled);
-        auto next = co_await client.client().get("/next").send();
+        auto next = co_await client.ref().get("/next").send();
         const auto next_body = co_await next.collect_body();
         EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(next_body.bytes().data()), next_body.size()), "next");
         while (!peer_finished) {
@@ -672,7 +672,7 @@ TEST(Ruvia, http_client_bounds_unfinished_upload_after_response_body_completion)
     ruvia::http_client client(worker.attachment_.loop(), config);
     auto operation = [&]() -> ruvia::task<void> {
         const acceptor_closer closer{acceptor};
-        auto exchange = co_await client.client().request("POST", "/unfinished").upload({});
+        auto exchange = co_await client.ref().request("POST", "/unfinished").upload({});
         auto response = co_await exchange.response();
         (void)co_await response.collect_body();
         while (!first_closed) {
@@ -688,10 +688,10 @@ TEST(Ruvia, http_client_bounds_unfinished_upload_after_response_body_completion)
             stopped = error.code() == std::make_error_code(std::errc::operation_canceled);
         }
         EXPECT_TRUE(stopped);
-        auto next = co_await client.client().get("/after-timeout").send();
+        auto next = co_await client.ref().get("/after-timeout").send();
         const auto next_body = co_await next.collect_body();
         EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(next_body.bytes().data()), next_body.size()), "next");
-        EXPECT_EQ(client.client().stats().failed_requests_, std::size_t{1});
+        EXPECT_EQ(client.ref().stats().failed_requests_, std::size_t{1});
         while (!peer_finished) {
             co_await peer_done.wait();
         }
@@ -699,8 +699,8 @@ TEST(Ruvia, http_client_bounds_unfinished_upload_after_response_body_completion)
             std::rethrow_exception(peer_failure);
         }
         co_await client.shutdown();
-        EXPECT_TRUE(!(co_await response.stream().read_text()).has_value());
-        EXPECT_TRUE(response.stream().complete());
+        EXPECT_TRUE(!(co_await response.body().read_text()).has_value());
+        EXPECT_TRUE(response.body().complete());
     };
     run_operation(worker, io, operation);
 }
@@ -744,7 +744,7 @@ TEST(Ruvia, http_client_reports_upload_transport_failure_during_response_body) {
     ruvia::http_client client(worker.attachment_.loop(), config);
     auto operation = [&]() -> ruvia::task<void> {
         const acceptor_closer closer{acceptor};
-        auto exchange = co_await client.client().request("POST", "/reset").upload({});
+        auto exchange = co_await client.ref().request("POST", "/reset").upload({});
         auto response = co_await exchange.response();
         EXPECT_TRUE(response.status() == ruvia::http_status::ok);
         const std::string chunk(16 * 1024, 'u');
@@ -810,7 +810,7 @@ TEST(Ruvia, http_capsule_client_retains_payloads_across_reads_and_rejects_trunca
         const std::string client_url = std::move(std::string("http://127.0.0.1:").append(std::to_string(acceptor.local_endpoint().port())));
         ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(client_url));
         auto operation = [&]() -> ruvia::task<void> {
-            auto result = co_await client.client().connect("target.test:443").connect();
+            auto result = co_await client.ref().connect("target.test:443").open();
             if (result.tunnel() == nullptr) {
                 throw std::runtime_error("expected an accepted tunnel");
             }
@@ -863,13 +863,13 @@ TEST(Ruvia, http_client_scopes_cookies_to_the_origin_authority_for_tunnels) {
     peer.start();
     auto operation = [&]() -> ruvia::task<void> {
         const std::array fields{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
-        auto result = co_await client.client().connect("proxy.test:8443").protocol("connect-udp").target("/.well-known/masque/udp/target.test/53/").headers(fields).connect();
+        auto result = co_await client.ref().connect("proxy.test:8443").protocol("connect-udp").target("/.well-known/masque/udp/target.test/53/").headers(fields).open();
         EXPECT_TRUE(result.tunnel() == nullptr);
         if (auto* rejected = result.response()) {
             EXPECT_EQ(rejected->status().value(), std::uint16_t{407});
             EXPECT_TRUE((co_await rejected->collect_body()).empty());
         }
-        auto origin = co_await client.client().get("/").send();
+        auto origin = co_await client.ref().get("/").send();
         EXPECT_TRUE((co_await origin.collect_body()).empty());
         co_await peer.wait();
         EXPECT_EQ(peer.requests_.size(), std::size_t{2});
@@ -926,7 +926,7 @@ TEST(Ruvia, http1_client_read_timeout_bounds_a_stalled_response_head_and_body) {
             const auto started = std::chrono::steady_clock::now();
             std::optional<std::error_code> code;
             try {
-                auto response = co_await client.client().get("/stall").send();
+                auto response = co_await client.ref().get("/stall").send();
                 EXPECT_TRUE(head_sent);
                 (void)co_await response.collect_body();
             } catch (const ruvia::http_client_error& error) {
@@ -1008,7 +1008,7 @@ TEST(Ruvia, http1_client_idle_timeout_closes_an_unused_pooled_connection) {
     auto operation = [&]() -> ruvia::task<void> {
         const acceptor_closer closer{acceptor};
         for (const std::string_view expected : {std::string_view("first"), std::string_view("second")}) {
-            auto response = co_await client.client().get("/idle").send();
+            auto response = co_await client.ref().get("/idle").send();
             const auto bytes_value = co_await response.collect_body();
             EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), expected);
             while (!idle_closed) {
@@ -1022,9 +1022,9 @@ TEST(Ruvia, http1_client_idle_timeout_closes_an_unused_pooled_connection) {
             std::rethrow_exception(peer_failure);
         }
         EXPECT_TRUE(idle_for < std::chrono::seconds(5));
-        const auto stats = client.client().stats();
+        const auto stats = client.ref().stats();
         EXPECT_EQ(stats.failed_requests_, std::size_t{0});
-        EXPECT_EQ(stats.idle_connections_with_pending_data_, std::size_t{0});
+        EXPECT_EQ(stats.idle_connections_with_pending_input_, std::size_t{0});
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
@@ -1076,13 +1076,13 @@ TEST(Ruvia, http1_client_closes_an_idle_connection_its_peer_ended_or_wrote_to) {
         ruvia::task_scope requests(worker.handle_);
         auto operation = [&]() -> ruvia::task<void> {
             co_await run_against(client, origin, requests, [&]() -> ruvia::task<void> {
-                auto response = co_await client.client().get("/first").send();
+                auto response = co_await client.ref().get("/first").send();
                 EXPECT_EQ(response_text(co_await response.collect_body()), "first");
                 // The origin ends only once the client closed the connection;
                 // its guard would close it after 10 seconds.
                 co_await origin.join();
                 EXPECT_TRUE(closed_after.has_value() && *closed_after < std::chrono::seconds(2));
-                EXPECT_EQ(client.client().stats().idle_connections_with_pending_data_, peer_writes ? std::size_t{1} : std::size_t{0});
+                EXPECT_EQ(client.ref().stats().idle_connections_with_pending_input_, peer_writes ? std::size_t{1} : std::size_t{0});
             });
         };
         run_operation(worker, io, operation);

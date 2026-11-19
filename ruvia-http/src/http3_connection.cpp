@@ -435,7 +435,7 @@ private:
 
 }  // namespace detail
 
-std::size_t http3_stream_output::size() const noexcept {
+std::size_t http3_stream_output::byte_size() const noexcept {
     std::size_t total = 0;
     for (std::size_t index = 0; index < buffer_count_; ++index) {
         total += buffers_[index].size();
@@ -1853,15 +1853,15 @@ std::variant<http_buffered_response_write_plan, http_response_head_error> http3_
     return write_plan;
 }
 
-std::variant<http_response_stream_commit_plan, http_response_head_error> http3_connection::submit_streaming_response_head(std::int64_t stream_id, http_response head, http_response_trailer_intent trailer_intent) {
-    if (const auto error = impl_->response_head_admission_error(stream_id, head.status())) {
+std::variant<http_response_stream_commit_plan, http_response_head_error> http3_connection::submit_streaming_response_head(std::int64_t stream_id, http_response response, http_response_trailer_intent trailer_intent) {
+    if (const auto error = impl_->response_head_admission_error(stream_id, response.status())) {
         return *error;
     }
-    auto commit_plan = plan_http_response_stream_commit(http_multiplexed_frames{}, impl_->find_stream(stream_id)->request_method_, head.status(), trailer_intent);
-    if (!commit_plan.trailer_intent_allowed() || detail::http_binary_final_response_control_plan(head).has_value()) {
+    auto commit_plan = plan_http_response_stream_commit(http_multiplexed_frames{}, impl_->find_stream(stream_id)->request_method_, response.status(), trailer_intent);
+    if (!commit_plan.trailer_intent_allowed() || detail::http_binary_final_response_control_plan(response).has_value()) {
         return http_response_head_error::invalid_message;
     }
-    auto stream_head = prepare_http_response_stream_head(std::move(head), commit_plan);
+    auto stream_head = prepare_http_response_stream_head(std::move(response), commit_plan);
     const auto head_plan_result = detail::http_framed_streaming_response_head_plan(commit_plan.body_plan(), stream_head.response());
     const auto* head_plan = std::get_if<detail::http_framed_response_head_plan>(&head_plan_result);
     if (head_plan == nullptr) {

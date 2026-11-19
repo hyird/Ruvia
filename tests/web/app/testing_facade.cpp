@@ -73,7 +73,7 @@ public:
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.edit_response().header("X-Test-Stamp", "on");
-        c.edit_response().header("X-Middleware-Method", c.req().method());
+        c.edit_response().header("X-Middleware-Method", c.request().method());
     }
 };
 
@@ -108,7 +108,7 @@ struct testing_facade_user final {
 class testing_facade_auth final {
 public:
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
-        const testing_facade_user user_value{.name_ = c.req().header("X-User").value_or("anonymous"), .level_ = 2};
+        const testing_facade_user user_value{.name_ = c.request().header("X-User").value_or("anonymous"), .level_ = 2};
         const auto binding = c.bind_request_state(user_value);
         co_await next_value();
     }
@@ -154,7 +154,7 @@ public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 
     ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
-        if (c.req().path().starts_with("/guarded")) {
+        if (c.request().path().starts_with("/guarded")) {
             throw ruvia::http_error({.status_ = ruvia::http_status::unauthorized});
         }
         co_await next_value();
@@ -294,8 +294,8 @@ private:
     // Relays a subrequest named by the query as status and body; X-Test-Relayed
     // tells a relayed answer from a failure escaping dispatch().
     ruvia::task<ruvia::http_response> subrequest(ruvia::context& c) {
-        std::string method(c.req().query("method").value_or("GET"));
-        std::string target(c.req().query("target").value_or("/"));
+        std::string method(c.request().query("method").value_or("GET"));
+        std::string target(c.request().query("target").value_or("/"));
         auto pending = c.dispatch({
             .method_ = method,
             .target_ = target,
@@ -306,10 +306,10 @@ private:
         const std::array headers{ruvia::http_header_view{"X-Test-Relayed", "1"}};
         const auto address = reinterpret_cast<std::uintptr_t>(child.body().data());
         const auto size = child.body().size();
-        auto response = c.text(std::move(child).take_body_bytes(), {.status_ = child.status(), .headers_ = headers});
+        auto response = c.text(std::move(child).take_body(), {.status_ = child.status(), .headers_ = headers});
         EXPECT_TRUE(child.body().empty());
         if (size >= 4096) {
-            EXPECT_EQ(reinterpret_cast<std::uintptr_t>(response.body_bytes().data()), address);
+            EXPECT_EQ(reinterpret_cast<std::uintptr_t>(response.body().data()), address);
         }
         co_return response;
     }
@@ -326,22 +326,22 @@ private:
     }
 
     ruvia::task<ruvia::http_response> user(ruvia::context& c) {
-        co_return c.body(c.req().param("id").value_or("?"));
+        co_return c.body(c.request().param("id").value_or("?"));
     }
 
     ruvia::task<ruvia::http_response> head_metadata(ruvia::context& c) {
         const std::array headers{
-            ruvia::http_header_view{"X-Handler-Method", c.req().method()},
-            ruvia::http_header_view{"X-Route-Param", c.req().param("id").value_or("?")},
+            ruvia::http_header_view{"X-Handler-Method", c.request().method()},
+            ruvia::http_header_view{"X-Route-Param", c.request().param("id").value_or("?")},
         };
         co_return c.text("payload", {.headers_ = headers});
     }
 
     ruvia::task<ruvia::http_response> greet(ruvia::context& c) {
         std::string reply;
-        reply.append(c.req().query("name").value_or("nobody"));
+        reply.append(c.request().query("name").value_or("nobody"));
         reply.push_back('/');
-        reply.append(c.req().cookie("sid").value_or("no-sid"));
+        reply.append(c.request().cookie("sid").value_or("no-sid"));
         co_return c.body(std::move(reply));
     }
 
@@ -358,9 +358,9 @@ private:
     }
 
     ruvia::task<ruvia::http_response> echo(ruvia::context& c) {
-        const auto& body = c.req().validated<testing_facade_echo>();
+        const auto& body = c.request().validated<testing_facade_echo>();
         const auto value = body.get<"value">().has_value() ? body.get<"value">()->view() : std::string_view("missing");
-        if (const auto independent = c.req().header("X-Test-Independent")) {
+        if (const auto independent = c.request().header("X-Test-Independent")) {
             std::string reply;
             reply.append(*independent);
             reply.push_back('/');
@@ -371,7 +371,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> propfind(ruvia::context& c) {
-        co_return c.body(c.req().method());
+        co_return c.body(c.request().method());
     }
 
     ruvia::task<ruvia::http_response> purge(ruvia::context& c) {
@@ -403,7 +403,7 @@ private:
     ruvia::task<ruvia::http_response> report(ruvia::context& c) {
         const std::string_view tags[] = {"a\"quoted", "b"};
         testing_facade_report report;
-        report.set<"path">(c.req().path());
+        report.set<"path">(c.request().path());
         report.set<"count">(static_cast<std::uint64_t>(std::size(tags)));
         auto& report_tags = report.ensure<"tags">();
         report_tags.reserve(std::size(tags));
@@ -415,7 +415,7 @@ private:
 
     ruvia::task<ruvia::http_response> large(ruvia::context& c) {
         std::string body;
-        const auto fill = c.req().query("fill").value_or("x");
+        const auto fill = c.request().query("fill").value_or("x");
         body.assign(1024 * 1024, fill.empty() ? 'x' : fill.front());
         co_return c.body(std::move(body));
     }
@@ -439,11 +439,15 @@ private:
         }
     }
     ruvia::task<ruvia::http_response> typed_inputs(ruvia::context& c) const {
-        const auto id = c.req().param<std::uint32_t>("id").value_or(0);
-        const auto active = c.req().param<bool>("active").value_or(false);
-        const auto page = c.req().query<std::int64_t>("page").value_or(1);
-        const auto verbose = c.req().query<bool>("verbose").value_or(false);
-        const auto* optional_user = c.try_request_state<testing_facade_user>();
+        const auto id = c.request().param<std::uint32_t>("id").value_or(0);
+        const auto active = c.request().param<bool>("active").value_or(false);
+        const auto page = c.request().query<std::int64_t>("page").value_or(1);
+        const auto verbose = c.request().query<bool>("verbose").value_or(false);
+        const testing_facade_user* optional_user = nullptr;
+        try {
+            optional_user = &c.request_state<testing_facade_user>();
+        } catch (const std::logic_error&) {
+        }
         const std::string_view span_args[] = {"12", "true"};
         std::string reply;
         reply.append(std::to_string(id));
@@ -461,7 +465,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> json_array(ruvia::context& c) const {
-        const auto raw = co_await c.req().body_text();
+        const auto raw = co_await c.request().body_text();
         auto parsed = ruvia::parse_json<ruvia::array<ruvia::string>>(raw);
         if (!parsed.has_value()) {
             throw ruvia::http_error({.status_ = ruvia::http_status::bad_request, .code_ = "invalid_json", .message_ = parsed.error().message(), .validation_issues_ = parsed.error().issues()});
@@ -472,21 +476,25 @@ private:
     }
 
     ruvia::task<ruvia::http_response> const_handler(ruvia::context& c) const {
-        const auto* user_ptr = c.try_request_state<testing_facade_user>();
+        const testing_facade_user* user_ptr = nullptr;
+        try {
+            user_ptr = &c.request_state<testing_facade_user>();
+        } catch (const std::logic_error&) {
+        }
         co_return c.text(user_ptr == nullptr ? "const-ok" : user_ptr->name_);
     }
 
     ruvia::task<ruvia::http_response> conn_info_handler(ruvia::context& c) const {
         std::string reply;
-        reply.append(c.conn().remote().address().to_string());
+        reply.append(c.connection().remote().address().to_string());
         reply.push_back(':');
-        reply.append(std::to_string(c.conn().remote().port()));
+        reply.append(std::to_string(c.connection().remote().port()));
         reply.push_back('/');
-        reply.append(c.conn().client().address().to_string());
+        reply.append(c.connection().client().address().to_string());
         reply.push_back('/');
-        reply.append(c.conn().via_trusted_proxy() ? "proxy" : "direct");
+        reply.append(c.connection().via_trusted_proxy() ? "proxy" : "direct");
         reply.push_back('/');
-        reply.append(c.conn().plain() != nullptr ? "plain" : "tls");
+        reply.append(c.connection().plain() != nullptr ? "plain" : "tls");
         co_return c.text(std::move(reply));
     }
 
@@ -503,7 +511,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> tree(ruvia::context& c) {
-        co_return c.body(c.req().param("*").value_or("?"));
+        co_return c.body(c.request().param("*").value_or("?"));
     }
 
     ruvia::task<ruvia::http_response> dot_links(ruvia::context& c) {
@@ -542,7 +550,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> sub_static_named(ruvia::context& c) {
-        co_return co_await c.static_file(*testing_facade_static_root(), {.relative_path_ = c.req().param("name").value_or("")});
+        co_return co_await c.static_file(*testing_facade_static_root(), {.relative_path_ = c.request().param("name").value_or("")});
     }
 
     ruvia::task<ruvia::http_response> sub_stream(ruvia::context& c) {
@@ -635,9 +643,9 @@ TEST(Ruvia, testing_facade_multi_route_paths_are_evaluated_once_per_registration
     const auto on_before = on_path_evaluations;
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
-    const auto all_response = app.request(ruvia::test_request::get("/t/counted-all"));
+    const auto all_response = app.dispatch(ruvia::test_request::get("/t/counted-all"));
     EXPECT_EQ(all_response.body(), std::string_view("hello"));
-    const auto on_response = app.request(ruvia::test_request::put("/t/counted-on"));
+    const auto on_response = app.dispatch(ruvia::test_request::put("/t/counted-on"));
     EXPECT_EQ(on_response.body(), std::string_view("hello"));
     EXPECT_TRUE(all_path_evaluations > all_before);
     EXPECT_EQ(all_path_evaluations - all_before, on_path_evaluations - on_before);
@@ -647,33 +655,33 @@ TEST(Ruvia, testing_facade_dispatches_routes_params_query_and_cookies) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
 
-    const auto hello = app.request(ruvia::test_request::get("/t/hello"));
+    const auto hello = app.dispatch(ruvia::test_request::get("/t/hello"));
     EXPECT_TRUE(hello.status() == ruvia::http_status::ok);
     EXPECT_EQ(hello.body(), std::string_view("hello"));
 
-    const auto user_value = app.request(ruvia::test_request::get("/t/users/42"));
+    const auto user_value = app.dispatch(ruvia::test_request::get("/t/users/42"));
     EXPECT_EQ(user_value.body(), std::string_view("42"));
 
-    const auto greet = app.request(ruvia::test_request::get("/t/greet?name=ada").cookie("sid", "s-1"));
+    const auto greet = app.dispatch(ruvia::test_request::get("/t/greet?name=ada").cookie("sid", "s-1"));
     EXPECT_EQ(greet.body(), std::string_view("ada/s-1"));
 
-    const auto absolute = app.request(ruvia::test_request::get("http://example.test/t/hello").header("Host", "stale.example"));
+    const auto absolute = app.dispatch(ruvia::test_request::get("http://example.test/t/hello").header("Host", "stale.example"));
     EXPECT_TRUE(absolute.status() == ruvia::http_status::ok);
     EXPECT_EQ(absolute.body(), std::string_view("hello"));
 
-    const auto server_wide_options = app.request(ruvia::test_request::options("http://example.test").header("Host", "stale.example"));
+    const auto server_wide_options = app.dispatch(ruvia::test_request::options("http://example.test").header("Host", "stale.example"));
     EXPECT_TRUE(server_wide_options.status() == ruvia::http_status::no_content);
 
-    const auto link = app.request(ruvia::test_request::get("/t/link"));
+    const auto link = app.dispatch(ruvia::test_request::get("/t/link"));
     EXPECT_EQ(link.body(), std::string_view("/t/users/9"));
 
-    const auto worker_value = app.request(ruvia::test_request::get("/t/worker"));
+    const auto worker_value = app.dispatch(ruvia::test_request::get("/t/worker"));
     EXPECT_EQ(worker_value.body(), std::string_view("valid/current"));
 
     // The automatic HEAD fallback answers with the GET status and no body.
     // Writer-synthesized framing headers (Content-Length, Date) are not part
     // of the in-memory dispatch product.
-    const auto head = app.request(ruvia::test_request::head("/t/hello"));
+    const auto head = app.dispatch(ruvia::test_request::head("/t/hello"));
     EXPECT_TRUE(head.status() == ruvia::http_status::ok);
     EXPECT_TRUE(head.body().empty());
 }
@@ -681,13 +689,13 @@ TEST(Ruvia, testing_facade_dispatches_routes_params_query_and_cookies) {
 TEST(Ruvia, testing_facade_head_fallback_preserves_request_method_and_route_params) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
-    const auto get = app.request(ruvia::test_request::get("/t/head/42"));
+    const auto get = app.dispatch(ruvia::test_request::get("/t/head/42"));
     EXPECT_TRUE(get.status() == ruvia::http_status::ok);
     EXPECT_EQ(get.body(), std::string_view("payload"));
     EXPECT_EQ(get.header("X-Handler-Method").value_or(""), std::string_view("GET"));
     EXPECT_EQ(get.header("X-Middleware-Method").value_or(""), std::string_view("GET"));
 
-    const auto head = app.request(ruvia::test_request::head("/t/head/42"));
+    const auto head = app.dispatch(ruvia::test_request::head("/t/head/42"));
     EXPECT_TRUE(head.status() == ruvia::http_status::ok);
     EXPECT_TRUE(head.body().empty());
     EXPECT_EQ(head.header("X-Handler-Method").value_or(""), std::string_view("HEAD"));
@@ -699,19 +707,19 @@ TEST(Ruvia, testing_facade_head_fallback_preserves_request_method_and_route_para
 TEST(Ruvia, testing_facade_rejects_invalid_request_line_targets) {
     ruvia::test_app app;
 
-    EXPECT_TRUE(app.request(ruvia::test_request::get("/bad path")).status() == ruvia::http_status::bad_request);
-    EXPECT_TRUE(app.request(ruvia::test_request::get("*")).status() == ruvia::http_status::bad_request);
-    EXPECT_TRUE(app.request(ruvia::test_request::get("/bad%zz")).status() == ruvia::http_status::bad_request);
-    EXPECT_TRUE(app.request(ruvia::test_request::method("BAD(METHOD", "/")).status() == ruvia::http_status::bad_request);
+    EXPECT_TRUE(app.dispatch(ruvia::test_request::get("/bad path")).status() == ruvia::http_status::bad_request);
+    EXPECT_TRUE(app.dispatch(ruvia::test_request::get("*")).status() == ruvia::http_status::bad_request);
+    EXPECT_TRUE(app.dispatch(ruvia::test_request::get("/bad%zz")).status() == ruvia::http_status::bad_request);
+    EXPECT_TRUE(app.dispatch(ruvia::test_request::method("BAD(METHOD", "/")).status() == ruvia::http_status::bad_request);
 }
 
 TEST(Ruvia, testing_facade_rejects_invalid_request_headers) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
 
-    EXPECT_TRUE(app.request(ruvia::test_request::get("/t/hello").header("Bad Header", "x")).status() == ruvia::http_status::bad_request);
-    EXPECT_TRUE(app.request(ruvia::test_request::get("/t/hello").header("X-Bad", std::string_view("a\rb", 3))).status() == ruvia::http_status::bad_request);
-    const auto independent = app.request(ruvia::test_request::post("/t/echo").json(R"({"value":"body"})").header("Content-Length", "5").header("Content-Length", "6").header("Transfer-Encoding", "chunked").header("X-Test-Independent", "header"));
+    EXPECT_TRUE(app.dispatch(ruvia::test_request::get("/t/hello").header("Bad Header", "x")).status() == ruvia::http_status::bad_request);
+    EXPECT_TRUE(app.dispatch(ruvia::test_request::get("/t/hello").header("X-Bad", std::string_view("a\rb", 3))).status() == ruvia::http_status::bad_request);
+    const auto independent = app.dispatch(ruvia::test_request::post("/t/echo").json(R"({"value":"body"})").header("Content-Length", "5").header("Content-Length", "6").header("Transfer-Encoding", "chunked").header("X-Test-Independent", "header"));
     EXPECT_TRUE(independent.status() == ruvia::http_status::ok);
     EXPECT_EQ(independent.body(), std::string_view("header/body"));
 
@@ -719,24 +727,24 @@ TEST(Ruvia, testing_facade_rejects_invalid_request_headers) {
     for (std::size_t i = 0; i < 80; ++i) {
         many.header("X-Test", "v");
     }
-    EXPECT_TRUE(app.request(many).status() == ruvia::http_status::ok);
+    EXPECT_TRUE(app.dispatch(many).status() == ruvia::http_status::ok);
 
     const std::string oversized_header_value(ruvia::max_http_header_bytes, 'x');
-    EXPECT_TRUE(app.request(ruvia::test_request::get("/t/hello").header("X-Big", oversized_header_value)).status() == ruvia::http_status::request_header_fields_too_large);
+    EXPECT_TRUE(app.dispatch(ruvia::test_request::get("/t/hello").header("X-Big", oversized_header_value)).status() == ruvia::http_status::request_header_fields_too_large);
 }
 
 TEST(Ruvia, testing_facade_runs_model_bodies_with_media_type_split) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
 
-    const auto ok = app.request(ruvia::test_request::post("/t/echo").json(R"({"value":"hi"})"));
+    const auto ok = app.dispatch(ruvia::test_request::post("/t/echo").json(R"({"value":"hi"})"));
     EXPECT_TRUE(ok.status() == ruvia::http_status::ok);
     EXPECT_EQ(ok.body(), std::string_view("hi"));
 
-    const auto wrong_type = app.request(ruvia::test_request::post("/t/echo").body(R"({"value":"hi"})", "text/plain"));
+    const auto wrong_type = app.dispatch(ruvia::test_request::post("/t/echo").body(R"({"value":"hi"})", "text/plain"));
     EXPECT_TRUE(wrong_type.status() == ruvia::http_status::unsupported_media_type);
 
-    const auto bad_body = app.request(ruvia::test_request::post("/t/echo").json("{not-json"));
+    const auto bad_body = app.dispatch(ruvia::test_request::post("/t/echo").json("{not-json"));
     EXPECT_TRUE(bad_body.status() == ruvia::http_status::bad_request);
 }
 
@@ -747,23 +755,23 @@ TEST(Ruvia, testing_facade_applies_app_level_configuration) {
     app.use_worker_state<testing_facade_counter>();
 
     // Global middleware wraps every matched route.
-    const auto stamped = app.request(ruvia::test_request::get("/t/hello"));
+    const auto stamped = app.dispatch(ruvia::test_request::get("/t/hello"));
     EXPECT_EQ(stamped.header("X-Test-Stamp").value_or(""), std::string_view("on"));
 
     // Worker state persists across requests on the same test_app.
-    const auto first_count = app.request(ruvia::test_request::get("/t/count"));
+    const auto first_count = app.dispatch(ruvia::test_request::get("/t/count"));
     EXPECT_EQ(first_count.body(), std::string_view("1"));
-    const auto second_count = app.request(ruvia::test_request::get("/t/count"));
+    const auto second_count = app.dispatch(ruvia::test_request::get("/t/count"));
     EXPECT_EQ(second_count.body(), std::string_view("2"));
 
     // Prefix fallback wins under its scope; the app-wide one covers the rest.
-    const auto scoped_miss = app.request(ruvia::test_request::get("/api/missing"));
+    const auto scoped_miss = app.dispatch(ruvia::test_request::get("/api/missing"));
     EXPECT_EQ(scoped_miss.body(), std::string_view("api-miss"));
-    const auto global_miss = app.request(ruvia::test_request::get("/nope"));
+    const auto global_miss = app.dispatch(ruvia::test_request::get("/nope"));
     EXPECT_EQ(global_miss.body(), std::string_view("custom-miss"));
 
     // 405 keeps flowing through the production fallback path too.
-    const auto not_allowed = app.request(ruvia::test_request::delete_("/t/hello"));
+    const auto not_allowed = app.dispatch(ruvia::test_request::delete_("/t/hello"));
     EXPECT_TRUE(not_allowed.status() == ruvia::http_status::method_not_allowed);
 
     // The route table is sealed after the first request.
@@ -790,7 +798,7 @@ TEST(Ruvia, testing_facade_retains_startup_failure_without_retrying) {
     for (int attempt_value = 0; attempt_value != 2; ++attempt_value) {
         bool threw = false;
         try {
-            (void)app.request(ruvia::test_request::get("/t/hello"));
+            (void)app.dispatch(ruvia::test_request::get("/t/hello"));
         } catch (const std::runtime_error& error) {
             threw = true;
             EXPECT_EQ(std::string_view(error.what()), std::string_view("testing facade startup failed"));
@@ -817,7 +825,7 @@ TEST(Ruvia, testing_facade_retains_pre_worker_startup_failure_without_retrying) 
     for (int attempt_value = 0; attempt_value != 2; ++attempt_value) {
         bool threw = false;
         try {
-            (void)app.request(ruvia::test_request::get("/t/hello"));
+            (void)app.dispatch(ruvia::test_request::get("/t/hello"));
         } catch (const testing_facade_startup_error& error) {
             threw = true;
             EXPECT_EQ(std::string_view(error.what()), std::string_view("testing facade middleware startup failed"));
@@ -840,20 +848,20 @@ TEST(Ruvia, testing_facade_constructs_middleware_from_registration_arguments) {
     app.controllers<testing_facade_controller>();
     app.use<testing_facade_configured_stamp>("audit", 2);
 
-    const auto first = app.request(ruvia::test_request::get("/t/hello"));
+    const auto first = app.dispatch(ruvia::test_request::get("/t/hello"));
     EXPECT_EQ(first.header("X-Test-Configured").value_or(""), std::string_view("audit"));
     EXPECT_EQ(first.header("X-Test-Level").value_or(""), std::string_view("two"));
 
     // One instance serves every request, so the arguments must still be readable
     // after the first dispatch rather than having been consumed by it.
-    const auto second = app.request(ruvia::test_request::get("/t/hello"));
+    const auto second = app.dispatch(ruvia::test_request::get("/t/hello"));
     EXPECT_EQ(second.header("X-Test-Configured").value_or(""), std::string_view("audit"));
 
     // Separate registrations of the same type stay independent.
     ruvia::test_app other;
     other.controllers<testing_facade_controller>();
     other.use<testing_facade_configured_stamp>("other", 5);
-    const auto distinct = other.request(ruvia::test_request::get("/t/hello"));
+    const auto distinct = other.dispatch(ruvia::test_request::get("/t/hello"));
     EXPECT_EQ(distinct.header("X-Test-Configured").value_or(""), std::string_view("other"));
     EXPECT_EQ(distinct.header("X-Test-Level").value_or(""), std::string_view("other"));
 }
@@ -879,16 +887,16 @@ TEST(Ruvia, testing_facade_runs_fallback_handlers_that_carry_state) {
         co_return c.text(std::move(body), {.status_ = error.status()});
     });
 
-    const auto missed = app.request(ruvia::test_request::get("/nowhere"));
+    const auto missed = app.dispatch(ruvia::test_request::get("/nowhere"));
     EXPECT_TRUE(missed.status() == ruvia::http_status::not_found);
     EXPECT_EQ(missed.body(), std::string_view("tenant-a"));
 
     // The captured state is still readable on a later request: the callable was
     // copied at registration, not borrowed from the caller's frame.
-    const auto missed_again = app.request(ruvia::test_request::get("/nowhere/else"));
+    const auto missed_again = app.dispatch(ruvia::test_request::get("/nowhere/else"));
     EXPECT_EQ(missed_again.body(), std::string_view("tenant-a"));
 
-    const auto failed = app.request(ruvia::test_request::get("/t/boom"));
+    const auto failed = app.dispatch(ruvia::test_request::get("/t/boom"));
     EXPECT_TRUE(failed.status() == ruvia::http_status::internal_server_error);
     EXPECT_EQ(failed.body(), std::string_view("tenant-a:error"));
 }
@@ -909,7 +917,7 @@ TEST(Ruvia, testing_facade_error_handler_throwing_validation_issues_keeps_its_st
         co_return c.text("unreachable");
     });
 
-    const auto failed = app.request(ruvia::test_request::get("/t/boom"));
+    const auto failed = app.dispatch(ruvia::test_request::get("/t/boom"));
     EXPECT_EQ(failed.status(), ruvia::http_status::unprocessable_content);
     EXPECT_TRUE(failed.body().find("\"invalid_payload\"") != std::string_view::npos);
     EXPECT_TRUE(failed.body().find("payload failed validation") != std::string_view::npos);
@@ -934,13 +942,13 @@ TEST(Ruvia, testing_facade_error_responses_are_not_renegotiated_into_406) {
     // satisfied either.
     for (const std::string_view refused : {std::string_view("identity;q=0, *;q=0"), std::string_view("gzip, identity;q=0")}) {
         calls = 0;
-        const auto failed = app.request(ruvia::test_request::get("/t/boom").header("Accept-Encoding", refused));
+        const auto failed = app.dispatch(ruvia::test_request::get("/t/boom").header("Accept-Encoding", refused));
         EXPECT_EQ(failed.status(), ruvia::http_status::internal_server_error);
         EXPECT_EQ(failed.body(), std::string_view("err"));
         EXPECT_EQ(calls, 1);
 
         calls = 0;
-        const auto refused_ok = app.request(ruvia::test_request::get("/t/hello").header("Accept-Encoding", refused));
+        const auto refused_ok = app.dispatch(ruvia::test_request::get("/t/hello").header("Accept-Encoding", refused));
         EXPECT_EQ(refused_ok.status(), ruvia::http_status::not_acceptable);
         EXPECT_EQ(calls, 1);
     }
@@ -1023,10 +1031,10 @@ TEST(Ruvia, testing_facade_rejects_root_scopes_and_second_app_wide_fallbacks) {
     }));
 
     // Neither the rejected scopes nor the rejected replacement took effect.
-    const auto missing = app.request(ruvia::test_request::get("/nope"));
+    const auto missing = app.dispatch(ruvia::test_request::get("/nope"));
     EXPECT_EQ(missing.status(), ruvia::http_status::not_found);
     EXPECT_EQ(missing.body(), std::string_view("custom-miss"));
-    const auto matched = app.request(ruvia::test_request::get("/t/hello"));
+    const auto matched = app.dispatch(ruvia::test_request::get("/t/hello"));
     EXPECT_EQ(matched.status(), ruvia::http_status::ok);
     EXPECT_TRUE(!matched.header("X-Test-Scope"));
 }
@@ -1040,9 +1048,9 @@ TEST(Ruvia, testing_facade_isolates_instances) {
     second.controllers<testing_facade_controller>();
     second.use_worker_state<testing_facade_counter>();
 
-    const auto first_count = first.request(ruvia::test_request::get("/t/count"));
+    const auto first_count = first.dispatch(ruvia::test_request::get("/t/count"));
     EXPECT_EQ(first_count.body(), std::string_view("1"));
-    const auto second_count = second.request(ruvia::test_request::get("/t/count"));
+    const auto second_count = second.dispatch(ruvia::test_request::get("/t/count"));
     EXPECT_EQ(second_count.body(), std::string_view("1"));
 }
 
@@ -1050,20 +1058,20 @@ TEST(Ruvia, testing_facade_middleware_publishes_request_state_to_handler) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
 
-    const auto named = app.request(ruvia::test_request::get("/t/whoami").header("X-User", "ada"));
+    const auto named = app.dispatch(ruvia::test_request::get("/t/whoami").header("X-User", "ada"));
     EXPECT_EQ(named.status(), ruvia::http_status::ok);
     EXPECT_EQ(named.body(), std::string_view("ada/2"));
 
     // A second request gets its own binding, not the previous one's value --
     // this is request scope, not worker scope.
-    const auto anonymous = app.request(ruvia::test_request::get("/t/whoami"));
+    const auto anonymous = app.dispatch(ruvia::test_request::get("/t/whoami"));
     EXPECT_EQ(anonymous.body(), std::string_view("anonymous/2"));
 }
 
 TEST(Ruvia, testing_facade_request_state_is_absent_without_its_middleware) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
-    const auto response = app.request(ruvia::test_request::get("/t/whoami-unbound").header("X-User", "ada"));
+    const auto response = app.dispatch(ruvia::test_request::get("/t/whoami-unbound").header("X-User", "ada"));
     EXPECT_EQ(response.status(), ruvia::http_status::ok);
     EXPECT_EQ(response.body(), std::string_view("unbound"));
 }
@@ -1071,7 +1079,7 @@ TEST(Ruvia, testing_facade_request_state_is_absent_without_its_middleware) {
 TEST(Ruvia, testing_facade_builds_a_runtime_sized_response_model) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
-    const auto response = app.request(ruvia::test_request::get("/t/report"));
+    const auto response = app.dispatch(ruvia::test_request::get("/t/report"));
     EXPECT_EQ(response.status(), ruvia::http_status::ok);
     EXPECT_EQ(response.body(), std::string_view(R"({"path":"/t/report","count":2,"tags":["a\"quoted","b"]})"));
     const auto content_type_value = response.header("Content-Type");
@@ -1082,11 +1090,11 @@ TEST(Ruvia, testing_facade_builds_a_runtime_sized_response_model) {
 TEST(Ruvia, testing_facade_response_owns_large_bodies_across_requests) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
-    const auto first = app.request(ruvia::test_request::get("/t/large?fill=a"));
+    const auto first = app.dispatch(ruvia::test_request::get("/t/large?fill=a"));
     EXPECT_EQ(first.body().size(), std::size_t(1024 * 1024));
     EXPECT_EQ(first.body(), std::string(1024 * 1024, 'a'));
 
-    const auto second = app.request(ruvia::test_request::get("/t/large?fill=b"));
+    const auto second = app.dispatch(ruvia::test_request::get("/t/large?fill=b"));
     EXPECT_EQ(second.body().size(), std::size_t(1024 * 1024));
     EXPECT_EQ(first.body().size(), std::size_t(1024 * 1024));
     EXPECT_EQ(second.body(), std::string(1024 * 1024, 'b'));
@@ -1099,14 +1107,14 @@ TEST(Ruvia, testing_facade_path_scoped_middleware_runs_only_under_its_prefix) {
     app.use_at<testing_facade_scoped>({.prefix_ = "/t/users"}, "users");
 
     // Under the scope, on both the exact prefix path shape and a deeper one.
-    const auto scoped = app.request(ruvia::test_request::get("/t/users/42"));
+    const auto scoped = app.dispatch(ruvia::test_request::get("/t/users/42"));
     EXPECT_EQ(scoped.status(), ruvia::http_status::ok);
     const auto scoped_header = scoped.header("X-Test-Scope");
     EXPECT_TRUE(scoped_header.has_value());
     EXPECT_EQ(*scoped_header, std::string_view("users"));
 
     // A sibling route outside the scope never receives the frame.
-    const auto outside = app.request(ruvia::test_request::get("/t/hello"));
+    const auto outside = app.dispatch(ruvia::test_request::get("/t/hello"));
     EXPECT_EQ(outside.status(), ruvia::http_status::ok);
     EXPECT_TRUE(!outside.header("X-Test-Scope").has_value());
 }
@@ -1118,7 +1126,7 @@ TEST(Ruvia, testing_facade_path_scope_matches_whole_segments_only) {
     // not a deeper path.
     app.use_at<testing_facade_scoped>({.prefix_ = "/t/user"}, "prefix-only");
 
-    const auto response = app.request(ruvia::test_request::get("/t/users/42"));
+    const auto response = app.dispatch(ruvia::test_request::get("/t/users/42"));
     EXPECT_EQ(response.status(), ruvia::http_status::ok);
     EXPECT_TRUE(!response.header("X-Test-Scope").has_value());
 }
@@ -1128,7 +1136,7 @@ TEST(Ruvia, testing_facade_path_scope_normalizes_a_trailing_slash) {
     app.controllers<testing_facade_controller>();
     app.use_at<testing_facade_scoped>({.prefix_ = "/t/users/"}, "trailing");
 
-    const auto response = app.request(ruvia::test_request::get("/t/users/42"));
+    const auto response = app.dispatch(ruvia::test_request::get("/t/users/42"));
     const auto header_value = response.header("X-Test-Scope");
     EXPECT_TRUE(header_value.has_value());
     EXPECT_EQ(*header_value, std::string_view("trailing"));
@@ -1141,9 +1149,9 @@ TEST(Ruvia, testing_facade_app_wide_middleware_still_runs_everywhere) {
 
     // Bound to names: dispatch_response owns its headers, so header() is rightly
     // rvalue-deleted and a view into a temporary is not obtainable.
-    const auto hello = app.request(ruvia::test_request::get("/t/hello"));
+    const auto hello = app.dispatch(ruvia::test_request::get("/t/hello"));
     EXPECT_TRUE(hello.header("X-Test-Scope").has_value());
-    const auto user_value = app.request(ruvia::test_request::get("/t/users/42"));
+    const auto user_value = app.dispatch(ruvia::test_request::get("/t/users/42"));
     EXPECT_TRUE(user_value.header("X-Test-Scope").has_value());
 }
 
@@ -1154,13 +1162,13 @@ TEST(Ruvia, testing_facade_unmatched_middleware_wraps_the_404_terminal) {
     app.use<testing_facade_stamp>();
 
     // A matched route runs both, as before.
-    const auto matched = app.request(ruvia::test_request::get("/t/hello"));
+    const auto matched = app.dispatch(ruvia::test_request::get("/t/hello"));
     EXPECT_EQ(matched.status(), ruvia::http_status::ok);
     EXPECT_TRUE(matched.header("X-Test-Always").has_value());
     EXPECT_TRUE(matched.header("X-Test-Stamp").has_value());
 
     // An unmatched one runs only what declared itself for unmatched requests.
-    const auto missing = app.request(ruvia::test_request::get("/nope"));
+    const auto missing = app.dispatch(ruvia::test_request::get("/nope"));
     EXPECT_EQ(missing.status(), ruvia::http_status::not_found);
     const auto always = missing.header("X-Test-Always");
     EXPECT_TRUE(always.has_value());
@@ -1174,14 +1182,14 @@ TEST(Ruvia, testing_facade_unmatched_middleware_also_wraps_405_and_501) {
     app.use<testing_facade_always>();
 
     // Known method, wrong verb for an existing path.
-    const auto wrong_method = app.request(ruvia::test_request::post("/t/hello"));
+    const auto wrong_method = app.dispatch(ruvia::test_request::post("/t/hello"));
     EXPECT_EQ(wrong_method.status(), ruvia::http_status::method_not_allowed);
     EXPECT_TRUE(wrong_method.header("X-Test-Always").has_value());
     // The Allow header the fallback sets must survive the chain.
     EXPECT_TRUE(wrong_method.header("Allow").has_value());
 
     // A token no route registered: the server does not know it, so 501.
-    const auto unknown_method = app.request(ruvia::test_request::method("FROBNICATE", "/t/hello"));
+    const auto unknown_method = app.dispatch(ruvia::test_request::method("FROBNICATE", "/t/hello"));
     EXPECT_EQ(unknown_method.status(), ruvia::http_status::not_implemented);
     EXPECT_TRUE(unknown_method.header("X-Test-Always").has_value());
 }
@@ -1193,7 +1201,7 @@ TEST(Ruvia, testing_facade_replacement_responses_do_not_inherit_the_discarded_on
         ruvia::test_app app;
         app.controllers<testing_facade_controller>();
         app.use_at<testing_facade_deny_after>({.prefix_ = "/t/partial"});
-        const auto denied = app.request(ruvia::test_request::get("/t/partial"));
+        const auto denied = app.dispatch(ruvia::test_request::get("/t/partial"));
         EXPECT_EQ(denied.status(), ruvia::http_status::forbidden);
         EXPECT_EQ(denied.header("Content-Type").value_or(std::string_view{}), std::string_view("application/problem+json"));
         EXPECT_TRUE(!denied.header("Content-Range").has_value());
@@ -1205,7 +1213,7 @@ TEST(Ruvia, testing_facade_replacement_responses_do_not_inherit_the_discarded_on
         ruvia::test_app app;
         app.controllers<testing_facade_controller>();
         app.use_at<testing_facade_replace_after>({.prefix_ = "/t/partial"});
-        const auto replaced = app.request(ruvia::test_request::get("/t/partial"));
+        const auto replaced = app.dispatch(ruvia::test_request::get("/t/partial"));
         EXPECT_EQ(replaced.status(), ruvia::http_status::ok);
         EXPECT_EQ(replaced.body(), std::string_view("denied"));
         EXPECT_EQ(replaced.header("Content-Type").value_or(std::string_view{}), std::string_view("text/plain; charset=UTF-8"));
@@ -1221,7 +1229,7 @@ TEST(Ruvia, testing_facade_explicit_policy_survives_replacement_before_and_after
         app.controllers<testing_facade_controller>();
         app.use<testing_facade_replace_after>();
         app.use<testing_facade_policy_stamp>(after);
-        const auto response = app.request(ruvia::test_request::get("/t/partial"));
+        const auto response = app.dispatch(ruvia::test_request::get("/t/partial"));
         EXPECT_EQ(response.body(), std::string_view("denied"));
         EXPECT_EQ(response.header("X-Policy"), std::string_view("retained"));
         EXPECT_TRUE(!response.header("Content-Range").has_value());
@@ -1235,7 +1243,7 @@ TEST(Ruvia, testing_facade_metadata_set_after_a_final_response_is_kept) {
         ruvia::test_app app;
         app.controllers<testing_facade_controller>();
         app.use_at<testing_facade_scoped>({.prefix_ = "/t/partial"}, "after");
-        const auto stamped = app.request(ruvia::test_request::get("/t/partial"));
+        const auto stamped = app.dispatch(ruvia::test_request::get("/t/partial"));
         EXPECT_EQ(stamped.status(), ruvia::http_status::partial_content);
         EXPECT_EQ(stamped.body(), std::string_view("abcd"));
         EXPECT_EQ(stamped.header("X-Test-Scope").value_or(std::string_view{}), std::string_view("after"));
@@ -1247,7 +1255,7 @@ TEST(Ruvia, testing_facade_metadata_set_after_a_final_response_is_kept) {
         ruvia::test_app app;
         app.controllers<testing_facade_controller>();
         app.use_at<testing_facade_forbid_after>({.prefix_ = "/t/partial"});
-        const auto denied = app.request(ruvia::test_request::get("/t/partial"));
+        const auto denied = app.dispatch(ruvia::test_request::get("/t/partial"));
         EXPECT_EQ(denied.status(), ruvia::http_status::forbidden);
         EXPECT_EQ(denied.body(), std::string_view("denied"));
         EXPECT_EQ(denied.header("X-Test-Denied").value_or(std::string_view{}), std::string_view("after"));
@@ -1263,7 +1271,7 @@ TEST(Ruvia, testing_facade_metadata_set_after_a_final_response_is_kept) {
         app.controllers<testing_facade_controller>();
         app.on_error(&facade_error);
         app.use_at<testing_facade_deny_after>({.prefix_ = "/t/partial"});
-        const auto denied = app.request(ruvia::test_request::get("/t/partial"));
+        const auto denied = app.dispatch(ruvia::test_request::get("/t/partial"));
         EXPECT_EQ(denied.status(), ruvia::http_status::forbidden);
         EXPECT_EQ(denied.body(), std::string_view("custom-error"));
         EXPECT_TRUE(!denied.header("Content-Range").has_value());
@@ -1276,7 +1284,7 @@ TEST(Ruvia, testing_facade_metadata_set_after_a_final_response_is_kept) {
         app.controllers<testing_facade_controller>();
         app.on_error(&facade_error);
         app.use_at<testing_facade_stamp_then_fail>({.prefix_ = "/t/partial"});
-        const auto failed = app.request(ruvia::test_request::get("/t/partial"));
+        const auto failed = app.dispatch(ruvia::test_request::get("/t/partial"));
         EXPECT_EQ(failed.status(), ruvia::http_status::conflict);
         EXPECT_EQ(failed.body(), std::string_view("custom-error"));
         EXPECT_TRUE(!failed.header("X-Test-After").has_value());
@@ -1290,7 +1298,7 @@ TEST(Ruvia, testing_facade_failure_after_next_discards_selected_response_metadat
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
     app.use_at<testing_facade_stamp_then_fail>({.prefix_ = "/t/partial"});
-    const auto failed = app.request(ruvia::test_request::get("/t/partial"));
+    const auto failed = app.dispatch(ruvia::test_request::get("/t/partial"));
     EXPECT_EQ(failed.status(), ruvia::http_status::conflict);
     EXPECT_TRUE(!failed.header("X-Test-After").has_value());
     EXPECT_TRUE(!failed.header("Content-Range").has_value());
@@ -1301,28 +1309,28 @@ TEST(Ruvia, testing_facade_subrequest_answers_like_a_network_request) {
     app.controllers<testing_facade_controller>();
     app.use<testing_facade_unmatched_reject>();
 
-    const auto missing = app.request(ruvia::test_request::get("/t/subrequest?target=/guarded/missing"));
+    const auto missing = app.dispatch(ruvia::test_request::get("/t/subrequest?target=/guarded/missing"));
     EXPECT_EQ(missing.status(), ruvia::http_status::unauthorized);
     EXPECT_TRUE(missing.header("X-Test-Relayed").has_value());
-    const auto options = app.request(ruvia::test_request::get("/t/subrequest?method=OPTIONS&target=/guarded/missing"));
+    const auto options = app.dispatch(ruvia::test_request::get("/t/subrequest?method=OPTIONS&target=/guarded/missing"));
     EXPECT_EQ(options.status(), ruvia::http_status::unauthorized);
     EXPECT_TRUE(options.header("X-Test-Relayed").has_value());
 
     // RFC 9110 9.3.2: HEAD answers with the GET metadata but no body.
-    const auto head = app.request(ruvia::test_request::get("/t/subrequest?method=HEAD&target=/t/hello"));
+    const auto head = app.dispatch(ruvia::test_request::get("/t/subrequest?method=HEAD&target=/t/hello"));
     EXPECT_EQ(head.status(), ruvia::http_status::ok);
     EXPECT_TRUE(head.body().empty());
-    const auto get = app.request(ruvia::test_request::get("/t/subrequest?target=/t/hello"));
+    const auto get = app.dispatch(ruvia::test_request::get("/t/subrequest?target=/t/hello"));
     EXPECT_EQ(get.body(), std::string_view("hello"));
-    const auto large = app.request(ruvia::test_request::get("/t/subrequest?target=/t/large"));
+    const auto large = app.dispatch(ruvia::test_request::get("/t/subrequest?target=/t/large"));
     EXPECT_EQ(large.status(), ruvia::http_status::ok);
     EXPECT_EQ(large.body(), std::string(1024 * 1024, 'x'));
 
     // The same dispatch entry preserves route parameters and error handling
     // when reached through the public subrequest API.
     for (const auto target : {"/t/users/42", "/t/boom", "/missing"}) {
-        const auto direct = app.request(ruvia::test_request::get(target));
-        const auto relayed = app.request(ruvia::test_request::get(std::string("/t/subrequest?target=") + target));
+        const auto direct = app.dispatch(ruvia::test_request::get(target));
+        const auto relayed = app.dispatch(ruvia::test_request::get(std::string("/t/subrequest?target=") + target));
         EXPECT_EQ(relayed.status(), direct.status());
         EXPECT_TRUE(relayed.header("X-Test-Relayed").has_value());
         EXPECT_EQ(relayed.body(), direct.body());
@@ -1336,12 +1344,12 @@ TEST(Ruvia, testing_facade_unmatched_middleware_wraps_automatic_options_answers)
 
     // The per-resource OPTIONS answer and the server-wide OPTIONS * one are
     // unmatched answers too, so the same response layer covers them.
-    const auto resource = app.request(ruvia::test_request::options("/t/hello"));
+    const auto resource = app.dispatch(ruvia::test_request::options("/t/hello"));
     EXPECT_EQ(resource.status(), ruvia::http_status::no_content);
     EXPECT_TRUE(resource.header("Allow").has_value());
     EXPECT_TRUE(resource.header("X-Test-Always").has_value());
 
-    const auto server = app.request(ruvia::test_request::options("*"));
+    const auto server = app.dispatch(ruvia::test_request::options("*"));
     EXPECT_EQ(server.status(), ruvia::http_status::no_content);
     // Methods differ per resource, so the server-wide answer carries no Allow.
     EXPECT_TRUE(!server.header("Allow").has_value());
@@ -1353,7 +1361,7 @@ TEST(Ruvia, testing_facade_unmatched_middleware_runs_with_a_custom_not_found_han
     app.use<testing_facade_always>();
     app.on_not_found(&facade_not_found);
 
-    const auto missing = app.request(ruvia::test_request::get("/nope"));
+    const auto missing = app.dispatch(ruvia::test_request::get("/nope"));
     EXPECT_EQ(missing.status(), ruvia::http_status::not_found);
     // The application's own fallback body still wins; the chain only wraps it.
     EXPECT_EQ(missing.body(), std::string_view("custom-miss"));
@@ -1364,7 +1372,7 @@ TEST(Ruvia, testing_facade_without_unmatched_middleware_the_404_path_is_unchange
     ruvia::test_app app;
     app.use<testing_facade_stamp>();
 
-    const auto missing = app.request(ruvia::test_request::get("/nope"));
+    const auto missing = app.dispatch(ruvia::test_request::get("/nope"));
     EXPECT_EQ(missing.status(), ruvia::http_status::not_found);
     EXPECT_TRUE(!missing.header("X-Test-Stamp").has_value());
 }
@@ -1376,10 +1384,10 @@ TEST(Ruvia, testing_facade_security_headers_reach_unmatched_requests) {
     app.controllers<testing_facade_controller>();
     app.use<ruvia::security_headers_middleware>();
 
-    const auto matched = app.request(ruvia::test_request::get("/t/hello"));
+    const auto matched = app.dispatch(ruvia::test_request::get("/t/hello"));
     EXPECT_TRUE(matched.header("Content-Security-Policy").has_value());
 
-    const auto missing = app.request(ruvia::test_request::get("/nope"));
+    const auto missing = app.dispatch(ruvia::test_request::get("/nope"));
     EXPECT_EQ(missing.status(), ruvia::http_status::not_found);
     const auto policy = missing.header("Content-Security-Policy");
     EXPECT_TRUE(policy.has_value());
@@ -1401,7 +1409,7 @@ TEST(Ruvia, testing_facade_security_headers_own_configured_policy) {
         app.use<ruvia::security_headers_middleware>(config);
     }
 
-    const auto response = app.request(ruvia::test_request::get("/t/hello"));
+    const auto response = app.dispatch(ruvia::test_request::get("/t/hello"));
     EXPECT_EQ(response.header("Content-Security-Policy"), std::string_view("default-src 'none'"));
     EXPECT_TRUE(!response.header("X-Frame-Options").has_value());
     EXPECT_TRUE(!response.header("X-XSS-Protection").has_value());
@@ -1424,7 +1432,7 @@ TEST(Ruvia, testing_facade_session_middleware_owns_configured_cookie_policy) {
         app.use<ruvia::session_middleware>(config);
     }
 
-    const auto response = app.request(ruvia::test_request::get("/t/session-clear"));
+    const auto response = app.dispatch(ruvia::test_request::get("/t/session-clear"));
     EXPECT_EQ(response.status(), ruvia::http_status::ok);
     const auto cookie = response.header("Set-Cookie");
     EXPECT_TRUE(cookie.has_value());
@@ -1449,7 +1457,7 @@ TEST(Ruvia, testing_facade_session_cookie_survives_response_replacement_after_ne
             app.use<ruvia::session_middleware>(config);
         }
 
-        const auto response = app.request(ruvia::test_request::get("/t/session-clear"));
+        const auto response = app.dispatch(ruvia::test_request::get("/t/session-clear"));
         EXPECT_EQ(response.status(), error_after ? ruvia::http_status::forbidden : ruvia::http_status::ok);
         if (!error_after) {
             EXPECT_EQ(response.body(), std::string_view("denied"));
@@ -1467,12 +1475,12 @@ TEST(Ruvia, testing_facade_routes_an_extension_method_by_its_exact_token) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
 
-    const auto propfind = app.request(ruvia::test_request::method("PROPFIND", "/t/files"));
+    const auto propfind = app.dispatch(ruvia::test_request::method("PROPFIND", "/t/files"));
     EXPECT_EQ(propfind.status(), ruvia::http_status::ok);
     // The handler sees the exact wire token, not a classification.
     EXPECT_EQ(propfind.body(), std::string_view("PROPFIND"));
 
-    const auto purge = app.request(ruvia::test_request::method("PURGE", "/t/files"));
+    const auto purge = app.dispatch(ruvia::test_request::method("PURGE", "/t/files"));
     EXPECT_EQ(purge.status(), ruvia::http_status::ok);
     EXPECT_EQ(purge.body(), std::string_view("purged"));
 }
@@ -1484,7 +1492,7 @@ TEST(Ruvia, testing_facade_extension_method_tokens_are_case_sensitive) {
     // different method from "PROPFIND" and no route registered it. 405 is
     // reserved for a method the origin server knows (15.5.6), so an
     // unregistered token is 501 no matter what the target path supports.
-    const auto response = app.request(ruvia::test_request::method("propfind", "/t/files"));
+    const auto response = app.dispatch(ruvia::test_request::method("propfind", "/t/files"));
     EXPECT_EQ(response.status(), ruvia::http_status::not_implemented);
 }
 
@@ -1494,11 +1502,11 @@ TEST(Ruvia, testing_facade_extension_method_splits_404_from_501) {
 
     // PROPFIND is registered somewhere, so the server knows it. A path with no
     // route at all is then an ordinary 404 -- the method is not the problem.
-    const auto missing_path = app.request(ruvia::test_request::method("PROPFIND", "/t/nothing-here"));
+    const auto missing_path = app.dispatch(ruvia::test_request::method("PROPFIND", "/t/nothing-here"));
     EXPECT_EQ(missing_path.status(), ruvia::http_status::not_found);
 
     // A token no route registered is 501 even on a path that exists.
-    const auto unknown_method = app.request(ruvia::test_request::method("FROBNICATE", "/t/files"));
+    const auto unknown_method = app.dispatch(ruvia::test_request::method("FROBNICATE", "/t/files"));
     EXPECT_EQ(unknown_method.status(), ruvia::http_status::not_implemented);
 }
 
@@ -1506,7 +1514,7 @@ TEST(Ruvia, testing_facade_extension_method_on_a_known_path_is_405_not_501) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
     // The resource exists under GET, so the method is the problem, not the URI.
-    const auto response = app.request(ruvia::test_request::method("PROPFIND", "/t/hello"));
+    const auto response = app.dispatch(ruvia::test_request::method("PROPFIND", "/t/hello"));
     EXPECT_EQ(response.status(), ruvia::http_status::method_not_allowed);
     const auto allow = response.header("Allow");
     EXPECT_TRUE(allow.has_value());
@@ -1519,7 +1527,7 @@ TEST(Ruvia, testing_facade_allow_header_names_extension_methods) {
 
     // A known method the path does not support: Allow must still name the
     // extension methods it does, or it is not the full supported set.
-    const auto known = app.request(ruvia::test_request::post("/t/files"));
+    const auto known = app.dispatch(ruvia::test_request::post("/t/files"));
     EXPECT_EQ(known.status(), ruvia::http_status::method_not_allowed);
     const auto known_allow = known.header("Allow");
     EXPECT_TRUE(known_allow.has_value());
@@ -1528,7 +1536,7 @@ TEST(Ruvia, testing_facade_allow_header_names_extension_methods) {
 
     // A path whose ONLY methods are extension ones must still answer 405 with a
     // populated Allow rather than 404 or an empty header.
-    const auto dav_only = app.request(ruvia::test_request::method("PURGE", "/t/dav-only"));
+    const auto dav_only = app.dispatch(ruvia::test_request::method("PURGE", "/t/dav-only"));
     EXPECT_EQ(dav_only.status(), ruvia::http_status::method_not_allowed);
     const auto dav_allow = dav_only.header("Allow");
     EXPECT_TRUE(dav_allow.has_value());
@@ -1539,7 +1547,7 @@ TEST(Ruvia, testing_facade_allow_header_names_extension_methods) {
 TEST(Ruvia, testing_facade_options_reports_extension_methods_too) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
-    const auto response = app.request(ruvia::test_request::options("/t/files"));
+    const auto response = app.dispatch(ruvia::test_request::options("/t/files"));
     EXPECT_EQ(response.status(), ruvia::http_status::no_content);
     const auto allow = response.header("Allow");
     EXPECT_TRUE(allow.has_value());
@@ -1549,7 +1557,7 @@ TEST(Ruvia, testing_facade_options_reports_extension_methods_too) {
 TEST(Ruvia, testing_facade_options_reports_extension_only_resource_methods_too) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
-    const auto response = app.request(ruvia::test_request::options("/t/dav-only"));
+    const auto response = app.dispatch(ruvia::test_request::options("/t/dav-only"));
     EXPECT_EQ(response.status(), ruvia::http_status::no_content);
     const auto allow = response.header("Allow");
     EXPECT_TRUE(allow.has_value());
@@ -1560,11 +1568,11 @@ TEST(Ruvia, testing_facade_options_reports_extension_only_resource_methods_too) 
 TEST(Ruvia, testing_facade_router_slash) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
-    auto res1 = app.request(ruvia::test_request::get("/t/a/123/"));
+    auto res1 = app.dispatch(ruvia::test_request::get("/t/a/123/"));
     EXPECT_EQ(res1.status(), ruvia::http_status::ok);
 
     // "/a/:id/" names paths ending in '/'; the bare spelling is another path.
-    auto res2 = app.request(ruvia::test_request::get("/t/a/123"));
+    auto res2 = app.dispatch(ruvia::test_request::get("/t/a/123"));
     EXPECT_EQ(res2.status(), ruvia::http_status::not_found);
 }
 
@@ -1572,17 +1580,17 @@ TEST(Ruvia, testing_facade_dynamic_paths_preserve_empty_segments) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
 
-    const auto repeated = app.request(ruvia::test_request::get("/t/empty//42"));
+    const auto repeated = app.dispatch(ruvia::test_request::get("/t/empty//42"));
     EXPECT_EQ(repeated.status(), ruvia::http_status::ok);
     EXPECT_EQ(repeated.body(), "42");
 
-    const auto missing_empty = app.request(ruvia::test_request::get("/t/empty/42"));
+    const auto missing_empty = app.dispatch(ruvia::test_request::get("/t/empty/42"));
     EXPECT_EQ(missing_empty.status(), ruvia::http_status::not_found);
 
-    const auto extra_empty = app.request(ruvia::test_request::get("/t/empty///42"));
+    const auto extra_empty = app.dispatch(ruvia::test_request::get("/t/empty///42"));
     EXPECT_EQ(extra_empty.status(), ruvia::http_status::not_found);
 
-    const auto empty_param = app.request(ruvia::test_request::get("/t/users//"));
+    const auto empty_param = app.dispatch(ruvia::test_request::get("/t/users//"));
     EXPECT_EQ(empty_param.status(), ruvia::http_status::not_found);
 }
 
@@ -1590,11 +1598,11 @@ TEST(Ruvia, testing_facade_reverse_routes_preserve_empty_segments) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
 
-    const auto link = app.request(ruvia::test_request::get("/t/slash-link"));
+    const auto link = app.dispatch(ruvia::test_request::get("/t/slash-link"));
     EXPECT_EQ(link.status(), ruvia::http_status::ok);
     EXPECT_EQ(link.body(), "/t/empty//456");
 
-    const auto response = app.request(ruvia::test_request::get(link.body()));
+    const auto response = app.dispatch(ruvia::test_request::get(link.body()));
     EXPECT_EQ(response.status(), ruvia::http_status::ok);
     EXPECT_EQ(response.body(), "456");
 }
@@ -1603,16 +1611,16 @@ TEST(Ruvia, testing_facade_reverse_routes_preserve_trailing_segments) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
 
-    const auto links = app.request(ruvia::test_request::get("/t/trailing-links"));
+    const auto links = app.dispatch(ruvia::test_request::get("/t/trailing-links"));
     EXPECT_EQ(links.status(), ruvia::http_status::ok);
     EXPECT_EQ(links.body(), "/t/literal/ /t/tail/789//");
 
     const auto separator = links.body().find(' ');
-    const auto literal = app.request(ruvia::test_request::get(links.body().substr(0, separator)));
+    const auto literal = app.dispatch(ruvia::test_request::get(links.body().substr(0, separator)));
     EXPECT_EQ(literal.status(), ruvia::http_status::ok);
     EXPECT_EQ(literal.body(), "hello");
 
-    const auto tail = app.request(ruvia::test_request::get(links.body().substr(separator + 1)));
+    const auto tail = app.dispatch(ruvia::test_request::get(links.body().substr(separator + 1)));
     EXPECT_EQ(tail.status(), ruvia::http_status::ok);
     EXPECT_EQ(tail.body(), "789");
 }
@@ -1623,15 +1631,15 @@ TEST(Ruvia, testing_facade_reverse_routes_reject_dot_segments) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
 
-    const auto links = app.request(ruvia::test_request::get("/t/dot-links"));
+    const auto links = app.dispatch(ruvia::test_request::get("/t/dot-links"));
     EXPECT_EQ(links.status(), ruvia::http_status::ok);
     EXPECT_EQ(links.body(), "xxxxxxxxx /t/tree/a.b/..c/.d /t/tree//a");
 
-    const auto tree = app.request(ruvia::test_request::get("/t/tree/a.b/..c/.d"));
+    const auto tree = app.dispatch(ruvia::test_request::get("/t/tree/a.b/..c/.d"));
     EXPECT_EQ(tree.status(), ruvia::http_status::ok);
     EXPECT_EQ(tree.body(), "a.b/..c/.d");
 
-    const auto leading = app.request(ruvia::test_request::get("/t/tree//a"));
+    const auto leading = app.dispatch(ruvia::test_request::get("/t/tree//a"));
     EXPECT_EQ(leading.status(), ruvia::http_status::ok);
     EXPECT_EQ(leading.body(), "/a");
 }
@@ -1642,22 +1650,22 @@ TEST(Ruvia, testing_facade_wildcard_capture_rejects_encoded_separators) {
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
 
-    const auto spaced = app.request(ruvia::test_request::get("/t/tree/a%20b/c"));
+    const auto spaced = app.dispatch(ruvia::test_request::get("/t/tree/a%20b/c"));
     EXPECT_EQ(spaced.status(), ruvia::http_status::ok);
     EXPECT_EQ(spaced.body(), "a b/c");
 
     for (const auto* target : {"/t/tree/secret%2Fkey.txt", "/t/tree/x%2F..%2Fsecret", "/t/tree/a%5Cb"}) {
-        EXPECT_EQ(app.request(ruvia::test_request::get(target)).status(), ruvia::http_status::bad_request);
+        EXPECT_EQ(app.dispatch(ruvia::test_request::get(target)).status(), ruvia::http_status::bad_request);
     }
 
     // Decoded exactly once: a doubly encoded "%252E%252E" stays the literal
     // name "%2E%2E" that static_file looks up as is, never a ".." segment.
-    const auto doubled = app.request(ruvia::test_request::get("/t/tree/public/%252E%252E/private"));
+    const auto doubled = app.dispatch(ruvia::test_request::get("/t/tree/public/%252E%252E/private"));
     EXPECT_EQ(doubled.status(), ruvia::http_status::ok);
     EXPECT_EQ(doubled.body(), "public/%2E%2E/private");
 
     // A single named segment has no boundary to forge and still decodes.
-    const auto named = app.request(ruvia::test_request::get("/t/users/a%2Fb"));
+    const auto named = app.dispatch(ruvia::test_request::get("/t/users/a%2Fb"));
     EXPECT_EQ(named.status(), ruvia::http_status::ok);
     EXPECT_EQ(named.body(), "a/b");
 }
@@ -1672,7 +1680,7 @@ TEST(Ruvia, testing_facade_subrequest_rejects_non_buffered_routes_protocol_field
     }
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
-    const auto res = app.request(ruvia::test_request::get("/t/sub-checks"));
+    const auto res = app.dispatch(ruvia::test_request::get("/t/sub-checks"));
     EXPECT_EQ(res.status(), ruvia::http_status::ok);
     EXPECT_EQ(res.body(), "1111");
 }
@@ -1696,7 +1704,7 @@ TEST(Ruvia, testing_facade_subrequest_rejects_a_file_response_recovered_from_406
         }
         co_return c.text("err", {.status_ = error.status()});
     });
-    const auto res = app.request(ruvia::test_request::get("/t/sub-refused-file"));
+    const auto res = app.dispatch(ruvia::test_request::get("/t/sub-refused-file"));
     EXPECT_EQ(res.status(), ruvia::http_status::ok);
     EXPECT_EQ(res.body(), "rejected");
 }
@@ -1724,26 +1732,26 @@ TEST(Ruvia, testing_facade_reads_file_bodies_and_negotiates_precompressed_static
 
     ruvia::test_app app;
     app.controllers<testing_facade_controller>();
-    const auto full_file = app.request(ruvia::test_request::get("/t/sub-file"));
+    const auto full_file = app.dispatch(ruvia::test_request::get("/t/sub-file"));
     EXPECT_EQ(full_file.status(), ruvia::http_status::ok);
     EXPECT_EQ(full_file.body(), large_payload);
 
-    const auto multi_range = app.request(ruvia::test_request::get("/t/sub-file").header("Range", "bytes=0-1, 4-5"));
+    const auto multi_range = app.dispatch(ruvia::test_request::get("/t/sub-file").header("Range", "bytes=0-1, 4-5"));
     EXPECT_EQ(multi_range.status(), ruvia::http_status::partial_content);
     EXPECT_TRUE(multi_range.body().find("LL") != std::string_view::npos);
 
-    const auto direct_static = app.request(ruvia::test_request::get("/t/sub-static"));
+    const auto direct_static = app.dispatch(ruvia::test_request::get("/t/sub-static"));
     EXPECT_EQ(direct_static.status(), ruvia::http_status::ok);
     EXPECT_EQ(direct_static.body(), "plain-asset-body");
 
     // A named parameter decodes "%2F" and "%5C" inside its one segment, so it
     // can carry a ".." no route or path scope saw; static_file rejects it
     // instead of resolving it back inside the root.
-    const auto named_static = app.request(ruvia::test_request::get("/t/sub-static/asset.txt"));
+    const auto named_static = app.dispatch(ruvia::test_request::get("/t/sub-static/asset.txt"));
     EXPECT_EQ(named_static.status(), ruvia::http_status::ok);
     EXPECT_EQ(named_static.body(), "plain-asset-body");
     for (const auto* target : {"/t/sub-static/sub%2F..%2Fasset.txt", "/t/sub-static/sub%5C..%5Casset.txt", "/t/sub-static/.%2Fasset.txt"}) {
-        EXPECT_EQ(app.request(ruvia::test_request::get(target)).status(), ruvia::http_status::forbidden);
+        EXPECT_EQ(app.dispatch(ruvia::test_request::get(target)).status(), ruvia::http_status::forbidden);
     }
     testing_facade_static_root().reset();
 }
@@ -1753,30 +1761,30 @@ TEST(Ruvia, testing_facade_supports_typed_params_queries_const_handlers_json_arr
     app.controllers<testing_facade_controller>();
     app.trusted_proxies({.cidrs_ = {"10.0.0.0/8"}, .trust_x_forwarded_proto_ = true});
 
-    const auto typed = app.request(ruvia::test_request::get("/t/typed/42/true?page=-5&verbose=1"));
+    const auto typed = app.dispatch(ruvia::test_request::get("/t/typed/42/true?page=-5&verbose=1"));
     EXPECT_EQ(typed.status(), ruvia::http_status::ok);
     EXPECT_EQ(typed.body(), "42:1:-5:1:none:/t/typed/12/true");
 
-    const auto bad_param = app.request(ruvia::test_request::get("/t/typed/not-an-int/true"));
+    const auto bad_param = app.dispatch(ruvia::test_request::get("/t/typed/not-an-int/true"));
     EXPECT_EQ(bad_param.status(), ruvia::http_status::bad_request);
 
-    const auto bad_query = app.request(ruvia::test_request::get("/t/typed/42/true?page=abc"));
+    const auto bad_query = app.dispatch(ruvia::test_request::get("/t/typed/42/true?page=abc"));
     EXPECT_EQ(bad_query.status(), ruvia::http_status::bad_request);
 
-    const auto const_res = app.request(ruvia::test_request::get("/t/const-handler"));
+    const auto const_res = app.dispatch(ruvia::test_request::get("/t/const-handler"));
     EXPECT_EQ(const_res.status(), ruvia::http_status::ok);
     EXPECT_EQ(const_res.body(), "const-ok");
     EXPECT_EQ(const_res.header("X-Const-Middleware").value_or(""), "yes");
 
     ruvia::array<ruvia::string> input_items;
     input_items.emplace_back("first");
-    const auto array_res = app.request(ruvia::test_request::post("/t/json-array").json(input_items));
+    const auto array_res = app.dispatch(ruvia::test_request::post("/t/json-array").json(input_items));
     EXPECT_EQ(array_res.status(), ruvia::http_status::ok);
     EXPECT_EQ(array_res.body(), R"(["first","tail"])");
 
-    const auto direct_conn = app.request(ruvia::test_request::get("/t/conn-info"));
+    const auto direct_conn = app.dispatch(ruvia::test_request::get("/t/conn-info"));
     EXPECT_EQ(direct_conn.body(), "127.0.0.1:0/127.0.0.1/direct/plain");
 
-    const auto proxied_conn = app.request(ruvia::test_request::get("/t/conn-info").remote("10.1.2.3", 12345).header("X-Forwarded-For", "203.0.113.9"));
+    const auto proxied_conn = app.dispatch(ruvia::test_request::get("/t/conn-info").remote("10.1.2.3", 12345).header("X-Forwarded-For", "203.0.113.9"));
     EXPECT_EQ(proxied_conn.body(), "10.1.2.3:12345/203.0.113.9/proxy/plain");
 }

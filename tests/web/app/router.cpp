@@ -86,7 +86,7 @@ struct counted_middleware final {
 };
 
 ruvia::task<ruvia::http_response> parameter(ruvia::context& context) {
-    co_return context.text(context.req().param("id").value_or("missing"));
+    co_return context.text(context.request().param("id").value_or("missing"));
 }
 
 struct upgrade_marker final {
@@ -103,7 +103,7 @@ struct visit_counter final {
 };
 
 ruvia::task<void> echo_websocket(ruvia::context& context) {
-    const auto room = context.req().param("room").value_or("missing");
+    const auto room = context.request().param("room").value_or("missing");
     while (auto message = co_await context.websocket().read()) {
         std::string echoed(room);
         echoed.append(":");
@@ -121,7 +121,7 @@ ruvia::task<void> echo_tunnel(ruvia::context& context) {
 }
 
 ruvia::task<void> echo_udp(ruvia::context& context) {
-    EXPECT_EQ(context.req().param("host").value_or(""), "echo.test");
+    EXPECT_EQ(context.request().param("host").value_or(""), "echo.test");
     auto channel = context.tunnel().udp();
     while (auto datagram = co_await channel.read()) {
         co_await channel.write(datagram->bytes());
@@ -130,7 +130,7 @@ ruvia::task<void> echo_udp(ruvia::context& context) {
 }
 
 ruvia::task<void> check(ruvia::http_client& client, std::string_view method, std::string_view path, ruvia::http_status_code status, std::string_view body) {
-    auto response = co_await client.client().request(method, path).send();
+    auto response = co_await client.ref().request(method, path).send();
     EXPECT_EQ(response.status(), status);
     const auto content = co_await response.collect_body();
     EXPECT_EQ(content.text(), body);
@@ -141,10 +141,11 @@ ruvia::task<void> check(ruvia::http_client& client, std::string_view method, std
 TEST(Ruvia, public_router_dispatches_parameters_bodies_streams_methods_and_middleware) {
     using namespace public_router_test;
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     ruvia::test::tcp_port_reservation port(io);
     const auto run = [&]() -> ruvia::task<void> {
-        ruvia::router routes(attachment.loop().worker());
+        const auto loop = attachment.loop();
+        ruvia::router routes(loop.worker());
         unsigned errors = 0;
         unsigned single_shot_calls = 0;
         unsigned connection_failures = 0;
@@ -159,17 +160,17 @@ TEST(Ruvia, public_router_dispatches_parameters_bodies_streams_methods_and_middl
             co_return context.text("literal");
         });
         routes.add("GET", "/api/files/*", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
-            co_return context.text(context.req().param("*").value());
+            co_return context.text(context.request().param("*").value());
         });
         routes.add("GET", "/api/url/:id", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
-            co_return context.text(context.url_for("/api/:id", {context.req().param("id").value()}));
+            co_return context.text(context.url_for("/api/:id", {context.request().param("id").value()}));
         });
         routes.add<ruvia::body_limit<4>>("POST", "/api/body", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
-            co_return context.text(co_await context.req().body_text());
+            co_return context.text(co_await context.request().body_text());
         });
         routes.stream("GET", "/api/stream/:id", [](ruvia::context& context) -> ruvia::task<void> {
             if (co_await context.stream().commit() == ruvia::stream_commit_result::body) {
-                co_await context.stream().write(context.req().param("id").value());
+                co_await context.stream().write(context.request().param("id").value());
             }
         });
         routes.stream<ruvia::stream_body, ruvia::body_limit<4>>("POST", "/api/upload", [](ruvia::context& context) -> ruvia::task<void> {
@@ -223,7 +224,7 @@ TEST(Ruvia, public_router_dispatches_parameters_bodies_streams_methods_and_middl
             co_await check(client, "HEAD", "/api/value", ruvia::http_status::ok, "");
             co_await check(client, "HEAD", "/api/stream/value", ruvia::http_status::ok, "");
             for (const auto method : {"OPTIONS", "PUT"}) {
-                auto response = co_await client.client().request(method, "/api/stream/value").send();
+                auto response = co_await client.ref().request(method, "/api/stream/value").send();
                 EXPECT_EQ(response.status(), std::string_view(method) == "OPTIONS" ? ruvia::http_status::no_content : ruvia::http_status::method_not_allowed);
                 const auto allow = response.header("Allow").value_or("");
                 EXPECT_NE(allow.find("GET"), std::string_view::npos);
@@ -233,19 +234,19 @@ TEST(Ruvia, public_router_dispatches_parameters_bodies_streams_methods_and_middl
                 (void)co_await response.collect_body();
             }
             for (const auto path : {"/api/body", "/api/upload"}) {
-                auto response = co_await client.client().post(path).body("four").send();
+                auto response = co_await client.ref().post(path).body("four").send();
                 EXPECT_EQ(response.status(), ruvia::http_status::ok);
                 EXPECT_EQ(response.header("X-Router").value_or(""), "scoped");
                 const auto content = co_await response.collect_body();
                 EXPECT_EQ(content.text(), "four");
-                auto oversized = co_await client.client().post(path).body("large").send();
+                auto oversized = co_await client.ref().post(path).body("large").send();
                 EXPECT_EQ(oversized.status(), ruvia::http_status::content_too_large);
                 const auto rejected = co_await oversized.collect_body();
                 EXPECT_EQ(rejected.text(), "router error");
             }
             co_await check(client, "GET", "/api/fail", ruvia::http_status::conflict, "router error");
             co_await check(client, "GET", "/api/stream-fail", ruvia::http_status::conflict, "router error");
-            auto misuse = co_await client.client().get("/api/twice").send();
+            auto misuse = co_await client.ref().get("/api/twice").send();
             EXPECT_EQ(misuse.status(), ruvia::http_status::internal_server_error);
             const auto misuse_body = co_await misuse.collect_body();
             EXPECT_NE(misuse_body.text().find("next_called_multiple_times"), std::string_view::npos);
@@ -254,14 +255,14 @@ TEST(Ruvia, public_router_dispatches_parameters_bodies_streams_methods_and_middl
             co_await check(client, "GET", "/api/limited", ruvia::http_status::too_many_requests, "router error");
             co_await check(client, "PROPFIND", "/extension", ruvia::http_status::ok, "missing");
             co_await check(client, "UNREGISTERED", "/extension", ruvia::http_status::not_implemented, "router error");
-            auto absent = co_await client.client().get("/apix/missing").send();
+            auto absent = co_await client.ref().get("/apix/missing").send();
             EXPECT_EQ(absent.status(), ruvia::http_status::not_found);
             EXPECT_FALSE(absent.header("X-Router").has_value());
             (void)co_await absent.collect_body();
             EXPECT_GE(errors, 7);
             bool truncated = false;
             try {
-                auto response = co_await client.client().get("/api/committed-fail").send();
+                auto response = co_await client.ref().get("/api/committed-fail").send();
                 (void)co_await response.collect_body();
             } catch (const ruvia::http_client_error&) {
                 truncated = true;
@@ -278,17 +279,18 @@ TEST(Ruvia, public_router_dispatches_parameters_bodies_streams_methods_and_middl
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
 }
 
 TEST(Ruvia, public_router_freeze_rejects_ambiguity_and_rolls_back_middleware_lifetimes) {
     using namespace public_router_test;
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const auto run = [&]() -> ruvia::task<void> {
-        const auto& worker = attachment.loop().worker();
+        const auto loop_for_worker = attachment.loop();
+        const auto& worker = loop_for_worker.worker();
         for (const auto other : {"/items/:second", "/%69tems/:first"}) {
             ruvia::router conflict(worker);
             conflict.add("GET", "/items/:first", &parameter);
@@ -323,15 +325,15 @@ TEST(Ruvia, public_router_freeze_rejects_ambiguity_and_rolls_back_middleware_lif
         attachment.request_stop();
         co_return;
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
 }
 
 TEST(Ruvia, public_router_retains_cold_dispatch_after_facade_destruction_and_joins_cancellation) {
     using namespace public_router_test;
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor acceptor(io, {asio::ip::address_v4::loopback(), 0});
     asio::ip::tcp::socket peer(io);
     peer.connect(acceptor.local_endpoint());
@@ -341,13 +343,14 @@ TEST(Ruvia, public_router_retains_cold_dispatch_after_facade_destruction_and_joi
     auto state = std::make_shared<lifetime>();
     bool cancelled = false;
     const auto run = [&]() -> ruvia::task<void> {
-        const auto& worker = attachment.loop().worker();
+        const auto loop_for_worker = attachment.loop();
+        const auto& worker = loop_for_worker.worker();
         ruvia::worker_signal entered(worker);
         auto routes = std::make_unique<ruvia::router>(worker);
         routes->use<counted_middleware>(state);
         routes->add("GET", "/wait", [&](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
             entered.notify();
-            cancelled = co_await ruvia::sleep_for(context.worker(), 1h, context.stop_token()) == ruvia::timer_sleep_result::stop_requested;
+            cancelled = co_await ruvia::sleep_for(context.worker(), 1h, context.stop_token()) == ruvia::sleep_status::stop_requested;
             co_return context.text("cancelled");
         });
         routes->freeze();
@@ -369,18 +372,19 @@ TEST(Ruvia, public_router_retains_cold_dispatch_after_facade_destruction_and_joi
         EXPECT_EQ(state->destroyed_, 1);
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
 }
 
 TEST(Ruvia, public_router_applies_host_representation_policies_and_its_rate_limit) {
     using namespace public_router_test;
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     ruvia::test::tcp_port_reservation port(io);
     const auto run = [&]() -> ruvia::task<void> {
-        const auto& worker = attachment.loop().worker();
+        const auto loop_for_worker = attachment.loop();
+        const auto& worker = loop_for_worker.worker();
         {
             ruvia::router invalid(worker);
             EXPECT_THROW(invalid.rate_limit({.rule_ = {.max_requests_ = 0, .window_ = 1s}}), std::invalid_argument);
@@ -417,19 +421,19 @@ TEST(Ruvia, public_router_applies_host_representation_policies_and_its_rate_limi
         try {
             co_await server.start();
             for (const auto path : {"/text", "/stream"}) {
-                auto response = co_await client.client().get(path).header("Origin", "https://site.test").header("Accept-Encoding", "gzip").configure({.decode_content_ = false}).send();
+                auto response = co_await client.ref().get(path).header("Origin", "https://site.test").header("Accept-Encoding", "gzip").configure({.decode_content_ = false}).send();
                 EXPECT_EQ(response.status(), ruvia::http_status::ok) << path;
                 EXPECT_EQ(response.header("Content-Encoding").value_or(""), "gzip") << path;
                 EXPECT_EQ(response.header("Access-Control-Allow-Origin").value_or(""), "*") << path;
                 const auto encoded = co_await response.collect_body();
                 EXPECT_LT(encoded.text().size(), text_body.size()) << path;
             }
-            auto preflight = co_await client.client().request("OPTIONS", "/text").header("Origin", "https://site.test").header("Access-Control-Request-Method", "GET").send();
+            auto preflight = co_await client.ref().request("OPTIONS", "/text").header("Origin", "https://site.test").header("Access-Control-Request-Method", "GET").send();
             EXPECT_EQ(preflight.status(), ruvia::http_status::no_content);
             EXPECT_EQ(preflight.header("Access-Control-Allow-Origin").value_or(""), "*");
             (void)co_await preflight.collect_body();
             co_await check(client, "GET", "/text", ruvia::http_status::ok, text_body);
-            auto limited = co_await client.client().get("/missing").send();
+            auto limited = co_await client.ref().get("/missing").send();
             EXPECT_EQ(limited.status(), ruvia::http_status::too_many_requests);
             EXPECT_TRUE(limited.header("Retry-After").has_value());
             const auto limited_body = co_await limited.collect_body();
@@ -444,18 +448,19 @@ TEST(Ruvia, public_router_applies_host_representation_policies_and_its_rate_limi
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
 }
 
 TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_http2) {
     using namespace public_router_test;
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     ruvia::test::tcp_port_reservation port(io);
     const auto run = [&]() -> ruvia::task<void> {
-        ruvia::router routes(attachment.loop().worker());
+        const auto loop = attachment.loop();
+        ruvia::router routes(loop.worker());
         unsigned errors = 0;
         routes.on_error([&](ruvia::context& context, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
             ++errors;
@@ -486,7 +491,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
                 try {
                     upgrade_marker::calls_ = 0;
                     {
-                        auto session = co_await client.client().websocket("/ws/lobby").connect();
+                        auto session = co_await client.ref().websocket("/ws/lobby").connect();
                         co_await session.text("hello");
                         const auto message = co_await session.read();
                         EXPECT_TRUE(message.has_value()) << label;
@@ -497,7 +502,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
                         EXPECT_FALSE(co_await session.read()) << label;
                     }
                     {
-                        auto opened = co_await client.client().connect("echo.test:443").connect();
+                        auto opened = co_await client.ref().connect("echo.test:443").open();
                         auto* tunnel = opened.tunnel();
                         EXPECT_TRUE(tunnel != nullptr) << label;
                         if (tunnel != nullptr) {
@@ -512,7 +517,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
                         }
                     }
                     {
-                        auto opened = co_await client.client().udp("/.well-known/masque/udp/echo.test/53/").connect();
+                        auto opened = co_await client.ref().connect_udp("/.well-known/masque/udp/echo.test/53/").open();
                         auto* tunnel = opened.tunnel();
                         EXPECT_TRUE(tunnel != nullptr) << label;
                         if (tunnel != nullptr) {
@@ -529,7 +534,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
                     }
                     EXPECT_EQ(upgrade_marker::calls_, 3U) << label;
                     {
-                        auto refused = co_await client.client().connect("other.test:443").connect();
+                        auto refused = co_await client.ref().connect("other.test:443").open();
                         auto* response = refused.response();
                         EXPECT_TRUE(response != nullptr) << label;
                         if (response != nullptr) {
@@ -538,7 +543,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
                         }
                     }
                     const auto before = errors;
-                    auto plain = co_await client.client().get("/ws/lobby").send();
+                    auto plain = co_await client.ref().get("/ws/lobby").send();
                     EXPECT_EQ(plain.status(), ruvia::http_status::bad_request) << label;
                     const auto plain_body = co_await plain.collect_body();
                     EXPECT_EQ(plain_body.text(), "router error") << label;
@@ -560,9 +565,9 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
 }
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -570,10 +575,11 @@ TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware
     using namespace public_router_test;
     ruvia::test::redis_session_store_peer peer;
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     ruvia::test::tcp_port_reservation port(io);
     const auto run = [&]() -> ruvia::task<void> {
-        const auto& worker = attachment.loop().worker();
+        const auto loop_for_worker = attachment.loop();
+        const auto& worker = loop_for_worker.worker();
         const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
         ruvia::redis_client redis(attachment.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1, .connect_timeout_ = 2s, .command_timeout_ = 2s});
         ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .versions_ = ruvia::http_client_versions{.http2_ = false}});
@@ -605,7 +611,7 @@ TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware
                 co_return context.text("plain");
             });
             routes.add("GET", "/relay", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
-                auto upstream = co_await context.client().get("/plain").send();
+                auto upstream = co_await context.http_client().get("/plain").send();
                 const auto content = co_await upstream.collect_body();
                 const auto stored = co_await context.redis().get("absent");
                 co_return context.text(std::string(content.text()) + (stored ? ":stored" : ":absent"));
@@ -621,7 +627,7 @@ TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware
             try {
                 co_await server.start();
                 const auto request = [&](std::string_view path, std::string_view cookie) -> ruvia::task<std::pair<std::string, std::string>> {
-                    auto builder = client.client().get(path);
+                    auto builder = client.ref().get(path);
                     if (!cookie.empty()) {
                         builder.header("Cookie", cookie);
                     }
@@ -662,9 +668,9 @@ TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
 }
 #endif
 
@@ -675,7 +681,7 @@ TEST(Ruvia, public_router_buffered_body_reads_honour_their_operation) {
     using namespace std::chrono_literals;
     asio::io_context io;
     ruvia::blocking_pool preparation({.thread_count_ = 1});
-    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &preparation});
+    auto attachment = ruvia::event_loop_attachment(io, {.blocking_pool_ = &preparation});
     ruvia::test::tcp_port_reservation plain(io), secure(io);
     ruvia::test::udp_port_reservation udp(io);
     ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
@@ -692,9 +698,10 @@ TEST(Ruvia, public_router_buffered_body_reads_honour_their_operation) {
             }
             co_return std::error_code{};
         };
-        ruvia::router routes(attachment.loop().worker());
+        const auto loop = attachment.loop();
+        ruvia::router routes(loop.worker());
         routes.add("POST", "/buffered", [&](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
-            const auto request = context.req();
+            const auto request = context.request();
             for (const auto attempt : {0, 1, 2}) {
                 try {
                     if (attempt == 0) {
@@ -766,7 +773,7 @@ TEST(Ruvia, public_router_buffered_body_reads_honour_their_operation) {
                         EXPECT_EQ(phase, expected) << entry.label_;
                     };
                     phase = 0;
-                    auto exchange = co_await client.client().post("/buffered").upload({});
+                    auto exchange = co_await client.ref().post("/buffered").upload({});
                     co_await exchange.body().write("abc");
                     co_await await_phase(1);
                     co_await exchange.body().write("def");
@@ -795,20 +802,21 @@ TEST(Ruvia, public_router_buffered_body_reads_honour_their_operation) {
         EXPECT_EQ(prestopped, targets.size());
         EXPECT_EQ(interruptions, 2 * targets.size());
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
 }
 
 TEST(Ruvia, public_router_binds_http_clients_by_its_own_unique_aliases) {
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     ruvia::test::tcp_port_reservation port(io);
     const auto run = [&]() -> ruvia::task<void> {
         const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
         ruvia::http_client first(attachment.loop(), {.base_url_ = origin, .versions_ = {.http2_ = false}});
         ruvia::http_client second(attachment.loop(), {.base_url_ = origin, .versions_ = {.http2_ = false}});
-        ruvia::router routes(attachment.loop().worker());
+        const auto loop = attachment.loop();
+        ruvia::router routes(loop.worker());
         routes.bind_http_client("one", first).bind_http_client("two", second).bind_http_client("default", first);
         EXPECT_THROW(routes.bind_http_client("one", second), std::invalid_argument);
         EXPECT_THROW(routes.bind_http_client("", first), std::invalid_argument);
@@ -819,9 +827,9 @@ TEST(Ruvia, public_router_binds_http_clients_by_its_own_unique_aliases) {
             co_return context.text("two");
         });
         routes.add("GET", "/relay", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
-            auto one = co_await context.client("one").get("/one").send();
+            auto one = co_await context.http_client("one").get("/one").send();
             const auto first = co_await one.collect_body();
-            auto two = co_await context.client("two").get("/two").send();
+            auto two = co_await context.http_client("two").get("/two").send();
             const auto second = co_await two.collect_body();
             co_return context.text(std::string(first.text()) + ":" + std::string(second.text()));
         });
@@ -833,7 +841,7 @@ TEST(Ruvia, public_router_binds_http_clients_by_its_own_unique_aliases) {
         std::exception_ptr failure;
         try {
             co_await server.start();
-            auto response = co_await first.client().get("/relay").send();
+            auto response = co_await first.ref().get("/relay").send();
             EXPECT_EQ(response.status(), ruvia::http_status::ok);
             const auto content = co_await response.collect_body();
             EXPECT_EQ(content.text(), "one:two");
@@ -848,7 +856,7 @@ TEST(Ruvia, public_router_binds_http_clients_by_its_own_unique_aliases) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
 }

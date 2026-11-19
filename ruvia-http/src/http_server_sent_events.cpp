@@ -241,7 +241,7 @@ sse_parse_result sse_parser::parse(std::string_view input) & try {
     throw;
 }
 
-void sse_parser::finish() noexcept {
+void sse_parser::finish_input() noexcept {
     if (state_ != decoder_state::active) {
         return;
     }

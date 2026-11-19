@@ -117,7 +117,7 @@ public:
             }
             if (state.permits_ != 0) {
                 --state.permits_;
-                wait_.complete_ready(wait_result<std::monostate>::with_value(std::monostate{}));
+                wait_.complete_ready(wait_result<std::monostate>::from_value(std::monostate{}));
                 return true;
             }
             return wait_.complete_or_publish("semaphore supports one pending acquire");
@@ -128,7 +128,7 @@ public:
         }
 
         [[nodiscard]] wait_result<std::monostate> await_resume() {
-            return wait_.take_result();
+            return wait_.take_value();
         }
 
     private:
@@ -151,7 +151,7 @@ public:
     void release() {
         auto lock = state_->lock_state();
         if (state_->wait_slot().occupied()) {
-            state_->wait_slot().complete(wait_result<std::monostate>::with_value(std::monostate{}));
+            state_->wait_slot().complete(wait_result<std::monostate>::from_value(std::monostate{}));
         } else {
             ++state_->permits_;
         }
@@ -208,8 +208,9 @@ task<void> wait_through_stop(event_loop_attachment& attachment, worker_semaphore
 
 TEST(Ruvia, PublicWorkerWaitBlocksComposeBoundSemaphore) {
     asio::io_context io_context;
-    auto attachment = attach_event_loop(io_context, {.queue_capacity_ = 8});
-    const auto worker_value = attachment.loop().worker();
+    auto attachment = event_loop_attachment(io_context, {.queue_capacity_ = 8});
+    const auto loop_for_worker_value = attachment.loop();
+    const auto worker_value = loop_for_worker_value.worker();
     std::binary_semaphore released{0};
     semaphore_outcomes outcomes;
     run_worker_tasks(attachment, exercise_semaphore(worker_value, released, outcomes));
@@ -223,8 +224,9 @@ TEST(Ruvia, PublicWorkerWaitBlocksComposeBoundSemaphore) {
 
 TEST(Ruvia, PublicWorkerWaitBlocksObserveWorkerStopping) {
     asio::io_context io_context;
-    auto attachment = attach_event_loop(io_context, {.queue_capacity_ = 8});
-    const auto worker_value = attachment.loop().worker();
+    auto attachment = event_loop_attachment(io_context, {.queue_capacity_ = 8});
+    const auto loop_for_worker_value = attachment.loop();
+    const auto worker_value = loop_for_worker_value.worker();
     worker_semaphore semaphore(worker_value, 0);
     bool stopping = false;
     run_worker_tasks(attachment, wait_through_stop(attachment, semaphore, stopping));
@@ -250,8 +252,9 @@ TEST(Ruvia, WorkerShutdownRegistrationRunsBothPhasesOnce) {
     auto dropped = std::make_shared<counting_observer>();
     {
         asio::io_context io_context;
-        auto attachment = attach_event_loop(io_context, {.queue_capacity_ = 8});
-        const auto worker_value = attachment.loop().worker();
+        auto attachment = event_loop_attachment(io_context, {.queue_capacity_ = 8});
+        const auto loop_for_worker_value = attachment.loop();
+        const auto worker_value = loop_for_worker_value.worker();
         EXPECT_TRUE(detail::worker_ref_access::register_shutdown(worker_value, observer, &counting_observer::registration_));
         EXPECT_THROW(static_cast<void>(detail::worker_ref_access::register_shutdown(worker_value, observer, &counting_observer::registration_)), std::logic_error);
         EXPECT_TRUE(detail::worker_ref_access::register_shutdown(worker_value, dropped, &counting_observer::registration_));
@@ -268,8 +271,9 @@ TEST(Ruvia, WorkerShutdownRegistrationRunsBothPhasesOnce) {
 
 TEST(Ruvia, WorkerCompletionLaneBypassesFullQueue) {
     asio::io_context io_context;
-    auto attachment = attach_event_loop(io_context, {.queue_capacity_ = 1});
-    const auto worker_value = attachment.loop().worker();
+    auto attachment = event_loop_attachment(io_context, {.queue_capacity_ = 1});
+    const auto loop_for_worker_value = attachment.loop();
+    const auto worker_value = loop_for_worker_value.worker();
     int ran = 0;
     ASSERT_TRUE(worker_value
             .post([&ran] {
@@ -309,31 +313,31 @@ TEST(Ruvia, WorkerCompletionLaneBypassesFullQueue) {
 }
 
 TEST(Ruvia, WorkerWaitResultFactoriesFixCategory) {
-    const auto value = wait_result<int>::with_value(7);
+    const auto value = wait_result<int>::from_value(7);
     EXPECT_EQ(value.status(), wait_status::value);
     EXPECT_EQ(value.value(), 7);
-    const auto timed_out = wait_result<int>::with_status(wait_status::timed_out);
+    const auto timed_out = wait_result<int>::from_status(wait_status::timed_out);
     EXPECT_EQ(timed_out.status(), wait_status::timed_out);
     EXPECT_FALSE(timed_out.has_value());
-    EXPECT_THROW(static_cast<void>(wait_result<int>::with_status(wait_status::value)), std::invalid_argument);
+    EXPECT_THROW(static_cast<void>(wait_result<int>::from_status(wait_status::value)), std::invalid_argument);
 }
 
 TEST(Ruvia, BlockingResultFactoriesFixCategory) {
-    auto value = blocking_result<int>::with_value(5);
+    auto value = blocking_result<int>::from_value(5);
     EXPECT_TRUE(value.completed());
     EXPECT_EQ(std::move(value).take_value(), 5);
-    const auto void_value = blocking_result<void>::with_value();
+    const auto void_value = blocking_result<void>::from_value();
     EXPECT_TRUE(void_value.completed());
-    const auto failed = blocking_result<int>::with_error(std::make_exception_ptr(std::runtime_error("failed")));
+    const auto failed = blocking_result<int>::from_error(std::make_exception_ptr(std::runtime_error("failed")));
     EXPECT_TRUE(failed.failed());
     EXPECT_EQ(failed.status(), blocking_status::failed);
     EXPECT_THROW(static_cast<void>(failed.value()), std::runtime_error);
-    const auto rejected = blocking_result<int>::with_status(blocking_status::queue_full);
+    const auto rejected = blocking_result<int>::from_status(blocking_status::queue_full);
     EXPECT_EQ(rejected.status(), blocking_status::queue_full);
     EXPECT_THROW(static_cast<void>(rejected.value()), blocking_operation_rejected);
-    EXPECT_THROW(static_cast<void>(blocking_result<int>::with_status(blocking_status::completed)), std::invalid_argument);
-    EXPECT_THROW(static_cast<void>(blocking_result<int>::with_status(blocking_status::failed)), std::invalid_argument);
-    EXPECT_THROW(static_cast<void>(blocking_result<int>::with_error(nullptr)), std::invalid_argument);
+    EXPECT_THROW(static_cast<void>(blocking_result<int>::from_status(blocking_status::completed)), std::invalid_argument);
+    EXPECT_THROW(static_cast<void>(blocking_result<int>::from_status(blocking_status::failed)), std::invalid_argument);
+    EXPECT_THROW(static_cast<void>(blocking_result<int>::from_error(nullptr)), std::invalid_argument);
 }
 
 }  // namespace ruvia::test::worker_wait_tests
@@ -461,9 +465,10 @@ task<void> exercise_payload_retirement(worker_ref worker, bool& success) {
 
 bool test_completion_move_can_close_receiver(bool stop_worker) {
     asio::io_context io;
-    auto attachment = attach_event_loop(io, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(io, {.queue_capacity_ = 8});
     payload_state state;
-    auto [completion, receiver] = make_one_shot<payload>(attachment.loop().worker());
+    const auto worker_loop_0 = attachment.loop();
+    auto [completion, receiver] = make_one_shot<payload>(worker_loop_0.worker());
     std::binary_semaphore requested{0};
     std::binary_semaphore closed{0};
     bool observe = true;
@@ -553,10 +558,11 @@ task<void> exercise_direct_payload_delivery(worker_ref worker, bool& success) {
 
 bool test_concurrent_completion_reservation(bool throw_first) {
     asio::io_context io;
-    auto attachment = attach_event_loop(io, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(io, {.queue_capacity_ = 8});
     payload_state first_state;
     payload_state retry_state;
-    auto [completion, receiver] = make_one_shot<payload>(attachment.loop().worker());
+    const auto worker_loop_1 = attachment.loop();
+    auto [completion, receiver] = make_one_shot<payload>(worker_loop_1.worker());
     std::binary_semaphore entered{0};
     std::binary_semaphore proceed{0};
     std::binary_semaphore second_finished{0};
@@ -888,8 +894,9 @@ TEST(Ruvia, OneShotLifecycle) {
     bool cancellation_during_completion = false;
     {
         asio::io_context io_context;
-        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-        const auto worker_value = attachment.loop().worker();
+        auto attachment = ruvia::event_loop_attachment(io_context, {.queue_capacity_ = 8});
+        const auto loop_for_worker_value = attachment.loop();
+        const auto worker_value = loop_for_worker_value.worker();
         auto cold_wait = make_cold_wait_after_receiver_close(worker_value, false);
         auto timed_cold_wait = make_cold_wait_after_receiver_close(worker_value, true);
         auto completed_cold_wait = make_cold_wait_after_receiver_close(worker_value, false, true);
@@ -900,8 +907,9 @@ TEST(Ruvia, OneShotLifecycle) {
     bool worker_stopping = false;
     {
         asio::io_context io_context;
-        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-        const auto worker_value = attachment.loop().worker();
+        auto attachment = ruvia::event_loop_attachment(io_context, {.queue_capacity_ = 8});
+        const auto loop_for_worker_value = attachment.loop();
+        const auto worker_value = loop_for_worker_value.worker();
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
         ruvia::test::run_worker_tasks(attachment, wait_for_worker_stopping(attachment, receiver, worker_stopping));
     }
@@ -909,8 +917,9 @@ TEST(Ruvia, OneShotLifecycle) {
     bool settled_outcomes_kept = false;
     {
         asio::io_context io_context;
-        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-        const auto worker_value = attachment.loop().worker();
+        auto attachment = ruvia::event_loop_attachment(io_context, {.queue_capacity_ = 8});
+        const auto loop_for_worker_value = attachment.loop();
+        const auto worker_value = loop_for_worker_value.worker();
         auto [delivered_completion, delivered_receiver] = ruvia::make_one_shot<int>(worker_value);
         auto [closed_completion, closed_receiver] = ruvia::make_one_shot<int>(worker_value);
         ruvia::test::run_worker_tasks(attachment, settled_outcomes_survive_worker_stopping(attachment, std::move(delivered_completion), delivered_receiver, std::move(closed_completion), closed_receiver, settled_outcomes_kept));
@@ -920,8 +929,9 @@ TEST(Ruvia, OneShotLifecycle) {
     bool cross_thread_completed = false;
     {
         asio::io_context io_context;
-        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-        const auto worker_value = attachment.loop().worker();
+        auto attachment = ruvia::event_loop_attachment(io_context, {.queue_capacity_ = 8});
+        const auto loop_for_worker_value = attachment.loop();
+        const auto worker_value = loop_for_worker_value.worker();
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
         std::binary_semaphore receiver_scheduled{0};
         asio::post(io_context, [&receiver_scheduled] {
@@ -949,9 +959,10 @@ TEST(Ruvia, OneShotCompletionPinsStateDuringReentrantRebinding) {
     for (const bool fail_move : {false, true}) {
         SCOPED_TRACE(fail_move);
         asio::io_context io;
-        auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 8});
+        auto attachment = ruvia::event_loop_attachment(io, {.queue_capacity_ = 8});
         payload_state state;
-        auto [completion, receiver] = ruvia::make_one_shot<payload>(attachment.loop().worker());
+        const auto worker_loop_2 = attachment.loop();
+        auto [completion, receiver] = ruvia::make_one_shot<payload>(worker_loop_2.worker());
         std::optional<ruvia::one_shot_receiver<payload>> owner(std::move(receiver));
         owner->close();
         bool first_move = true;
@@ -983,9 +994,10 @@ TEST(Ruvia, OneShotCompletionPinsStateDuringReentrantRebinding) {
 
 TEST(Ruvia, OneShotDeliversPayloadWithoutIntermediateMoves) {
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 8});
+    auto attachment = ruvia::event_loop_attachment(io, {.queue_capacity_ = 8});
     bool success = false;
-    ruvia::test::run_worker_tasks(attachment, ruvia::test::one_shot_tests::exercise_direct_payload_delivery(attachment.loop().worker(), success));
+    const auto worker_loop_3 = attachment.loop();
+    ruvia::test::run_worker_tasks(attachment, ruvia::test::one_shot_tests::exercise_direct_payload_delivery(worker_loop_3.worker(), success));
     EXPECT_TRUE(success);
 }
 
@@ -1128,7 +1140,7 @@ ruvia::task<void> exercise_lease_and_close(ruvia::pool_lease_scheduler& schedule
         (void)scheduler.close();
     });
     const auto waiting_at_close = co_await scheduler.acquire();
-    if (!handoff_released || waiting_at_close.status() != ruvia::wait_status::closed || !scheduler.closing() || scheduler.close()) {
+    if (!handoff_released || waiting_at_close.status() != ruvia::wait_status::closed || !scheduler.closed() || scheduler.close()) {
         co_return;
     }
     scheduler.release(index);
@@ -1290,7 +1302,7 @@ ruvia::task<void> exercise_repeated_lifecycle(ruvia::pool_lease_scheduler& sched
     success = retained_result.has_value() && retained_result->has_value() && retained_result->value() == held.value();
 }
 
-ruvia::task<void> observe_timed_out_acquire(ruvia::pool_lease_acquire pending, bool& timed_out) {
+ruvia::task<void> observe_timed_out_acquire(ruvia::pool_lease_acquire_operation pending, bool& timed_out) {
     const auto result_value = co_await std::move(pending);
     timed_out = result_value.status() == ruvia::wait_status::timed_out;
 }
@@ -1299,10 +1311,11 @@ bool test_scheduler_owns_timeout_for_lazy_acquires() {
     bool success = true;
     for (const bool with_stop_token : {false, true}) {
         asio::io_context context;
-        auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 8});
+        auto attachment = ruvia::event_loop_attachment(context, {.queue_capacity_ = 8});
         {
-            ruvia::pool_lease_scheduler scheduler(0, attachment.loop().worker());
-            std::optional<ruvia::pool_lease_acquire> pending;
+            const auto worker_loop_4 = attachment.loop();
+            ruvia::pool_lease_scheduler scheduler(0, worker_loop_4.worker());
+            std::optional<ruvia::pool_lease_acquire_operation> pending;
             {
                 std::optional<ruvia::timeout_duration> timeout = std::chrono::milliseconds(1);
                 ruvia::stop_source unused_stop;
@@ -1324,7 +1337,7 @@ bool test_scheduler_owns_timeout_for_lazy_acquires() {
     return success;
 }
 
-ruvia::task<void> observe_worker_acquire(ruvia::pool_lease_acquire pending, const ruvia::worker_ref& worker_value, ruvia::stop_source& source, bool& cancelled) {
+ruvia::task<void> observe_worker_acquire(ruvia::pool_lease_acquire_operation pending, const ruvia::worker_ref& worker_value, ruvia::stop_source& source, bool& cancelled) {
     static_cast<void>(worker_value.post([&source] {
         source.request_stop();
     }));
@@ -1334,12 +1347,13 @@ ruvia::task<void> observe_worker_acquire(ruvia::pool_lease_acquire pending, cons
 
 bool test_scheduler_retains_worker_binding_for_lazy_acquires() {
     asio::io_context context;
-    auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 8});
-    const auto worker_value = attachment.loop().worker();
+    auto attachment = ruvia::event_loop_attachment(context, {.queue_capacity_ = 8});
+    const auto loop_for_worker_value = attachment.loop();
+    const auto worker_value = loop_for_worker_value.worker();
     bool success = true;
     {
         std::optional<ruvia::pool_lease_scheduler> scheduler;
-        std::optional<ruvia::pool_lease_acquire> pending;
+        std::optional<ruvia::pool_lease_acquire_operation> pending;
         ruvia::stop_source source;
         {
             auto temporary_worker = worker_value;
@@ -1479,8 +1493,9 @@ ruvia::task<void> exercise_acquire_observes_worker_stop(ruvia::event_loop_attach
 
 TEST(Ruvia, PoolLeaseSchedulerLifecycle) {
     asio::io_context io_context;
-    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-    const auto worker_value = attachment.loop().worker();
+    auto attachment = ruvia::event_loop_attachment(io_context, {.queue_capacity_ = 8});
+    const auto loop_for_worker_value = attachment.loop();
+    const auto worker_value = loop_for_worker_value.worker();
     ruvia::pool_lease_scheduler lease_scheduler(1, worker_value);
     ruvia::pool_lease_scheduler saturated_timeout_scheduler(0, worker_value);
     ruvia::pool_lease_scheduler worker_timeout_scheduler(0, worker_value);
@@ -1518,8 +1533,9 @@ TEST(Ruvia, SchedulerRetainsWorkerBindingForLazyAcquires) {
 
 TEST(Ruvia, PoolLeaseAcquireCompletesWithWorkerStopping) {
     asio::io_context io_context;
-    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-    const auto worker_value = attachment.loop().worker();
+    auto attachment = ruvia::event_loop_attachment(io_context, {.queue_capacity_ = 8});
+    const auto loop_for_worker_value = attachment.loop();
+    const auto worker_value = loop_for_worker_value.worker();
     bool success = false;
     ruvia::test::run_worker_tasks(attachment, exercise_acquire_observes_worker_stop(attachment, worker_value, success));
     EXPECT_TRUE(success);

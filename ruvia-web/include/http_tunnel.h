@@ -62,6 +62,8 @@ public:
         return payload_ ? std::string_view(*payload_) : std::string_view{};
     }
     std::string_view text() const&& = delete;
+    [[nodiscard]] std::string take_text() && noexcept;
+    std::string take_text() & = delete;
 
 private:
     friend class http_capsule_stream;

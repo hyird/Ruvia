@@ -77,7 +77,7 @@ public:
     // select the default.
     template <typename t_type>
         requires std::same_as<std::remove_cvref_t<t_type>, std::string_view>
-    [[nodiscard]] std::optional<std::remove_cvref_t<t_type>> get(std::string_view name) const& RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::optional<std::remove_cvref_t<t_type>> get(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     template <typename t_type>
         requires(!std::same_as<std::remove_cvref_t<t_type>, std::string_view>)
     [[nodiscard]] std::optional<std::remove_cvref_t<t_type>> get(std::string_view name) const&;
@@ -110,8 +110,8 @@ private:
 
 template <typename t_type>
     requires std::same_as<std::remove_cvref_t<t_type>, std::string_view>
-std::optional<std::remove_cvref_t<t_type>> env::get(std::string_view name) const& {
-    return get_parsed<t_type>(name);
+std::optional<std::remove_cvref_t<t_type>> env::get(std::string_view name) const& noexcept {
+    return get(name);
 }
 
 template <typename t_type>

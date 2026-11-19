@@ -504,11 +504,11 @@ bool mariadb_statement_cache::refused(std::size_t hash) const noexcept {
 void mariadb_statement_cache::invalidate() {
     std::size_t handles = 0;
     statements_.for_each([&handles](mariadb_statement& statement) {
-        handles += statement.handle_ != nullptr ? 1 : 0;
+        handles += statement.statement_ != nullptr ? 1 : 0;
     });
     reserve_retired(handles);
     statements_.for_each([this](mariadb_statement& statement) {
-        retire(std::exchange(statement.handle_, nullptr));
+        retire(std::exchange(statement.statement_, nullptr));
     });
     statements_.clear();
     refused_.fill(0);
@@ -535,8 +535,8 @@ void mariadb_statement_cache::clear() noexcept {
         (void)mysql_stmt_close(statement);
     };
     statements_.for_each([&release](mariadb_statement& statement) {
-        if (statement.handle_ != nullptr) {
-            release(std::exchange(statement.handle_, nullptr));
+        if (statement.statement_ != nullptr) {
+            release(std::exchange(statement.statement_, nullptr));
         }
     });
     for (auto* retired : retired_) {
@@ -615,7 +615,7 @@ std::optional<mariadb_statement_cache::entry_ref> mariadb_statement_cache::find(
     };
     auto found = cache.statements_.find(sql, types, may_prepare, make);
     if (found.evicted_.has_value()) {
-        cache.retire(found.evicted_->handle_);
+        cache.retire(found.evicted_->statement_);
     }
     if (!may_prepare || !found.statement_.has_value()) {
         return std::nullopt;
@@ -651,7 +651,7 @@ std::exception_ptr mariadb_statement_failure(const std::exception_ptr& failure, 
 mariadb_prepared_run start_mariadb_prepared(mariadb_statement_cache& cache, mariadb_statement_cache::entry_ref statement, std::span<const db_value> params) noexcept {
     mariadb_prepared_run run;
     run.cache_ = &cache;
-    run.handle_ = statement;
+    run.cached_entry_ = statement;
     run.params_ = params;
     run.step_ = mariadb_prepared_run::step::close;
     return run;
@@ -874,11 +874,11 @@ void materialize_rows(cache_state& cache, MYSQL_STMT& statement, db_rows& output
 // run, so it is not run again.
 void start_draining(cache_state& cache, mariadb_prepared_run& run, mariadb_statement& entry, bool refuse) {
     cache.reserve_retired();
-    auto* statement = std::exchange(entry.handle_, nullptr);
+    auto* statement = std::exchange(entry.statement_, nullptr);
     if (refuse) {
-        cache.refuse(run.handle_, entry.key_hash_);
+        cache.refuse(run.cached_entry_, entry.key_hash_);
     } else {
-        (void)cache.statements_.forget(run.handle_, true);
+        (void)cache.statements_.forget(run.cached_entry_, true);
     }
     cache.retire(statement);
     run.closing_ = statement;
@@ -889,8 +889,8 @@ void start_draining(cache_state& cache, mariadb_prepared_run& run, mariadb_state
 
 void take_mariadb_prepared_rows(mariadb_prepared_run& run, db_rows* output) {
     auto& cache = *run.cache_;
-    auto& entry = cache.entry(run.handle_);
-    auto& statement = *entry.handle_;
+    auto& entry = cache.entry(run.cached_entry_);
+    auto& statement = *entry.statement_;
     if (run.returned_rows_) {
         run.extra_row_set_ = true;
     } else if (output != nullptr) {
@@ -969,7 +969,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                         continue;
                     }
                     if (cache.retired_.empty()) {
-                        run.step_ = cache.entry(run.handle_).handle_ == nullptr ? run_step::prepare : run_step::execute;
+                        run.step_ = cache.entry(run.cached_entry_).statement_ == nullptr ? run_step::prepare : run_step::execute;
                         if (run.step_ == run_step::execute) {
                             return 0;
                         }
@@ -994,44 +994,44 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                 continue;
             }
             case run_step::prepare: {
-                auto& entry = cache.entry(run.handle_);
+                auto& entry = cache.entry(run.cached_entry_);
                 if (!run.started_) {
                     cache.reserve_retired();
                     auto* created = mysql_stmt_init(&connection);
                     if (created == nullptr) {
                         throw std::bad_alloc();
                     }
-                    entry.handle_ = created;
+                    entry.statement_ = created;
                     const my_bool update_max_length = 1;
                     (void)mysql_stmt_attr_set(created, STMT_ATTR_UPDATE_MAX_LENGTH, &update_max_length);
                 }
                 // The cache owns the text libmariadb sends, also while the
                 // prepare is suspended and the statement's caller has left.
-                const auto sql = cache.statements_.sql(run.handle_);
+                const auto sql = cache.statements_.sql(run.cached_entry_);
                 int failed = 0;
-                const int status = run.started_ ? mysql_stmt_prepare_cont(&failed, entry.handle_, ready) : mysql_stmt_prepare_start(&failed, entry.handle_, sql.data(), static_cast<unsigned long>(sql.size()));
+                const int status = run.started_ ? mysql_stmt_prepare_cont(&failed, entry.statement_, ready) : mysql_stmt_prepare_start(&failed, entry.statement_, sql.data(), static_cast<unsigned long>(sql.size()));
                 run.started_ = true;
                 if (status != 0) {
                     return status;
                 }
                 run.started_ = false;
                 ready = 0;
-                auto& statement = *entry.handle_;
+                auto& statement = *entry.statement_;
                 if (failed != 0) {
                     if (connection_failure(statement)) {
                         throw_connection_failure(connection, statement, "mysql_stmt_prepare");
                     }
                     // Never prepared, so closing it sends nothing.
-                    (void)mysql_stmt_close(std::exchange(entry.handle_, nullptr));
-                    cache.refuse(run.handle_, entry.key_hash_);
+                    (void)mysql_stmt_close(std::exchange(entry.statement_, nullptr));
+                    cache.refuse(run.cached_entry_, entry.key_hash_);
                     run.text_ = true;
                     run.step_ = run_step::done;
                     return 0;
                 }
                 if (!readable_as_text(statement.fields, statement.field_count, false)) {
                     // Prepared on the server: closed by the next run.
-                    cache.retire(std::exchange(entry.handle_, nullptr));
-                    cache.refuse(run.handle_, entry.key_hash_);
+                    cache.retire(std::exchange(entry.statement_, nullptr));
+                    cache.refuse(run.cached_entry_, entry.key_hash_);
                     run.text_ = true;
                     run.step_ = run_step::done;
                     return 0;
@@ -1041,8 +1041,8 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
             }
             case run_step::execute:
             case run_step::executing: {
-                auto& entry = cache.entry(run.handle_);
-                auto& statement = *entry.handle_;
+                auto& entry = cache.entry(run.cached_entry_);
+                auto& statement = *entry.statement_;
                 if (run.step_ == run_step::execute) {
                     if (auto failure = bind_params(cache, statement, run.params_); failure != nullptr) {
                         run.failure_ = std::move(failure);
@@ -1079,8 +1079,8 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                     if (code == ER_NEED_REPREPARE || code == ER_UNKNOWN_STMT_HANDLER) {
                         // The server no longer runs it as prepared.
                         cache.reserve_retired();
-                        cache.retire(std::exchange(entry.handle_, nullptr));
-                        (void)cache.statements_.forget(run.handle_, true);
+                        cache.retire(std::exchange(entry.statement_, nullptr));
+                        (void)cache.statements_.forget(run.cached_entry_, true);
                         run.stale_ = true;
                     }
                     run.step_ = run_step::done;
@@ -1106,7 +1106,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                 continue;
             }
             case run_step::storing: {
-                auto& statement = *cache.entry(run.handle_).handle_;
+                auto& statement = *cache.entry(run.cached_entry_).statement_;
                 int failed = 0;
                 const int status = run.started_ ? mysql_stmt_store_result_cont(&failed, &statement, ready) : mysql_stmt_store_result_start(&failed, &statement);
                 run.started_ = true;
@@ -1134,7 +1134,7 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                 return 0;
             }
             case run_step::next_result: {
-                auto& statement = *cache.entry(run.handle_).handle_;
+                auto& statement = *cache.entry(run.cached_entry_).statement_;
                 int result = 0;
                 const int status = run.started_ ? mysql_stmt_next_result_cont(&result, &statement, ready) : mysql_stmt_next_result_start(&result, &statement);
                 run.started_ = true;
@@ -1168,8 +1168,8 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                 continue;
             }
             case run_step::resetting: {
-                auto& entry = cache.entry(run.handle_);
-                auto& statement = *entry.handle_;
+                auto& entry = cache.entry(run.cached_entry_);
+                auto& statement = *entry.statement_;
                 my_bool failed = 0;
                 const int status = run.started_ ? mysql_stmt_reset_cont(&failed, &statement, ready) : mysql_stmt_reset_start(&failed, &statement);
                 run.started_ = true;
@@ -1183,8 +1183,8 @@ int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int re
                     }
                     // The server no longer knows it: it is prepared anew.
                     cache.reserve_retired();
-                    cache.retire(std::exchange(entry.handle_, nullptr));
-                    (void)cache.statements_.forget(run.handle_, true);
+                    cache.retire(std::exchange(entry.statement_, nullptr));
+                    (void)cache.statements_.forget(run.cached_entry_, true);
                 }
                 run.step_ = run_step::done;
                 return 0;

@@ -234,6 +234,8 @@ public:
     [[nodiscard]] std::vector<http_header> take_headers() &&;
     [[nodiscard]] std::span<const http_header> trailers() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const http_header> trailers() const&& = delete;
+    [[nodiscard]] std::vector<http_header> take_trailers() &&;
+    std::vector<http_header> take_trailers() & = delete;
     // Case-insensitive; the first field line wins. unique_header() reports a
     // repeated field instead of choosing one of its lines.
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& RUVIA_LIFETIMEBOUND;
@@ -242,11 +244,11 @@ public:
     [[nodiscard]] http_unique_field_lookup unique_header(std::string_view) const&& = delete;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view) const&& = delete;
-    [[nodiscard]] http_client_response_body& stream() & noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] http_client_response_body& body() & noexcept RUVIA_LIFETIMEBOUND {
         return body_;
     }
-    http_client_response_body& stream() && = delete;
-    // Collects the unread remainder of the body on stream()'s read lane.
+    http_client_response_body& body() && = delete;
+    // Collects the unread remainder of the body on body()'s read lane.
     // max_bytes is a caller bound in addition to the origin's transport bound.
     // Caller-limit failure and interruption keep the unread bytes for the next
     // operation. A crossed caller limit does not wait for the end of the body.
@@ -470,8 +472,8 @@ public:
     http_client_push(http_client_push&&) noexcept;
     http_client_push& operator=(http_client_push&&) noexcept;
     ~http_client_push();
-    [[nodiscard]] const http_push_request& request() const& RUVIA_LIFETIMEBOUND;
-    const http_push_request& request() const&& = delete;
+    [[nodiscard]] const http2_push_request& request() const& RUVIA_LIFETIMEBOUND;
+    const http2_push_request& request() const&& = delete;
     // Transfers the response once, when the operation is started. Promise
     // metadata remains available through this push until it is destroyed.
     // An operation timeout or stop request ends only this wait for the head
@@ -577,7 +579,7 @@ public:
     [[nodiscard]] http_client_request head(std::string_view path) const;
     [[nodiscard]] http_client_request options(std::string_view path) const;
     [[nodiscard]] http_client_connect_request connect(std::string_view authority) const;
-    [[nodiscard]] http_client_connect_request udp(std::string_view path) const;
+    [[nodiscard]] http_client_connect_request connect_udp(std::string_view path) const;
     [[nodiscard]] http_client_websocket_request websocket(std::string_view path) const;
     // Migrates existing authenticated HTTP/3 sessions only, without reconnect or
     // replay. Cancellation and the tighter of operation/connect timeout cover
@@ -585,16 +587,16 @@ public:
     [[nodiscard]] task<void> migrate(std::string_view local_address, std::uint16_t port = 0) const;
     [[nodiscard]] http_client_stats stats() const;
     [[nodiscard]] std::vector<http_client_endpoint_address> dns_snapshot() const;
-    void update_dns(argument_list<http_client_endpoint_address> addresses);
+    void update_dns(argument_list<http_client_endpoint_address> addresses) const;
     [[nodiscard]] task<void> refresh_dns() const;
     // Non-destructive DNS resolution: resolves the client's dial host (or a
     // specified host) into a sorted, deduplicated IP address list without
     // retiring existing active connections or WebSockets.
     [[nodiscard]] task<std::vector<ip_address>> resolve_dns(operation_options options = {}) const;
     [[nodiscard]] task<std::vector<ip_address>> resolve_dns(std::string_view host, operation_options options = {}) const;
-    [[nodiscard]] bool close_connection(std::uint64_t id);
-    [[nodiscard]] std::optional<http_client_advertisement> next_advertisement();
-    [[nodiscard]] std::optional<http_client_push> next_push();
+    [[nodiscard]] bool close_connection(std::uint64_t id) const;
+    [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() const;
+    [[nodiscard]] std::optional<http_client_push> next_push() const;
     [[nodiscard]] std::string_view host() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view host() const&& = delete;
     [[nodiscard]] std::uint16_t port() const;
@@ -713,8 +715,8 @@ private:
     bool has_body_{false};
 };
 
-// Built by http_client_ref::connect(authority) or udp(path); consumed by
-// connect(), which yields the tunnel. Setters keep the value category like
+// Built by http_client_ref::connect(authority) or connect_udp(path); consumed by
+// open(), which yields the tunnel. Setters keep the value category like
 // http_client_request.
 class http_client_connect_request final {
 public:
@@ -742,8 +744,8 @@ public:
     http_client_connect_request&& target(std::string_view value) && {
         return std::move(target(value));
     }
-    [[nodiscard]] task<http_client_tunnel_result> connect(http_client_tunnel_config config = {}) &&;
-    task<http_client_tunnel_result> connect(http_client_tunnel_config = {}) & = delete;
+    [[nodiscard]] task<http_client_tunnel_result> open(http_client_tunnel_config config = {}) &&;
+    task<http_client_tunnel_result> open(http_client_tunnel_config = {}) & = delete;
 
 private:
     friend class http_client_ref;
@@ -773,14 +775,14 @@ public:
 
     // Handles and operations borrow this client's open lifecycle. Starting one
     // from a temporary would immediately run the client destructor and begin
-    // shutdown, so only lvalue clients may create them. Like worker_services_access::client(),
+    // shutdown, so only lvalue clients may create them. Like worker_services_access::http_client(),
     // a handle carries no operation options; derive them with with_options().
-    // client() selects the sole configuration, or alias "default" in a set.
+    // ref() selects the sole configuration, or alias "default" in a set.
     // 默认重定向仅可到达已注册 origin；请求策略可显式扩充集合。
-    [[nodiscard]] http_client_ref client() const&;
-    http_client_ref client() const&& = delete;
-    [[nodiscard]] http_client_ref client(std::string_view alias) const&;
-    http_client_ref client(std::string_view) const&& = delete;
+    [[nodiscard]] http_client_ref ref() const&;
+    http_client_ref ref() const&& = delete;
+    [[nodiscard]] http_client_ref ref(std::string_view alias) const&;
+    http_client_ref ref(std::string_view) const&& = delete;
     // Worker-local 发布；调用时拥有配置，await 在 blocking_pool 准备 TLS 后原子替换。
     // 无 TLS 文件准备时无需 blocking_pool；取消或准备失败不改变既有 alias。
     // 旧池取消并 join，最后一个旧句柄/冷操作释放后回收；其他 alias 不变。
@@ -791,7 +793,8 @@ public:
 
     // Idempotent and callable from any thread. It only requests immediate
     // shutdown; use shutdown() when the worker teardown must be awaited.
-    void request_stop() noexcept;
+    void request_stop() & noexcept;
+    void request_stop() && = delete;
     // Cancels and joins client producers/send operations, then retires their
     // transport borrows on the bound loop. Response body consumers are owned by
     // the response, not this shutdown: finish/join them and destroy responses

@@ -324,7 +324,7 @@ TEST(Ruvia, model_bytes_own_and_compare_without_allocator_identity) {
     ruvia::bytes second(bytes_value);
 
     EXPECT_TRUE(first == second);
-    first.assign_owned(std::span<const std::uint8_t>{});
+    first.assign(std::span<const std::uint8_t>{});
     EXPECT_TRUE(first.empty());
 }
 
@@ -372,7 +372,7 @@ TEST(Ruvia, model_string_owned_assignment_is_alias_safe) {
     ruvia::string value(std::string(128, 'd'));
     const auto alias = value.view().substr(31, 64);
 
-    value.assign_owned(alias);
+    value.assign(alias);
     const std::string expected(64, 'd');
 
     EXPECT_EQ(value.view(), std::string_view(expected));
@@ -387,17 +387,17 @@ TEST(Ruvia, model_string_move_assignment_preserves_values_and_reclaims_storage) 
     target = std::move(source_value);
     EXPECT_EQ(target.view(), std::string_view(source_text));
 
-    source_value.assign_owned(std::string(128, 'm'));
+    source_value.assign(std::string(128, 'm'));
     const std::string moved_from_text(128, 'm');
     EXPECT_EQ(source_value.view(), std::string_view(moved_from_text));
 }
 
-TEST(Ruvia, model_string_assign_owned_rvalue_steals_storage) {
+TEST(Ruvia, model_string_assign_rvalue_steals_storage) {
     const std::string expected(200, 'a');
     std::string input(expected);
     const char* const original_data = input.data();
     ruvia::string target;
-    target.assign_owned(std::move(input));
+    target.assign(std::move(input));
     EXPECT_EQ(target.data(), original_data);
     EXPECT_EQ(target.view(), std::string_view(expected));
 }
@@ -490,7 +490,7 @@ TEST(Ruvia, model_bytes_repeated_operations_reclaim_storage_and_keep_results) {
         }
         std::vector<std::uint8_t> compatible(128, 7);
         retained.set<"bytes">(std::move(compatible));
-        retained.ensure<"bytes">().assign_owned(retained.get<"bytes">().view().subspan(1));
+        retained.ensure<"bytes">().assign(retained.get<"bytes">().view().subspan(1));
         EXPECT_EQ(retained.get<"bytes">().size(), std::size_t{127});
         EXPECT_EQ(retained.get<"bytes">().view().back(), std::uint8_t{7});
         EXPECT_TRUE(saved.size() > 256);
@@ -1138,7 +1138,7 @@ TEST(Ruvia, model_input_presence_survives_application_mutation_and_moves) {
     auto present = ruvia::parse_json<nullable_default_value>(R"({"value":null})").take_value();
     absent.set<"value">("application value");
     EXPECT_TRUE(!absent.is_present<"value">());
-    present.ensure<"value">().assign_owned(std::string_view("replacement"));
+    present.ensure<"value">().assign(std::string_view("replacement"));
     EXPECT_TRUE(present.is_present<"value">() && !present.is_null<"value">());
     present.reset<"value">();
     EXPECT_TRUE(present.is_present<"value">() && !present.is_null<"value">());
@@ -1428,7 +1428,7 @@ TEST(Ruvia, model_array_construction_and_mutable_assignment_keep_values) {
     const std::string text(160, 'b');
     ruvia::array<ruvia::string> strings;
     strings.emplace_back(text);
-    strings.emplace_back().assign_owned(text);
+    strings.emplace_back().assign(text);
     ruvia::array<resource_child> children;
     children.emplace_back().set<"name">(text);
     ruvia::boxed_array<ruvia::string> boxed;
@@ -1640,7 +1640,11 @@ static_assert(!offers_rvalue_value<ruvia::json_field_lookup<ruvia::string>>);
 static_assert(!std::is_move_assignable_v<ruvia::json_field_lookup<ruvia::string>>);
 
 template <typename container_type, typename arg_type>
-concept offers_rvalue_assign_owned = requires(container_type c, arg_type arg) { std::move(c).assign_owned(std::move(arg)); };
+concept offers_rvalue_assign = requires(container_type c, arg_type arg) { std::move(c).assign(std::move(arg)); };
+template <typename container_type>
+concept offers_rvalue_items = requires(container_type c) { std::move(c).items(); };
+template <typename error_type>
+concept offers_lvalue_take_message = requires(error_type& e) { e.take_message(); };
 template <typename container_type>
 concept offers_rvalue_reserve = requires(container_type c) { std::move(c).reserve(1); };
 template <typename container_type>
@@ -1649,10 +1653,10 @@ template <typename container_type>
 concept offers_rvalue_resize = requires(container_type c) { std::move(c).resize(1); };
 
 TEST(Ruvia, model_value_containers_enforce_lvalue_mutation_and_zero_copy_take) {
-    static_assert(!offers_rvalue_assign_owned<ruvia::string, std::string>);
-    static_assert(!offers_rvalue_assign_owned<ruvia::string, std::string_view>);
-    static_assert(!offers_rvalue_assign_owned<ruvia::bytes, std::vector<std::uint8_t>>);
-    static_assert(!offers_rvalue_assign_owned<ruvia::bytes, std::span<const std::uint8_t>>);
+    static_assert(!offers_rvalue_assign<ruvia::string, std::string>);
+    static_assert(!offers_rvalue_assign<ruvia::string, std::string_view>);
+    static_assert(!offers_rvalue_assign<ruvia::bytes, std::vector<std::uint8_t>>);
+    static_assert(!offers_rvalue_assign<ruvia::bytes, std::span<const std::uint8_t>>);
     static_assert(!offers_rvalue_reserve<ruvia::array<ruvia::int32>>);
     static_assert(!offers_rvalue_clear<ruvia::array<ruvia::int32>>);
     static_assert(!offers_rvalue_resize<ruvia::array<ruvia::int32>>);
@@ -1681,4 +1685,58 @@ TEST(Ruvia, model_value_containers_enforce_lvalue_mutation_and_zero_copy_take) {
     ASSERT_EQ(taken_items.size(), std::size_t{1});
     EXPECT_EQ(taken_items[0].value_, 42);
     EXPECT_TRUE(list.empty());
+}
+
+TEST(Ruvia, model_value_contracts_try_from_value_array_assign_and_error_take_message) {
+    static_assert(!offers_rvalue_items<ruvia::array<ruvia::int32>>);
+    static_assert(!offers_rvalue_assign<ruvia::array<ruvia::int32>, std::vector<ruvia::int32>>);
+    static_assert(!offers_lvalue_take_message<ruvia::model_parse_error>);
+
+    static_assert(noexcept(ruvia::int8::try_from_value(0)));
+    EXPECT_EQ(ruvia::int8::try_from_value(-128)->value_, std::int8_t{-128});
+    EXPECT_EQ(ruvia::int8::try_from_value(127)->value_, std::int8_t{127});
+    EXPECT_FALSE(ruvia::int8::try_from_value(-129).has_value());
+    EXPECT_FALSE(ruvia::int8::try_from_value(128).has_value());
+    EXPECT_EQ(ruvia::uint8::try_from_value(255)->value_, std::uint8_t{255});
+    EXPECT_FALSE(ruvia::uint8::try_from_value(-1).has_value());
+
+    std::vector<ruvia::int32> initial{ruvia::int32(10), ruvia::int32(20)};
+    const auto* const initial_ptr = initial.data();
+    ruvia::array<ruvia::int32> items_array(std::move(initial));
+    EXPECT_EQ(items_array.items().data(), initial_ptr);
+    ASSERT_EQ(items_array.items().size(), std::size_t{2});
+    EXPECT_EQ(items_array.items()[1].value_, 20);
+
+    std::vector<ruvia::int32> replacement{ruvia::int32(30), ruvia::int32(40), ruvia::int32(50)};
+    const auto* const replacement_ptr = replacement.data();
+    items_array.assign(std::move(replacement));
+    EXPECT_EQ(items_array.items().data(), replacement_ptr);
+    ASSERT_EQ(items_array.items().size(), std::size_t{3});
+    EXPECT_EQ(items_array.items()[0].value_, 30);
+
+    std::string str_buf(160, 'q');
+    const char* const str_ptr = str_buf.data();
+    ruvia::string assigned_str;
+    assigned_str.assign(std::move(str_buf));
+    EXPECT_EQ(assigned_str.data(), str_ptr);
+    assigned_str.assign("short");
+    EXPECT_EQ(assigned_str.view(), "short");
+
+    std::vector<std::uint8_t> byte_buf(128, std::uint8_t{0xCD});
+    const auto* const byte_ptr = byte_buf.data();
+    ruvia::bytes assigned_bytes;
+    assigned_bytes.assign(std::move(byte_buf));
+    EXPECT_EQ(assigned_bytes.data(), byte_ptr);
+    const std::array<std::uint8_t, 2> span_bytes{0x01, 0x02};
+    assigned_bytes.assign(span_bytes);
+    EXPECT_EQ(assigned_bytes.view().size(), std::size_t{2});
+    EXPECT_EQ(assigned_bytes.view()[1], std::uint8_t{0x02});
+
+    auto failed = ruvia::parse_json<narrow_values>("{invalid");
+    ASSERT_FALSE(failed.has_value());
+    auto parse_err = std::move(failed).take_error();
+    const std::string expected_msg(parse_err.message());
+    EXPECT_FALSE(expected_msg.empty());
+    const std::string moved_msg = std::move(parse_err).take_message();
+    EXPECT_EQ(moved_msg, expected_msg);
 }

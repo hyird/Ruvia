@@ -230,7 +230,7 @@ std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
     // Each member's failure is read once with ownership: it is returned as the
     // primary, collapsed into it, or reported here.
     for (std::size_t index = 0; index != members_.size(); ++index) {
-        const auto failure = members_[index]->take_failure();
+        const auto failure = members_[index]->observe_failure();
         if (failure == nullptr || equivalent_failures(failure, primary)) {
             continue;
         }
@@ -294,7 +294,7 @@ std::exception_ptr worker_group::observe_phase_failure() noexcept {
     if (member != nullptr) {
         // A phase waiter may be on a different, healthy member. Observe only
         // the exception actually delivered, preserving other failure reports.
-        static_cast<void>(member->take_failure());
+        static_cast<void>(member->observe_failure());
     }
     return failure;
 }

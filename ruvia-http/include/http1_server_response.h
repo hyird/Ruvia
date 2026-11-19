@@ -315,7 +315,7 @@ enum class http1_connection_close_field_policy : std::uint8_t { close_only,
 // after the socket lifecycle is decided, while preserving the Upgrade
 // option required by any retained Upgrade field and any custom hop-by-hop
 // field names declared in Connection (RFC 9110 section 7.6.1).
-void http1_mark_connection_close(http_response& response, http1_connection_close_field_policy field_policy = http1_connection_close_field_policy::close_only);
+void mark_http1_connection_close(http_response& response, http1_connection_close_field_policy field_policy = http1_connection_close_field_policy::close_only);
 
 class prepared_http1_response_stream;
 
@@ -326,7 +326,7 @@ class prepared_http1_response_stream;
 // head serialization; a head this endpoint cannot send (for example a 426
 // without an Upgrade protocol, or a Transfer-Encoding other than exactly
 // `chunked`) throws http1_response_head_error before the response changes.
-[[nodiscard]] http1_request_connection_plan http1_commit_final_response(http_response& response, http1_request_connection_plan plan);
+[[nodiscard]] http1_request_connection_plan commit_http1_final_response(http_response& response, http1_request_connection_plan plan);
 
 // Commit-time result. This object combines request/version/runtime constraints with
 // the response method/status and Connection options, then binds the exact header

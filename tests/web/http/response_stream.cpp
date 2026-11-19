@@ -54,6 +54,11 @@
 #include "task_scope.h"
 #include "worker_task_fixture.h"
 
+template <typename bytes_type>
+concept outbound_bytes_allows_rvalue_bytes = requires(bytes_type b) { std::move(b).bytes(); };
+template <typename bytes_type>
+concept outbound_bytes_allows_lvalue_take_string = requires(bytes_type& b) { b.take_string(); };
+
 TEST(Ruvia, OutboundBytesOwnsBorrowedAndTemporaryInputsAtConstruction) {
     std::string text(128, 't');
     ruvia::outbound_bytes copied_text(text);
@@ -67,7 +72,7 @@ TEST(Ruvia, OutboundBytesOwnsBorrowedAndTemporaryInputsAtConstruction) {
 
     ruvia::outbound_bytes temporary_bytes(std::vector<std::byte>{std::byte{'a'}, std::byte{0}, std::byte{'b'}});
     EXPECT_EQ(temporary_bytes.view(), std::string_view("a\0b", 3));
-    EXPECT_EQ(std::move(temporary_bytes).into_string(), std::string("a\0b", 3));
+    EXPECT_EQ(std::move(temporary_bytes).take_string(), std::string("a\0b", 3));
 }
 
 TEST(Ruvia, OutboundBytesTakesOverExactStringRvaluesWithoutCopying) {
@@ -75,7 +80,7 @@ TEST(Ruvia, OutboundBytesTakesOverExactStringRvaluesWithoutCopying) {
     const auto* const storage = text.data();
     ruvia::outbound_bytes bytes(std::move(text));
     EXPECT_EQ(bytes.view().data(), storage);
-    auto extracted = std::move(bytes).into_string();
+    auto extracted = std::move(bytes).take_string();
     EXPECT_EQ(extracted.data(), storage);
     EXPECT_EQ(extracted, std::string(512, 't'));
 
@@ -97,8 +102,26 @@ TEST(Ruvia, OutboundBytesPreservesEmptyInputs) {
         EXPECT_TRUE(bytes.empty());
         EXPECT_EQ(bytes.size(), 0U);
         EXPECT_TRUE(bytes.view().empty());
-        EXPECT_TRUE(std::move(bytes).into_string().empty());
+        EXPECT_TRUE(bytes.bytes().empty());
+        EXPECT_TRUE(std::move(bytes).take_string().empty());
     }
+}
+
+TEST(Ruvia, OutboundBytesExposesByteSpanAndEnforcesOwnershipQualifiers) {
+    static_assert(!outbound_bytes_allows_rvalue_bytes<ruvia::outbound_bytes>);
+    static_assert(!outbound_bytes_allows_lvalue_take_string<ruvia::outbound_bytes>);
+
+    std::string text(256, 'b');
+    const void* const storage = text.data();
+    ruvia::outbound_bytes payload(std::move(text));
+    const std::span<const std::byte> span_view = payload.bytes();
+    EXPECT_EQ(static_cast<const void*>(span_view.data()), storage);
+    EXPECT_EQ(span_view.size(), std::size_t{256});
+    EXPECT_EQ(span_view[0], std::byte{'b'});
+
+    const std::string moved = std::move(payload).take_string();
+    EXPECT_EQ(static_cast<const void*>(moved.data()), storage);
+    EXPECT_EQ(moved.size(), std::size_t{256});
 }
 
 namespace response_stream_test {
@@ -127,7 +150,7 @@ struct stream_lane_observation final {
 class stream_early_respond_middleware final {
 public:
     ruvia::task<void> invoke(ruvia::context& context_value, ruvia::next&) {
-        const auto body = co_await context_value.req().body_text();
+        const auto body = co_await context_value.request().body_text();
         context_value.respond(context_value.text("early:" + std::string(body)));
     }
 };
@@ -252,7 +275,7 @@ class stream_lane_routes final {
             co_return;
         }
         co_await writer.write("x");
-        const auto body = co_await context_value.req().body_text();
+        const auto body = co_await context_value.request().body_text();
         co_await writer.write(body);
     }
 
@@ -271,7 +294,7 @@ class stream_lane_routes final {
     // chunks, `over` declares 4 and writes 6, `short` declares 10 and ends
     // after 3.
     ruvia::task<void> length_stream(ruvia::context& context_value) {
-        const auto mode = context_value.req().param("mode").value_or("");
+        const auto mode = context_value.request().param("mode").value_or("");
         const std::string_view declared = mode == "over" ? "4" : "10";
         const std::array headers{ruvia::http_header_view{"Content-Length", declared}};
         auto& writer = context_value.stream_text({.headers_ = headers});
@@ -860,7 +883,7 @@ class file_transfer_routes final {
     }
 
     ruvia::task<ruvia::http_response> held(ruvia::context& c) {
-        const auto path = transfer_dir() / std::string(c.req().param("name").value_or(""));
+        const auto path = transfer_dir() / std::string(c.request().param("name").value_or(""));
         auto response = co_await c.file({.path_ = path});
         held_response_framed.release();
         for (int wait = 0; wait < 1000 && !rewritten.load(); ++wait) {
@@ -1245,7 +1268,7 @@ struct context_body_read_observation final {
 inline std::unique_ptr<ruvia::task<std::string_view>> make_expired_context_text_read() {
     std::unique_ptr<ruvia::task<std::string_view>> operation;
     (void)with_context(ruvia::test_request::post("/").body("body"), [&](ruvia::context& context_value) -> ruvia::task<void> {
-        operation.reset(new ruvia::task<std::string_view>(context_value.req().body_text()));
+        operation.reset(new ruvia::task<std::string_view>(context_value.request().body_text()));
         co_return;
     });
     return operation;
@@ -1263,7 +1286,7 @@ inline context_body_read_observation read_context_gzip_body(std::string_view enc
     context_body_read_observation observation;
     (void)with_context(ruvia::test_request::post("/").header("Content-Encoding", "gzip").body(encoded), [&](ruvia::context& context_value) -> ruvia::task<void> {
         try {
-            observation.body_ = co_await context_value.req().body_text();
+            observation.body_ = co_await context_value.request().body_text();
         } catch (const ruvia::http_protocol_error& error) {
             observation.error_status_ = error.status();
         }
@@ -1373,7 +1396,7 @@ class body_lane_routes final {
     // returns the whole body.
     ruvia::task<ruvia::http_response> read_interrupted_buffered(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
-        const auto request = context_value.req();
+        const auto request = context_value.request();
         try {
             (void)request.body_text({.timeout_ = std::chrono::milliseconds(0)});
         } catch (const std::invalid_argument&) {
@@ -1489,67 +1512,67 @@ class body_lane_routes final {
     }
 
     ruvia::task<ruvia::http_response> pipelined_echo(ruvia::context& context_value) {
-        co_return context_value.text(co_await context_value.req().body_text());
+        co_return context_value.text(co_await context_value.request().body_text());
     }
 
     ruvia::task<ruvia::http_response> consume_buffered(ruvia::context& context_value) {
-        const bool discard = context_value.req().param("operation") == "discard";
+        const bool discard = context_value.request().param("operation") == "discard";
         std::string_view buffered;
         ruvia::task_scope consumers(context_value.worker());
         const auto consume = [&]() -> ruvia::task<void> {
             if (discard) {
-                co_await context_value.req().discard_body();
+                co_await context_value.request().discard_body();
             } else {
-                buffered = co_await context_value.req().body_text();
+                buffered = co_await context_value.request().body_text();
             }
         };
         consumers.spawn(consume());
         unsigned overlap_rejected{};
         try {
-            (void)co_await context_value.req().body_text();
+            (void)co_await context_value.request().body_text();
         } catch (const std::logic_error&) {
             ++overlap_rejected;
         }
         try {
-            co_await context_value.req().discard_body();
+            co_await context_value.request().discard_body();
         } catch (const std::logic_error&) {
             ++overlap_rejected;
         }
         co_await context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints));
         co_await consumers.join();
-        co_await context_value.req().discard_body();
+        co_await context_value.request().discard_body();
         if (discard) {
             bool reread_rejected{};
             try {
-                (void)co_await context_value.req().body_text();
+                (void)co_await context_value.request().body_text();
             } catch (const std::logic_error&) {
                 reread_rejected = true;
             }
             co_return context_value.text(overlap_rejected == 2 && reread_rejected ? "discarded" : "invalid-discard");
         }
-        const auto retained = co_await context_value.req().body_text();
+        const auto retained = co_await context_value.request().body_text();
         co_return context_value.text(overlap_rejected == 2 && retained == buffered ? retained : std::string_view("invalid-read"));
     }
 
     ruvia::task<ruvia::http_response> fail_buffered(ruvia::context& context_value) {
         bool failed{};
         try {
-            if (context_value.req().param("operation") == "discard") {
-                co_await context_value.req().discard_body();
+            if (context_value.request().param("operation") == "discard") {
+                co_await context_value.request().discard_body();
             } else {
-                (void)co_await context_value.req().body_text();
+                (void)co_await context_value.request().body_text();
             }
         } catch (const ruvia::http_protocol_error&) {
             failed = true;
         }
         unsigned rejected{};
         try {
-            (void)co_await context_value.req().body_text();
+            (void)co_await context_value.request().body_text();
         } catch (const std::logic_error&) {
             ++rejected;
         }
         try {
-            co_await context_value.req().discard_body();
+            co_await context_value.request().discard_body();
         } catch (const std::logic_error&) {
             ++rejected;
         }
@@ -1559,7 +1582,7 @@ class body_lane_routes final {
 
 void exercise_lazy_body_reads(std::string_view target, std::string_view body, std::string_view expected) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     ruvia::test::http_server_fixture server(io);
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
@@ -1576,8 +1599,8 @@ void exercise_lazy_body_reads(std::string_view target, std::string_view body, st
             const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                 asio::async_write(client, asio::buffer(head), std::move(handler));
             });
-            if (sent.error_code()) {
-                throw std::system_error(sent.error_code());
+            if (sent.code()) {
+                throw std::system_error(sent.code());
             }
             std::string informational{};
             char byte{};
@@ -1585,8 +1608,8 @@ void exercise_lazy_body_reads(std::string_view target, std::string_view body, st
                 const auto received = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                     client.async_read_some(asio::buffer(&byte, 1), std::move(handler));
                 });
-                if (received.error_code()) {
-                    throw std::system_error(received.error_code());
+                if (received.code()) {
+                    throw std::system_error(received.code());
                 }
                 informational.push_back(byte);
             }
@@ -1594,8 +1617,8 @@ void exercise_lazy_body_reads(std::string_view target, std::string_view body, st
             const auto body_sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                 asio::async_write(client, asio::buffer(body), std::move(handler));
             });
-            if (body_sent.error_code()) {
-                throw std::system_error(body_sent.error_code());
+            if (body_sent.code()) {
+                throw std::system_error(body_sent.code());
             }
             std::string response{};
             std::array<char, 1024> buffer;
@@ -1603,13 +1626,13 @@ void exercise_lazy_body_reads(std::string_view target, std::string_view body, st
                 const auto received = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                     client.async_read_some(asio::buffer(buffer), std::move(handler));
                 });
-                if (received.error_code() == asio::error::eof) {
+                if (received.code() == asio::error::eof) {
                     break;
                 }
-                if (received.error_code()) {
-                    throw std::system_error(received.error_code());
+                if (received.code()) {
+                    throw std::system_error(received.code());
                 }
-                response.append(buffer.data(), received.result());
+                response.append(buffer.data(), received.value());
             }
             EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
             EXPECT_TRUE(response.ends_with(expected));
@@ -1620,9 +1643,9 @@ void exercise_lazy_body_reads(std::string_view target, std::string_view body, st
         ruvia::close_socket(client);
         attachment.request_stop();
     };
-    auto done = attachment.loop().start(run());
+    auto done = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(done).get();
+    std::move(done).take_value();
     server.finish();
     if (failure) {
         std::rethrow_exception(failure);
@@ -1634,7 +1657,7 @@ void exercise_lazy_body_reads(std::string_view target, std::string_view body, st
 // server sends until it closes the connection.
 std::string exchange_raw_request(std::string_view head, std::string_view body, bool await_continue, bool shutdown_send) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     ruvia::test::http_server_fixture server(io);
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
@@ -1652,8 +1675,8 @@ std::string exchange_raw_request(std::string_view head, std::string_view body, b
                 const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                     asio::async_write(client, asio::buffer(bytes), std::move(handler));
                 });
-                if (sent.error_code()) {
-                    throw std::system_error(sent.error_code());
+                if (sent.code()) {
+                    throw std::system_error(sent.code());
                 }
             };
             co_await write_all(head);
@@ -1664,8 +1687,8 @@ std::string exchange_raw_request(std::string_view head, std::string_view body, b
                     const auto received = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                         client.async_read_some(asio::buffer(&byte, 1), std::move(handler));
                     });
-                    if (received.error_code()) {
-                        throw std::system_error(received.error_code());
+                    if (received.code()) {
+                        throw std::system_error(received.code());
                     }
                     informational.push_back(byte);
                 }
@@ -1682,13 +1705,13 @@ std::string exchange_raw_request(std::string_view head, std::string_view body, b
                 const auto received = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                     client.async_read_some(asio::buffer(buffer), std::move(handler));
                 });
-                if (received.error_code() == asio::error::eof) {
+                if (received.code() == asio::error::eof) {
                     break;
                 }
-                if (received.error_code()) {
-                    throw std::system_error(received.error_code());
+                if (received.code()) {
+                    throw std::system_error(received.code());
                 }
-                response.append(buffer.data(), received.result());
+                response.append(buffer.data(), received.value());
             }
         } catch (...) {
             failure = std::current_exception();
@@ -1697,9 +1720,9 @@ std::string exchange_raw_request(std::string_view head, std::string_view body, b
         ruvia::close_socket(client);
         attachment.request_stop();
     };
-    auto done = attachment.loop().start(run());
+    auto done = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(done).get();
+    std::move(done).take_value();
     server.finish();
     if (failure) {
         std::rethrow_exception(failure);
@@ -1977,7 +2000,7 @@ TEST(Ruvia, web_request_decodes_content_coding_stacks_in_reverse_order) {
         return;
     }
     (void)ruvia::test::with_context(ruvia::test_request::post("/").header("Content-Encoding", "gzip, deflate").body(*encoded), [&](ruvia::context& context_value) -> ruvia::task<void> {
-        const auto body = co_await context_value.req().body_text();
+        const auto body = co_await context_value.request().body_text();
         EXPECT_EQ(body, std::string_view(plain));
     });
 }

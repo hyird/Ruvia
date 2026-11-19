@@ -160,7 +160,7 @@ http_response request_exchange<host_type>::body(response_options options) const 
 template <typename host_type>
 http_response request_exchange<host_type>::body(outbound_bytes body, response_options options) const {
     auto response = detail::make_response(options);
-    response.body(std::move(body).into_string());
+    response.body(std::move(body).take_string());
     return response;
 }
 
@@ -175,7 +175,7 @@ template <typename host_type>
 http_response request_exchange<host_type>::text(outbound_bytes body, response_options options) const {
     auto response = detail::make_response(options);
     mark_plain_text_defaults(response);
-    response.body(std::move(body).into_string());
+    response.body(std::move(body).take_string());
     return response;
 }
 
@@ -239,7 +239,7 @@ template <typename host_type>
 http_response request_exchange<host_type>::html(outbound_bytes body, response_options options) const {
     auto response = detail::make_response(options);
     set_default_content_type(response, http_content_type::text_html_utf8);
-    response.body(std::move(body).into_string());
+    response.body(std::move(body).take_string());
     return response;
 }
 
@@ -280,7 +280,7 @@ http_response request_exchange<host_type>::error(const http_error_info& info, re
     return response;
 }
 
-task<http_response> context::not_found() & {
+task<http_response> context::invoke_not_found() & {
     // Selected only here, on demand: every matched request carries the table,
     // and few of them ever ask for a not-found answer.
     const auto* routes = runtime_services().routes();
@@ -513,7 +513,7 @@ http_response make_readiness_response(context&, readiness_response_options optio
 template <typename host_type>
 void request_exchange<host_type>::advertise_origins(argument_list<std::string_view> origins) {
     auto& services = exchange().runtime_services();
-    if (services.connection_advertisements() == nullptr || conn().tls() == nullptr) {
+    if (services.connection_advertisements() == nullptr || connection().tls() == nullptr) {
         throw std::logic_error("ORIGIN requires an HTTPS connection with advertisement output");
     }
     services.connection_advertisements()->advertise_origins(origins.span());
@@ -665,7 +665,7 @@ task<dispatch_response> context::dispatch(dispatch_options options) & {
     // never round-trips through a wire format.
     std::string method(options.method_);
     std::string target(options.target_);
-    std::string body(std::move(options.body_).into_string());
+    std::string body(std::move(options.body_).take_string());
     std::vector<http_header> headers;
     if (!options.headers_.empty()) {
         headers.reserve(options.headers_.size());
@@ -688,7 +688,7 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
     active_headers.push_back(http_header_view("Content-Length", content_length));
     const auto request = [&]() {
         try {
-            return make_parsed_http_request(method, target, active_headers.view(), std::as_bytes(std::span(body.data(), body.size())));
+            return make_http_request(method, target, active_headers.view(), std::as_bytes(std::span(body.data(), body.size())));
         } catch (const http_protocol_error&) {
             throw std::invalid_argument("invalid subrequest");
         }
@@ -739,7 +739,7 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
     dispatch_response result(std::move(response));
     // As on the wire: HEAD and content-forbidden statuses carry no body.
     if (!plan_http_response_body(known_method, response.status()).body_suppressed()) {
-        result.body_ = std::move(response).take_body_bytes();
+        result.body_ = std::move(response).take_body();
     }
     co_return result;
 }
@@ -769,8 +769,8 @@ context::context(const http_request& request, std::string_view route_path, const
 context::~context() = default;
 
 template <typename host_type>
-const conn_info& request_exchange<host_type>::conn() const& noexcept {
-    return exchange().runtime_services().get_conn_info();
+const connection_info& request_exchange<host_type>::connection() const& noexcept {
+    return exchange().runtime_services().get_connection_info();
 }
 
 template <typename host_type>
@@ -878,7 +878,8 @@ bool detail::context_response_output::committed() const noexcept {
     return true;
 }
 
-conn_info detail::context_services::resolve_conn_info(const http_request& request) const noexcept {
+connection_info detail::context_services::resolve_connection_info(
+    const http_request& request) const noexcept {
     auto resolved = connection_services_.info_;
     if (!connection_services_.peer_trusted_ || worker_services_->trusted_proxies_ == nullptr) {
         return resolved;
@@ -1057,7 +1058,7 @@ inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
 
 // Rejects an invalid or unsupported Content-Encoding; the result owns the codings span.
 [[nodiscard]] http_content_coding_field_result require_decodable_request_coding(const http_request& request, detail::unsupported_request_content_coding::read_type read) {
-    auto parsed_coding = request_content_coding(request);
+    auto parsed_coding = parse_http_request_content_coding(request);
     if (const auto* invalid = parsed_coding.invalid()) {
         throw http_protocol_error(invalid->status(), static_text{"invalid_content_encoding"}, "invalid request Content-Encoding");
     }

@@ -171,7 +171,7 @@ class response_compression_routes final {
     ruvia::task<ruvia::http_response> custom_coding(ruvia::context& context_value) {
         auto resp = context_value.text("custom-encoded-payload");
         ruvia::http_accepted_encoding_quality quality;
-        quality.update(context_value.req().header("Accept-Encoding").value_or(""), "x-custom");
+        quality.update(context_value.request().header("Accept-Encoding").value_or(""), "x-custom");
         if (quality.accepts(false)) {
             resp.header("Content-Encoding", "x-custom");
         }
@@ -185,26 +185,26 @@ class response_compression_routes final {
     ruvia::task<ruvia::http_response> echo_decoded(ruvia::context& context_value) {
         const ruvia::operation_options expired{.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::now())};
         try {
-            (void)co_await context_value.req().body_text(expired);
+            (void)co_await context_value.request().body_text(expired);
             ADD_FAILURE() << "expired initial read returned the request body";
         } catch (const std::system_error& error) {
             EXPECT_EQ(error.code(), std::errc::timed_out);
         }
-        const auto bytes = co_await context_value.req().body_bytes();
-        const auto body = co_await context_value.req().body_text();
+        const auto bytes = co_await context_value.request().body_bytes();
+        const auto body = co_await context_value.request().body_text();
         try {
-            (void)co_await context_value.req().collect_body(expired);
+            (void)co_await context_value.request().collect_body(expired);
             ADD_FAILURE() << "expired collection returned cached bytes";
         } catch (const std::system_error& error) {
             EXPECT_EQ(error.code(), std::errc::timed_out);
         }
         try {
-            co_await context_value.req().discard_body(expired);
+            co_await context_value.request().discard_body(expired);
             ADD_FAILURE() << "expired discard succeeded";
         } catch (const std::system_error& error) {
             EXPECT_EQ(error.code(), std::errc::timed_out);
         }
-        const auto owned = co_await context_value.req().collect_body();
+        const auto owned = co_await context_value.request().collect_body();
         EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), body);
         EXPECT_EQ(owned, body);
         if (!body.empty()) {
@@ -233,7 +233,7 @@ class response_compression_routes final {
         ruvia::stop_source stop;
         const auto first_read = [&]() -> ruvia::task<void> {
             try {
-                (void)co_await ctx.req().body_bytes({.stop_token_ = stop.token()});
+                (void)co_await ctx.request().body_bytes({.stop_token_ = stop.token()});
                 ADD_FAILURE() << "cancelled read returned the body";
             } catch (const std::system_error& error) {
                 EXPECT_EQ(error.code(), std::errc::operation_canceled);
@@ -244,7 +244,7 @@ class response_compression_routes final {
         bool rejected = false;
         std::exception_ptr failure;
         try {
-            (void)co_await ctx.req().collect_body({.timeout_ = std::chrono::milliseconds(100)});
+            (void)co_await ctx.request().collect_body({.timeout_ = std::chrono::milliseconds(100)});
         } catch (const std::logic_error&) {
             rejected = true;
         } catch (...) {
@@ -257,8 +257,8 @@ class response_compression_routes final {
         if (failure) {
             std::rethrow_exception(failure);
         }
-        const auto text = co_await ctx.req().body_text();
-        const auto bytes = co_await ctx.req().body_bytes();
+        const auto text = co_await ctx.request().body_text();
+        const auto bytes = co_await ctx.request().body_bytes();
         EXPECT_EQ(bytes.data(), reinterpret_cast<const std::byte*>(text.data()));
         co_return ctx.text(text);
     }
@@ -323,14 +323,14 @@ class response_compression_routes final {
 
     ruvia::task<ruvia::http_response> validators(ruvia::context& context_value) {
         auto resp = context_value.text(std::string_view(small_body));
-        resp.header("ETag", context_value.req().query("etag").value_or(""));
+        resp.header("ETag", context_value.request().query("etag").value_or(""));
         resp.header("Accept-Ranges", "bytes");
         co_return resp;
     }
 
     ruvia::task<ruvia::http_response> media(ruvia::context& context_value) {
         auto resp = context_value.text(std::string_view(small_body));
-        const auto type = context_value.req().query("type").value_or("");
+        const auto type = context_value.request().query("type").value_or("");
         if (type.empty()) {
             resp.remove_header("Content-Type");
         } else {
@@ -340,7 +340,7 @@ class response_compression_routes final {
     }
 
     ruvia::task<ruvia::http_response> digest(ruvia::context& context_value) {
-        const auto field = context_value.req().query("field").value_or("");
+        const auto field = context_value.request().query("field").value_or("");
         const std::array headers{ruvia::http_header_view{field, "sha-256=:AAAA:"}};
         co_return context_value.text(std::string_view(small_body), {.headers_ = headers});
     }
@@ -498,7 +498,7 @@ TEST(Ruvia, http2_websocket_handshake_failure_response_is_not_encoded) {
 TEST(Ruvia, http2_buffered_request_body_rejects_overlapping_decode_and_allows_retry) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, compressing_server());
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const std::string plain(96 * 1024, 'x');
     auto encoded = ruvia::encode_http_content(ruvia::http_content_coding::gzip, plain, {.max_encoded_bytes_ = plain.size()});
     ASSERT_TRUE(encoded);
@@ -507,7 +507,7 @@ TEST(Ruvia, http2_buffered_request_body_rejects_overlapping_decode_and_allows_re
         ruvia::http_client client(attachment.loop(), {.base_url_ = url, .versions_ = ruvia::http_client_versions{.http1_ = false}});
         std::exception_ptr failure;
         try {
-            auto response = co_await client.client().post("/compression-overlap").header("Content-Encoding", "gzip").body(std::move(*encoded)).send();
+            auto response = co_await client.ref().post("/compression-overlap").header("Content-Encoding", "gzip").body(std::move(*encoded)).send();
             EXPECT_EQ(response.status(), ruvia::http_status::ok);
             const auto received = co_await response.collect_body();
             EXPECT_EQ(received.text(), plain);

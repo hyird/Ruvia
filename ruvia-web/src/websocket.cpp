@@ -252,7 +252,7 @@ task<void> detail::websocket_state::write(websocket_opcode opcode, outbound_byte
         throw std::logic_error("a fragmented websocket message is in progress");
     }
     operation = override_operation_options(defaults_, std::move(operation));
-    return operation_scope_.attach(write_websocket_payload(target_, write_, opcode, std::move(payload_value).into_string(), write_active_, compress, extent, std::move(operation), fragmented_message_active_));
+    return operation_scope_.attach(write_websocket_payload(target_, write_, opcode, std::move(payload_value).take_string(), write_active_, compress, extent, std::move(operation), fragmented_message_active_));
 }
 
 websocket_message_writer detail::websocket_state::begin_text(websocket_send_options options) & {

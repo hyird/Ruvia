@@ -462,7 +462,7 @@ private:
         default:
             return false;
     }
-    if (!http_client_expectation_is_valid(expect_continue, content_indication) || !section_size.add(":method", method) || !section_size.add(":scheme", scheme) || (authority.has_value() && !section_size.add(":authority", *authority)) || !section_size.add(":path", path) || (expect_continue && !section_size.add("expect", http_continue_expectation_token))) {
+    if (!is_valid_http_client_expectation(expect_continue, content_indication) || !section_size.add(":method", method) || !section_size.add(":scheme", scheme) || (authority.has_value() && !section_size.add(":authority", *authority)) || !section_size.add(":path", path) || (expect_continue && !section_size.add("expect", http_continue_expectation_token))) {
         return false;
     }
     request_field_state fields{request_field_framing::binary};

@@ -43,15 +43,23 @@ public:
     // Eight little-endian bytes.
     void update_u64_le(std::uint64_t value);
 
-    // Ends the digest; nothing may be fed afterwards.
+    // Ends the digest; nothing may be fed afterwards until reset().
     [[nodiscard]] sha256_digest finish();
 
+    // Resets the hasher to active state so the underlying digest context can be reused.
+    void reset() noexcept;
+
 private:
+    enum class state_type : std::uint8_t { active,
+        finished,
+        failed };
+
     [[noreturn]] static void throw_digest_failure();
 
     std::array<unsigned char, 512> buffer_;
     std::size_t buffered_{0};
     ::evp_md_ctx_st* context_{nullptr};
+    state_type state_{state_type::active};
 };
 
 [[nodiscard]] sha256_digest sha256_of(std::string_view bytes);

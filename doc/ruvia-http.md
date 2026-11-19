@@ -699,12 +699,12 @@ enum class url_decode_mode : std::uint8_t { percent,
 ```cpp
 namespace ruvia {
 [[nodiscard]] inline bool has_url_encoding(std::string_view value, url_decode_mode mode) noexcept;
-[[nodiscard]] constexpr std::optional<unsigned char> http_try_decode_percent_byte(std::string_view input, std::size_t index) noexcept;
+[[nodiscard]] constexpr std::optional<unsigned char> decode_percent_byte(std::string_view input, std::size_t index) noexcept;
 [[nodiscard]] constexpr bool is_uri_unreserved_byte(unsigned char byte) noexcept;
-inline void http_append_percent_byte(std::string& output, unsigned char byte);
+inline void append_percent_byte(std::string& output, unsigned char byte);
 [[nodiscard]] std::string_view percent_encode_uri_reference(borrowed_text reference, std::string& storage);
 [[nodiscard]] std::string_view percent_encode_url_component(borrowed_text text, std::string& storage);
-[[nodiscard]] inline bool validate_url_encoding(std::string_view value) noexcept;
+[[nodiscard]] inline bool is_valid_url_encoding(std::string_view value) noexcept;
 [[nodiscard]] constexpr std::optional<std::size_t> decode_url_bytes(std::string_view input, char* output, url_decode_mode mode) noexcept;
 [[nodiscard]] std::optional<std::string_view> decode_url_component(borrowed_text text, std::string& storage, url_decode_mode mode = url_decode_mode::percent);
 }
@@ -713,12 +713,12 @@ inline void http_append_percent_byte(std::string& output, unsigned char byte);
 | 符号 | 语义 |
 | --- | --- |
 | `has_url_encoding(value, mode)` | 是否含需解码的字符：`percent`/`path` 只看 `%`，`form`/`strict_form` 看 `%` 或 `+`。不校验转义合法性。 |
-| `http_try_decode_percent_byte(input, index)` | 解码从 `input[index]` 开始的 `%HH` 三元组（RFC 3986 §2.1）；三元组被截断、不以 `%` 开始或含非十六进制数字时返回 `std::nullopt`。`index` 越界同样返回 `std::nullopt`。 |
+| `decode_percent_byte(input, index)` | 解码从 `input[index]` 开始的 `%HH` 三元组（RFC 3986 §2.1）；三元组被截断、不以 `%` 开始或含非十六进制数字时返回 `std::nullopt`。`index` 越界同样返回 `std::nullopt`。 |
 | `is_uri_unreserved_byte(byte)` | RFC 3986 §2.3 unreserved：`ALPHA / DIGIT / "-" / "." / "_" / "~"`。这些字节编码与否等价（§6.2.2.2），编码器保持其字面形式。 |
-| `http_append_percent_byte(output, byte)` | 追加规范的大写三元组 `%HH`；哪些字节需要转义由调用方决定。失败（分配）时 `output` 不变。 |
+| `append_percent_byte(output, byte)` | 追加规范的大写三元组 `%HH`；哪些字节需要转义由调用方决定。失败（分配）时 `output` 不变。 |
 | `percent_encode_uri_reference(reference, storage)` | 为应用提供的 RFC 3986 URI-reference（例如 `Location` 字段值）补全转义：对在其位置不能字面出现的字节做百分号编码。已有的良构三元组与合法字节逐字节保留，因此正确编码的引用不会被二次编码（§2.4）。`[`、`]` 仅作为 authority 的 IP-literal 定界符保留；相对路径引用的第一段中的 `:` 被编码（§4.2）；userinfo 内的 `@` 被编码，只保留定界用的 `@`（§3.2.1）；只有第一个 `#` 开始片段。无需编码时返回 `reference` 本身且不分配；否则编码结果替换 `storage` 内容并返回其视图。失败（分配或长度错误）保留 `storage` 原内容。 |
 | `percent_encode_url_component(text, storage)` | 单组件编码：仅保留 unreserved 字节，其余（含 `%`、`+`、分隔符、UTF-8 字节）转为大写 `%XX`；空格为 `%20`。无需转义时直接借用输入，否则原子替换 `storage`；支持输入别名。 |
-| `validate_url_encoding(value)` | 每个 `%` 是否都开始一个合法三元组。 |
+| `is_valid_url_encoding(value)` | 每个 `%` 是否都开始一个合法三元组。 |
 | `decode_url_bytes(input, output, mode)` | 唯一 URL 解码循环：按 `mode` 一遍把 `input` 解码到 `output` 并返回解码长度；`mode` 拒绝时返回 `std::nullopt`（`output` 可能已被部分写入）。前置条件：`output` 至少 `input.size()` 字节且与 `input` 不重叠。需要把多个解码值打包进同一缓冲的调用方直接使用它。 |
 | `decode_url_component(text, storage, mode)` | 按 `mode` 解码一个 URL 组件。无可解码内容时返回 `text` 本身且不分配；否则解码字节替换 `storage` 内容并返回其视图；`mode` 拒绝时返回 `std::nullopt`，保留 `storage` 的原内容和容量。 |
 
@@ -811,7 +811,7 @@ public:
     constexpr ip_address() noexcept = default;
     [[nodiscard]] static constexpr ip_address ipv4(const std::array<std::uint8_t, 4>& bytes) noexcept;
     [[nodiscard]] static constexpr ip_address ipv6(const std::array<std::uint8_t, 16>& bytes, std::uint32_t scope_id = 0) noexcept;
-    [[nodiscard]] static std::optional<ip_address> parse(std::string_view text) noexcept;
+    [[nodiscard]] static std::optional<ip_address> try_parse(std::string_view text) noexcept;
 
     [[nodiscard]] constexpr ip_address_family family() const noexcept;
     [[nodiscard]] constexpr std::span<const std::uint8_t> bytes() const& noexcept RUVIA_LIFETIMEBOUND;
@@ -847,7 +847,7 @@ static_assert(std::is_trivially_copyable_v<ip_address>);
 | --- | --- |
 | 默认构造 | `0.0.0.0`（IPv4）。 |
 | `ipv4(bytes)` / `ipv6(bytes, scope_id)` | 由网络序字节构造。 |
-| `parse(text)` | 解析完整地址字面量：不带前导零的点分十进制 IPv4，或 RFC 4291 §2.2 IPv6 文本并可带数字 `%zone`。方括号、端口、首尾空白与内嵌 NUL 均返回 `std::nullopt`。 |
+| `try_parse(text)` | 解析完整地址字面量：不带前导零的点分十进制 IPv4，或 RFC 4291 §2.2 IPv6 文本并可带数字 `%zone`。方括号、端口、首尾空白与内嵌 NUL 均返回 `std::nullopt`。 |
 | `family()` / `scope_id()` | 地址族与 zone（IPv4 恒为 0）。 |
 | `bytes() const&` | IPv4 返回 4 字节、IPv6 返回 16 字节的网络序视图，借用 `*this`；右值重载 `= delete`，拒绝从临时地址取借用。 |
 | `is_ipv4_mapped()` | 是否为无 zone 的 `::ffff:a.b.c.d`。 |
@@ -885,7 +885,7 @@ namespace ruvia {
 class ip_cidr final {
 public:
     constexpr ip_cidr() noexcept = default;
-    [[nodiscard]] static std::optional<ip_cidr> parse(std::string_view text) noexcept;
+    [[nodiscard]] static std::optional<ip_cidr> try_parse(std::string_view text) noexcept;
     [[nodiscard]] ip_address network() const noexcept;
     [[nodiscard]] constexpr std::uint8_t prefix_bits() const noexcept;
     [[nodiscard]] ip_address first_address() const noexcept;
@@ -903,9 +903,9 @@ IPv4 或 IPv6 CIDR 前缀块（或不带前缀的单个地址，视为全宽前�
 | 成员 | 语义 |
 | --- | --- |
 | 默认构造 | 网络全零、前缀 128 位，即只匹配 `::`。 |
-| `parse(text)` | 单遍解析 `address` 或 `address/prefix`；前缀不超过 32（IPv4）或 128（IPv6），必须全零主机位，拒绝全部 IPv6 zone 拼写（含 `%0`）。非法返回 `nullopt`。 |
+| `try_parse(text)` | 单遍解析 `address` 或 `address/prefix`；前缀不超过 32（IPv4）或 128（IPv6），必须全零主机位，拒绝全部 IPv6 zone 拼写（含 `%0`）。非法返回 `nullopt`。 |
 | `contains(address)` | 是否落在块内；IPv6 块匹配时忽略对端 scope，IPv4 块保持上述映射规则。 |
-| `contains(address_text)` | 先 `ip_address::parse`；无法解析时返回 `false`。 |
+| `contains(address_text)` | 先 `ip_address::try_parse`；无法解析时返回 `false`。 |
 | `operator==` | 按保存的网络与前缀长度比较。 |
 | `network()` / `prefix_bits()` | 原地址族的网络地址与前缀位数，无需重新切分文本。 |
 | `first_address()` / `last_address()` | 包含两端的完整地址区间，不扣除网络地址或广播地址；`/0` 与全宽前缀同样适用。 |
@@ -1495,7 +1495,7 @@ public:
 static_assert(std::is_trivially_copyable_v<http_content_length>);
 static_assert(sizeof(http_content_length) == sizeof(std::uint64_t));
 
-[[nodiscard]] std::optional<std::uint64_t> http_parse_content_length(std::string_view field_value) noexcept;
+[[nodiscard]] std::optional<std::uint64_t> parse_http_content_length(std::string_view field_value) noexcept;
 }
 ```
 
@@ -1505,7 +1505,7 @@ static_assert(sizeof(http_content_length) == sizeof(std::uint64_t));
 - 整数到 `http_content_length` 隐式转换，非负整数可直接填入；不接受浮点与枚举，不要预先转成无符号数；用 `value()` 解包。默认构造为 `0`。
 - 出站长度与范围尺寸统一使用它，例如 [`http_request_content_plan::known_length()` / `streaming()`](#api-http-request-content-plan-h)（可选位置保留 `std::optional`）、[`resolve_http_byte_range_set()`](#api-http-range-h)、[`http_selected_representation_metadata::length_`](#api-http-representation-h)、[`http_response::file_body()` 等](#api-http-response-h)。已解析或已计算的协议长度仍以 `std::uint64_t` 返回。
 
-`http_parse_content_length(field_value)`：解析接收到的 `Content-Length` 字段值（RFC 9110 §8.6）。合并重复字段行后可能是逗号分隔的十进制长度列表，所有成员必须一致；空成员、非数字、溢出或不一致的长度返回 `std::nullopt`，否则返回该长度。
+`parse_http_content_length(field_value)`：解析接收到的 `Content-Length` 字段值（RFC 9110 §8.6）。合并重复字段行后可能是逗号分隔的十进制长度列表，所有成员必须一致；空成员、非数字、溢出或不一致的长度返回 `std::nullopt`，否则返回该长度。
 
 ---
 
@@ -1651,7 +1651,7 @@ public:
 };
 
 [[nodiscard]] constexpr std::size_t http_quoted_string_size(std::string_view input) noexcept;
-[[nodiscard]] constexpr bool http_is_quoted_string(std::string_view value) noexcept;
+[[nodiscard]] constexpr bool is_http_quoted_string(std::string_view value) noexcept;
 
 class http_field_name_list final {
 public:
@@ -1671,7 +1671,7 @@ public:
 | `http_trim_quoted_field_value(text)` | 若两端恰为一对 DQUOTE 则去除，不反转义 quoted-pair；结果借用输入。 |
 | `http_quoted_string_cursor` | 无分配的 quoted-string 读取器。输入须以开引号开始，否则构造即进入失败态。`next(out)` 每次校验并解码一个内容字节（qdtext 或 quoted-pair 的被转义字节，须为 HTAB、SP、VCHAR 或 obs-text），成功时写入 `out` 并返回 `true`；遇闭引号或畸形输入（缺闭引号、`\` 位于末尾、非法字节）返回 `false`。`closed()` 区分两种结束：`true` 表示正常遇到闭引号。`consumed()` 为已读取字节数（含两侧引号）。闭引号之后的字节永不读取。 |
 | `http_quoted_string_size(input)` | `input` 开头的完整 quoted-string 的字节长度（含引号）；开头不是合法 quoted-string 时为 `0`。 |
-| `http_is_quoted_string(value)` | `value` 整体恰为一个合法 quoted-string 时为 `true`。 |
+| `is_http_quoted_string(value)` | `value` 整体恰为一个合法 quoted-string 时为 `true`。 |
 | `http_field_name_list` | 无分配迭代逗号分隔的字段名列表（如 `Connection`、`Trailer`、`Vary` 的名称列表）。成员裁剪 OWS，空成员（包括整个列表为空）被忽略；返回的视图借用输入。反复调用 `next()` 直至返回 `std::nullopt`，再用 `valid()` 区分正常结束（`true`）与遇到非 token 成员（`false`）；未排空前 `valid()` 为 `false`。此类按普通逗号切分，不感知引号（字段名列表不含 quoted-string）。 |
 
 - **内部借用**：从列表选出的成员及参数前的 token 均借用原字段文本，返回视图通过 `RUVIA_LIFETIMEBOUND` 标注这一依赖。
@@ -1690,7 +1690,7 @@ public:
     http_header& operator=(http_header&& other) noexcept;
     ~http_header() noexcept;
 
-    [[nodiscard]] static http_header copy_with_lowercase_name(std::string_view name, std::string_view value);
+    [[nodiscard]] static http_header with_lowercase_name(std::string_view name, std::string_view value);
 
     [[nodiscard]] std::string_view name() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view name() const&& = delete;
@@ -1721,7 +1721,7 @@ public:
 | `http_header(name, value)` | 把名称与值复制进一次分配的连续存储（两者皆空时不分配）。不校验语法。`name.size() + value.size()` 溢出 `size_t` 时抛 `std::length_error`；分配失败抛 `std::bad_alloc`。 |
 | 拷贝构造 / 拷贝赋值 | 拥有型对象复制字段存储；库内部的静态借用型对象拷贝后仍借用原文。拷贝赋值先完整构造副本再交换，失败时目标保持原值。 |
 | 移动构造 / 移动赋值 | 转移存储、不分配；源对象变为空（名称与值均为空视图）。移动赋值先提交新字段状态，再释放旧存储。 |
-| `copy_with_lowercase_name(name, value)` | 与构造函数相同（一次分配），并在复制时把名称 ASCII 小写化；用于需要规范化字段名的拥有型边界。异常同构造函数。 |
+| `with_lowercase_name(name, value)` | 与构造函数相同（一次分配），并在复制时把名称 ASCII 小写化；用于需要规范化字段名的拥有型边界。异常同构造函数。 |
 | `name()` / `value()` | 借用本对象存储的视图，有效至对象被修改、移动或销毁。右值重载 `= delete`：禁止从临时 `http_header` 取得会立即悬垂的视图。 |
 
 `http_header_view` 是非拥有型字段视图，按值保存两个 `std::string_view`。默认构造得到空名称与空值。删除的模板构造函数在任一实参为临时拥有型字符串（如 `std::string` 右值）时参与重载并被选中，从而在编译期拒绝必然悬垂的视图；字符串字面量、`std::string_view` 与拥有型字符串左值可正常构造。视图不校验内容。
@@ -1935,7 +1935,7 @@ public:
         }
     editable_http_headers(range_type& fields) noexcept;
 
-    [[nodiscard]] http_header_range_view fields() const noexcept;
+    [[nodiscard]] http_header_range_view headers() const noexcept;
     void remove(std::string_view name) noexcept;
     void remove_if(bool (*matches)(std::string_view field_name) noexcept) noexcept;
     void set(std::string_view name, std::string_view value);
@@ -1954,7 +1954,7 @@ public:
 
 | 成员 | 语义 |
 | --- | --- |
-| `fields()` | 当前字段行的只读视图；之后任何修改都会使其失效。 |
+| `headers()` | 当前字段行的只读视图；之后任何修改都会使其失效。 |
 | `remove(name)` | 删除所有名称（不区分大小写）为 `name` 的行；对响应目标，任何字段都不可能携带的名称（非 token 等）不删除任何内容。`name` 不得借用本容器。 |
 | `remove_if(matches)` | 删除名称满足 `matches` 的所有行。 |
 | `set(name, value)` | 保证 `name` 恰好剩一行：替换第一条既有行并删除其后的同名行，无既有行时追加。`name` / `value` 可借用被替换的行（新字段先构造）。 |
@@ -1993,7 +1993,7 @@ enum class http_request_head_kind : std::uint8_t {
 | 成员 | 含义 |
 | --- | --- |
 | `none` (0) | 不发送 `Expect`。 |
-| `continue_` (1) | 发送 `Expect: 100-continue` 并在收到 `100 (Continue)` 或最终响应前暂缓内容；仅在请求有内容时有效（见 [`http_client_expectation_is_valid`](#api-http-request-expectation-h)）。 |
+| `continue_` (1) | 发送 `Expect: 100-continue` 并在收到 `100 (Continue)` 或最终响应前暂缓内容；仅在请求有内容时有效（见 [`is_valid_http_client_expectation`](#api-http-request-expectation-h)）。 |
 
 `http_request_field_source`：区分转发收到的字段与新生成字段（RFC 9110 §2.2）。
 
@@ -2061,7 +2061,7 @@ struct http_request_head_view final {
 ### 5.3 `"http_request.h"`
 <a id="api-http-request-h"></a>
 
-服务端接收请求的语义模型 `http_request`（零拷贝借用协议输入）、直接构造已解析请求的 `make_parsed_http_request`、请求 Trailer 收集器 `http_request_trailers`，以及请求托管字段与应用字段校验谓词。无条件编译；公开 include [`"borrowed_text.h"`](#api-borrowed-text-h)、[`"http_field_section_budget.h"`](#api-http-field-section-budget-h)、[`"http_header.h"`](#api-http-header-h)、[`"http_message.h"`](#api-http-message-h)、[`"http_protocol.h"`](#api-http-protocol-h)。源码：[`ruvia-http/include/http_request.h`](../ruvia-http/include/http_request.h)
+服务端接收请求的语义模型 `http_request`（零拷贝借用协议输入）、直接构造已解析请求的 `make_http_request`、请求 Trailer 收集器 `http_request_trailers`，以及请求托管字段与应用字段校验谓词。无条件编译；公开 include [`"borrowed_text.h"`](#api-borrowed-text-h)、[`"http_field_section_budget.h"`](#api-http-field-section-budget-h)、[`"http_header.h"`](#api-http-header-h)、[`"http_message.h"`](#api-http-message-h)、[`"http_protocol.h"`](#api-http-protocol-h)。源码：[`ruvia-http/include/http_request.h`](../ruvia-http/include/http_request.h)
 
 #### 5.3.1 请求字段谓词与自由函数
 
@@ -2072,7 +2072,7 @@ namespace ruvia {
 [[nodiscard]] bool is_valid_http_request_application_field(std::string_view name, std::string_view value) noexcept;
 [[nodiscard]] constexpr std::string_view http_canonical_extended_connect_protocol(borrowed_text protocol) noexcept;
 
-[[nodiscard]] http_request make_parsed_http_request(borrowed_text method, borrowed_text target,
+[[nodiscard]] http_request make_http_request(borrowed_text method, borrowed_text target,
     std::span<const http_header_view> headers, borrowed_span<std::byte> body = {});
 
 [[nodiscard]] bool is_valid_http_connect_authority(std::string_view authority) noexcept;
@@ -2086,7 +2086,7 @@ namespace ruvia {
 | `is_http_protocol_managed_request_field(name)` | HTTP 协议层在为请求分帧和传输时自行生成或解释的字段：`Host`（RFC 9110 §7.2）、消息分帧 `Content-Length`、`Transfer-Encoding`、`Trailer`（§6.5、§8.6）、`Expect`（§10.1.1）、连接管理 `Connection` 及连接专属 `Keep-Alive`、`Proxy-Connection`、`TE`、`Upgrade`（§7.6.1）。代替应用构造请求的组件拥有这些字段，不得从应用接受。名称不区分大小写。 |
 | `is_valid_http_request_application_field(name, value)` | 在应用配置或请求构造边界校验单个出站请求首部，`noexcept`、不分配。检查名称 token、规范化值（RFC 9110 §5.5，拒绝首尾 SP / HTAB 与非法控制字节），拒绝上述协议托管字段（不区分大小写），并复用请求 writer 对已知字段的发送方语义校验（如 `Content-Type`、`Content-Encoding`、`Origin` 与 CORS 请求字段）；合法未知扩展及其空值允许。HTTP/1 与 HTTP/2 的 `TE` 差异已被托管字段边界排除，因此无版本参数。不保留输入或跨调用状态；字段间重复与完整消息约束由调用方及最终 writer 负责；返回 `true` 不表示整个请求可发送。不得用于响应首部（用 [`is_valid_http_response_field`](#api-http-header-h)）或接收方校验。 |
 | `http_canonical_extended_connect_protocol(protocol)` | RFC 9110 §7.8 对协议名不区分大小写，而 RFC 8441 §4 与 RFC 9220 §3 注册的 `:protocol` token 为小写 `websocket`：任何大小写的 `websocket` 映射为 `"websocket"`（静态存储），其他协议原样返回并借用 `protocol`。 |
-| `make_parsed_http_request(method, target, headers, body = {})` | 不经线格式解析直接构造语义请求，见 5.3.4。 |
+| `make_http_request(method, target, headers, body = {})` | 不经线格式解析直接构造语义请求，见 5.3.4。 |
 | `is_valid_http_connect_authority(authority)` | RFC 9110 CONNECT authority-form：须有非空 host 与显式端口。 |
 | `is_valid_http_origin_form_target(target)` | 无分配校验 origin-form 请求目标；服务端路由与出站 HTTP / WebSocket 客户端共用同一规则。 |
 
@@ -2216,7 +2216,7 @@ public:
 | `http2` (4) | HTTP/2 请求：目标组成部分由伪首部携带，而非单个 HTTP/1 request-target token。 |
 | `http3` (5) | HTTP/3 请求，同上。 |
 
-`http_request` 拥有紧凑的首部描述符块（在堆上，不在协程帧中；协议字段数上限与对象布局无关），字段文本与正文仍借用协议输入；对象只由解析器或 `make_parsed_http_request` 产生（无公开默认构造）。不可拷贝；移动构造转移描述符块；移动赋值先整体接管新对象再释放旧存储，不分配。所有返回的视图借用协议输入缓冲（或 `make_parsed_http_request` 的调用方存储），并在 `headers()` / `body()` 等左值限定访问器上额外受本对象生存期约束。
+`http_request` 拥有紧凑的首部描述符块（在堆上，不在协程帧中；协议字段数上限与对象布局无关），字段文本与正文仍借用协议输入；对象只由解析器或 `make_http_request` 产生（无公开默认构造）。不可拷贝；移动构造转移描述符块；移动赋值先整体接管新对象再释放旧存储，不分配。所有返回的视图借用协议输入缓冲（或 `make_http_request` 的调用方存储），并在 `headers()` / `body()` 等左值限定访问器上额外受本对象生存期约束。
 
 | 成员 | 语义 |
 | --- | --- |
@@ -2237,9 +2237,9 @@ public:
 
 查找方法的首行 / 三态选择遵循 [接收字段单值查找统一规则](#api-http-header-h)。
 
-#### 5.3.4 `make_parsed_http_request`
+#### 5.3.4 `make_http_request`
 
-`make_parsed_http_request(method, target, headers, body = {})` 不解析线格式请求头，直接构造语义请求：
+`make_http_request(method, target, headers, body = {})` 不解析线格式请求头，直接构造语义请求：
 
 - 首部名称 / 值与正文字节借用调用方；按 `headers` 的精确数量分配描述符。调用方必须在返回的请求使用期间保持所有文本与正文存储存活。`method` / `target` 为 `borrowed_text`，`body` 为 `borrowed_span<std::byte>`，二者都拒绝临时拥有型容器。
 - 方法、目标或首部字段非法时抛 [`http_protocol_error`](#api-http-protocol-h)。首部字段经过与 HTTP/1、HTTP/2 解析器相同的接收方字段规则，因此重复的 singleton 字段（如 `Range`、`If-Range`）抛出异常，而不是解析为其中一行。
@@ -2249,7 +2249,7 @@ public:
 ```cpp
 const std::array headers{ruvia::http_header_view{"host", "example.test"},
                          ruvia::http_header_view{"content-type", "text/plain"}};
-const auto request = ruvia::make_parsed_http_request("POST", "/items?id=1", headers);
+const auto request = ruvia::make_http_request("POST", "/items?id=1", headers);
 // request.path() == "/items", request.query_string() == "id=1"
 // request.header("Content-Type") == "text/plain"
 ```
@@ -2266,7 +2266,7 @@ namespace ruvia {
 
 enum class http_request_content_indication : std::uint8_t { no_content, will_follow };
 
-[[nodiscard]] constexpr bool http_client_expectation_is_valid(bool has_continue, http_request_content_indication content) noexcept;
+[[nodiscard]] constexpr bool is_valid_http_client_expectation(bool has_continue, http_request_content_indication content) noexcept;
 
 enum class http_unsupported_expectation_policy : std::uint8_t { ignore, reject };
 
@@ -2276,11 +2276,11 @@ enum class http_server_expectation_plan : std::uint8_t {
     reject_unsupported,
 };
 
-[[nodiscard]] inline http_protocol_error http_unsupported_expectation_error() noexcept;
+[[nodiscard]] inline http_protocol_error make_http_unsupported_expectation_error() noexcept;
 
 class http_request_expectations final {
 public:
-    void parse_field(std::string_view value) noexcept;
+    void update(std::string_view value) noexcept;
     [[nodiscard]] bool has_continue() const noexcept;
     [[nodiscard]] bool has_unsupported() const noexcept;
     void ignore_continue() noexcept;
@@ -2312,14 +2312,14 @@ public:
 | --- | --- |
 | `no_action` (0) | 无需动作。 |
 | `send_continue` (1) | 应发送 `100 (Continue)`。 |
-| `reject_unsupported` (2) | 应以 `http_unsupported_expectation_error()` 拒绝。 |
+| `reject_unsupported` (2) | 应以 `make_http_unsupported_expectation_error()` 拒绝。 |
 
 | 符号 | 语义 |
 | --- | --- |
-| `http_client_expectation_is_valid(has_continue, content)` | RFC 9110 §10.1.1 禁止客户端对无内容请求生成 `100-continue`：`!has_continue \|\| content == will_follow`。 |
-| `http_unsupported_expectation_error()` | 返回 `http_protocol_error(http_status::expectation_failed, static_text{"unsupported_expectation"}, "unsupported Expect header")`。 |
+| `is_valid_http_client_expectation(has_continue, content)` | RFC 9110 §10.1.1 禁止客户端对无内容请求生成 `100-continue`：`!has_continue \|\| content == will_follow`。 |
+| `make_http_unsupported_expectation_error()` | 返回 `http_protocol_error(http_status::expectation_failed, static_text{"unsupported_expectation"}, "unsupported Expect header")`。 |
 | `http_request_expectations` | 接收方对 `Expect` `#list` 的定长增量状态（平凡可拷贝，至多 1 字节）。重复字段行延续同一逻辑列表；空成员被忽略。唯一标准化成员是 `100-continue`（不区分大小写匹配）；其他非空成员一律记为“unsupported”这一语义事实，交由产品政策处理。 |
-| `parse_field(value)` | 并入一个字段行的值；列表切分感知引号。 |
+| `update(value)` | 并入一个字段行的值；列表切分感知引号。 |
 | `has_continue()` / `has_unsupported()` | 是否见过 `100-continue` / 其他成员。 |
 | `ignore_continue()` | 清除 continue 事实：RFC 9110 要求 HTTP/1.0 接收方忽略 `100-continue`；unsupported 事实保留，以便产品仍可应用其扩展支持政策。 |
 | `server_plan(content, unsupported_policy)` | 有 unsupported 且策略为 `reject` → `reject_unsupported`；否则有 continue 且 `content == will_follow` → `send_continue`；否则 `no_action`。 |
@@ -2592,15 +2592,15 @@ public:
 
     [[nodiscard]] std::string_view body() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view body() const&& = delete;
-    [[nodiscard]] std::string_view body_bytes() const& noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] std::string_view body_bytes() const&& = delete;
-    [[nodiscard]] std::string take_body_bytes() &&;
+    [[nodiscard]] std::span<const std::byte> body_bytes() const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::span<const std::byte> body_bytes() const&& = delete;
+    [[nodiscard]] std::string take_body() &&;
     [[nodiscard]] std::optional<http_response_file_view> file_body() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<http_response_file_view> file_body() const&& = delete;
     [[nodiscard]] bool has_multipart_file_body() const noexcept;
     [[nodiscard]] bool has_file_representation() const noexcept;
-    void head_metadata_body() noexcept;
-    [[nodiscard]] bool has_head_metadata_body() const noexcept;
+    void mark_head_metadata_only() noexcept;
+    [[nodiscard]] bool has_head_metadata_only() const noexcept;
     [[nodiscard]] std::size_t body_segment_count() const noexcept;
     [[nodiscard]] http_response_body_segment_view body_segment(std::size_t index) const& RUVIA_LIFETIMEBOUND;
     http_response_body_segment_view body_segment(std::size_t index) const&& = delete;
@@ -2609,8 +2609,8 @@ public:
     template <std::same_as<std::string> string_type>
     void body(string_type&& value) noexcept;
     void static_body(static_text value) noexcept;
-    void file_bytes_body(std::string&& value) noexcept;
-    void file_bytes_body(std::shared_ptr<const std::string> value);
+    void file_representation_body(std::string&& value) noexcept;
+    void file_representation_body(std::shared_ptr<const std::string> value);
     void file_body(http_native_path_string_type file, http_content_length size, http_content_length offset,
                    http_content_length length, http_response_file_identity identity,
                    http_response_file_descriptor opened = {});
@@ -2647,17 +2647,17 @@ public:
 
 | 成员 | 语义 |
 | --- | --- |
-| `body()` / `body_bytes()` | 字节正文（复制、拥有、静态借用或 `file_bytes_body`）的字节视图；文件、multipart 文件与空正文返回空视图。`body()` 与 `body_bytes()` 等价。 |
+| `body()` / `body_bytes()` | 字节正文（复制、拥有、静态借用或 `file_representation_body`）的文本视图（`std::string_view`）或字节视图（`std::span<const std::byte>`，同一存储）；文件、multipart 文件与空正文返回空视图。 |
 | `file_body() const&` | 文件正文或 multipart 文件正文时返回 [`http_response_file_view`](#api-http-response-body-h)（multipart 时描述整个文件 `[0, size)`），否则 `std::nullopt`。 |
 | `has_multipart_file_body()` | 正文为 `multipart_file_body()` 设置的 `multipart/byteranges` 文件正文时为 `true`。 |
-| `has_file_representation()` | 正文来自 `file_body()`、`multipart_file_body()` 或 `file_bytes_body()` 时为 `true`：这些字节是文件的表示，发送方原样传送（例如不再做动态内容编码）。 |
-| `has_head_metadata_body()` | 当前正文由 `head_metadata_body()` 设置时为 `true`。 |
+| `has_file_representation()` | 正文来自 `file_body()`、`multipart_file_body()` 或 `file_representation_body()` 时为 `true`：这些字节是文件的表示，发送方原样传送（例如不再做动态内容编码）。 |
+| `has_head_metadata_only()` | 当前正文由 `mark_head_metadata_only()` 设置时为 `true`。 |
 | `body_segment_count()` | 表示的存储片段数，不等于待发送字节数：空字节正文为 `0`；字节正文为 `1`；文件正文即使长度为零也为 `1`（保留路径、描述符与 identity）；multipart 文件正文为计划中的文件区间与边界元数据片段总数。 |
 | `body_segment(index) const&` | 返回第 `index` 个片段的 `http_response_body_segment_view`（字节片段填 `bytes_`，文件片段填 `file_`）；越界抛 `std::out_of_range`。 |
 
 长度为零的文件片段仍然存在，调用方必须完成适用的文件校验（打开、identity 验证），不能因写计划 `send_body() == false` 就丢弃它；`send_body()` 只表示方法/状态允许且正文长度非零时需要传送 payload（见 [`http_buffered_response_write_plan`](#api-http-response-body-h)）。
 
-`take_body_bytes() &&` 移出独占字节或复制静态、共享字节；成功后清空正文、保留首部。文件计划须由驱动读取；对其调用会抛 `std::logic_error`，不改变响应。
+`take_body() &&` 移出独占字节或复制静态、共享字节；成功后清空正文、保留首部。文件计划须由驱动读取；对其调用会抛 `std::logic_error`，不改变响应。
 
 正文设置（每次设置都替换整个正文：先发布完整的新表示，再释放旧正文资源；释放回调中重入替换的结果保留。重新设置正文会清除 HEAD 元数据标记）：
 
@@ -2666,11 +2666,11 @@ public:
 | `body(std::string_view)` | 复制字节；空输入得到空正文（无 segment）。分配失败抛分配异常且正文不变。 |
 | `body(std::string&&) noexcept` | 仅精确的非 const `std::string` 右值接管存储，不复制；空串得到空正文。 |
 | `static_body(static_text) noexcept` | 零拷贝借用经编译期检查的[静态文本](#api-borrowed-text-h)；空输入得到空正文。 |
-| `file_bytes_body(std::string&&) noexcept` | 接管从文件读取的字节（整个文件、一个字节范围或 multipart byteranges 负载）。与 `body()` 的设置重载不同，即使为空也保持文件表示（`has_file_representation() == true`）。 |
-| `file_bytes_body(std::shared_ptr<const std::string> value)` | 保活完整的不可变缓冲，不复制字节；空字符串仍保留文件表示。指针为空或不持有所有权时抛 `std::invalid_argument`，响应不变。 |
+| `file_representation_body(std::string&&) noexcept` | 接管从文件读取的字节（整个文件、一个字节范围或 multipart byteranges 负载）。与 `body()` 的设置重载不同，即使为空也保持文件表示（`has_file_representation() == true`）。 |
+| `file_representation_body(std::shared_ptr<const std::string> value)` | 保活完整的不可变缓冲，不复制字节；空字符串仍保留文件表示。指针为空或不持有所有权时抛 `std::invalid_argument`，响应不变。 |
 | `file_body(file, size, offset, length, identity, opened = {})` | 设置文件正文：按值接收原生路径，移动右值的存储而不复制堆上字节；保留运行时不透明 identity。`opened` 若已占用，是运行时据以分帧的已打开描述符，由正文拥有并在销毁或替换时释放。`file` 为空或 `[offset, offset + length)` 超出 `size` 时抛 `std::invalid_argument`，正文不变，被拒绝的 `opened` 随调用释放。 |
 | `multipart_file_body(file, size, identity, plan, opened = {})` | 设置 `multipart/byteranges` 文件正文；路径与句柄所有权同 `file_body()`。`plan` 为 [`http_multipart_byte_range_plan`](#api-http-range-h)。`file` 为空、计划无片段、无文件片段、某文件片段长度为零或超出 `size` 时抛 `std::invalid_argument`，正文不变，`opened` 被释放。 |
-| `head_metadata_body() noexcept` | 把正文替换为仅描述 HEAD 所选表示的空正文：保留首部、释放原正文资源。序列化 HEAD 时保留显式 `Content-Length`（作为 GET 表示的长度）；未提供长度时不推断为零。标记随移动转移，不影响 GET 等其他方法的正文规则。 |
+| `mark_head_metadata_only() noexcept` | 把正文替换为仅描述 HEAD 所选表示的空正文：保留首部、释放原正文资源。序列化 HEAD 时保留显式 `Content-Length`（作为 GET 表示的长度）；未提供长度时不推断为零。标记随移动转移，不影响 GET 等其他方法的正文规则。 |
 
 内容编码：
 
@@ -3000,7 +3000,7 @@ public:
 | `status_allows_body()` | 状态不是 `1xx`、`204`、`205`、`304`。 |
 | `body_suppressed()` | `!status_allows_body()`，或分类不是 `with_content`（即 HEAD、CONNECT 2xx 也抑制正文）。 |
 | `auto_content_length_allowed()` | 非 CONNECT 隧道，且状态允许正文或为 `205`（RFC 9110 §15.3.6 允许 `205` 以 `Content-Length: 0` 表明无内容）。 |
-| `explicit_content_length_allowed()` | 非 CONNECT 隧道，且状态允许正文或为 `304`（`304` 可携带所选表示的长度）。HEAD 在此为 `true`：显式长度描述 GET 表示，配合 `head_metadata_body()` 保留。 |
+| `explicit_content_length_allowed()` | 非 CONNECT 隧道，且状态允许正文或为 `304`（`304` 可携带所选表示的长度）。HEAD 在此为 `true`：显式长度描述 GET 表示，配合 `mark_head_metadata_only()` 保留。 |
 | `transfer_encoding_allowed()` | 非 CONNECT 隧道且状态允许正文。 |
 | `buffered_representation_length(response)` | 状态不允许正文或为 CONNECT 隧道时为 `0`，否则为响应正文表示的字节长度（文件为区间长度，multipart 为计划总长）。 |
 
@@ -3140,10 +3140,10 @@ enum class http_content_coding : std::uint8_t {
 };
 
 [[nodiscard]] std::string_view http_content_coding_token(http_content_coding coding) noexcept;
-[[nodiscard]] std::optional<http_content_coding> http_content_coding_from_token(std::string_view token) noexcept;
+[[nodiscard]] std::optional<http_content_coding> parse_http_content_coding_token(std::string_view token) noexcept;
 inline constexpr std::size_t max_content_codings = 8;
 [[nodiscard]] constexpr bool is_http_transfer_coding(http_content_coding coding) noexcept;
-[[nodiscard]] inline bool http_is_gzip_coding_token(std::string_view token) noexcept;
+[[nodiscard]] inline bool is_http_gzip_coding_token(std::string_view token) noexcept;
 [[nodiscard]] inline constexpr std::string_view http_supported_request_content_codings() noexcept;
 
 class http_content_codings final {
@@ -3180,10 +3180,10 @@ enum class http_content_decode_error : std::uint8_t {
 | 符号 | 语义 |
 | --- | --- |
 | `http_content_coding_token(c)` | 上表 token。 |
-| `http_content_coding_from_token(token)` | 去除首尾 OWS 后大小写不敏感匹配；`x-gzip` 为 `gzip`；空或其他 token 返回 `std::nullopt`。 |
+| `parse_http_content_coding_token(token)` | 去除首尾 OWS 后大小写不敏感匹配；`x-gzip` 为 `gzip`；空或其他 token 返回 `std::nullopt`。 |
 | `max_content_codings` | `8`。编码栈深度上限，防止对端构造无界解码级数：更长的 `Content-Encoding` 栈报告为不支持，更长的 `Transfer-Encoding` 栈被拒绝。 |
 | `is_http_transfer_coding(c)` | 仅 `gzip` 与 `deflate` 为 `true`：RFC 9112 §7.2 只注册这两种压缩传输编码，`br`、`zstd` 只能作为内容编码。 |
-| `http_is_gzip_coding_token(token)` | 已修剪 token 是否为 `gzip` 或 `x-gzip`（大小写不敏感）。 |
+| `is_http_gzip_coding_token(token)` | 已修剪 token 是否为 `gzip` 或 `x-gzip`（大小写不敏感）。 |
 | `http_supported_request_content_codings()` | 请求正文可解码的编码，以 `Accept-Encoding` 字段值形式给出：`"gzip, deflate, br, zstd"`。 |
 
 `http_content_codings` 是内容编码与传输编码共用的有界内联编码栈，按应用顺序存放；不持有内存资源，因此解析得到的分帧计划可以比其来源首部存储活得更久。`push_back` 在已有 `max_content_codings` 项时抛 `std::length_error`。`data` / `begin` / `end` / `operator[]` 借用本对象（`operator[]` 不检查下标），右值重载均删除。
@@ -3228,7 +3228,7 @@ public:
 
 [[nodiscard]] http_content_coding_field_result parse_http_content_coding(std::string_view value) noexcept;
 [[nodiscard]] http_content_coding_field_result parse_http_content_coding_headers(const http_header_range_view& headers) noexcept;
-[[nodiscard]] http_content_coding_field_result request_content_coding(const http_request& request) noexcept;
+[[nodiscard]] http_content_coding_field_result parse_http_request_content_coding(const http_request& request) noexcept;
 [[nodiscard]] bool is_http_media_type_compressible(std::string_view content_type_value) noexcept;
 ```
 
@@ -3246,7 +3246,7 @@ public:
 | --- | --- |
 | `parse_http_content_coding(value)` | 按接收方列表规则解析一个逻辑 `Content-Encoding` 字段值；空成员被忽略，空值即 identity。 |
 | `parse_http_content_coding_headers(headers)` | 把 [`http_header_range_view`](#api-http-header-h) 中所有 `Content-Encoding` 行折叠为一个接收方判定；无字段或只有空成员即 identity。 |
-| `request_content_coding(request)` | 使用解析器已分类的首部描述符读取已解析请求的 `Content-Encoding`，不重新扫描线上名称；请求接纳阶段不解释该字段。 |
+| `parse_http_request_content_coding(request)` | 使用解析器已分类的首部描述符读取已解析请求的 `Content-Encoding`，不重新扫描线上名称；请求接纳阶段不解释该字段。 |
 | `is_http_media_type_compressible(content_type)` | 动态响应压缩与静态预压缩共用的白名单：`text/*`、`+json`、`+xml` 后缀以及常见文本、字体、wasm、图标媒体类型为 `true`；名称含 zip 容器的类型为 `false`。 |
 
 ### 7.2 `"http_content_codec.h"`
@@ -3474,7 +3474,7 @@ public:
 ### 7.4 `"http_multipart.h"`
 <a id="api-http-multipart-h"></a>
 
-`multipart/form-data`（RFC 7578，边界语法 RFC 2046）的边界提取、一次性缓冲解析与流式增量解析。畸形或超限的对端字节以值报告，不抛异常。依赖 [`"decode_step.h"`](#api-decode-step-h)、[`"http_io_buffer.h"`](#api-http-io-buffer-h)、[`"http_protocol.h"`](#api-http-protocol-h)、[`"http_status.h"`](#api-http-status-h)、[`"borrowed_text.h"`](#api-borrowed-text-h)。Web 层 `c.req().multipart()` / `multipart_reader` 见 [ruvia-web](ruvia-web.md)。源码：[`ruvia-http/include/http_multipart.h`](../ruvia-http/include/http_multipart.h)
+`multipart/form-data`（RFC 7578，边界语法 RFC 2046）的边界提取、一次性缓冲解析与流式增量解析。畸形或超限的对端字节以值报告，不抛异常。依赖 [`"decode_step.h"`](#api-decode-step-h)、[`"http_io_buffer.h"`](#api-http-io-buffer-h)、[`"http_protocol.h"`](#api-http-protocol-h)、[`"http_status.h"`](#api-http-status-h)、[`"borrowed_text.h"`](#api-borrowed-text-h)。Web 层 `c.request().multipart()` / `multipart_reader` 见 [ruvia-web](ruvia-web.md)。源码：[`ruvia-http/include/http_multipart.h`](../ruvia-http/include/http_multipart.h)
 
 #### 7.4.1 `class multipart_boundary` 与边界提取
 
@@ -3482,7 +3482,7 @@ public:
 class multipart_boundary final {
 public:
     explicit multipart_boundary(std::string_view value);
-    [[nodiscard]] static std::optional<multipart_boundary> try_from_value(std::string_view value) noexcept;
+    [[nodiscard]] static std::optional<multipart_boundary> try_parse(std::string_view value) noexcept;
     [[nodiscard]] constexpr std::string_view value() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view value() const&& = delete;
 };
@@ -3497,7 +3497,7 @@ enum class multipart_boundary_error : std::uint8_t {
 parse_multipart_boundary(std::string_view content_type_value);
 ```
 
-`multipart_boundary` 以内联存储（最多 70 字节）保存校验过的 RFC 2046 边界值，不分配，所有解析器消费同一值，不会引用悬垂的 `Content-Type` 子串。合法值：1–70 字节，由 `0-9A-Za-z'()+_,-./:=?` 与空格组成，且不以空格结尾。显式构造遇非法值抛 `std::invalid_argument`；`try_from_value` 返回 `std::nullopt` 而不抛。`value() const&` 借用本对象，右值重载删除。
+`multipart_boundary` 以内联存储（最多 70 字节）保存校验过的 RFC 2046 边界值，不分配，所有解析器消费同一值，不会引用悬垂的 `Content-Type` 子串。合法值：1–70 字节，由 `0-9A-Za-z'()+_,-./:=?` 与空格组成，且不以空格结尾。显式构造遇非法值抛 `std::invalid_argument`；`try_parse` 返回 `std::nullopt` 而不抛。`value() const&` 借用本对象，右值重载删除。
 
 `parse_multipart_boundary(content_type)` 从 `multipart/form-data` 的 `boundary` 参数提取边界：MIME quoted-pair 被解码进拥有的 `multipart_boundary`；空参数槽被忽略；仍要求非空且唯一的 `boundary`。
 
@@ -3708,7 +3708,7 @@ public:
     ~sse_parser() = default;
     [[nodiscard]] sse_parse_result parse(std::string_view input) & RUVIA_LIFETIMEBOUND;
     sse_parse_result parse(std::string_view input) && = delete;
-    void finish() noexcept;
+    void finish_input() noexcept;
     void reset() noexcept;
     [[nodiscard]] decoder_state state() const noexcept;
     [[nodiscard]] std::string_view last_event_id() const& noexcept RUVIA_LIFETIMEBOUND;
@@ -3723,7 +3723,7 @@ public:
 | --- | --- |
 | `event_limit_exceeded`（0） | 一个事件超过 `event_limit_`；解析器进入 `failed`。 |
 
-`sse_event`（WHATWG HTML “Dispatch the event” 派发的一个事件，只能由解析器产生）：`type()` 为事件类型，未命名时为 `"message"`；`data()` 为以 LF 连接的数据行，不带末尾 LF；`last_event_id()` 为派发时的最后事件 ID。视图借用解析器，有效至解析器下一次 `parse()`、`finish()`、`reset()`、移动或销毁；所有视图都是合法 UTF-8。
+`sse_event`（WHATWG HTML “Dispatch the event” 派发的一个事件，只能由解析器产生）：`type()` 为事件类型，未命名时为 `"message"`；`data()` 为以 LF 连接的数据行，不带末尾 LF；`last_event_id()` 为派发时的最后事件 ID。视图借用解析器，有效至解析器下一次 `parse()`、`finish_input()`、`reset()`、移动或销毁；所有视图都是合法 UTF-8。
 
 `sse_parser` 是一个响应正文的 sans-I/O `text/event-stream` 解析器（WHATWG HTML “Parsing an event stream”），接受任意大小的分块：
 
@@ -3737,7 +3737,7 @@ public:
 | 成员 | 语义 |
 | --- | --- |
 | `parse(input) &` | 消费输入直到下一个事件完整、流失败或输入耗尽。结果为 `decode_need_input`、`sse_event` 或 `sse_parse_failure`；`consumed_bytes()` 计数：直到完成事件的空行为止、直到导致失败的字段字节为止，或需要更多输入时为全部输入。调用方以未消费后缀再次调用。非 `active` 状态调用抛 `std::logic_error`。右值重载删除：返回的事件借用解析器，临时解析器会立即悬垂。 |
-| `finish() noexcept` | 流结束：`active` 解析器丢弃未完成事件并进入 `finished`；其他状态无效果。 |
+| `finish_input() noexcept` | 流结束：`active` 解析器丢弃未完成事件并进入 `finished`；其他状态无效果。 |
 | `reset() noexcept` | 唯一离开 `finished` / `failed` 的方式：开始新流，保留不超过 4 KiB 的缓冲容量。 |
 | `state()` | `active` / `finished` / `failed`。 |
 | `last_event_id() const&` | 空行提交最新合法 `id`（包括空值），转移存储而不复制。流结束或失败时丢弃未提交的 `id`，保留已提交的 `Last-Event-ID`。视图借用解析器，右值重载删除。 |
@@ -3851,7 +3851,7 @@ public:
 
 端口约定：本头所有端口输入使用 `port_number`（受检整数，见 [`"checked_integer.h"`](#api-checked-integer-h)），合法整数可直接传入，窄化前按原始宽度检查 `0..65535`，越界抛出 `std::invalid_argument`；无异常探测用 `port_number::try_from_value()`。已解析端口以 `std::uint16_t` 返回。零端口与缺省端口语义不同。
 
-#### 8.1.2 `class http_origin_view` 与 `make_http_origin_authority`
+#### 8.1.2 `class http_origin_view` 与 `format_http_origin_authority`
 
 ```cpp
 namespace ruvia {
@@ -3862,7 +3862,7 @@ struct http_origin_options final {
 
 class http_origin_view final {
 public:
-    [[nodiscard]] static http_origin_view for_scheme(http_scheme scheme, http_origin_options options);
+    http_origin_view(http_scheme scheme, http_origin_options options);
     [[nodiscard]] static http_origin_view http(http_origin_options options);
     [[nodiscard]] static http_origin_view https(http_origin_options options);
 
@@ -3871,7 +3871,7 @@ public:
     [[nodiscard]] constexpr std::uint16_t port() const noexcept;
 };
 
-[[nodiscard]] std::string make_http_origin_authority(const http_origin_view& origin);
+[[nodiscard]] std::string format_http_origin_authority(const http_origin_view& origin);
 }
 ```
 
@@ -3879,14 +3879,14 @@ public:
 | --- | --- |
 | `http_origin_options::host_` | 借用的 RFC 3986 `uri-host`，IP-literal 必须带方括号（如 `"[::1]"`）；存储须在源站值被使用期间存活且不变。 |
 | `http_origin_options::port_` | 可选端口；缺省时回填 scheme 默认端口（`http` 80，`https` 443）。 |
-| `for_scheme(scheme, options)` | 按运行期 `http_scheme` 构造源站。主机为空抛 `std::invalid_argument`（"HTTP origin host must not be empty"），主机语法非法抛 `std::invalid_argument`（"HTTP origin host is invalid"）；因此可观察到的源站主机总是合法非空。 |
-| `http(options)` / `https(options)` | 等价于 `for_scheme(http_scheme::http / https, options)`。 |
+| `http_origin_view(scheme, options)` | 按运行期 `http_scheme` 构造源站。主机为空抛 `std::invalid_argument`（"HTTP origin host must not be empty"），主机语法非法抛 `std::invalid_argument`（"HTTP origin host is invalid"）；因此可观察到的源站主机总是合法非空。 |
+| `http(options)` / `https(options)` | 等价于 `http_origin_view(http_scheme::http / https, options)`。 |
 | `scheme()` / `host()` / `port()` | 访问器；`host()` 只含 `uri-host`（借用 `options.host_`），端口单独由 `port()` 给出（已回填默认值）。 |
-| `make_http_origin_authority(origin)` | 返回拥有型 RFC 3986 authority：保留 IP-literal 方括号，仅当端口不等于 scheme 默认端口时附加 `:port`。返回值拥有字节，源站本身仍是借用。 |
+| `format_http_origin_authority(origin)` | 返回拥有型 RFC 3986 authority：保留 IP-literal 方括号，仅当端口不等于 scheme 默认端口时附加 `:port`。返回值拥有字节，源站本身仍是借用。 |
 
 ```cpp
 auto origin = ruvia::http_origin_view::https({.host_ = "example.com", .port_ = 8443});
-std::string authority = ruvia::make_http_origin_authority(origin); // "example.com:8443"
+std::string authority = ruvia::format_http_origin_authority(origin); // "example.com:8443"
 ```
 
 ### 8.2 `"http_target_origin.h"`
@@ -3934,7 +3934,7 @@ public:
     template </* 临时拥有型字符串类型 */ host_type>
     static void dns_name(host_type&&) = delete;
     [[nodiscard]] static constexpr http_target_origin decoded_dns_name(std::string_view host) noexcept;
-    [[nodiscard]] static constexpr http_target_origin ip_address(http_target_host_kind kind, std::span<const std::uint8_t> address) noexcept;
+    [[nodiscard]] static constexpr http_target_origin from_ip_address(http_target_host_kind kind, std::span<const std::uint8_t> address) noexcept;
 };
 
 [[nodiscard]] http_target_origin plan_http_target_origin(const http_request& request, http_target_origin_connection connection) noexcept;
@@ -3957,7 +3957,7 @@ public:
 | `accepted()` / `misdirected()` | 构造对应判定。 |
 | `dns_name(host)` | 借用 `host` 构造 `verify_certificate`；空或超过 253 字节返回 `misdirected()`。删除的模板重载拒绝临时拥有型字符串（如 `std::string` 右值），防止悬垂借用。 |
 | `decoded_dns_name(host)` | 把 `host` 复制进对象内部存储（用于解码后的临时文本）；长度规则同 `dns_name`。 |
-| `ip_address(kind, address)` | 复制地址字节；`kind` 非 `ipv4`/`ipv6` 或长度不符（4/16）返回 `misdirected()`。 |
+| `from_ip_address(kind, address)` | 复制地址字节；`kind` 非 `ipv4`/`ipv6` 或长度不符（4/16）返回 `misdirected()`。 |
 | `plan_http_target_origin(request, connection)` | 判定规则见下。 |
 
 `plan_http_target_origin` 规则（按顺序）：
@@ -4188,7 +4188,7 @@ struct http_client_ip_result final {
 | `http_forwarded_header_kind::single_ip` | 必须恰好一行、不含逗号的单个地址；地址属于受信代理时不采用。 |
 | `http_forwarded_header_spec` | 一个转发头名称与种类；接受视图、`const char*`、`const std::string&`（复制名称）或右值 `std::string&&`（零复制移入）。 |
 | `http_client_ip_options::enabled_` | 关闭时 `resolve` 始终返回对端地址。 |
-| `trusted_proxies_` | 按 [`ip_cidr::parse`](#api-ip-address-h) 解析受信代理地址或 CIDR。要求主机位为零，不接受 IPv6 zone；不自动扩大受信网段。 |
+| `trusted_proxies_` | 按 [`ip_cidr::try_parse`](#api-ip-address-h) 解析受信代理地址或 CIDR。要求主机位为零，不接受 IPv6 zone；不自动扩大受信网段。 |
 | `forwarding_headers_` | 按优先级排列的转发头；为空时默认 `{"X-Forwarded-For", "Forwarded"}`。 |
 | `trust_x_forwarded_proto_` | 是否把与 `X-Forwarded-For` 对齐的 `X-Forwarded-Proto` 项作为 scheme；仅当每个受信代理都清洗并追加匹配的 `X-Forwarded-For` / `X-Forwarded-Proto` 元素时开启。 |
 | `http_client_ip_result::address_` / `address()` | 解析出的客户端地址（IPv4 映射地址已规范化为 IPv4）。 |
@@ -4395,27 +4395,43 @@ struct tls_client_hello_fingerprints final {
     std::string peetprint_hash_;
 };
 
-class tls_client_hello_info final {
+class tls_client_hello final {
 public:
-    tls_client_hello_info() noexcept = default;
+    tls_client_hello() noexcept = default;
     [[nodiscard]] constexpr std::uint16_t legacy_version() const noexcept;
     [[nodiscard]] std::uint16_t version() const noexcept;
     [[nodiscard]] std::span<const std::uint16_t> cipher_suites() const& noexcept RUVIA_LIFETIMEBOUND;
     std::span<const std::uint16_t> cipher_suites() const&& = delete;
+    [[nodiscard]] std::vector<std::uint16_t> take_cipher_suites() && noexcept;
+    std::vector<std::uint16_t> take_cipher_suites() & = delete;
     [[nodiscard]] std::span<const std::uint16_t> extensions() const& noexcept RUVIA_LIFETIMEBOUND;
     std::span<const std::uint16_t> extensions() const&& = delete;
+    [[nodiscard]] std::vector<std::uint16_t> take_extensions() && noexcept;
+    std::vector<std::uint16_t> take_extensions() & = delete;
     [[nodiscard]] std::span<const std::uint16_t> supported_groups() const& noexcept RUVIA_LIFETIMEBOUND;
     std::span<const std::uint16_t> supported_groups() const&& = delete;
+    [[nodiscard]] std::vector<std::uint16_t> take_supported_groups() && noexcept;
+    std::vector<std::uint16_t> take_supported_groups() & = delete;
     [[nodiscard]] std::span<const std::uint8_t> ec_point_formats() const& noexcept RUVIA_LIFETIMEBOUND;
     std::span<const std::uint8_t> ec_point_formats() const&& = delete;
+    [[nodiscard]] std::vector<std::uint8_t> take_ec_point_formats() && noexcept;
+    std::vector<std::uint8_t> take_ec_point_formats() & = delete;
     [[nodiscard]] std::span<const std::string> alpn() const& noexcept RUVIA_LIFETIMEBOUND;
     std::span<const std::string> alpn() const&& = delete;
+    [[nodiscard]] std::vector<std::string> take_alpn() && noexcept;
+    std::vector<std::string> take_alpn() & = delete;
     [[nodiscard]] std::span<const std::uint16_t> signature_algorithms() const& noexcept RUVIA_LIFETIMEBOUND;
     std::span<const std::uint16_t> signature_algorithms() const&& = delete;
+    [[nodiscard]] std::vector<std::uint16_t> take_signature_algorithms() && noexcept;
+    std::vector<std::uint16_t> take_signature_algorithms() & = delete;
     [[nodiscard]] std::span<const std::uint16_t> supported_versions() const& noexcept RUVIA_LIFETIMEBOUND;
     std::span<const std::uint16_t> supported_versions() const&& = delete;
+    [[nodiscard]] std::vector<std::uint16_t> take_supported_versions() && noexcept;
+    std::vector<std::uint16_t> take_supported_versions() & = delete;
     [[nodiscard]] std::string_view server_name() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view server_name() const&& = delete;
+    [[nodiscard]] std::string take_server_name() && noexcept;
+    std::string take_server_name() & = delete;
 
     [[nodiscard]] std::string ja3_raw() const;
     [[nodiscard]] std::string ja3() const;
@@ -4423,24 +4439,10 @@ public:
     [[nodiscard]] std::string peetprint() const;
     [[nodiscard]] std::string peetprint_hash() const;
     [[nodiscard]] tls_client_hello_fingerprints fingerprints(bool quic = false) const;
-
-    std::uint16_t legacy_version_{0};
-    std::vector<std::uint16_t> cipher_suites_;
-    std::vector<std::uint16_t> extensions_;
-    std::vector<std::uint16_t> supported_groups_;
-    std::vector<std::uint8_t> ec_point_formats_;
-    std::vector<std::string> alpn_;
-    std::vector<std::uint16_t> signature_algorithms_;
-    std::vector<std::uint16_t> supported_versions_;
-    std::string server_name_;
 };
 
-[[nodiscard]] std::optional<tls_client_hello_info> parse_tls_client_hello(std::span<const std::byte> message);
-[[nodiscard]] std::optional<tls_client_hello_info> parse_tls_client_hello(std::string_view message);
-
-[[nodiscard]] std::optional<tls_client_hello_fingerprints> compute_tls_client_hello_fingerprints(std::span<const std::byte> message, bool quic = false);
-[[nodiscard]] std::optional<tls_client_hello_fingerprints> compute_tls_client_hello_fingerprints(std::string_view message, bool quic = false);
-[[nodiscard]] inline tls_client_hello_fingerprints compute_tls_client_hello_fingerprints(const tls_client_hello_info& hello, bool quic = false);
+[[nodiscard]] std::optional<tls_client_hello> parse_tls_client_hello(std::span<const std::byte> message);
+[[nodiscard]] std::optional<tls_client_hello> parse_tls_client_hello(std::string_view message);
 }
 ```
 
@@ -4448,10 +4450,10 @@ public:
 | --- | --- |
 | `is_tls_grease_value(value)` | RFC 8701 GREASE 值判定（`0x?a?a` 且高低字节相等）。 |
 | `tls_client_hello_fingerprints` | `ja3_raw_`（JA3 原文）、`ja3_`（其 MD5 小写十六进制）、`ja4_`、`peetprint_`（原文）、`peetprint_hash_`（其 MD5）。 |
-| 公开字段 `legacy_version_` … `server_name_` | 解析出的 ClientHello 字段（已过滤 GREASE），按线上顺序；访问器返回同一数据的借用视图，右值重载删除。 |
 | `legacy_version()` | `legacy_version` 字段。 |
-| `version()` | `supported_versions` 非空时取其最大值，否则 `legacy_version_`。 |
-| `cipher_suites()` / `extensions()` / `supported_groups()` / `ec_point_formats()` / `alpn()` / `signature_algorithms()` / `supported_versions()` / `server_name()` | 对应字段的借用视图，有效期至对象修改或销毁。 |
+| `version()` | `supported_versions` 非空时取其最大值，否则 `legacy_version`。 |
+| `cipher_suites()` / `extensions()` / `supported_groups()` / `ec_point_formats()` / `alpn()` / `signature_algorithms()` / `supported_versions()` / `server_name()` | 解析出的 ClientHello 字段（已过滤 GREASE，按线上顺序）的借用视图，有效期至对象移出或销毁；右值重载删除。 |
+| `take_cipher_suites()` / `take_extensions()` / `take_supported_groups()` / `take_ec_point_formats()` / `take_alpn()` / `take_signature_algorithms()` / `take_supported_versions()` / `take_server_name()` | 仅右值可调用，零复制移出并清空对应存储；左值重载删除。 |
 | `ja3_raw()` | `legacy_version,ciphers,extensions,groups,point_formats`（各列表 `-` 连接的十进制）。 |
 | `ja3()` | `ja3_raw()` 的 MD5 小写十六进制。 |
 | `ja4(quic)` | JA4：前缀 `q`（`quic == true`）或 `t`、版本码、`d`（SNI 为域名）/`i`、两位密码套件数与扩展数（上限 99）、首个 ALPN 首尾字符（非字母数字时为首字节十六进制，无 ALPN 为 `00`）；随后 `_` 分隔的排序密码套件 SHA-256 前 12 位，与排序扩展（去除 SNI `0x0000` 与 ALPN `0x0010`）加签名算法的 SHA-256 前 12 位。 |
@@ -4459,8 +4461,6 @@ public:
 | `peetprint_hash()` | `peetprint()` 的 MD5。 |
 | `fingerprints(quic)` | 一次性计算上述全部字段。 |
 | `parse_tls_client_hello(message)` | 输入为完整 ClientHello 握手消息（`msg_type` 1 + 3 字节长度 + 正文），也接受长度恰好匹配的单个 5 字节 TLS 记录头（ContentType 0x16）包装。长度不一致、类型不符或任何字段越界返回 `std::nullopt`；可因分配抛出。 |
-| `compute_tls_client_hello_fingerprints(message, quic)` | 解析后计算指纹；解析失败返回 `std::nullopt`。 |
-| `compute_tls_client_hello_fingerprints(hello, quic)` | 等价于 `hello.fingerprints(quic)`。 |
 
 ### 8.7 `"http_client_redirect.h"`
 <a id="api-http-client-redirect-h"></a>
@@ -4835,7 +4835,7 @@ public:
 };
 ```
 
-已解析的指令集合（RFC 9111 §5.2）。可拷贝的值类型，默认构造为“无任何指令”；不分配内存，字段名列表保存在对象内联存储中。通常由 `parse_cache_control()`、`cache_control_field_parser::finish()` 或 `parse_targeted_cache_control()` 产生。
+已解析的指令集合（RFC 9111 §5.2）。可拷贝的值类型，默认构造为“无任何指令”；不分配内存，字段名列表保存在对象内联存储中。通常由 `parse_cache_control()`、`cache_control_field_parser::control()` / `take_control()` 或 `parse_targeted_cache_control()` 产生。
 
 | 成员 | 语义 |
 | --- | --- |
@@ -4858,14 +4858,18 @@ public:
 class cache_control_field_parser final {
 public:
     void update(std::string_view field_value) noexcept;
-    [[nodiscard]] cache_control finish() const noexcept;
+    void reset() noexcept;
+    [[nodiscard]] const cache_control& control() const& noexcept RUVIA_LIFETIMEBOUND;
+    const cache_control& control() const&& = delete;
+    [[nodiscard]] cache_control take_control() && noexcept;
+    cache_control take_control() & = delete;
 };
 
 [[nodiscard]] cache_control parse_cache_control(std::string_view value) noexcept;
 [[nodiscard]] cache_control parse_cache_control(const http_header_range_view& headers) noexcept;
 ```
 
-`cache_control_field_parser` 把多行 `Cache-Control` 当作同一个逗号分隔指令列表增量解析（RFC 9110 §5.3）。默认构造即可使用；`update()` 每次吸收一行字段值，状态跨调用保留；`finish()` 返回当前结果快照，可多次调用，不重置状态。
+`cache_control_field_parser` 把多行 `Cache-Control` 当作同一个逗号分隔指令列表增量解析（RFC 9110 §5.3）。默认构造即可使用；`update()` 每次吸收一行字段值，状态跨调用保留（`reset()` 重置）；`control()` 借用当前结果快照（右值重载删除），`take_control() &&` 移出结果并重置解析器。
 
 解析规则（`parse_cache_control` 同样适用）：
 
@@ -4905,15 +4909,15 @@ struct targeted_cache_control_selection final {
 bool strip_http_cache_private_headers(editable_http_headers headers, const cache_control& control, std::span<const std::string_view> protected_fields = {}) noexcept;
 bool strip_http_cache_no_cache_headers(editable_http_headers headers, const cache_control& control) noexcept;
 
-[[nodiscard]] bool http_cache_control_has_no_transform(std::string_view field_value) noexcept;
-[[nodiscard]] bool http_cache_control_has_no_transform(const http_header_range_view& headers) noexcept;
+[[nodiscard]] bool has_http_cache_no_transform(std::string_view field_value) noexcept;
+[[nodiscard]] bool has_http_cache_no_transform(const http_header_range_view& headers) noexcept;
 ```
 
 | 函数 | 语义 |
 | --- | --- |
 | `strip_http_cache_private_headers` | RFC 9111 §5.2.2.7：`no-store`、无限定 `private` 或提名命中受保护名称时返回 `false`，整个首部块不变；否则删除全部被提名字段。CDN 可传入不可删除的表示元数据名称，不隐式假定宿主策略。 |
 | `strip_http_cache_no_cache_headers` | RFC 9111 §5.2.2.4 的对应操作：`no-store` 或无限定 `no-cache` 时返回 `false`（未经验证不得复用）；否则删除 `no-cache="..."` 列出的字段并返回 `true` |
-| `http_cache_control_has_no_transform` | 等价于 `parse_cache_control(...).no_transform()`，供代理与压缩路径判断是否允许变换表示（RFC 9110 §7.7） |
+| `has_http_cache_no_transform` | 等价于 `parse_cache_control(...).no_transform()`，供代理与压缩路径判断是否允许变换表示（RFC 9110 §7.7） |
 
 `editable_http_headers` 的绑定规则与单步原子性见 [`"http_header.h"`](#api-http-header-h)；删除操作不会失败，因此两个剥离函数为 `noexcept`。
 
@@ -5696,14 +5700,14 @@ public:
     template <std::same_as<std::string> string_type>
     http_cookie_jar(http_scheme scheme, string_type&& host, http_cookie_jar_options options = {});
 
-    void add_configured_cookie(std::string_view name, std::string_view value);
+    void set_cookie(std::string_view name, std::string_view value);
     // 以及接受 std::same_as<std::string> auto&& 名称和/或值的零复制重载
 
-    bool absorb_set_cookie(std::string_view request_target, std::string_view set_cookie_value, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
+    bool apply_set_cookie(std::string_view request_target, std::string_view set_cookie_value, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
 
-    void retain_response_cookies(std::string_view request_target, const http_header_range_view& headers, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
+    void apply_response_cookies(std::string_view request_target, const http_header_range_view& headers, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
 
-    [[nodiscard]] std::string cookie_header(std::string_view request_target, bool include_received = true, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
+    [[nodiscard]] std::string format_cookie_header(std::string_view request_target, bool include_received = true, std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
 
     template <typename fn_type>
     void visit_matching_cookies(std::string_view request_target, bool include_received, std::chrono::system_clock::time_point now, fn_type&& fn);
@@ -5720,15 +5724,15 @@ public:
 };
 ```
 
-容器对视图参数复制存储，对右值 `std::string&&`（构造函数的 `host` 与 `add_configured_cookie` 的 `name` / `value`）零复制接管；可拷贝、可移动，内部无同步，同一实例的并发调用需由调用方串行化。`request_target` 为 origin-form 请求目标（路径加可选查询）。
+容器对视图参数复制存储，对右值 `std::string&&`（构造函数的 `host` 与 `set_cookie` 的 `name` / `value`）零复制接管；可拷贝、可移动，内部无同步，同一实例的并发调用需由调用方串行化。`request_target` 为 origin-form 请求目标（路径加可选查询）。
 
 | 成员 | 语义 |
 | --- | --- |
 | 构造函数 | 固定源站的方案与主机；方括号包围的 IPv6 主机去掉括号保存。`http_origin_view` 重载取其 `scheme()` 与 `host()` |
-| `add_configured_cookie(name, value)` | 追加一个应用配置的 Cookie：路径 `/`、host-only、非 `Secure`、永不过期；不校验内容，不受 `max_cookies_` / `max_cookie_bytes_` 拒绝，但其字节计入 `storage_bytes()`。配置 Cookie 不会被接收的同名 Cookie 替换，且总会发送（与 `include_received` 无关） |
-| `absorb_set_cookie(target, value, now)` | 吸收一个 `Set-Cookie` 值。先淘汰已过期条目；再以 `parse_set_cookie()` 解析；以下情形拒绝并返回 `false`：解析失败、非 `https` 源站收到 `Secure`、`Domain` 与主机不域匹配、`SameSite=None` 或 `Partitioned` 缺少 `Secure`、名称前缀约束不满足、新增或替换后超出容量。返回 `true` 表示已存储、已替换或已按删除处理 |
-| `retain_response_cookies(target, headers, now)` | 对首部块中每个 `Set-Cookie` 行（大小写不敏感）执行与 `absorb_set_cookie` 相同的处理，被拒绝的行静默忽略 |
-| `cookie_header(target, include_received, now)` | 生成出站 `Cookie` 字段值（以 `"; "` 连接，经 `append_cookie_request_pair()` 写出）；没有匹配时返回空字符串 |
+| `set_cookie(name, value)` | 追加或覆盖一个应用配置的 Cookie：路径 `/`、host-only、非 `Secure`、永不过期；不校验内容，不受 `max_cookies_` / `max_cookie_bytes_` 拒绝，但其字节计入 `storage_bytes()`。配置 Cookie 不会被接收的同名 Cookie 替换，且总会发送（与 `include_received` 无关） |
+| `apply_set_cookie(target, value, now)` | 吸收一个 `Set-Cookie` 值。先淘汰已过期条目；再以 `parse_set_cookie()` 解析；以下情形拒绝并返回 `false`：解析失败、非 `https` 源站收到 `Secure`、`Domain` 与主机不域匹配、`SameSite=None` 或 `Partitioned` 缺少 `Secure`、名称前缀约束不满足、新增或替换后超出容量。返回 `true` 表示已存储、已替换或已按删除处理 |
+| `apply_response_cookies(target, headers, now)` | 对首部块中每个 `Set-Cookie` 行（大小写不敏感）执行与 `apply_set_cookie` 相同的处理，被拒绝的行静默忽略 |
+| `format_cookie_header(target, include_received, now)` | 生成出站 `Cookie` 字段值（以 `"; "` 连接，经 `append_cookie_request_pair()` 写出）；没有匹配时返回空字符串 |
 | `visit_matching_cookies(target, include_received, now, fn)` | 先在 `now` 不早于最早过期时刻时淘汰过期条目，再按存储顺序对每个匹配条目调用 `fn(std::string_view name, std::string_view value)`。匹配条件：配置 Cookie，或 `include_received` 为真时的接收 Cookie；`Secure` 条目仅在源站方案为 `https` 时匹配；`cookie_path_matches(request_path_only(target), path)` 成立。视图借用容器存储，在下一次修改容器前有效 |
 | `size()` / `empty()` | 条目数（含配置 Cookie） |
 | `storage_bytes()` | 全部条目名称、值、路径、域字节数之和 |
@@ -5958,7 +5962,7 @@ struct http_response_coding_qualities final {
 | `http_accepts_encoding(value, coding)` | 单字段值判定；`value` 为空（显式空字段）时只接受 `identity` |
 | `http_accepts_encoding(request, coding)` | 合并请求中全部 `Accept-Encoding` 行；字段缺失时接受任何编码。请求只在调用期间借用 |
 | `http_response_coding_qualities` | 内置五种编码的质量快照。`field_present_`：至少吸收过一行；`has_non_empty_item_`：存在非空成员。缺失字段与显式空字段语义不同：缺失表示任何编码均可接受，空值只接受 identity（无编码）表示 |
-| `http_response_coding_qualities::update(value)` | 吸收一行，置 `field_present_`，按 `http_content_coding_from_token()`（[`"http_content_coding.h"`](#api-http-content-coding-h)）映射已知编码，`*` 更新全部五种编码的通配权重 |
+| `http_response_coding_qualities::update(value)` | 吸收一行，置 `field_present_`，按 `parse_http_content_coding_token()`（[`"http_content_coding.h"`](#api-http-content-coding-h)）映射已知编码，`*` 更新全部五种编码的通配权重 |
 | `http_response_coding_qualities::accepts(coding)` | 该编码在快照中可接受：字段缺失时全部可接受；字段存在但无非空成员时只有 identity 可接受；否则按 `quality()` |
 
 #### 9.7.4 响应编码候选与选择
@@ -6134,7 +6138,7 @@ struct http_structured_parser {
 
 1. [`http1_server_request_parser::parse()`](#api-http1-server-request-h) 增量解析请求头，得到 `http_request`、请求体分帧计划 `http1_request_body_plan` 与连接计划 `http1_request_connection_plan`。
 2. 以 `body_plan().framing()` 构造 [`http1_body_decoder`](#api-http1-message-body-h)，逐步去除分帧与传输编码。
-3. 响应：缓冲响应经 `http1_commit_final_response()` + `plan_http1_buffered_response_head()`，流式响应经 `plan_http1_response_stream()` + `prepare_http1_response_stream_head()` 得到 `http1_response_head_plan`，再由 `append_http1_response_head()` 写入 `http_response_head_buffer`（见 [`"http1_server_response.h"`](#api-http1-server-response-h)）。
+3. 响应：缓冲响应经 `commit_http1_final_response()` + `plan_http1_buffered_response_head()`，流式响应经 `plan_http1_response_stream()` + `prepare_http1_response_stream_head()` 得到 `http1_response_head_plan`，再由 `append_http1_response_head()` 写入 `http_response_head_buffer`（见 [`"http1_server_response.h"`](#api-http1-server-response-h)）。
 
 客户端处理流程：
 
@@ -6429,10 +6433,10 @@ enum class http1_body_decode_error : std::uint8_t {
 
 [[nodiscard]] http_protocol_error make_http_protocol_error(http1_body_decode_error error) noexcept;
 
-[[nodiscard]] std::string_view http1_response_body_error_message(http1_body_decode_error error) noexcept;
+[[nodiscard]] std::string_view http1_body_decode_error_message(http1_body_decode_error error) noexcept;
 ```
 
-| 成员 | 值 | 含义 | 请求侧映射（`make_http_protocol_error`） | 响应侧诊断（`http1_response_body_error_message`） |
+| 成员 | 值 | 含义 | 请求侧映射（`make_http_protocol_error`） | 响应侧诊断（`http1_body_decode_error_message`） |
 |---|---|---|---|---|
 | `invalid_framing` | 0 | chunk 分帧或 Trailer 区段格式错误。 | `400`，code `invalid_chunked_body` | `invalid HTTP/1 response body framing` |
 | `framing_limit_exceeded` | 1 | chunk-size 行、chunk-ext 预算或 Trailer 区段超出 `max_http_header_bytes`。 | `413`，code `chunked_framing_too_large` | `invalid HTTP/1 response body framing` |
@@ -6440,7 +6444,7 @@ enum class http1_body_decode_error : std::uint8_t {
 | `invalid_transfer_coding` | 3 | 编码字节损坏、编码结束后仍有字节、或完整的 chunked 分帧留下未完成的编码。 | `400`，code `invalid_transfer_coding_body` | `invalid HTTP/1 response transfer coding` |
 | `incomplete_body` | 4 | 输入在分帧结束前结束（EOF）。 | `400`，code `incomplete_request_body` | `incomplete HTTP/1 response body` |
 
-`make_http_protocol_error(http1_body_decode_error)` 给出服务端对请求体解码失败的应答状态，`http1_response_body_error_message()` 给出客户端报告响应体失败的诊断文本（静态字符串）。`make_http_protocol_error` 是按各错误族枚举重载的单一名称：本头定义 `http1_body_decode_error` 重载，`http1_chunk_decode_error` 重载见 [`"http1_chunked_body.h"`](#api-http1-chunked-body-h)，`http_parse_error` 重载见 [`"http_protocol.h"`](#api-http-protocol-h)，`http_request_body_failure` 与 `(http_content_decode_error, http_coding_field)` 重载见 [`"http_request_body_failure.h"`](#api-http-request-body-failure-h)，multipart 与 WebSocket 重载分别见 [`"http_multipart.h"`](#api-http-multipart-h) 与 [`"websocket_handshake.h"`](#api-websocket-handshake-h)。
+`make_http_protocol_error(http1_body_decode_error)` 给出服务端对请求体解码失败的应答状态，`http1_body_decode_error_message()` 给出客户端报告响应体失败的诊断文本（静态字符串）。`make_http_protocol_error` 是按各错误族枚举重载的单一名称：本头定义 `http1_body_decode_error` 重载，`http1_chunk_decode_error` 重载见 [`"http1_chunked_body.h"`](#api-http1-chunked-body-h)，`http_parse_error` 重载见 [`"http_protocol.h"`](#api-http-protocol-h)，`http_request_body_failure` 与 `(http_content_decode_error, http_coding_field)` 重载见 [`"http_request_body_failure.h"`](#api-http-request-body-failure-h)，multipart 与 WebSocket 重载分别见 [`"http_multipart.h"`](#api-http-multipart-h) 与 [`"websocket_handshake.h"`](#api-websocket-handshake-h)。
 
 #### 10.3.2 `class http1_body_trailers` 与结果类型
 
@@ -6891,9 +6895,9 @@ public:
 enum class http1_connection_close_field_policy : std::uint8_t { close_only,
     preserve_upgrade };
 
-inline void http1_mark_connection_close(http_response& response, http1_connection_close_field_policy field_policy = http1_connection_close_field_policy::close_only);
+inline void mark_http1_connection_close(http_response& response, http1_connection_close_field_policy field_policy = http1_connection_close_field_policy::close_only);
 
-[[nodiscard]] http1_request_connection_plan http1_commit_final_response(http_response& response, http1_request_connection_plan plan);
+[[nodiscard]] http1_request_connection_plan commit_http1_final_response(http_response& response, http1_request_connection_plan plan);
 
 class prepared_http1_response_stream final {
 public:
@@ -6926,7 +6930,7 @@ public:
 | `request_method()` | 请求的 `http_known_method`。 |
 | `plan_http1_response_stream(parsed_value, close_policy, consumption)` | 由已完成的解析器给出计划。路由在流式输出前已读完请求体时传 `complete`；解析器的请求体计划仍描述原始请求分帧，因此请求体未读时传 `body_plan().consumption_if_unread()`。提交时据此区分需要关闭定界的 HTTP/1.0 带正文流与已自定界的正文被抑制响应。 |
 
-`http1_connection_close_field_policy` 与 `http1_mark_connection_close(response, field_policy)`：运行时的关闭裁决优先于 keep-alive，在套接字生命周期决定之后把响应的全部 `Connection` 字段合并为一个。
+`http1_connection_close_field_policy` 与 `mark_http1_connection_close(response, field_policy)`：运行时的关闭裁决优先于 keep-alive，在套接字生命周期决定之后把响应的全部 `Connection` 字段合并为一个。
 
 | 成员 | 值 | 含义 |
 |---|---|---|
@@ -6935,20 +6939,20 @@ public:
 
 合并规则：去掉原有的 `close`、`keep-alive`、`Upgrade` 选项，保留应用在 `Connection` 中声明的其他自定义逐跳字段名（RFC 9110 §7.6.1），追加在基础值之后；结果以替换方式写回单个 `Connection` 字段。可能因分配抛出。
 
-`http1_commit_final_response(response, plan)`：在运行时并入请求体完成状态与服务端策略之后，提交响应侧 HTTP/1 持久性；这是唯一的协议修改点。
+`commit_http1_final_response(response, plan)`：在运行时并入请求体完成状态与服务端策略之后，提交响应侧 HTTP/1 持久性；这是唯一的协议修改点。
 
 - 响应自带 `Connection: close`，或隧道请求（CONNECT）的最终响应不是 `2xx`（失败的 CONNECT 绝不成为隧道，RFC 9931 §8），计划收紧为关闭。
-- 关闭时调用 `http1_mark_connection_close()`（响应有 `Upgrade` 字段时用 `preserve_upgrade`）。
+- 关闭时调用 `mark_http1_connection_close()`（响应有 `Upgrade` 字段时用 `preserve_upgrade`）。
 - 可复用时：响应有 `Upgrade` 字段而 `Connection` 未列出时补上 `Upgrade` 选项；HTTP/1.0 请求且响应未列出 `keep-alive` 时补上 `keep-alive`。已有 `Connection` 行被扩展而不是替换。
 - 成功时返回的计划保留确切请求版本供响应头序列化。无法发送的头（例如没有 `Upgrade` 协议的 `426`，或 `Transfer-Encoding` 不是恰好 `chunked`）在修改响应之前抛 `http1_response_head_error`。
 
 `prepare_http1_response_stream_head(response, plan, trailer_intent)`：流式响应提交。
 
 - 分帧选择（RFC 9112 §6.3）：响应自身合法的 `Content-Length`、无 `Transfer-Encoding`（它覆盖 `Content-Length`）且正文未被抑制、状态允许正文时，在任一 HTTP/1 版本上选择 `known_length`（`response_head_plan().framing().content_length()` 给出长度），保留 `Content-Length`，连接可复用，不承载 Trailer；否则使用计划的 `chunked`（HTTP/1.1）或 `close_delimited`（HTTP/1.0）并移除 `Content-Length`。定长流的超长与不足由驱动拒绝并关闭连接（RFC 9112 §8）。
-- 连接：仅当请求连接计划与运行时策略都允许复用，且分帧不是 `close_delimited`（或正文被抑制，已自定界）时保持复用，否则要求关闭；随后调用 `http1_commit_final_response()`。
+- 连接：仅当请求连接计划与运行时策略都允许复用，且分帧不是 `close_delimited`（或正文被抑制，已自定界）时保持复用，否则要求关闭；随后调用 `commit_http1_final_response()`。
 - 响应随后按 `http_response_stream_commit_plan`（见 [`"http_response_stream.h"`](#api-http-response-stream-h)，`trailer_intent` 同样定义于该头）经 `prepare_http_response_stream_head()` 规范化。
 - 返回的 `prepared_http1_response_stream` 把请求/版本/运行时约束与响应方法/状态和 `Connection` 选项合并，并把确切首部字节绑定到权威连接计划：`response()`（左值可变/只读访问，右值重载被删除）、`response_head_plan()`（传给 `append_http1_response_head()`）、`commit_plan()`、`connection_plan()`（提交后的权威连接计划）。
-- 异常：与 `http1_commit_final_response()` 及 `prepare_http_response_stream_head()` 相同（无法发送的响应头抛 `http1_response_head_error`）。
+- 异常：与 `commit_http1_final_response()` 及 `prepare_http_response_stream_head()` 相同（无法发送的响应头抛 `http1_response_head_error`）。
 
 #### 10.5.7 CONNECT 与协议升级
 
@@ -6969,7 +6973,7 @@ public:
 示例（缓冲响应头；请求来自 10.2 的解析器，`response` 由应用生成）：
 
 ```cpp
-const auto connection = ruvia::http1_commit_final_response(
+const auto connection = ruvia::commit_http1_final_response(
     response, ruvia::apply_request_body_consumption(parser.connection_plan(), consumption));
 const auto head_plan = ruvia::plan_http1_buffered_response_head(
     ruvia::plan_buffered_http_response_write(parser.request().known_method(), response), connection);
@@ -7583,7 +7587,7 @@ struct http_fingerprint_options final {
 };
 ```
 
-HTTP/2 与 HTTP/3 指纹采集器（[`http2_akamai_fingerprint_collector`](#api-http2-connection-h) 及 HTTP/3 对应类型）的观察预算：在第一个请求字段块完成前，观察到的帧数超过 `max_frames_`，或帧与字段累计字节超过 `max_bytes_`，采集器即进入失败状态。
+HTTP/2 与 HTTP/3 指纹采集器（[`http2_fingerprint_collector`](#api-http2-connection-h) 及 HTTP/3 对应类型）的观察预算：在第一个请求字段块完成前，观察到的帧数超过 `max_frames_`，或帧与字段累计字节超过 `max_bytes_`，采集器即进入失败状态。
 
 #### 11.1.3 `class http_received_data_credit`
 
@@ -7867,12 +7871,12 @@ enum class http2_cleartext_preface_probe : std::uint8_t {
 #### 11.3.1 类型
 
 ```cpp
-struct http_push_request final {
-    http_push_request() noexcept = default;
-    http_push_request(const http_push_request&) = delete;
-    http_push_request& operator=(const http_push_request&) = delete;
-    http_push_request(http_push_request&&) noexcept = default;
-    http_push_request& operator=(http_push_request&&) = delete;
+struct http2_push_request final {
+    http2_push_request() noexcept = default;
+    http2_push_request(const http2_push_request&) = delete;
+    http2_push_request& operator=(const http2_push_request&) = delete;
+    http2_push_request(http2_push_request&&) noexcept = default;
+    http2_push_request& operator=(http2_push_request&&) = delete;
     std::string method_;
     std::string scheme_;
     std::string authority_;
@@ -7883,7 +7887,7 @@ struct http_push_request final {
 struct http2_push_promise_event final {
     std::uint32_t associated_stream_id_;
     std::uint32_t promised_stream_id_;
-    http_push_request request_;
+    http2_push_request request_;
 };
 
 enum class http2_push_submit_error : std::uint8_t {
@@ -7894,7 +7898,7 @@ enum class http2_push_submit_error : std::uint8_t {
 };
 ```
 
-- `http_push_request`：脱离 `feed()` 输入、自行拥有解码字节的承诺请求元数据（`:method`、`:scheme`、`:authority`、`:path` 与常规字段）；只可移动构造。服务端提交的承诺请求则以 [`http_request_head_view`](#api-http-request-head-view-h) 描述。接受承诺不建立传输权威：驱动在消费推送响应前，必须用其已认证连接校验 URI 源站。
+- `http2_push_request`：脱离 `feed()` 输入、自行拥有解码字节的承诺请求元数据（`:method`、`:scheme`、`:authority`、`:path` 与常规字段）；只可移动构造。服务端提交的承诺请求则以 [`http_request_head_view`](#api-http-request-head-view-h) 描述。接受承诺不建立传输权威：驱动在消费推送响应前，必须用其已认证连接校验 URI 源站。
 - `http2_push_promise_event`：客户端收到的 PUSH_PROMISE，经 `http2_event::push_promise()` 取得；`associated_stream_id_` 为关联请求流，`promised_stream_id_` 为承诺流，其响应随后以普通响应事件在承诺流上发布。两个流号字段没有默认初始化值。
 - `http2_push_submit_error`（`http2_connection::submit_push_request()` 的失败分支）：
 
@@ -7989,7 +7993,7 @@ enum class http2_end_stream : std::uint8_t {
 
 [[nodiscard]] constexpr bool http2_ends_stream(http2_end_stream value) noexcept;
 
-enum class http2_output_batch_status : std::uint8_t { taken, empty };
+enum class http2_output_batch_status : std::uint8_t { drained, empty };
 
 struct http2_output_batch_result final {
     http2_output_batch_status status_{http2_output_batch_status::empty};
@@ -8040,8 +8044,8 @@ enum class http2_server_request_release_status : std::uint8_t { released, closed
 | `protocol_failure` | 连接处于致命错误：调用前已失败（此时直接返回），或本段输入导致失败；`connection_error()` 报告错误码 |
 
 - `http2_end_stream`：`keep_open` 发送后保持流打开，`end_stream` 在本次输入全部消费后发送 END_STREAM；`http2_ends_stream(value)` 在值为 `end_stream` 时返回 `true`。
-- `http2_output_batch_status` / `http2_output_batch_result`：`taken` 表示本次向 `output` 追加了 `bytes_` 字节，`empty` 表示无待写输出（`bytes_` 为 0）。
-- `http2_data_output_observer_type`：`take_output_batch()` 的 DATA 观察回调 `void(void* context, std::uint32_t stream_id, std::size_t payload_bytes) noexcept`，对本批取出的每段 DATA 载荷报告流号与字节数，用于 socket 写完成记账。
+- `http2_output_batch_status` / `http2_output_batch_result`：`drained` 表示本次向 `output` 追加了 `bytes_` 字节，`empty` 表示无待写输出（`bytes_` 为 0）。
+- `http2_data_output_observer_type`：`drain_output_batch()` 的 DATA 观察回调 `void(void* context, std::uint32_t stream_id, std::size_t payload_bytes) noexcept`，对本批取出的每段 DATA 载荷报告流号与字节数，用于 socket 写完成记账。
 - `http2_request_content_release_status`（`release_request_content()`）：`released` 已放行等待 `100 (Continue)` 的请求内容；`not_pending` 该流没有处于等待的请求内容；`closed` 流不存在。
 - `http2_server_request_release_status`（`release()`）：`released` 已释放仍存活流的租约；`closed` 流已关闭，租约仅被消耗。
 
@@ -8291,7 +8295,7 @@ public:
     http2_feed_status feed(input_type&&) = delete;
     [[nodiscard]] std::optional<http2_event> next_event() &;
     std::optional<http2_event> next_event() && = delete;
-    [[nodiscard]] http2_output_batch_result take_output_batch(std::size_t max_bytes, std::string& output, http2_data_output_observer_type observer = nullptr, void* observer_context = nullptr);
+    [[nodiscard]] http2_output_batch_result drain_output_batch(std::size_t max_bytes, std::string& output, http2_data_output_observer_type observer = nullptr, void* observer_context = nullptr);
     [[nodiscard]] bool wants_write() const noexcept;
 
     [[nodiscard]] std::size_t available_request_streams(std::size_t local_limit) const noexcept;
@@ -8332,7 +8336,7 @@ public:
 };
 ```
 
-稳定的 Sans-I/O HTTP/2 驱动：喂入传输字节，取出类型化事件，写出 `take_output_batch()` 的结果。连接对象只可移动；单线程使用，不可在其回调内重入。
+稳定的 Sans-I/O HTTP/2 驱动：喂入传输字节，取出类型化事件，写出 `drain_output_batch()` 的结果。连接对象只可移动；单线程使用，不可在其回调内重入。
 
 构造与查询：
 
@@ -8348,7 +8352,7 @@ public:
 
 - `feed(input)`：见 `http2_feed_status`（11.4.1）。被接受的输入，其背后存储必须在该次调用产生的全部事件被取出、且所有派生自事件的字节视图失效之前保持存活且不变；再次 `feed()` 可能使这些视图失效。拥有型字符串右值（`std::string` 临时对象等）在编译期被删除重载拒绝，避免视图借用临时存储。
 - `next_event()`：按顺序取出下一个事件，队列空时返回 `std::nullopt`。事件队列容量几何增长并保留复用。
-- `take_output_batch(max_bytes, output, observer, observer_context)`：向 `output` 追加整帧边界的输出（第一帧可超过 `max_bytes`；`max_bytes` 不受限时取出全部待写帧）；客户端前言视为一个不可分割段。完整未消费批次在 `output` 为空时交换存储，其余情况复制所选字节。复制失败时输出游标与观察器均不变；游标总停在帧边界，并在 DATA 观察之前提交。观察器可以在回调中提交或取出更多输出，那些帧与本批无关。
+- `drain_output_batch(max_bytes, output, observer, observer_context)`：向 `output` 追加整帧边界的输出（第一帧可超过 `max_bytes`；`max_bytes` 不受限时取出全部待写帧）；客户端前言视为一个不可分割段。完整未消费批次在 `output` 为空时交换存储，其余情况复制所选字节。复制失败时输出游标与观察器均不变；游标总停在帧边界，并在 DATA 观察之前提交。观察器可以在回调中提交或取出更多输出，那些帧与本批无关。
 - `wants_write()`：存在待写输出时为真。
 
 客户端请求：
@@ -8474,17 +8478,17 @@ while (auto ev = conn.next_event()) {
 std::string out;
 while (conn.wants_write()) {
     out.clear();
-    (void)conn.take_output_batch(16384, out);
+    (void)conn.drain_output_batch(16384, out);
     // 写出 out
 }
 ```
 
-#### 11.4.7 `class http2_akamai_fingerprint_collector`
+#### 11.4.7 `class http2_fingerprint_collector`
 
 ```cpp
-class http2_akamai_fingerprint_collector final {
+class http2_fingerprint_collector final {
 public:
-    explicit http2_akamai_fingerprint_collector(http_fingerprint_options options = {});
+    explicit http2_fingerprint_collector(http_fingerprint_options options = {});
 
     void observe_frame(const http2_frame_metadata& frame) noexcept;
     void observe_header(const http2_header_metadata& header) noexcept;
@@ -8764,7 +8768,7 @@ public:
 class http3_deferred_consume_event final {
 public:
     [[nodiscard]] std::int64_t stream_id() const noexcept;
-    [[nodiscard]] std::size_t bytes() const noexcept;
+    [[nodiscard]] std::size_t consumed_bytes() const noexcept;
 };
 
 class http3_goaway_event final {
@@ -8872,7 +8876,7 @@ struct http3_datagram_prefix final {
 };
 
 struct http3_stream_output final {
-    [[nodiscard]] std::size_t size() const noexcept;
+    [[nodiscard]] std::size_t byte_size() const noexcept;
 
     std::int64_t stream_id_{-1};
     std::array<std::span<const std::byte>, 16> buffers_{};
@@ -8938,7 +8942,7 @@ struct http3_connection_options final {
 
 `http3_datagram_prefix`：一条请求流全部 HTTP/3 Datagram 前缀的 Quarter Stream ID（RFC 9297 §2.1），以 QUIC 变长整数编码在 `bytes_` 的前 `size_` 字节。`bytes()` 返回借用该对象的视图，`const&&` 重载删除以拒绝临时对象。
 
-`http3_stream_output`：`peek_output()` 填写的一段借用输出。`stream_id_` 为所属 QUIC 流（默认 `-1`）；`buffers_[0, buffer_count_)` 为至多 16 个借用缓冲；`fin_` 表示这些字节之后流结束；`size()` 返回各缓冲字节总和。
+`http3_stream_output`：`peek_output()` 填写的一段借用输出。`stream_id_` 为所属 QUIC 流（默认 `-1`）；`buffers_[0, buffer_count_)` 为至多 16 个借用缓冲；`fin_` 表示这些字节之后流结束；`byte_size()` 返回各缓冲字节总和。
 
 帧与字段观察（与 HTTP/2 帧观察对齐，见 [`"http2_connection.h"`](#api-http2-connection-h)）：
 
@@ -9449,12 +9453,12 @@ public:
     http3_quic_connection& operator=(http3_quic_connection&&) noexcept;
 
     [[nodiscard]] http_connection_role role() const noexcept;
-    [[nodiscard]] ngtcp2_conn* native_handle() & noexcept RUVIA_LIFETIMEBOUND;
-    ngtcp2_conn* native_handle() && = delete;
-    [[nodiscard]] const ngtcp2_conn* native_handle() const& noexcept RUVIA_LIFETIMEBOUND;
-    const ngtcp2_conn* native_handle() const&& = delete;
+    [[nodiscard]] ngtcp2_conn* native() & noexcept RUVIA_LIFETIMEBOUND;
+    ngtcp2_conn* native() && = delete;
+    [[nodiscard]] const ngtcp2_conn* native() const& noexcept RUVIA_LIFETIMEBOUND;
+    const ngtcp2_conn* native() const&& = delete;
     [[nodiscard]] void* callback_context() const noexcept;
-    void set_tls_native_handle(void* tls_native_handle) noexcept;
+    void set_tls_session(void* tls_session) noexcept;
     [[nodiscard]] bool handshake_completed() const noexcept;
     [[nodiscard]] bool after_retry() const noexcept;
     [[nodiscard]] bool stateless_reset_received() const noexcept;
@@ -9508,10 +9512,10 @@ public:
 | `client(options)` / `server(options)` | 创建连接；选项非法抛 `std::invalid_argument`（见 12.3.2）。 |
 | 析构、移动构造/赋值 | 仅可移动（`noexcept`），不可复制。 |
 | `role()` | 连接角色。 |
-| `native_handle()` | 仅从左值连接借用底层 `ngtcp2_conn*`，供 QUIC-TLS 适配器的 `ngtcp2_crypto_conn_ref::get_conn` 使用；其他能力都有对应成员。 |
+| `native()` | 仅从左值连接借用底层 `ngtcp2_conn*`，供 QUIC-TLS 适配器的 `ngtcp2_crypto_conn_ref::get_conn` 使用；其他能力都有对应成员。 |
 | `http3()` | 仅从左值连接借用内部 HTTP/3 编解码器。 |
 | `callback_context()` | 返回选项中的 `callback_context_`。 |
-| `set_tls_native_handle(handle)` | 设置交给 ngtcp2 的 TLS 原生句柄（如 OpenSSL `SSL*`）。 |
+| `set_tls_session(tls_session)` | 设置交给 ngtcp2 的 TLS 会话指针（如 OpenSSL `SSL*`）。 |
 | `handshake_completed()` / `after_retry()` / `stateless_reset_received()` | 握手是否完成 / 客户端是否经历了 Retry / 是否收到无状态重置。 |
 
 HTTP/3 启动与 0-RTT：
@@ -9955,7 +9959,7 @@ struct websocket_client_deflate_offer final {
     websocket_zlib_options deflater_{};
 };
 
-enum class websocket_inflate_result : std::uint8_t {
+enum class websocket_inflate_status : std::uint8_t {
     ok,
     error,
     too_large,
@@ -9971,7 +9975,7 @@ public:
     websocket_deflate_codecs& operator=(websocket_deflate_codecs&&) = delete;
 
     [[nodiscard]] bool deflate_message(std::string_view payload, std::string& out, int compression_level, int window_bits);
-    [[nodiscard]] websocket_inflate_result inflate_message(std::string_view payload, std::string& out, protocol_byte_limit message_limit);
+    [[nodiscard]] websocket_inflate_status inflate_message(std::string_view payload, std::string& out, protocol_byte_limit message_limit);
 };
 }
 ```
@@ -10018,7 +10022,7 @@ public:
 - `deflate_message(payload, out, compression_level, window_bits)`：将压缩后的消息负载追加到 `out`，不含最终 flush 的尾部 `00 00 FF FF`（RFC 7692 §7.2.1）。等级须 `0..9`、窗口须 `8..15`，否则抛 `std::invalid_argument`；返回 `false` 表示编解码器失败；分配异常以原类型传播。
 - `inflate_message(payload, out, message_limit)`：将解压结果追加到 `out`，本次追加总量受 `message_limit` 约束（RFC 7692 §7.2.2）。
 
-| `websocket_inflate_result` | 含义 |
+| `websocket_inflate_status` | 含义 |
 | --- | --- |
 | `ok` | 解压成功 |
 | `error` | 压缩数据非法或编解码器失败 |
@@ -10400,7 +10404,7 @@ using http_capsule_decode_failure = decode_failure<http_capsule_decode_error>;
 struct http_capsule_boundary final {};
 using http_capsule_feed_result = decode_step<decode_need_input, http_capsule_boundary, decode_complete, http_capsule_decode_failure>;
 struct http_capsule_options final {
-    std::uint64_t max_capsule_length_{16 * 1024 * 1024};
+    std::uint64_t max_capsule_bytes_{16 * 1024 * 1024};
 };
 enum class http_capsule_retention : std::uint8_t {
     all,
@@ -10430,11 +10434,11 @@ public:
 | `http_capsule_decode_error` | 含义 |
 | --- | --- |
 | `truncated` | 流在 Capsule 头或负载中途结束；回调抛异常后的失败状态也记为此值 |
-| `limit_exceeded` | 保留的 Capsule 超过 `max_capsule_length_` |
+| `limit_exceeded` | 保留的 Capsule 超过 `max_capsule_bytes_` |
 
 `http_capsule_feed_result` 是 [`decode_step`](#api-decode-step-h) 实例，`consumed_bytes()` 为本次消费字节数，结果为以下之一：`decode_need_input`（需要更多输入）、`http_capsule_boundary`（仅 `feed_one()`：一个保留 Capsule 在已消费输入内结束）、`decode_complete`（流在 FIN 处干净结束）、`http_capsule_decode_failure`（失败，见 [通用契约](#2-通用契约)）。
 
-`http_capsule_options::max_capsule_length_`（默认 16 MiB）限制被保留的 Capsule 长度；构造时超过 QUIC 变长整数上限抛 `std::invalid_argument`。被丢弃的 Capsule 无论多长都被跳过。
+`http_capsule_options::max_capsule_bytes_`（默认 16 MiB）限制被保留的 Capsule 长度；构造时超过 QUIC 变长整数上限抛 `std::invalid_argument`。被丢弃的 Capsule 无论多长都被跳过。
 
 | `http_capsule_retention` | 含义 |
 | --- | --- |
@@ -10448,7 +10452,7 @@ public:
 
 | 成员 | 语义 |
 | --- | --- |
-| 构造函数 | 保存配置；`max_capsule_length_` 越界抛 `std::invalid_argument` |
+| 构造函数 | 保存配置；`max_capsule_bytes_` 越界抛 `std::invalid_argument` |
 | `state()` | [`decoder_state`](#api-decode-step-h)：活动、已完成或已失败 |
 | `reset()` | 以构造时配置开始新的 Capsule 流 |
 | `feed(input, fin, callback, context, retention)` | 消费全部 `input`（保留 Capsule 超限时除外），对保留 Capsule 的每个片段调用回调。`fin` 为真且全部消费时：处于 Capsule 中途返回 `truncated` 失败，否则进入完成状态返回 `decode_complete`；否则返回 `decode_need_input` |
@@ -10581,7 +10585,7 @@ enum class http_connect_udp_error : std::uint8_t {
 
 ```cpp
 namespace ruvia {
-[[nodiscard]] std::variant<std::string, http_connect_udp_error> encode_http_connect_udp_path(http_connect_udp_target_view target);
+[[nodiscard]] std::variant<std::string, http_connect_udp_error> format_http_connect_udp_path(http_connect_udp_target_view target);
 [[nodiscard]] std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect_udp_path(std::string_view path);
 
 [[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_request(http_protocol_version version, const http_request_head_view& request) noexcept;
@@ -10596,7 +10600,7 @@ namespace ruvia {
 
 | 函数 | 语义 |
 | --- | --- |
-| `encode_http_connect_udp_path(target)` | 按 RFC 9298 默认 URI 模板生成 `/.well-known/masque/udp/{host}/{port}/`：主机中所有非 unreserved 字节百分号编码（IPv6 的 `:` 编码为 `%3A`），端口为十进制。主机非法或端口为 0 返回 `invalid_target`；分配失败抛异常 |
+| `format_http_connect_udp_path(target)` | 按 RFC 9298 默认 URI 模板生成 `/.well-known/masque/udp/{host}/{port}/`：主机中所有非 unreserved 字节百分号编码（IPv6 的 `:` 编码为 `%3A`），端口为十进制。主机非法或端口为 0 返回 `invalid_target`；分配失败抛异常 |
 | `parse_http_connect_udp_path(path)` | 逆操作：前缀、两段与结尾 `/` 不符返回 `invalid_path`；主机段含未转义 `:`、端口非 `1..65535` 十进制、解码后主机非法返回 `invalid_target`；成功返回拥有型目标 |
 | `validate_http_connect_udp_request(version, request)` | 接收方检查。HTTP/1.1：方法 `GET`，`Upgrade` 含 `connect-udp`、`Connection` 含 `upgrade`，有 `Host`；HTTP/2、HTTP/3：方法 `CONNECT`、`protocol_` 为 `connect-udp`、`scheme_` 为 `http` / `https`，不带连接专用字段。两者都要求非空 `authority_`（HTTP/1.1 为 Host，且与 Host 一致）与 origin-form `target_`；HTTP/1.0 拒绝。`connect-udp` token 本身选择 Capsule Protocol，因此 `Capsule-Protocol` 可选，非 Boolean、`?0` 或重复的字段按缺失处理（RFC 9297 §3.4）。失败返回 `invalid_request` |
 | `validate_http_connect_udp_request_to_send(version, request)` | 本端发出的请求：接收方规则之外，必须恰好一个 `Capsule-Protocol: ?1`（RFC 9297 §3.4 的 SHOULD，对 Ruvia 发送方强制），否则 `invalid_capsule_protocol` |
@@ -10607,7 +10611,7 @@ namespace ruvia {
 | `prepare_http1_connect_udp_response_head(response)` | 对 `prepare_http_connect_udp_response()` 产出的 HTTP/1.1 响应生成 [`http1_response_head_plan`](#api-http1-server-response-h)（连接按关闭分帧，后续字节属于隧道）；其他响应抛 `http1_response_head_error` |
 
 ```cpp
-auto path = ruvia::encode_http_connect_udp_path({.host_ = "2001:db8::1", .port_ = 443});
+auto path = ruvia::format_http_connect_udp_path({.host_ = "2001:db8::1", .port_ = 443});
 // std::get<std::string>(path) == "/.well-known/masque/udp/2001%3Adb8%3A%3A1/443/"
 auto target = ruvia::parse_http_connect_udp_path(std::get<std::string>(path));
 ```

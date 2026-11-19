@@ -120,7 +120,7 @@ private:
 
     void start_next() noexcept;
     void schedule_next() noexcept;
-    void on_delay(worker_timer_outcome outcome) noexcept;
+    void on_delay(worker_timer_status outcome) noexcept;
     void on_connect(std::size_t index, const std::error_code& error) noexcept;
     void close_active() noexcept;
 

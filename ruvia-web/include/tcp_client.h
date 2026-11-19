@@ -73,6 +73,8 @@ public:
     // retain this owner while using the view. EOF does not end the write lane.
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &;
     task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
+    [[nodiscard]] task<std::optional<std::string_view>> read_text(operation_options operation = {}) &;
+    task<std::optional<std::string_view>> read_text(operation_options = {}) && = delete;
     // Owns the bytes before returning the cold task (exact std::string rvalues
     // move without copying); completes after all bytes are written. Failure may
     // have sent a prefix and always retires the stream.
@@ -81,7 +83,8 @@ public:
 
     // Immediate whole-connection teardown, not a send half-close. TLS uses
     // the shared transport's bounded best-effort close_notify before closing.
-    void request_stop() noexcept;
+    void request_stop() & noexcept;
+    void request_stop() && = delete;
     // Aborts and waits for operation and socket retirement. This
     // is not a TLS graceful shutdown or a send half-close. Run on worker().
     [[nodiscard]] task<void> shutdown() &;

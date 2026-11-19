@@ -156,8 +156,8 @@ namespace {
 
 task<http_response> mark_explicit_head_route_response(task<http_response> operation) {
     auto response = co_await std::move(operation);
-    if (!response.has_file_representation() && response.body_bytes().empty() && !response.status().is_redirection() && !response.status().is_error()) {
-        response.head_metadata_body();
+    if (!response.has_file_representation() && response.body().empty() && !response.status().is_redirection() && !response.status().is_error()) {
+        response.mark_head_metadata_only();
     }
     co_return response;
 }
@@ -186,7 +186,7 @@ task<http_response> detail::route_table::respond_through_chain(middleware_chain 
     chain.terminal_ = callback_access::bind<task<void>(context&)>(respond);
     co_await run_chain(chain, context_value);
     if (detail::context_access::has_response(context_value)) {
-        co_return detail::context_access::release_response(context_value);
+        co_return detail::context_access::take_response(context_value);
     }
     if (auto exception = context_value.exception()) {
         co_return co_await finalize_failure(context_value, exception);
@@ -210,7 +210,7 @@ task<result_type> detail::route_table::complete_failure(const route_table& table
         detail::context_access::set_response(context_value, std::move(response));
     }
     if constexpr (!std::is_void_v<result_type>) {
-        co_return detail::context_access::release_response(context_value);
+        co_return detail::context_access::take_response(context_value);
     }
 }
 

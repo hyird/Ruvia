@@ -39,6 +39,6 @@ static_assert(sizeof(http_content_length) == sizeof(std::uint64_t));
 // of decimal lengths, as left by combining repeated field lines, that must all
 // agree. An empty member, a non-digit, overflow or disagreeing lengths yield
 // no value. Every protocol version frames messages with this same rule.
-[[nodiscard]] std::optional<std::uint64_t> http_parse_content_length(std::string_view field_value) noexcept;
+[[nodiscard]] std::optional<std::uint64_t> parse_http_content_length(std::string_view field_value) noexcept;
 
 }  // namespace ruvia

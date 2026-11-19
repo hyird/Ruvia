@@ -916,8 +916,8 @@ const http_response_header* http_response_headers::find_header_for_read(std::str
     return nullptr;
 }
 
-template <typename Mutation>
-http_response_header& http_response_headers::upsert_header(std::string_view key, std::uint32_t known_bit, Mutation&& mutate) {
+template <typename mutation_type>
+http_response_header& http_response_headers::upsert_header(std::string_view key, std::uint32_t known_bit, mutation_type&& mutate) {
     if (auto* const existing = find_header_for_update(key, known_bit)) {
         const bool was_appended = detail::http_response_header_access::append(*existing);
         auto& header_value = mutate(existing);

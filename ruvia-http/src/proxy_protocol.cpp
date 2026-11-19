@@ -64,7 +64,7 @@ constexpr std::uint8_t af_unix = 0x3;
     if (text.find('%') != std::string_view::npos) {
         return std::nullopt;
     }
-    const auto address = ip_address::parse(text);
+    const auto address = ip_address::try_parse(text);
     if (!address || address->family() != family) {
         return std::nullopt;
     }

@@ -89,7 +89,7 @@ void sse_writer::expire_capability() noexcept {
     writer_ = nullptr;
 }
 
-http_tunnel& context::tunnel() const& {
+http_tunnel& context::tunnel() & {
     const auto* output = response_output().tunnel();
     if (output == nullptr) {
         throw std::logic_error("HTTP tunnel is available only in an established CONNECT route");
@@ -97,7 +97,7 @@ http_tunnel& context::tunnel() const& {
     return output->tunnel();
 }
 
-websocket& context::websocket() const& {
+websocket& context::websocket() & {
     const auto* output = response_output().get_websocket();
     if (output == nullptr) {
         throw std::logic_error("websocket is not available");
@@ -128,7 +128,7 @@ task<void> end_owned(response_stream_output output, task<void> (*end)(void*, std
     });
 }
 
-task<timer_sleep_result> sleep_stopped_by_either(void* target, task<timer_sleep_result> (*sleep)(void*, timeout_duration, const stop_token&), timeout_duration duration, stop_token context_stop, stop_token stop) {
+task<sleep_status> sleep_stopped_by_either(void* target, task<sleep_status> (*sleep)(void*, timeout_duration, const stop_token&), timeout_duration duration, stop_token context_stop, stop_token stop) {
     const stop_group either{context_stop, stop};
     co_return co_await sleep(target, duration, either.token());
 }
@@ -172,7 +172,7 @@ task<stream_commit_result> sse_writer::commit(operation_options operation) & {
 task<void> response_stream_writer::write(outbound_bytes chunk, operation_options operation) & {
     require_active();
     require_output();
-    return operation_scope_.attach(run_response_stream_output({target_, output_active_, *interrupts_, *worker_, context_}, std::move(operation), "response stream write", [target = target_, write = write_, chunk = std::move(chunk).into_string()] {
+    return operation_scope_.attach(run_response_stream_output({target_, output_active_, *interrupts_, *worker_, context_}, std::move(operation), "response stream write", [target = target_, write = write_, chunk = std::move(chunk).take_string()] {
         return write(target, chunk);
     }));
 }
@@ -186,12 +186,12 @@ task<void> detail::streaming_access::write_borrowed(response_stream_writer& writ
 
 task<void> response_stream_writer::writeln(outbound_bytes chunk, operation_options operation) & {
     require_active();
-    auto owned = std::move(chunk).into_string();
+    auto owned = std::move(chunk).take_string();
     owned.push_back('\n');
     return write(std::move(owned), std::move(operation));
 }
 
-task<timer_sleep_result> response_stream_writer::sleep(timeout_duration duration, stop_token stop) & {
+task<sleep_status> response_stream_writer::sleep(timeout_duration duration, stop_token stop) & {
     require_active();
     if (!stop.stoppable() || stop == stop_token_) {
         return operation_scope_.attach(sleep_(target_, duration, stop_token_));
@@ -216,7 +216,7 @@ task<void> response_stream_writer::finish(argument_list<http_header_view> traile
     return operation_scope_.attach(end_owned({target_, output_active_, *interrupts_, *worker_, context_}, end_, std::move(owned_trailers_value), std::move(operation)));
 }
 
-task<timer_sleep_result> sse_writer::sleep(timeout_duration duration, stop_token stop) & {
+task<sleep_status> sse_writer::sleep(timeout_duration duration, stop_token stop) & {
     return writer().sleep(duration, std::move(stop));
 }
 

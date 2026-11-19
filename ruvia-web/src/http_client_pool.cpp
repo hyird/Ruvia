@@ -382,8 +382,8 @@ void http_client_pool::schedule_dns_refresh() {
     if (!config_.dns_refresh_interval_ || closing_ || background_joined_) {
         return;
     }
-    (void)dns_refresh_timer_.schedule(worker_, deadline_after(config_.dns_refresh_interval_->value()), [this](worker_timer_outcome outcome) noexcept {
-        if (outcome != worker_timer_outcome::expired || closing_) {
+    (void)dns_refresh_timer_.schedule(worker_, deadline_after(config_.dns_refresh_interval_->value()), [this](worker_timer_status outcome) noexcept {
+        if (outcome != worker_timer_status::expired || closing_) {
             return;
         }
         try {
@@ -612,7 +612,7 @@ http_client_stats http_client_pool::stats() const noexcept {
         idle += connection_value && connection_value->idle() ? 1U : 0U;
     }
 #endif
-    return {.buffered_requests_ = requests_buffered_, .in_flight_requests_ = requests_in_flight_, .completed_requests_ = completed_requests_, .failed_requests_ = failed_requests_, .plaintext_bytes_sent_ = wire_counters_.sent_, .plaintext_bytes_received_ = wire_counters_.received_, .idle_connections_with_pending_data_ = idle_connections_with_pending_data_, .open_connections_ = open_connections_, .idle_connections_ = idle, .dns_refreshes_ = dns_refreshes_, .dropped_advertisements_ = advertisements_.dropped(), .received_pushes_ = received_pushes_, .rejected_pushes_ = rejected_pushes_};
+    return {.buffered_requests_ = requests_buffered_, .in_flight_requests_ = requests_in_flight_, .completed_requests_ = completed_requests_, .failed_requests_ = failed_requests_, .plaintext_bytes_sent_ = wire_counters_.sent_, .plaintext_bytes_received_ = wire_counters_.received_, .idle_connections_with_pending_input_ = idle_connections_with_pending_input_, .open_connections_ = open_connections_, .idle_connections_ = idle, .dns_refreshes_ = dns_refreshes_, .dropped_advertisements_ = advertisements_.dropped(), .received_pushes_ = received_pushes_, .rejected_pushes_ = rejected_pushes_};
 }
 
 void http_client_pool::cancel_operation_by_id(std::uint64_t cancellation_id) noexcept {
@@ -814,7 +814,7 @@ task<void> http_client_pool::execute_into(http_client_request_storage request, o
         output->stop();
     }
     state_value->head_signal_.notify();
-    state_value->data_signal_.notify();
+    state_value->body_signal_.notify();
 }
 
 void http_client_pool::require_accepting() const {
@@ -1055,8 +1055,8 @@ task<void> http_client_pool::wait_for_admission(const operation_deadline& acquir
     }
     worker_timer_registration deadline_timer;
     if (const auto deadline = acquire_timeout.deadline()) {
-        (void)deadline_timer.schedule(worker_, *deadline, [this](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired) {
+        (void)deadline_timer.schedule(worker_, *deadline, [this](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired) {
                 admission_signal_.notify();
             }
         });
@@ -1707,7 +1707,7 @@ task<std::optional<http_tunnel_input>> http_client_pool::read_http3_tunnel_input
             co_return std::nullopt;
         }
         state.throw_if_read_interrupted();
-        co_await state.data_signal_.wait();
+        co_await state.body_signal_.wait();
     }
 }
 
@@ -1866,7 +1866,7 @@ void http_client_push::release() noexcept {
     }
     response_.release();
 }
-const http_push_request& http_client_push::request() const& {
+const http2_push_request& http_client_push::request() const& {
     const auto* state_value = response_.state_;
     if (state_value == nullptr || !state_value->promised_request_) {
         throw std::logic_error("push owner has moved");

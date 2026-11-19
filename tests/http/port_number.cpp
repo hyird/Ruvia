@@ -36,7 +36,7 @@ TEST(Ruvia, port_number_rejects_wide_inputs_without_changing_an_existing_origin)
         }
         EXPECT_TRUE(assignment_rejected);
         const auto retained = ruvia::http_origin_view::https(options);
-        EXPECT_EQ(ruvia::make_http_origin_authority(retained), "example.test:8443");
+        EXPECT_EQ(ruvia::format_http_origin_authority(retained), "example.test:8443");
     }
     const auto maximum = std::numeric_limits<std::uint64_t>::max();
     EXPECT_TRUE(rejects(maximum));
@@ -50,12 +50,12 @@ TEST(Ruvia, port_number_preserves_zero_maximum_and_scheme_default_authorities) {
     };
     for (const auto entry : std::array{port_case{0, "[::1]:0"}, port_case{1, "[::1]:1"}, port_case{80, "[::1]:80"}, port_case{443, "[::1]"}, port_case{65535, "[::1]:65535"}}) {
         const auto origin = ruvia::http_origin_view::https({.host_ = "[::1]", .port_ = entry.input_});
-        EXPECT_EQ(ruvia::make_http_origin_authority(origin), entry.authority_);
+        EXPECT_EQ(ruvia::format_http_origin_authority(origin), entry.authority_);
     }
     const auto absent = ruvia::http_origin_view::http({.host_ = "example.test"});
     const auto zero = ruvia::http_origin_view::http({.host_ = "example.test", .port_ = 0});
-    EXPECT_EQ(ruvia::make_http_origin_authority(absent), "example.test");
-    EXPECT_EQ(ruvia::make_http_origin_authority(zero), "example.test:0");
+    EXPECT_EQ(ruvia::format_http_origin_authority(absent), "example.test");
+    EXPECT_EQ(ruvia::format_http_origin_authority(zero), "example.test:0");
 }
 
 TEST(Ruvia, port_number_rejects_invalid_authority_defaults_before_origin_comparison) {

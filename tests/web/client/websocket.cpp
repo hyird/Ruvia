@@ -85,7 +85,7 @@ namespace {
 
 void check_peer_exchange(bool reply_close, bool truncated_frame = false) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::exception_ptr peer_failure;
     bool saw_close = false;
@@ -130,7 +130,7 @@ void check_peer_exchange(bool reply_close, bool truncated_frame = false) {
         std::exception_ptr failure;
         std::optional<ruvia::websocket> websocket;
         try {
-            websocket.emplace(co_await client.client().websocket("/").connect());
+            websocket.emplace(co_await client.ref().websocket("/").connect());
             const auto greeting = co_await websocket->read();
             if (truncated_frame) {
                 ADD_FAILURE() << "truncated WebSocket frame returned instead of reporting EOF";
@@ -175,9 +175,9 @@ void check_peer_exchange(bool reply_close, bool truncated_frame = false) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run_client());
+    auto root = attachment.loop().submit(run_client()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -204,7 +204,7 @@ void check_peer_exchange(bool reply_close, bool truncated_frame = false) {
 // close_handshake_timeout_, and only then closes without failing.
 void check_server_closes_first(bool client_initiates, bool server_closes) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::exception_ptr peer_failure;
     bool server_closed = false;
@@ -255,7 +255,7 @@ void check_server_closes_first(bool client_initiates, bool server_closes) {
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url});
         std::exception_ptr failure;
         try {
-            auto websocket = co_await client.client().websocket("/").lifecycle({.close_handshake_timeout_ = server_closes ? std::chrono::milliseconds(10000) : std::chrono::milliseconds(100)}).connect();
+            auto websocket = co_await client.ref().websocket("/").lifecycle({.close_handshake_timeout_ = server_closes ? std::chrono::milliseconds(10000) : std::chrono::milliseconds(100)}).connect();
             auto& handle = websocket;
             EXPECT_TRUE(handle.connected());
             EXPECT_TRUE(handle.subprotocol().empty());
@@ -287,9 +287,9 @@ void check_server_closes_first(bool client_initiates, bool server_closes) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run_client());
+    auto root = attachment.loop().submit(run_client()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -302,7 +302,7 @@ void check_server_closes_first(bool client_initiates, bool server_closes) {
 
 TEST(Ruvia, websocket_client_negotiates_deflate_and_can_skip_individual_messages) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::exception_ptr peer_failure;
     bool offered = false;
@@ -356,9 +356,9 @@ TEST(Ruvia, websocket_client_negotiates_deflate_and_can_skip_individual_messages
         const std::string base_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url});
         {
-            auto cold = client.client().websocket("/").deflate({.compression_ = {.enabled_ = true}}).connect();
+            auto cold = client.ref().websocket("/").deflate({.compression_ = {.enabled_ = true}}).connect();
         }
-        auto websocket = co_await client.client().websocket("/").deflate({.compression_ = {.enabled_ = true}}).connect();
+        auto websocket = co_await client.ref().websocket("/").deflate({.compression_ = {.enabled_ = true}}).connect();
         auto& handle = websocket;
         {
             auto first_write = handle.text("discarded");
@@ -444,9 +444,9 @@ TEST(Ruvia, websocket_client_negotiates_deflate_and_can_skip_individual_messages
             throw;
         }
     };
-    auto root = attachment.loop().start(run_to_completion());
+    auto root = attachment.loop().submit(run_to_completion()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -457,7 +457,7 @@ TEST(Ruvia, websocket_client_negotiates_deflate_and_can_skip_individual_messages
 
 TEST(Ruvia, websocket_client_event_loop_stop_joins_pending_connect) {
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     asio::steady_timer gate(io, std::chrono::steady_clock::time_point::max());
     std::promise<void> request_received;
@@ -477,13 +477,13 @@ TEST(Ruvia, websocket_client_event_loop_stop_joins_pending_connect) {
         const std::string base_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url});
         try {
-            auto websocket = co_await client.client().websocket("/").connect();
+            auto websocket = co_await client.ref().websocket("/").connect();
         } catch (const ruvia::http_client_error&) {
             connect_failed = true;
         }
         co_await client.shutdown();
     };
-    auto root = attachment.loop().start(connect_client());
+    auto root = attachment.loop().submit(connect_client()).take_value();
     std::thread driver([&] {
         attachment.run();
     });
@@ -493,7 +493,7 @@ TEST(Ruvia, websocket_client_event_loop_stop_joins_pending_connect) {
             gate.cancel();
         });
         driver.join();
-        std::move(root).get();
+        std::move(root).take_value();
         throw std::runtime_error("WebSocket peer did not receive the upgrade request");
     }
     received_value.get();
@@ -502,13 +502,13 @@ TEST(Ruvia, websocket_client_event_loop_stop_joins_pending_connect) {
         gate.cancel();
     });
     driver.join();
-    std::move(root).get();
+    std::move(root).take_value();
     EXPECT_TRUE(connect_failed);
 }
 
 TEST(Ruvia, websocket_client_handshake_sends_heads_beyond_the_retained_buffer) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     // Larger than the handshake head buffer first tried, within the limit.
     const std::string large_value(20 * 1024, 'v');
@@ -556,7 +556,7 @@ TEST(Ruvia, websocket_client_handshake_sends_heads_beyond_the_retained_buffer) {
                     .dial_host_ = std::string("127.0.0.1"),
                     .dial_port_ = peer.local_endpoint().port()
                 };
-                auto builder = client.client().websocket(path);
+                auto builder = client.ref().websocket(path);
                 return std::move(builder).headers(large_headers).configure(std::move(options)).connect();
             }();
             auto websocket = co_await std::move(pending);
@@ -571,9 +571,9 @@ TEST(Ruvia, websocket_client_handshake_sends_heads_beyond_the_retained_buffer) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run_client());
+    auto root = attachment.loop().submit(run_client()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -602,7 +602,7 @@ TEST(Ruvia, websocket_client_handshake_sends_the_default_user_agent_unless_heade
     };
     for (const auto& test_case : cases) {
         auto& io = ruvia::test::new_test_io_context();
-        auto attachment = ruvia::attach_event_loop(io);
+        auto attachment = ruvia::event_loop_attachment(io);
         asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
         std::exception_ptr peer_failure;
         std::string request{};
@@ -629,7 +629,7 @@ TEST(Ruvia, websocket_client_handshake_sends_the_default_user_agent_unless_heade
             ruvia::http_client client(attachment.loop(), config);
             std::exception_ptr failure;
             try {
-                auto websocket = co_await client.client().websocket("/").headers(test_case.headers_).connect();
+                auto websocket = co_await client.ref().websocket("/").headers(test_case.headers_).connect();
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -640,9 +640,9 @@ TEST(Ruvia, websocket_client_handshake_sends_the_default_user_agent_unless_heade
                 std::rethrow_exception(failure);
             }
         };
-        auto root = attachment.loop().start(run_client());
+        auto root = attachment.loop().submit(run_client()).take_value();
         attachment.run();
-        std::move(root).get();
+        std::move(root).take_value();
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
         }
@@ -662,7 +662,7 @@ TEST(Ruvia, websocket_client_handshake_sends_the_default_user_agent_unless_heade
 
 TEST(Ruvia, websocket_client_event_loop_stop_joins_connected_heartbeat_and_pending_read) {
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::promise<void> ping_received;
     auto ping_ready = ping_received.get_future();
@@ -702,7 +702,7 @@ TEST(Ruvia, websocket_client_event_loop_stop_joins_connected_heartbeat_and_pendi
     const auto run_client = [&]() -> ruvia::task<void> {
         const std::string base_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url});
-        auto websocket = co_await client.client().websocket("/").lifecycle({.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(20), .pong_timeout_ = std::chrono::seconds(5)}}).connect();
+        auto websocket = co_await client.ref().websocket("/").lifecycle({.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(20), .pong_timeout_ = std::chrono::seconds(5)}}).connect();
         connected = websocket.connected();
         try {
             read_cancelled = !(co_await websocket.read()).has_value();
@@ -711,14 +711,14 @@ TEST(Ruvia, websocket_client_event_loop_stop_joins_connected_heartbeat_and_pendi
         }
         co_await client.shutdown();
     };
-    auto root = attachment.loop().start(run_client());
+    auto root = attachment.loop().submit(run_client()).take_value();
     std::thread driver([&] {
         attachment.run();
     });
     if (ping_ready.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
         attachment.request_stop();
         driver.join();
-        std::move(root).get();
+        std::move(root).take_value();
         if (peer_failure != nullptr) {
             std::rethrow_exception(peer_failure);
         }
@@ -727,7 +727,7 @@ TEST(Ruvia, websocket_client_event_loop_stop_joins_connected_heartbeat_and_pendi
     ping_ready.get();
     attachment.request_stop();
     driver.join();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure != nullptr) {
         std::rethrow_exception(peer_failure);
     }
@@ -738,7 +738,7 @@ TEST(Ruvia, websocket_client_event_loop_stop_joins_connected_heartbeat_and_pendi
 
 TEST(Ruvia, websocket_client_heartbeat_pings_after_a_blocked_message_write) {
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     constexpr std::size_t payload_size = std::size_t{16} * 1024 * 1024;
     std::promise<void> ping_received;
@@ -810,7 +810,7 @@ TEST(Ruvia, websocket_client_heartbeat_pings_after_a_blocked_message_write) {
     const auto run_client = [&]() -> ruvia::task<void> {
         const std::string base_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url});
-        auto websocket = co_await client.client().websocket("/").max_message_bytes(payload_size).lifecycle({.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(20), .pong_timeout_ = std::chrono::seconds(5)}}).connect();
+        auto websocket = co_await client.ref().websocket("/").max_message_bytes(payload_size).lifecycle({.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(20), .pong_timeout_ = std::chrono::seconds(5)}}).connect();
         const std::string payload(payload_size, 'x');
         co_await websocket.binary(std::as_bytes(std::span(std::string_view(payload))));
         wrote = true;
@@ -820,14 +820,14 @@ TEST(Ruvia, websocket_client_heartbeat_pings_after_a_blocked_message_write) {
         }
         co_await client.shutdown();
     };
-    auto root = attachment.loop().start(run_client());
+    auto root = attachment.loop().submit(run_client()).take_value();
     std::thread driver([&] {
         attachment.run();
     });
     if (ping_ready.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
         attachment.request_stop();
         driver.join();
-        std::move(root).get();
+        std::move(root).take_value();
         if (peer_failure != nullptr) {
             std::rethrow_exception(peer_failure);
         }
@@ -836,7 +836,7 @@ TEST(Ruvia, websocket_client_heartbeat_pings_after_a_blocked_message_write) {
     ping_ready.get();
     attachment.request_stop();
     driver.join();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure != nullptr) {
         std::rethrow_exception(peer_failure);
     }
@@ -850,7 +850,7 @@ TEST(Ruvia, websocket_client_heartbeat_pings_after_a_blocked_message_write) {
 // bounds that stall, independently of any transport write timeout.
 TEST(Ruvia, websocket_client_heartbeat_aborts_a_write_stalled_by_a_non_reading_peer) {
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     constexpr std::size_t payload_size = std::size_t{16} * 1024 * 1024;
     // Held open without reading, so the client's large write fills the
@@ -875,7 +875,7 @@ TEST(Ruvia, websocket_client_heartbeat_aborts_a_write_stalled_by_a_non_reading_p
     const auto run_client = [&]() -> ruvia::task<void> {
         const std::string base_url("http://127.0.0.1:" + std::string(std::to_string(peer.local_endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url, .write_timeout_ = std::nullopt, .request_timeout_ = std::nullopt});
-        auto websocket = co_await client.client().websocket("/").max_message_bytes(payload_size).lifecycle({.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(50), .pong_timeout_ = std::chrono::milliseconds(100)}}).connect();
+        auto websocket = co_await client.ref().websocket("/").max_message_bytes(payload_size).lifecycle({.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(50), .pong_timeout_ = std::chrono::milliseconds(100)}}).connect();
         const std::string payload(payload_size, 'x');
         try {
             co_await websocket.binary(std::as_bytes(std::span(std::string_view(payload))));
@@ -885,7 +885,7 @@ TEST(Ruvia, websocket_client_heartbeat_aborts_a_write_stalled_by_a_non_reading_p
         co_await client.shutdown();
         write_finished.set_value();
     };
-    auto root = attachment.loop().start(run_client());
+    auto root = attachment.loop().submit(run_client()).take_value();
     std::thread driver([&] {
         attachment.run();
     });
@@ -893,7 +893,7 @@ TEST(Ruvia, websocket_client_heartbeat_aborts_a_write_stalled_by_a_non_reading_p
     const bool finished = write_done.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
     attachment.request_stop();
     driver.join();
-    std::move(root).get();
+    std::move(root).take_value();
     if (!finished) {
         throw std::runtime_error("WebSocket client write stalled by a non-reading peer never timed out");
     }
@@ -924,7 +924,7 @@ TEST(Ruvia, websocket_client_lets_the_server_close_the_connection_first) {
 
 TEST(Ruvia, websocket_client_reads_frame_above_default_message_limit) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::exception_ptr peer_failure;
     std::string payload_value(ruvia::default_max_websocket_message_bytes + 1, '\0');
@@ -965,7 +965,7 @@ TEST(Ruvia, websocket_client_reads_frame_above_default_message_limit) {
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url, .read_timeout_ = std::chrono::seconds(10)});
         std::exception_ptr failure;
         try {
-            auto websocket = co_await client.client().websocket("/").max_message_bytes(payload_value.size()).connect();
+            auto websocket = co_await client.ref().websocket("/").max_message_bytes(payload_value.size()).connect();
             const auto message = co_await websocket.read();
             matched = message.has_value() && message->payload() == payload_value;
             co_await websocket.close({});
@@ -979,9 +979,9 @@ TEST(Ruvia, websocket_client_reads_frame_above_default_message_limit) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run_client());
+    auto root = attachment.loop().submit(run_client()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -1019,7 +1019,7 @@ TEST(Ruvia, websocket_client_rejects_untrusted_tls_peer) {
     require(SSL_CTX_use_PrivateKey(tls.native_handle(), key.get()) == 1);
 
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     bool handshake_rejected = false;
     std::exception_ptr peer_failure;
@@ -1039,7 +1039,7 @@ TEST(Ruvia, websocket_client_rejects_untrusted_tls_peer) {
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url});
         std::exception_ptr failure;
         try {
-            auto websocket = co_await client.client().websocket("/").connect();
+            auto websocket = co_await client.ref().websocket("/").connect();
         } catch (const ruvia::http_client_error& error) {
             tls_failure = error.code() == ruvia::make_error_code(ruvia::http_client_errc::tls_failed);
         } catch (...) {
@@ -1052,9 +1052,9 @@ TEST(Ruvia, websocket_client_rejects_untrusted_tls_peer) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run_client());
+    auto root = attachment.loop().submit(run_client()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -1104,9 +1104,10 @@ asio::awaitable<void> answer_client_close(asio::ip::tcp::socket& socket) {
 
 void check_heartbeat_policy(bool enabled) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
-    const auto worker = attachment.loop().worker();
+    const auto loop_for_worker = attachment.loop();
+    const auto worker = loop_for_worker.worker();
     ruvia::worker_signal peer_done(worker);
     std::exception_ptr peer_failure;
     std::size_t pings = 0;
@@ -1150,7 +1151,7 @@ void check_heartbeat_policy(bool enabled) {
             ruvia::websocket_lifecycle_options lifecycle;
             lifecycle.heartbeat_.ping_interval_ = enabled ? std::optional(std::chrono::milliseconds(20)) : std::nullopt;
             lifecycle.heartbeat_.pong_timeout_ = enabled ? std::optional(std::chrono::milliseconds(50)) : std::nullopt;
-            auto websocket = co_await client.client().websocket("/").lifecycle(lifecycle).connect();
+            auto websocket = co_await client.ref().websocket("/").lifecycle(lifecycle).connect();
             if (!enabled) {
                 (void)co_await ruvia::sleep_for(websocket.worker(), std::chrono::milliseconds(200));
                 EXPECT_TRUE(websocket.connected());
@@ -1181,9 +1182,9 @@ void check_heartbeat_policy(bool enabled) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -1199,9 +1200,10 @@ enum class client_failure_scenario : std::uint8_t {
 // The peer sends the scenario's frame, then drains the client until it ends.
 void check_client_failure_termination(client_failure_scenario scenario) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
-    const auto worker = attachment.loop().worker();
+    const auto loop_for_worker = attachment.loop();
+    const auto worker = loop_for_worker.worker();
     ruvia::worker_signal peer_done(worker);
     std::exception_ptr peer_failure;
     std::string close_payload{};
@@ -1242,7 +1244,7 @@ void check_client_failure_termination(client_failure_scenario scenario) {
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url, .read_timeout_ = std::chrono::seconds(5)});
         std::exception_ptr failure;
         try {
-            auto websocket = co_await client.client().websocket("/").max_message_bytes(4).connect();
+            auto websocket = co_await client.ref().websocket("/").max_message_bytes(4).connect();
             EXPECT_TRUE(websocket.termination() == ruvia::websocket_termination::none);
             if (scenario == client_failure_scenario::aborted) {
                 websocket.abort();
@@ -1265,9 +1267,9 @@ void check_client_failure_termination(client_failure_scenario scenario) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -1311,7 +1313,7 @@ TEST(Ruvia, websocket_client_absent_ping_interval_disables_heartbeat) {
 
 TEST(Ruvia, websocket_client_keeps_a_peer_whose_pong_waits_for_the_next_read) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::exception_ptr peer_failure;
     const auto serve = [&]() -> asio::awaitable<void> {
@@ -1349,7 +1351,7 @@ TEST(Ruvia, websocket_client_keeps_a_peer_whose_pong_waits_for_the_next_read) {
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url});
         std::exception_ptr failure;
         try {
-            auto websocket = co_await client.client().websocket("/").lifecycle({.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(20), .pong_timeout_ = std::chrono::milliseconds(50)}}).connect();
+            auto websocket = co_await client.ref().websocket("/").lifecycle({.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(20), .pong_timeout_ = std::chrono::milliseconds(50)}}).connect();
             // The answered Ping's Pong stays unread far past its timeout.
             (void)co_await ruvia::sleep_for(client.worker(), std::chrono::milliseconds(300));
             connected_before_read = websocket.connected();
@@ -1366,9 +1368,9 @@ TEST(Ruvia, websocket_client_keeps_a_peer_whose_pong_waits_for_the_next_read) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run_client());
+    auto root = attachment.loop().submit(run_client()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -1378,7 +1380,7 @@ TEST(Ruvia, websocket_client_keeps_a_peer_whose_pong_waits_for_the_next_read) {
 
 TEST(Ruvia, websocket_client_read_progresses_between_back_to_back_writes) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::exception_ptr peer_failure;
     const auto serve = [&]() -> asio::awaitable<void> {
@@ -1414,7 +1416,7 @@ TEST(Ruvia, websocket_client_read_progresses_between_back_to_back_writes) {
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url});
         std::exception_ptr failure;
         try {
-            auto websocket = co_await client.client().websocket("/").connect();
+            auto websocket = co_await client.ref().websocket("/").connect();
             ruvia::task_scope reader(client.worker());
             const auto receive = [&]() -> ruvia::task<void> {
                 const auto message = co_await websocket.read();
@@ -1437,9 +1439,9 @@ TEST(Ruvia, websocket_client_read_progresses_between_back_to_back_writes) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run_client());
+    auto root = attachment.loop().submit(run_client()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -1449,7 +1451,7 @@ TEST(Ruvia, websocket_client_read_progresses_between_back_to_back_writes) {
 
 TEST(Ruvia, websocket_client_handshake_rejection_records_upstream_http_status) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::exception_ptr peer_failure;
     const auto serve = [&]() -> asio::awaitable<void> {
@@ -1469,7 +1471,7 @@ TEST(Ruvia, websocket_client_handshake_rejection_records_upstream_http_status) {
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url});
         std::exception_ptr failure;
         try {
-            auto websocket = co_await client.client().websocket("/").connect();
+            auto websocket = co_await client.ref().websocket("/").connect();
         } catch (const ruvia::http_client_error& error) {
             error_code = error.code();
             status_code = error.status();
@@ -1483,9 +1485,9 @@ TEST(Ruvia, websocket_client_handshake_rejection_records_upstream_http_status) {
             std::rethrow_exception(failure);
         }
     };
-    auto root = attachment.loop().start(run_client());
+    auto root = attachment.loop().submit(run_client()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }

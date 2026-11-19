@@ -503,16 +503,16 @@ TEST(Ruvia, cookie_plan_serialization_writes_zero_max_age_as_deletion_expires) {
 TEST(RuviaHttpPublicApi, cookie_jar_scopes_prefixes_and_deletes_by_max_age) {
     const auto now = std::chrono::system_clock::now();
     ruvia::http_cookie_jar jar(ruvia::http_scheme::https, "sub.example.com", {.max_cookies_ = 8, .max_cookie_bytes_ = 1024});
-    jar.add_configured_cookie("static", "1");
-    EXPECT_TRUE(jar.absorb_set_cookie("/app/login", "sid=abc; Path=/app; Secure; HttpOnly", now));
-    EXPECT_TRUE(jar.absorb_set_cookie("/app/login", "__Host-token=xyz; Path=/; Secure", now));
+    jar.set_cookie("static", "1");
+    EXPECT_TRUE(jar.apply_set_cookie("/app/login", "sid=abc; Path=/app; Secure; HttpOnly", now));
+    EXPECT_TRUE(jar.apply_set_cookie("/app/login", "__Host-token=xyz; Path=/; Secure", now));
     // __Host- with Domain must be rejected.
-    EXPECT_FALSE(jar.absorb_set_cookie("/app/login", "__Host-bad=1; Domain=example.com; Path=/; Secure", now));
-    EXPECT_EQ(jar.cookie_header("/app/dashboard", true, now), "sid=abc; static=1; __Host-token=xyz");
-    EXPECT_EQ(jar.cookie_header("/other", true, now), "static=1; __Host-token=xyz");
+    EXPECT_FALSE(jar.apply_set_cookie("/app/login", "__Host-bad=1; Domain=example.com; Path=/; Secure", now));
+    EXPECT_EQ(jar.format_cookie_header("/app/dashboard", true, now), "sid=abc; static=1; __Host-token=xyz");
+    EXPECT_EQ(jar.format_cookie_header("/other", true, now), "static=1; __Host-token=xyz");
     // Max-Age=0 deletes the stored cookie.
-    EXPECT_TRUE(jar.absorb_set_cookie("/app/logout", "sid=deleted; Path=/app; Max-Age=0", now));
-    EXPECT_EQ(jar.cookie_header("/app/dashboard", true, now), "static=1; __Host-token=xyz");
+    EXPECT_TRUE(jar.apply_set_cookie("/app/logout", "sid=deleted; Path=/app; Max-Age=0", now));
+    EXPECT_EQ(jar.format_cookie_header("/app/dashboard", true, now), "static=1; __Host-token=xyz");
 }
 
 TEST(Ruvia, set_cookie_parser_handles_deterministic_arbitrary_bytes) {
@@ -774,30 +774,30 @@ TEST(Ruvia, set_cookie_parser_preserves_date_token_widths_and_calendar_bounds) {
 TEST(Ruvia, cookie_jar_deduplicates_and_expires_by_partitioned_four_tuple) {
     const auto now = std::chrono::system_clock::from_time_t(1'700'000'000);
     ruvia::http_cookie_jar jar(ruvia::http_scheme::https, "example.test");
-    EXPECT_TRUE(jar.absorb_set_cookie("/", "sid=part1; Path=/; Secure; Partitioned", now));
-    EXPECT_TRUE(jar.absorb_set_cookie("/", "sid=unpart1; Path=/; Secure", now));
+    EXPECT_TRUE(jar.apply_set_cookie("/", "sid=part1; Path=/; Secure; Partitioned", now));
+    EXPECT_TRUE(jar.apply_set_cookie("/", "sid=unpart1; Path=/; Secure", now));
     EXPECT_EQ(jar.size(), std::size_t{2});
 
     // Updating the unpartitioned cookie leaves the partitioned entry intact.
-    EXPECT_TRUE(jar.absorb_set_cookie("/", "sid=unpart2; Path=/; Secure", now));
+    EXPECT_TRUE(jar.apply_set_cookie("/", "sid=unpart2; Path=/; Secure", now));
     EXPECT_EQ(jar.size(), std::size_t{2});
-    const auto both = jar.cookie_header("/", true, now);
+    const auto both = jar.format_cookie_header("/", true, now);
     EXPECT_NE(both.find("sid=part1"), std::string::npos);
     EXPECT_NE(both.find("sid=unpart2"), std::string::npos);
 
     // Expiring the partitioned cookie removes only the partitioned entry.
-    EXPECT_TRUE(jar.absorb_set_cookie("/", "sid=; Path=/; Max-Age=0; Secure; Partitioned", now));
+    EXPECT_TRUE(jar.apply_set_cookie("/", "sid=; Path=/; Max-Age=0; Secure; Partitioned", now));
     EXPECT_EQ(jar.size(), std::size_t{1});
-    EXPECT_EQ(jar.cookie_header("/", true, now), "sid=unpart2");
+    EXPECT_EQ(jar.format_cookie_header("/", true, now), "sid=unpart2");
 }
 
 TEST(Ruvia, cookie_jar_max_age_is_exact_before_the_epoch) {
     using namespace std::chrono;
     const auto now = system_clock::time_point{} - seconds{2};
     ruvia::http_cookie_jar jar(ruvia::http_scheme::https, "example.test");
-    ASSERT_TRUE(jar.absorb_set_cookie("/", "sid=value; Max-Age=1", now));
-    EXPECT_EQ(jar.cookie_header("/", true, now), "sid=value");
-    EXPECT_TRUE(jar.cookie_header("/", true, now + seconds{1}).empty());
+    ASSERT_TRUE(jar.apply_set_cookie("/", "sid=value; Max-Age=1", now));
+    EXPECT_EQ(jar.format_cookie_header("/", true, now), "sid=value");
+    EXPECT_TRUE(jar.format_cookie_header("/", true, now + seconds{1}).empty());
 }
 
 TEST(Ruvia, cookie_jar_max_age_saturates_only_when_the_deadline_does_not_fit) {
@@ -806,12 +806,12 @@ TEST(Ruvia, cookie_jar_max_age_saturates_only_when_the_deadline_does_not_fit) {
     const auto tick = system_clock::duration{1};
     const auto now = maximum - seconds{1} - tick;
     ruvia::http_cookie_jar jar(ruvia::http_scheme::https, "example.test");
-    ASSERT_TRUE(jar.absorb_set_cookie("/", "sid=value; Max-Age=1", now));
-    EXPECT_TRUE(jar.cookie_header("/", true, maximum - tick).empty());
+    ASSERT_TRUE(jar.apply_set_cookie("/", "sid=value; Max-Age=1", now));
+    EXPECT_TRUE(jar.format_cookie_header("/", true, maximum - tick).empty());
 
-    ASSERT_TRUE(jar.absorb_set_cookie("/", "sid=value; Max-Age=3", maximum - seconds{2}));
-    EXPECT_EQ(jar.cookie_header("/", true, maximum - tick), "sid=value");
-    EXPECT_TRUE(jar.cookie_header("/", true, maximum).empty());
+    ASSERT_TRUE(jar.apply_set_cookie("/", "sid=value; Max-Age=3", maximum - seconds{2}));
+    EXPECT_EQ(jar.format_cookie_header("/", true, maximum - tick), "sid=value");
+    EXPECT_TRUE(jar.format_cookie_header("/", true, maximum).empty());
 }
 
 TEST(Ruvia, cookie_jar_expires_preserves_subsecond_clock_boundaries) {
@@ -819,13 +819,13 @@ TEST(Ruvia, cookie_jar_expires_preserves_subsecond_clock_boundaries) {
     const auto epoch = system_clock::time_point{};
     const auto tick = system_clock::duration{1};
     ruvia::http_cookie_jar jar(ruvia::http_scheme::https, "example.test");
-    ASSERT_TRUE(jar.absorb_set_cookie("/", "sid=value; Expires=Thu, 01 Jan 1970 00:00:00 GMT", epoch - tick));
-    EXPECT_EQ(jar.cookie_header("/", true, epoch - tick), "sid=value");
-    EXPECT_TRUE(jar.cookie_header("/", true, epoch).empty());
+    ASSERT_TRUE(jar.apply_set_cookie("/", "sid=value; Expires=Thu, 01 Jan 1970 00:00:00 GMT", epoch - tick));
+    EXPECT_EQ(jar.format_cookie_header("/", true, epoch - tick), "sid=value");
+    EXPECT_TRUE(jar.format_cookie_header("/", true, epoch).empty());
 
     const auto now = epoch + tick;
     const auto limit = now + seconds{ruvia::max_cookie_age_seconds};
-    ASSERT_TRUE(jar.absorb_set_cookie("/", "sid=value; Expires=Tue, 01 Jan 2030 00:00:00 GMT", now));
-    EXPECT_EQ(jar.cookie_header("/", true, limit - tick), "sid=value");
-    EXPECT_TRUE(jar.cookie_header("/", true, limit).empty());
+    ASSERT_TRUE(jar.apply_set_cookie("/", "sid=value; Expires=Tue, 01 Jan 2030 00:00:00 GMT", now));
+    EXPECT_EQ(jar.format_cookie_header("/", true, limit - tick), "sid=value");
+    EXPECT_TRUE(jar.format_cookie_header("/", true, limit).empty());
 }

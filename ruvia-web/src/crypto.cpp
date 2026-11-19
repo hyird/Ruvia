@@ -2,8 +2,10 @@
 
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 
 #include <openssl/crypto.h>
+#include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 
@@ -41,6 +43,9 @@ sha256::~sha256() {
 }
 
 void sha256::update(std::string_view bytes) {
+    if (state_ != state_type::active) {
+        throw std::logic_error("SHA-256 digest is no longer active");
+    }
     if (bytes.empty()) {
         return;
     }
@@ -52,10 +57,12 @@ void sha256::update(std::string_view bytes) {
         }
         context_ = EVP_MD_CTX_new();
         if (context_ == nullptr || EVP_DigestInit_ex(context_, EVP_sha256(), nullptr) != 1 || (buffered_ != 0 && EVP_DigestUpdate(context_, buffer_.data(), buffered_) != 1)) {
+            state_ = state_type::failed;
             throw_digest_failure();
         }
     }
     if (EVP_DigestUpdate(context_, bytes.data(), bytes.size()) != 1) {
+        state_ = state_type::failed;
         throw_digest_failure();
     }
 }
@@ -69,18 +76,36 @@ void sha256::update_u64_le(std::uint64_t value) {
 }
 
 sha256_digest sha256::finish() {
+    if (state_ != state_type::active) {
+        throw std::logic_error("SHA-256 digest is no longer active");
+    }
     sha256_digest digest;
     if (context_ == nullptr) {
         if (!compute_sha256(std::span<const unsigned char>(buffer_.data(), buffered_), digest)) {
+            state_ = state_type::failed;
             throw_digest_failure();
         }
+        state_ = state_type::finished;
         return digest;
     }
     unsigned int size = 0;
     if (EVP_DigestFinal_ex(context_, digest.data(), &size) != 1 || size != digest.size()) {
+        state_ = state_type::failed;
         throw_digest_failure();
     }
+    state_ = state_type::finished;
     return digest;
+}
+
+void sha256::reset() noexcept {
+    buffered_ = 0;
+    state_ = state_type::active;
+    if (context_ != nullptr) {
+        if (EVP_MD_CTX_reset(context_) != 1 || EVP_DigestInit_ex(context_, EVP_sha256(), nullptr) != 1) {
+            ERR_clear_error();
+            EVP_MD_CTX_free(std::exchange(context_, nullptr));
+        }
+    }
 }
 
 [[noreturn]] void sha256::throw_digest_failure() {

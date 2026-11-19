@@ -11,7 +11,7 @@
 namespace ruvia {
 
 // The transport facts every server-side connection description shares:
-// conn_info, connection_event, tls_client_hello_record and server_connection
+// connection_info, connection_event, tls_client_hello_record and server_connection
 // derive from it, so connection_id(), local() and remote() read the same way
 // on each. A plain value: copying it copies the facts.
 class connection_endpoints {
@@ -37,7 +37,7 @@ public:
     }
 
     // The peer at the other end of this socket. Behind a reverse proxy that is
-    // the proxy, not the caller -- use conn_info::client() for the caller.
+    // the proxy, not the caller -- use connection_info::client() for the caller.
     [[nodiscard]] constexpr ip_endpoint remote() const noexcept {
         return remote_;
     }

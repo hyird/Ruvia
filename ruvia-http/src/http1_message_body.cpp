@@ -52,7 +52,7 @@ http_protocol_error make_http_protocol_error(http1_body_decode_error error) noex
     return make_http_protocol_error(http1_chunk_decode_error::invalid_framing);
 }
 
-std::string_view http1_response_body_error_message(http1_body_decode_error error) noexcept {
+std::string_view http1_body_decode_error_message(http1_body_decode_error error) noexcept {
     switch (error) {
         case http1_body_decode_error::invalid_framing:
         case http1_body_decode_error::framing_limit_exceeded:

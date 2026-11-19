@@ -57,8 +57,9 @@ control_runtime& controls() {
     return value;
 }
 
-ruvia::event_loop control_loop() {
-    return controls().loops_.loop(0);
+const ruvia::event_loop& control_loop() {
+    static const ruvia::event_loop value = controls().loops_.loop(0);
+    return value;
 }
 
 std::binary_semaphore started{0};
@@ -85,7 +86,7 @@ ruvia::task<void> serve_connection(ruvia::server_connection& connection) {
 void wait_until_running(ruvia::application& app) {
     ruvia::test::wait_until([&app] {
         try {
-            control_loop().start(app.remove_listener(control_loop().worker(), {.address_ = "0.0.0.0", .port_ = 9})).get();
+            control_loop().submit(app.remove_listener(control_loop().worker(), {.address_ = "0.0.0.0", .port_ = 9})).take_value().take_value();
         } catch (const std::invalid_argument&) {
             return true;
         } catch (const std::logic_error&) {
@@ -139,7 +140,7 @@ TEST(Ruvia, adding_first_routed_listener_builds_controllers_and_route_rate_limit
     ruvia::test::app_run run(app);
     ASSERT_TRUE(started.try_acquire_for(10s));
     wait_until_running(app);
-    control_loop().start(app.add_listener(control_loop().worker(), {.address_ = "127.0.0.1", .http_ = routed.endpoint().port()})).get();
+    control_loop().submit(app.add_listener(control_loop().worker(), {.address_ = "127.0.0.1", .http_ = routed.endpoint().port()})).take_value().take_value();
     EXPECT_TRUE(request(io, routed.endpoint()).ends_with("ready"));
     EXPECT_TRUE(request(io, routed.endpoint(), "/limited").starts_with("HTTP/1.1 200 "));
     EXPECT_TRUE(request(io, routed.endpoint(), "/limited").starts_with("HTTP/1.1 429 "));
@@ -178,15 +179,15 @@ TEST(Ruvia, add_listener_prepare_failure_discards_already_adopted_sockets_withou
         config.inherited_sockets_->http_.push_back(inherited_socket(io, addition.endpoint()));
     }
     const auto sockets = config.inherited_sockets_->http_;
-    EXPECT_THROW(control_loop().start(app.add_listener(control_loop().worker(), config)).get(), std::system_error);
+    EXPECT_THROW(control_loop().submit(app.add_listener(control_loop().worker(), config)).take_value().take_value(), std::system_error);
     for (const auto socket : sockets) {
         EXPECT_TRUE(closed(socket));
     }
     EXPECT_TRUE(request(io, original.endpoint()).ends_with("ready"));
-    EXPECT_THROW(control_loop().start(app.remove_listener(control_loop().worker(), {.address_ = "127.0.0.1", .port_ = addition.endpoint().port()})).get(), std::invalid_argument);
+    EXPECT_THROW(control_loop().submit(app.remove_listener(control_loop().worker(), {.address_ = "127.0.0.1", .port_ = addition.endpoint().port()})).take_value().take_value(), std::invalid_argument);
     blocker.close();
     config.inherited_sockets_.reset();
-    control_loop().start(app.add_listener(control_loop().worker(), std::move(config))).get();
+    control_loop().submit(app.add_listener(control_loop().worker(), std::move(config))).take_value().take_value();
     EXPECT_TRUE(request(io, addition.endpoint()).ends_with("ready"));
     EXPECT_TRUE(request(io, original.endpoint()).ends_with("ready"));
     app.request_stop();
@@ -256,7 +257,7 @@ TEST(Ruvia, runtime_tls_listener_preparation_does_not_block_its_caller_worker) {
     entered.acquire();
 
     const auto loop = control_loop();
-    auto addition = loop.start(app.add_listener(loop.worker(), {.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::connection}));
+    auto addition = loop.submit(app.add_listener(loop.worker(), {.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identities_ = ruvia::tls_fixed_identities{.primary_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}}, .dispatch_ = ruvia::listener_dispatch::connection})).take_value();
     std::promise<void> heartbeat;
     auto observed = heartbeat.get_future();
     const auto posted = loop.worker().post([&heartbeat] {
@@ -272,7 +273,7 @@ TEST(Ruvia, runtime_tls_listener_preparation_does_not_block_its_caller_worker) {
     if (posted == ruvia::post_status::accepted) {
         observed.wait();
     }
-    std::move(addition).get();
+    std::move(addition).take_value();
 
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.load_verify_file(identity.ca_file_.string());
@@ -312,7 +313,7 @@ TEST(Ruvia, application_prepared_batch_waits_for_publication_and_rolls_back_fail
         return ruvia::listen_config{.address_ = "127.0.0.1", .http_ = port, .dispatch_ = ruvia::listener_dispatch::connection};
     };
     const std::array failed_configs{config(addition.endpoint().port()), config(blocker.local_endpoint().port())};
-    EXPECT_THROW(loop.start(app.prepare_listeners(loop.worker(), failed_configs)).get(), std::system_error);
+    EXPECT_THROW(static_cast<void>(loop.submit(app.prepare_listeners(loop.worker(), failed_configs)).take_value().take_value()), std::system_error);
     EXPECT_TRUE(request(io, original.endpoint()).ends_with("ready"));
     asio::ip::tcp::socket refused(io);
     asio::error_code error;
@@ -322,7 +323,7 @@ TEST(Ruvia, application_prepared_batch_waits_for_publication_and_rolls_back_fail
     calls.store(0);
     published.store(false);
     const std::array configs{config(addition.endpoint().port()), config(second.endpoint().port())};
-    auto prepared = loop.start(app.prepare_listeners(loop.worker(), configs)).get();
+    auto prepared = loop.submit(app.prepare_listeners(loop.worker(), configs)).take_value().take_value();
     std::array<asio::ip::tcp::socket, 2> queued{asio::ip::tcp::socket(io), asio::ip::tcp::socket(io)};
     const std::array endpoints{addition.endpoint(), second.endpoint()};
     constexpr std::string_view head = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
@@ -332,29 +333,29 @@ TEST(Ruvia, application_prepared_batch_waits_for_publication_and_rolls_back_fail
     }
     EXPECT_EQ(calls.load(), 0U);
     published.store(true);
-    loop.start(std::move(prepared).activate()).get();
+    loop.submit(std::move(prepared).activate()).take_value().take_value();
     for (auto& peer : queued) {
         EXPECT_TRUE(ruvia::test::read_to_end(peer).ends_with("ready"));
     }
     EXPECT_EQ(calls.load(), 2U);
-    loop.start(app.remove_listener(loop.worker(), {.address_ = "127.0.0.1", .port_ = original.endpoint().port()})).get();
-    loop.start(app.remove_listener(loop.worker(), {.address_ = "127.0.0.1", .port_ = addition.endpoint().port()})).get();
-    loop.start(app.remove_listener(loop.worker(), {.address_ = "127.0.0.1", .port_ = second.endpoint().port()})).get();
+    loop.submit(app.remove_listener(loop.worker(), {.address_ = "127.0.0.1", .port_ = original.endpoint().port()})).take_value().take_value();
+    loop.submit(app.remove_listener(loop.worker(), {.address_ = "127.0.0.1", .port_ = addition.endpoint().port()})).take_value().take_value();
+    loop.submit(app.remove_listener(loop.worker(), {.address_ = "127.0.0.1", .port_ = second.endpoint().port()})).take_value().take_value();
     const std::array abandoned_configs{config(abandoned.endpoint().port()), config(second.endpoint().port())};
     {
-        auto pending = loop.start(app.prepare_listeners(loop.worker(), abandoned_configs)).get();
+        auto pending = loop.submit(app.prepare_listeners(loop.worker(), abandoned_configs)).take_value().take_value();
     }
-    auto pending = loop.start(app.prepare_listeners(loop.worker(), abandoned_configs)).get();
+    auto pending = loop.submit(app.prepare_listeners(loop.worker(), abandoned_configs)).take_value().take_value();
     app.request_stop();
     run.join();
-    EXPECT_THROW(loop.start(std::move(pending).activate()).get(), std::logic_error);
+    EXPECT_THROW(loop.submit(std::move(pending).activate()).take_value().take_value(), std::logic_error);
     // Only the cancelled candidate remained; restart has zero bound listeners.
     ruvia::test::app_run empty_run(app);
     ASSERT_TRUE(started.try_acquire_for(10s));
     wait_until_running(app);
     const std::array first_config{config(addition.endpoint().port())};
-    auto first = loop.start(app.prepare_listeners(loop.worker(), first_config)).get();
-    loop.start(std::move(first).activate()).get();
+    auto first = loop.submit(app.prepare_listeners(loop.worker(), first_config)).take_value().take_value();
+    loop.submit(std::move(first).activate()).take_value().take_value();
     EXPECT_TRUE(request(io, addition.endpoint()).ends_with("ready"));
     app.request_stop();
     empty_run.join();

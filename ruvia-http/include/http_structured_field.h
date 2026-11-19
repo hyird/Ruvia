@@ -17,7 +17,7 @@
 // Callers own the top-level list or dictionary walk.
 namespace ruvia {
 
-struct http_structured_item {
+struct http_structured_item final {
     enum class kind_type : std::uint8_t { other,
         integer,
         boolean,
@@ -48,7 +48,7 @@ struct http_structured_item {
     }
 };
 
-struct http_structured_text_input {
+struct http_structured_text_input final {
     std::string_view remaining_;
 
     [[nodiscard]] bool empty() const noexcept {
@@ -129,13 +129,13 @@ private:
 };
 
 template <typename input_type>
-struct http_structured_parser {
+struct http_structured_parser final {
     input_type input_;
 
     [[nodiscard]] bool empty() const noexcept {
         return input_.empty();
     }
-    bool take(char ch) {
+    bool consume(char ch) {
         if (!input_.empty() && input_.peek() == ch) {
             input_.advance();
             return true;
@@ -143,7 +143,7 @@ struct http_structured_parser {
         return false;
     }
     void spaces() {
-        while (take(' ')) {
+        while (consume(' ')) {
         }
     }
     void ows() {
@@ -176,15 +176,15 @@ struct http_structured_parser {
             return false;
         }
         value = {};
-        if (take('?')) {
+        if (consume('?')) {
             value.kind_ = http_structured_item::kind_type::boolean;
-            if (take('1')) {
+            if (consume('1')) {
                 value.boolean_ = true;
                 return true;
             }
-            return take('0');
+            return consume('0');
         }
-        if (take('"')) {
+        if (consume('"')) {
             const char* chunk = input_.data();
             std::size_t length = 0;
             std::optional<std::string> fragmented;
@@ -233,7 +233,7 @@ struct http_structured_parser {
             }
             return false;
         }
-        if (take(':')) {
+        if (consume(':')) {
             std::size_t count = 0, padding = 0;
             while (!input_.empty() && input_.peek() != ':') {
                 const auto ch = input_.peek();
@@ -251,10 +251,10 @@ struct http_structured_parser {
             // final '=' of a partially padded sequence. Validate the data
             // quartet and supplied padding as if missing padding were added.
             const auto data_remainder = (count - padding) % 4;
-            return take(':') && data_remainder != 1 && padding <= (4 - data_remainder) % 4;
+            return consume(':') && data_remainder != 1 && padding <= (4 - data_remainder) % 4;
         }
         if (input_.peek() == '-' || (input_.peek() >= '0' && input_.peek() <= '9')) {
-            const bool negative = take('-');
+            const bool negative = consume('-');
             std::size_t digits = 0;
             std::int64_t number = 0;
             while (!input_.empty() && input_.peek() >= '0' && input_.peek() <= '9') {
@@ -267,7 +267,7 @@ struct http_structured_parser {
             if (!digits) {
                 return false;
             }
-            if (take('.')) {
+            if (consume('.')) {
                 if (digits > 12) {
                     return false;
                 }
@@ -307,12 +307,12 @@ struct http_structured_parser {
         return true;
     }
     bool parameters() {
-        while (take(';')) {
+        while (consume(';')) {
             spaces();
             if (key().empty()) {
                 return false;
             }
-            if (take('=')) {
+            if (consume('=')) {
                 http_structured_item ignored;
                 if (!item(ignored, false)) {
                     return false;
@@ -322,13 +322,13 @@ struct http_structured_parser {
         return true;
     }
     bool member(http_structured_item& value, bool retain_text = true) {
-        if (!take('(')) {
+        if (!consume('(')) {
             return item(value, retain_text) && parameters();
         }
         value = {};
         value.kind_ = http_structured_item::kind_type::inner_list;
         spaces();
-        while (!take(')')) {
+        while (!consume(')')) {
             http_structured_item ignored;
             if (!item(ignored, false) || !parameters()) {
                 return false;

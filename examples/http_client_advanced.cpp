@@ -52,7 +52,7 @@ ruvia::task<void> follow_redirect(const ruvia::http_client_ref& origin) {
         target = std::move(*resolved).take_target();
         // Drain the old response before reusing its HTTP/1 connection. Abandoning
         // a partially consumed HTTP/1 response closes that connection instead.
-        while (co_await response.stream().read()) {
+        while (co_await response.body().read()) {
         }
     }
     throw std::runtime_error("redirect hop limit exceeded");
@@ -65,8 +65,8 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(ruvia::event_loop loop, 
     std::optional<ruvia::http_client_response_bytes> retained;
     std::exception_ptr failure;
     try {
-        auto origin = client.client();
-        auto bounded = client.client().with_options({.timeout_ = std::chrono::seconds(5)});
+        auto origin = client.ref();
+        auto bounded = client.ref().with_options({.timeout_ = std::chrono::seconds(5)});
         {
             const std::array<ruvia::http_header_view, 1> headers{{
                 {"content-type", "application/octet-stream"},
@@ -81,7 +81,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(ruvia::event_loop loop, 
             const std::array<ruvia::http_header_view, 1> trailers{{{"X-Upload-Complete", "yes"}}};
             co_await exchange_value.body().finish(trailers);
             auto response = co_await exchange_value.response();
-            while (const auto text = co_await response.stream().read_text()) {
+            while (const auto text = co_await response.body().read_text()) {
                 // Each view expires at the next body operation. Do not retain
                 // it or assume an entire UTF-8 character is in one chunk.
                 std::cout << *text;
@@ -94,7 +94,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(ruvia::event_loop loop, 
             if (response.protocol_version() == ruvia::http_protocol_version::http2) {
                 response.reprioritize({.urgency_ = 1, .incremental_ = true});
             }
-            while (co_await response.stream().read()) {
+            while (co_await response.body().read()) {
             }
             while (auto push = origin.next_push()) {
                 std::cout << "push=" << push->request().target_ << '\n';
@@ -109,7 +109,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(ruvia::event_loop loop, 
         co_await follow_redirect(origin);
         {
             auto response = co_await bounded.get("/features/safe").send();
-            while (co_await response.stream().read()) {
+            while (co_await response.body().read()) {
             }
         }
         {
@@ -157,8 +157,8 @@ int main(int argc, char** argv) {
         };
         ruvia::event_loop_pool loops({.loop_count_ = 1});
         loops.start();
-        auto done = loops.loop(0).start(exercise(loops.loop(0), std::move(config)));
-        auto body = std::move(done).get();
+        auto done = loops.loop(0).submit(exercise(loops.loop(0), std::move(config))).take_value();
+        auto body = std::move(done).take_value();
         loops.request_stop();
         loops.join();
         const auto bytes_value = body.bytes();

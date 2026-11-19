@@ -82,7 +82,7 @@ class inbound_memory_routes final {
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> buffered_body(ruvia::context& context_value) {
-        const auto body = co_await context_value.req().body_text();
+        const auto body = co_await context_value.request().body_text();
         co_return context_value.text(std::string(std::to_string(body.size())));
     }
 
@@ -108,7 +108,7 @@ class inbound_memory_routes final {
         held_view().first_read_bytes_ = view.size();
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         while (!held_view().release_.load()) {
-            if (std::chrono::steady_clock::now() >= deadline || co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(1), context_value.stop_token()) != ruvia::timer_sleep_result::elapsed) {
+            if (std::chrono::steady_clock::now() >= deadline || co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(1), context_value.stop_token()) != ruvia::sleep_status::elapsed) {
                 throw std::runtime_error("held view was not released");
             }
         }
@@ -310,14 +310,14 @@ TEST(Ruvia, http2_request_body_inbound_budget_exhaustion_answers_with_503) {
     ruvia::test::http_server_fixture server(io, inbound_memory_config());
 
     auto& client_io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(client_io);
+    auto attachment = ruvia::event_loop_attachment(client_io);
     const auto url = "http://127.0.0.1:" + std::to_string(server.endpoint().port());
 
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(attachment.loop(), {.base_url_ = url, .versions_ = {.http1_ = false, .http2_ = true}});
         const std::string payload(12000, 'h');
         for (const std::string_view path : {"/inbound-buffered", "/inbound-stream"}) {
-            auto response = co_await client.client().post(path).body(payload).send();
+            auto response = co_await client.ref().post(path).body(payload).send();
             EXPECT_EQ(response.status(), ruvia::http_status::service_unavailable);
             const auto body = co_await response.collect_body();
             EXPECT_NE(body.text().find("inbound_buffer_limit"), std::string_view::npos);
@@ -325,12 +325,12 @@ TEST(Ruvia, http2_request_body_inbound_budget_exhaustion_answers_with_503) {
         co_await client.shutdown();
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     std::jthread driver([&] {
         attachment.run();
     });
     driver.join();
-    std::move(root).get();
+    std::move(root).take_value();
     server.finish();
 }
 

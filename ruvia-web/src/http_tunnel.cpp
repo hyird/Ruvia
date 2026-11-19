@@ -289,7 +289,7 @@ task<std::optional<std::string_view>> http_tunnel::read_text(operation_options o
 }
 task<void> http_tunnel::write(outbound_bytes bytes_value, operation_options operation) & {
     require_unadapted();
-    return write_(target_, std::move(bytes_value).into_string(), std::move(operation));
+    return write_(target_, std::move(bytes_value).take_string(), std::move(operation));
 }
 task<void> http_tunnel::finish(operation_options operation) & {
     return finish_(target_, std::move(operation));
@@ -325,6 +325,11 @@ http_capsule& http_capsule::operator=(http_capsule&& other) noexcept {
 }
 http_capsule::~http_capsule() {
     release();
+}
+std::string http_capsule::take_text() && noexcept {
+    std::string extracted = payload_ ? std::move(*payload_) : std::string{};
+    release();
+    return extracted;
 }
 void http_capsule::release() noexcept {
     // Payload storage is returned before its domain pin can retire the pool.
@@ -423,7 +428,7 @@ task<void> http_capsule_stream::write(std::uint64_t type, outbound_bytes payload
     }
     std::array<char, 16> header;
     const auto encoded = encode_http_capsule_header(header, type, payload_value.size());
-    if ((encoded.index() != 0) || payload_value.size() > state_->config_.max_capsule_length_) {
+    if ((encoded.index() != 0) || payload_value.size() > state_->config_.max_capsule_bytes_) {
         throw std::length_error("invalid capsule type or payload length");
     }
     return write_frame(std::string_view(header.data(), std::get<0>(encoded)), std::move(payload_value), false, std::move(operation));
@@ -465,7 +470,7 @@ task<void> http_capsule_stream::write_frame(std::string_view prefix, outbound_by
             throw;
         }
     };
-    auto bytes_value = std::move(payload_value).into_string();
+    auto bytes_value = std::move(payload_value).take_string();
     if (!prefix.empty()) {
         bytes_value.insert(0, prefix);
     }
@@ -549,7 +554,7 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::caps
                 continue;
             }
             const std::size_t offset = bytes_value.size() - std::get<0>(decoded)->size();
-            if (native && owned.size() > state_value.config_.max_capsule_length_) {
+            if (native && owned.size() > state_value.config_.max_capsule_bytes_) {
                 state_value.abort_malformed();
                 throw std::runtime_error("oversized HTTP Datagram");
             }
@@ -579,7 +584,7 @@ task<void> http_datagram_stream::write(outbound_bytes payload_value, operation_o
     }
     const bool udp = mode_ == http_datagram_mode::connect_udp;
     const auto context_bytes = udp ? std::size_t{1} : std::size_t{0};
-    if (context_bytes > state_value.config_.max_capsule_length_ || payload_value.size() > state_value.config_.max_capsule_length_ - context_bytes) {
+    if (context_bytes > state_value.config_.max_capsule_bytes_ || payload_value.size() > state_value.config_.max_capsule_bytes_ - context_bytes) {
         throw std::length_error("HTTP Datagram exceeds capsule bound");
     }
     const auto payload_view = payload_value.view();

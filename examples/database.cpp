@@ -81,7 +81,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
-        const auto name = co_await c.req().body_text();
+        const auto name = co_await c.request().body_text();
         std::uint64_t id = 0;
         co_await insert_user(c, name, id);
         std::string body;
@@ -97,7 +97,7 @@ private:
     }
 
     static ruvia::task<void> load_user_found(ruvia::context& c, bool& found) {
-        auto result_value = co_await c.db().query(driver_ == ruvia::db_driver::postgresql ? "SELECT id, name FROM users WHERE id = $1" : "SELECT id, name FROM users WHERE id = ?", c.req().param("id").value_or(""));
+        auto result_value = co_await c.db().query(driver_ == ruvia::db_driver::postgresql ? "SELECT id, name FROM users WHERE id = $1" : "SELECT id, name FROM users WHERE id = ?", c.request().param("id").value_or(""));
         found = !result_value.empty();
         co_return;
     }

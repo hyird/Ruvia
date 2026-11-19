@@ -15,7 +15,7 @@
 
 namespace ruvia {
 
-class pool_lease_acquire;
+class pool_lease_acquire_operation;
 
 // Single-worker owner of pool slot leases and their asynchronous wait queue.
 // The worker endpoint is retained once by the scheduler. Acquires copy
@@ -42,8 +42,8 @@ public:
     // timer queue stops, queued acquires and saturated new ones complete with
     // worker_stopping, as channel and one_shot waits do; a free slot is still
     // leased. It never throws for that.
-    [[nodiscard]] pool_lease_acquire acquire(operation_options options = {}) &;
-    pool_lease_acquire acquire(operation_options = {}) && = delete;
+    [[nodiscard]] pool_lease_acquire_operation acquire(operation_options options = {}) &;
+    pool_lease_acquire_operation acquire(operation_options = {}) && = delete;
 
     // Return a caller-owned slot on the bound worker. A queued acquire takes
     // ownership before this call returns, but its coroutine resumes in a later
@@ -55,10 +55,10 @@ public:
     // resume in a later worker turn, never inline here, so the caller finishes
     // its own teardown before any waiter observes the closure.
     [[nodiscard]] bool close() noexcept;
-    [[nodiscard]] bool closing() const noexcept;
+    [[nodiscard]] bool closed() const noexcept;
 
 private:
-    friend class pool_lease_acquire;
+    friend class pool_lease_acquire_operation;
 
     class impl_type;
     std::unique_ptr<impl_type> impl_;
@@ -66,14 +66,14 @@ private:
 
 // One acquire: single-use, movable only before it is awaited. The scheduler
 // must outlive it; destroying a scheduler with live acquires terminates.
-class pool_lease_acquire final : public detail::waiter_link<pool_lease_acquire> {
+class pool_lease_acquire_operation final : public detail::waiter_link<pool_lease_acquire_operation> {
 public:
-    pool_lease_acquire(pool_lease_acquire&& other) noexcept;
-    pool_lease_acquire(const pool_lease_acquire&) = delete;
-    pool_lease_acquire& operator=(const pool_lease_acquire&) = delete;
-    pool_lease_acquire& operator=(pool_lease_acquire&&) = delete;
+    pool_lease_acquire_operation(pool_lease_acquire_operation&& other) noexcept;
+    pool_lease_acquire_operation(const pool_lease_acquire_operation&) = delete;
+    pool_lease_acquire_operation& operator=(const pool_lease_acquire_operation&) = delete;
+    pool_lease_acquire_operation& operator=(pool_lease_acquire_operation&&) = delete;
     void operator&() const = delete;
-    ~pool_lease_acquire();
+    ~pool_lease_acquire_operation();
 
     [[nodiscard]] bool await_ready();
     [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation);
@@ -82,7 +82,7 @@ public:
 private:
     friend class pool_lease_scheduler;
 
-    pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value, operation_options options) noexcept;
+    pool_lease_acquire_operation(pool_lease_scheduler::impl_type& owner_value, operation_options options) noexcept;
     void cancel_registrations() noexcept;
     // Commits the outcome; returns the continuation to resume, or null while
     // the acquire has not suspended yet.

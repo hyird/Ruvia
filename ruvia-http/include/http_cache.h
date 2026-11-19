@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "borrowed_text.h"
@@ -191,9 +192,14 @@ public:
         *this = {};
     }
 
-    [[nodiscard]] cache_control finish() const noexcept {
+    [[nodiscard]] const cache_control& control() const& noexcept RUVIA_LIFETIMEBOUND {
         return value_;
     }
+    const cache_control& control() const&& = delete;
+    [[nodiscard]] cache_control take_control() && noexcept {
+        return std::exchange(value_, {});
+    }
+    cache_control take_control() & = delete;
 
 private:
     cache_control value_;
@@ -229,13 +235,13 @@ struct targeted_cache_control_selection final {
 
 // RFC 9111 field-qualified stripping. Rejection (no-store, unqualified
 // private, or a nominated protected name) leaves the entire block unchanged.
-bool strip_http_cache_private_headers(editable_http_headers headers, const cache_control& control, std::span<const std::string_view> protected_fields = {}) noexcept;
+[[nodiscard]] bool strip_http_cache_private_headers(editable_http_headers headers, const cache_control& control, std::span<const std::string_view> protected_fields = {}) noexcept;
 // The no-cache="field1, field2" counterpart: false if `no-store` or
 // unqualified `no-cache` forbids reuse without validation.
-bool strip_http_cache_no_cache_headers(editable_http_headers headers, const cache_control& control) noexcept;
+[[nodiscard]] bool strip_http_cache_no_cache_headers(editable_http_headers headers, const cache_control& control) noexcept;
 
-[[nodiscard]] bool http_cache_control_has_no_transform(std::string_view field_value) noexcept;
-[[nodiscard]] bool http_cache_control_has_no_transform(const http_header_range_view& headers) noexcept;
+[[nodiscard]] bool has_http_cache_no_transform(std::string_view field_value) noexcept;
+[[nodiscard]] bool has_http_cache_no_transform(const http_header_range_view& headers) noexcept;
 
 // Rewrites only max-age, preserving s-maxage and every other directive.
 // nullopt removes max-age without imposing a browser freshness lifetime.
@@ -341,10 +347,10 @@ enum class http_cache_validator_match : std::uint8_t { none,
 // Returns false without mutation when validators, encoding, or Connection
 // syntax do not match. Otherwise atomically replaces eligible stored fields.
 // Inputs may alias wholly or in part. No CDN policy is inferred.
-bool merge_http_304_response_headers(editable_http_headers cached_headers, const http_header_range_view& not_modified_headers);
+[[nodiscard]] bool merge_http_304_response_headers(editable_http_headers cached_headers, const http_header_range_view& not_modified_headers);
 
 // Reuses representation ETag semantics when a cache transforms content coding.
 // Invalid or repeated tags reject without mutation; absence is a no-op success.
-bool weaken_http_cache_etag(editable_http_headers headers);
+[[nodiscard]] bool weaken_http_cache_etag(editable_http_headers headers);
 
 }  // namespace ruvia

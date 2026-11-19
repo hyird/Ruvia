@@ -73,6 +73,10 @@ public:
         return issues_;
     }
     const std::vector<validation_issue>& issues() const&& = delete;
+    [[nodiscard]] std::string take_message() && noexcept {
+        return std::exchange(message_, {});
+    }
+    std::string take_message() & = delete;
     [[nodiscard]] std::vector<validation_issue> take_issues() && noexcept {
         auto issues = std::move(issues_);
         issues_.clear();
@@ -168,7 +172,7 @@ template <typename t_type>
 inline constexpr bool is_model_field = model_field_value<std::remove_cvref_t<t_type>>;
 
 template <typename t_type>
-inline constexpr bool model_json_value = is_ruvia_string<t_type> || is_ruvia_bytes<t_type> || is_ruvia_scalar<t_type> || is_model<t_type>;
+inline constexpr bool model_json_value = is_ruvia_string<t_type> || is_ruvia_bytes<t_type> || is_ruvia_scalar<t_type> || is_ruvia_json_value<t_type> || is_ruvia_json_object<t_type> || is_model<t_type>;
 
 template <typename value_type>
 inline constexpr bool model_json_value<array<value_type>> = model_json_value<std::remove_cvref_t<value_type>>;
@@ -1276,18 +1280,18 @@ void assign_field_value(std::optional<field_type>& target, value_type&& value) {
         target.emplace(field);
     } else if constexpr (detail::is_ruvia_string<field_type> && std::is_same_v<std::remove_cvref_t<value_type>, std::string> && std::is_rvalue_reference_v<value_type&&>) {
         field_type field;
-        field.assign_owned(std::forward<value_type>(value));
+        field.assign(std::forward<value_type>(value));
         target.emplace(std::move(field));
     } else if constexpr (detail::is_ruvia_string<field_type> && std::is_convertible_v<value_type&&, std::string_view> && !std::is_same_v<std::remove_cvref_t<value_type>, field_type>) {
         field_type field;
-        field.assign_owned(std::string_view(std::forward<value_type>(value)));
+        field.assign(std::string_view(std::forward<value_type>(value)));
         target.emplace(std::move(field));
     } else if constexpr (detail::is_ruvia_bytes<field_type> && !std::is_same_v<std::remove_cvref_t<value_type>, field_type>) {
         field_type field;
         if constexpr (std::is_same_v<std::remove_cvref_t<value_type>, std::vector<std::uint8_t>> && std::is_rvalue_reference_v<value_type&&>) {
-            field.assign_owned(std::forward<value_type>(value));
+            field.assign(std::forward<value_type>(value));
         } else {
-            field.assign_owned(std::span<const std::uint8_t>(std::forward<value_type>(value)));
+            field.assign(std::span<const std::uint8_t>(std::forward<value_type>(value)));
         }
         target.emplace(std::move(field));
     } else {
@@ -1787,7 +1791,7 @@ template <typename t_type>
         std::string decoded_storage;
         if (decode_form_value(input, encoding, decoded_storage).data() != input.data()) {
             field_type value;
-            value.assign_owned(std::move(decoded_storage));
+            value.assign(std::move(decoded_storage));
             return value;
         }
         if (string_storage == model_string_storage::owned) {
@@ -2137,7 +2141,7 @@ template <typename t_type>
         if (token->encoding() == json_string_encoding::escaped) {
             input = remaining;
             field_type value;
-            value.assign_owned(std::move(decoded));
+            value.assign(std::move(decoded));
             return value;
         }
         if (string_storage == model_string_storage::borrowed) {
@@ -2759,7 +2763,7 @@ private:
 // Dynamic JSON tokens borrow lvalue parse input and adopt std::string rvalues.
 // Both moves preserve borrowing/ownership, except that assignment copies a
 // borrow into the destination's own bytes before replacing that destination.
-// Use clone() or into_owned() to retain a token independently of its input.
+// Use clone() or take_owned() to retain a token independently of its input.
 // Successful moves reset the source to its default token; self-move is a no-op
 // and failed allocation leaves both operands unchanged. Refresh outstanding
 // views and borrowed get<T>() results after changing their source token.
@@ -2795,22 +2799,26 @@ public:
     }
 
     // Reuse owned storage or copy borrowed bytes, then reset this token.
-    [[nodiscard]] derived_type into_owned() && {
+    [[nodiscard]] derived_type take_owned() && {
         storage_.own_borrowed_in_place();
         return std::move(static_cast<derived_type&>(*this));
     }
+    derived_type take_owned() & = delete;
 
     // Consume owned text or copy borrowed bytes, then reset to default token.
-    [[nodiscard]] std::string take_text() && {
+    [[nodiscard]] std::string take_string() && {
         auto taken = std::move(storage_).take();
         storage_.assign_borrowed(default_token.view());
         return taken;
     }
+    std::string take_string() & = delete;
 
     // The callback receives a field name and json_value borrowing this object's
     // token; both are valid only for the duration of the callback.
     template <typename visitor_type>
-    [[nodiscard]] bool for_each_field(visitor_type&& visitor) const;
+    [[nodiscard]] bool for_each_field(visitor_type&& visitor) const&;
+    template <typename visitor_type>
+    bool for_each_field(visitor_type&&) const&& = delete;
 
     // Compare retained token bytes exactly, ignoring JSON normalization, to
     // preserve the zero-cost view semantics.
@@ -2866,7 +2874,7 @@ protected:
     }
 
     [[nodiscard]] derived_type rebind_for_model() && {
-        return std::move(*this).into_owned();
+        return std::move(*this).take_owned();
     }
 
     model_text_storage storage_;
@@ -2974,7 +2982,9 @@ public:
     // The callback receives a json_value borrowing this object's token; it is
     // valid only for the duration of the callback.
     template <typename visitor_type>
-    [[nodiscard]] bool for_each_element(visitor_type&& visitor) const;
+    [[nodiscard]] bool for_each_element(visitor_type&& visitor) const&;
+    template <typename visitor_type>
+    bool for_each_element(visitor_type&&) const&& = delete;
 
     // RFC 6901 string form. Calls a synchronous visitor with a borrowed token;
     // returns false without invoking it if the pointer cannot resolve uniquely.
@@ -3065,7 +3075,7 @@ inline model_parse_result<json_object> json_object::parse(borrowed_text body, mo
 }
 
 template <typename visitor_type>
-[[nodiscard]] inline bool json_value::for_each_element(visitor_type&& visitor) const {
+[[nodiscard]] inline bool json_value::for_each_element(visitor_type&& visitor) const& {
     if (!is_array()) {
         return false;
     }
@@ -3088,7 +3098,7 @@ namespace detail {
 
 template <typename derived_type, fixed_string default_token>
 template <typename visitor_type>
-[[nodiscard]] inline bool json_token_base<derived_type, default_token>::for_each_field(visitor_type&& visitor) const {
+[[nodiscard]] inline bool json_token_base<derived_type, default_token>::for_each_field(visitor_type&& visitor) const& {
     if constexpr (std::is_same_v<derived_type, json_value>) {
         if (!static_cast<const json_value*>(this)->is_object()) {
             return false;
@@ -3234,20 +3244,6 @@ template <typename t_type>
     }
     detail::append_json_value(output, value);
     return output;
-}
-
-// Dynamic tokens retain JSON text, so conversion writes their owned storage
-// directly through the model writer, without parsing the generated token.
-template <typename model_type>
-    requires detail::is_model<model_type>
-[[nodiscard]] json_value to_json_value(const model_type& value) {
-    return json_value(value);
-}
-
-template <typename model_type>
-    requires detail::is_model<model_type>
-[[nodiscard]] json_object to_json_object(const model_type& value) {
-    return json_object(value);
 }
 
 }  // namespace ruvia

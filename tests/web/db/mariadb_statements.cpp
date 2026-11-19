@@ -168,7 +168,7 @@ TEST(Ruvia, db_mariadb_repeated_statement_runs_prepared_from_its_second_use) {
     using mariadb_statement_test::peer_type;
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::array<pipeline_test::outcome, 3> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -191,7 +191,7 @@ TEST(Ruvia, db_mariadb_prepared_parameters_keep_their_types) {
     using mariadb_statement_test::peer_type;
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::array<std::string, 2> results{std::string(), std::string()};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -235,7 +235,7 @@ TEST(Ruvia, db_mariadb_prepared_reals_read_as_the_text_protocol_sends_them) {
     }
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>({{.name_ = std::string("d"), .type_ = type_double, .decimals_ = not_fixed, .length_ = 22}, {.name_ = std::string("f"), .type_ = type_float, .decimals_ = not_fixed, .length_ = 12}}), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>(rows)}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::optional<db_rows> text_rows;
     std::optional<db_rows> prepared_rows;
@@ -254,7 +254,7 @@ TEST(Ruvia, db_mariadb_prepared_values_read_as_the_text_protocol_sends_them) {
     const std::vector<std::optional<std::string>> expected({std::string("1.500000"), std::string("1.500"), std::string("00000042"), std::string("2001-02-03 04:05:06.789"), std::string("-838:59:59.500"), std::string("25:00:00"), std::string("0000-00-00"), std::string("-1.5000000000"), std::string("18446744073709551615"), std::string("-9223372036854775808"), std::string("\0\xff\x10", 3), std::nullopt, std::string("123456789.123457"), std::string("0.100"), std::string("00000000"), std::string("0000-00-00 00:00:00.000"), std::string("-00:00:00.500"), std::string("838:59:59"), std::string("2024-02-29"), std::string("0.0000000001"), std::string("0"), std::string("7"), std::string(""), std::string("0.1"), std::string("10000000000.000000"), std::string("2.001"), std::string("99999999"), std::string("2038-01-19 03:14:07.999"), std::string("12:34:56.001"), std::string("00:00:01"), std::string("9999-12-31"), std::string("12345678901234567890.0000000000"), std::string("1"), std::string("-1"), std::string("x"), std::nullopt});
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(columns), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>(rows)}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::optional<db_rows> text_rows;
     std::optional<db_rows> prepared_rows;
@@ -272,7 +272,7 @@ TEST(Ruvia, db_mariadb_statement_the_server_will_not_prepare_runs_as_text) {
     using mariadb_statement_test::peer_type;
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.error_ = std::string("This command is not supported in the prepared statement protocol yet"), .code_ = 1295, .sql_state_ = std::string("HY000"), .prepare_fails_ = true}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::array<pipeline_test::outcome, 3> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -295,7 +295,7 @@ TEST(Ruvia, db_mariadb_stale_prepared_statement_is_prepared_again_once) {
     const peer_type::maria_reply unknown{.error_ = "Unknown prepared statement handler", .code_ = 1243, .sql_state_ = "HY000"};
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, unknown, {.rows_ = std::vector<std::string>({std::string("c")})}, unknown, unknown}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -322,7 +322,7 @@ TEST(Ruvia, db_mariadb_cached_statements_arriving_together_run_as_pipelined_text
     using mariadb_statement_test::peer_type;
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")}), .hold_ = 1}, {.rows_ = std::vector<std::string>({std::string("d")}), .batch_ = 2}, {.rows_ = std::vector<std::string>({std::string("e")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::array<pipeline_test::outcome, 5> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -348,7 +348,7 @@ TEST(Ruvia, db_mariadb_transaction_statement_runs_prepared_from_its_second_use) 
     using mariadb_statement_test::peer_type;
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .status_ = 3}, {.rows_ = std::vector<std::string>({std::string("a")}), .status_ = 3}, {.rows_ = std::vector<std::string>({std::string("b")}), .status_ = 3}, {.column_ = std::string("")}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::array<std::string, 2> results{std::string(), std::string()};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -373,7 +373,7 @@ TEST(Ruvia, db_mariadb_least_recently_used_prepared_statement_is_closed_for_a_ne
     std::vector<peer_type::maria_reply> replies(statements * 2, peer_type::maria_reply{.rows_ = std::vector<std::string>({std::string("v")})});
     peer_type peer(std::move(replies), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::size_t failures = 0;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -403,7 +403,7 @@ TEST(Ruvia, db_mariadb_prepared_server_error_above_the_client_range_is_the_state
     using mariadb_statement_test::peer_type;
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .affected_rows_ = 1}, {.column_ = std::string(""), .error_ = std::string("CONSTRAINT `t.v` failed for `db`.`t`"), .code_ = 4025, .sql_state_ = std::string("23000")}, {.column_ = std::string(""), .affected_rows_ = 1}}), peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::array<pipeline_test::outcome, 3> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -434,7 +434,7 @@ TEST(Ruvia, db_mariadb_parameters_read_otherwise_than_their_literals_run_as_text
     constexpr std::string_view sql = "SELECT v FROM t WHERE a = ?";
     peer_type peer(std::vector<reply>(10, reply{.rows_ = std::vector<std::string>({std::string("v")})}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 10> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -468,7 +468,7 @@ TEST(Ruvia, db_mariadb_integer_only_placeholders_run_prepared_only_with_integers
     constexpr std::string_view fetch = "SELECT v FROM t ORDER BY v OFFSET ? ROWS FETCH FIRST ? ROWS ONLY";
     peer_type peer(std::vector<reply>(19, reply{.rows_ = std::vector<std::string>({std::string("v")})}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 19> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -519,7 +519,7 @@ TEST(Ruvia, db_mariadb_statements_the_binary_protocol_runs_otherwise_are_never_p
     replies[9] = {.rows_ = {"*"}};
     peer_type peer(std::move(replies), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 11> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -558,7 +558,7 @@ TEST(Ruvia, db_mariadb_prepared_values_without_a_fixed_scale_read_as_the_text_pr
     const std::vector<std::optional<std::string>> expected({std::string("0"), std::string("1970-01-01 00:00:01.500000"), std::string("00:00:01.500000"), std::string("0"), std::string("1970-01-01 00:00:01"), std::string("01:02:03"), std::string("0"), std::string("2020-01-01 10:00:00.000010"), std::string("-34:00:00.250000")});
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(columns), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>(rows)}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::optional<db_rows> text_rows;
     std::optional<db_rows> prepared_rows;
@@ -582,7 +582,7 @@ TEST(Ruvia, db_mariadb_statement_with_a_year_column_runs_as_text) {
     const std::vector<column> plain({{.name_ = std::string("y"), .type_ = type_year, .flags_ = unsigned_flag, .length_ = 4}});
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("0000")})}, {.rows_ = std::vector<std::string>({std::string("0000")}), .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(plain), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(little(0, 2))})}), .prepare_columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(padded)}, {.rows_ = std::vector<std::string>({std::string("0000")})}, {.rows_ = std::vector<std::string>({std::string("0")})}, {.rows_ = std::vector<std::string>({std::string("0")}), .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(plain)}, {.rows_ = std::vector<std::string>({std::string("0")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 6> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -616,7 +616,7 @@ TEST(Ruvia, db_mariadb_year_column_appearing_at_execution_reads_padded_or_fails_
     const std::vector<column> plain({{.name_ = std::string("y"), .type_ = type_year, .flags_ = unsigned_flag, .length_ = 4}});
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(padded), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(little(0, 2))}), std::vector<std::optional<std::string>>({std::string(little(2155, 2))})}), .prepare_columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(number)}, {.rows_ = std::vector<std::string>({std::string("y")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(plain), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(little(0, 2))})}), .prepare_columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(number)}, {.rows_ = std::vector<std::string>({std::string("0")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::optional<db_rows> padded_rows;
     std::array<pipeline_test::outcome, 3> outcomes;
@@ -649,7 +649,7 @@ TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_once_and_is_pr
     const std::vector<column> two({{.name_ = std::string("v")}, {.name_ = std::string("w")}});
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(one), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("1"))})})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(two), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("2")), std::string(text("2"))}), std::vector<std::optional<std::string>>({std::string(text("3")), std::string(text("4"))})})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(two), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("3")), std::string(text("2"))})})}}), peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -677,7 +677,7 @@ TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_inside_a_trans
     const std::vector<column> two({{.name_ = std::string("v")}, {.name_ = std::string("w")}});
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .status_ = 3}, {.rows_ = std::vector<std::string>({std::string("1")}), .status_ = 3}, {.status_ = 3, .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(one), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("1"))})})}, {.status_ = 3, .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(two), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("1")), std::string(text("2"))})})}, {.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string("after")})}}), peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::vector<std::string> results{};
     std::optional<std::error_code> failure;
@@ -716,7 +716,7 @@ TEST(Ruvia, db_mariadb_abandoned_prepare_is_finished_from_the_cached_statement_t
     sql.append(" */");
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("text")})}, {.rows_ = std::vector<std::string>({std::string("second")}), .read_hold_ = 1}, {.rows_ = std::vector<std::string>({std::string("third")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -757,7 +757,7 @@ TEST(Ruvia, db_mariadb_prepared_statement_failing_in_its_rows_leaves_the_others_
     const reply unknown{.error_ = "Unknown prepared statement handler", .code_ = 1243, .sql_state_ = "HY000"};
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})}, {.rows_ = std::vector<std::string>({std::string("2")}), .error_ = std::string("DOUBLE value is out of range"), .code_ = 1690, .sql_state_ = std::string("22003"), .error_after_rows_ = true}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, unknown, {.rows_ = std::vector<std::string>({std::string("b")})}}), peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 5> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -787,7 +787,7 @@ TEST(Ruvia, db_mariadb_prepared_statement_runs_again_after_its_rows_failed) {
     using namespace mariadb_statement_test;
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})}, {.rows_ = std::vector<std::string>({std::string("2")}), .error_ = std::string("Subquery returns more than 1 row"), .code_ = 1242, .sql_state_ = std::string("21000"), .error_after_rows_ = true}, {.rows_ = std::vector<std::string>({std::string("3")})}, {.rows_ = std::vector<std::string>({std::string("f1")})}, {.rows_ = std::vector<std::string>({std::string("f2")})}}), peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 5> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -819,7 +819,7 @@ TEST(Ruvia, db_mariadb_session_change_drops_the_cached_statements) {
     using namespace mariadb_statement_test;
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("sql_mode"), std::string("PIPES_AS_CONCAT,ANSI_QUOTES,STRICT_TRANS_TABLES")}})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 5> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -847,7 +847,7 @@ TEST(Ruvia, db_mariadb_rowless_stream_preserves_session_changes_and_invalidates_
     using namespace mariadb_statement_test;
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("0")})}, {.rows_ = std::vector<std::string>({std::string("0")})}, {.column_ = std::string(""), .status_ = 514, .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("sql_mode"), std::string("PIPES_AS_CONCAT,NO_BACKSLASH_ESCAPES")}})}, {.rows_ = std::vector<std::string>({std::string("ab")}), .status_ = 514}, {.rows_ = std::vector<std::string>({std::string("ab")}), .status_ = 514}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 4> outcomes;
     bool refused = false;
@@ -887,7 +887,7 @@ TEST(Ruvia, db_mariadb_statements_run_as_text_while_the_client_character_set_dif
     replies.insert(replies.end(), 2, reply{.rows_ = std::vector<std::string>({std::string("v")})});
     peer_type peer(std::move(replies), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 7> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -915,7 +915,7 @@ TEST(Ruvia, db_mariadb_set_and_use_run_as_text) {
     using namespace mariadb_statement_test;
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string("")}, {.column_ = std::string("")}, {.column_ = std::string("")}, {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("sql_mode"), std::string("PIPES_AS_CONCAT")}})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 8> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -953,7 +953,7 @@ TEST(Ruvia, db_mariadb_one_character_set_variable_off_utf8mb4_runs_statements_as
         replies.insert(replies.end(), 2, reply{.rows_ = std::vector<std::string>({std::string("y")})});
         peer_type peer(std::move(replies), peer_type::after_startup::idle);
         auto& context_value = test::new_test_io_context();
-        auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+        auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
         db_client client(attachment.loop(), config(peer));
         std::array<pipeline_test::outcome, 5> outcomes;
         test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -995,7 +995,7 @@ TEST(Ruvia, db_mariadb_untracked_session_runs_nothing_prepared) {
     {
         peer_type peer(std::vector<reply>(3, reply{.rows_ = std::vector<std::string>({std::string("v")})}), peer_type::after_startup::idle, 1, false);
         auto& context_value = test::new_test_io_context();
-        auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+        auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
         db_client client(attachment.loop(), config(peer));
         std::array<pipeline_test::outcome, 3> outcomes;
         test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -1015,7 +1015,7 @@ TEST(Ruvia, db_mariadb_untracked_session_runs_nothing_prepared) {
         replies.insert(replies.end(), 2, reply{.rows_ = std::vector<std::string>({std::string("v")})});
         peer_type peer(std::move(replies), peer_type::after_startup::idle);
         auto& context_value = test::new_test_io_context();
-        auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+        auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
         db_client client(attachment.loop(), config(peer));
         std::array<pipeline_test::outcome, 5> outcomes;
         test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -1047,7 +1047,7 @@ TEST(Ruvia, db_mariadb_statements_that_run_as_text_take_no_cache_places) {
     replies[cached * 2 + calls * 2] = {.rows_ = {std::string(server_tracked_list)}};
     peer_type peer(std::move(replies), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::size_t failures = 0;
     const auto select = [](std::size_t index) {
@@ -1095,7 +1095,7 @@ TEST(Ruvia, db_mariadb_reports_of_other_variables_keep_the_cached_statements) {
     using namespace mariadb_statement_test;
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string(""), .affected_rows_ = 1, .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("last_gtid"), std::string("0-1-5")}})}, {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("autocommit"), std::string("OFF")}})}, {.rows_ = std::vector<std::string>({std::string("c")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 5> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -1120,7 +1120,7 @@ TEST(Ruvia, db_mariadb_call_has_the_tracked_variables_read_back) {
     using namespace mariadb_statement_test;
     peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string(server_tracked_list)})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string("time_zone")})}, {.rows_ = std::vector<std::string>({std::string("d")})}, {.rows_ = std::vector<std::string>({std::string("e")})}}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 7> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {

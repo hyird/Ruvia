@@ -342,7 +342,7 @@ http1_server_request_parse_result http1_server_request_parser::parse(borrowed_te
     return http1_server_request_parse_result(header_bytes, decode_complete{});
 }
 
-http_request make_parsed_http_request(borrowed_text method, borrowed_text target, std::span<const http_header_view> headers, borrowed_span<std::byte> body) {
+http_request make_http_request(borrowed_text method, borrowed_text target, std::span<const http_header_view> headers, borrowed_span<std::byte> body) {
     const auto method_view = method.view();
     const auto target_text = target.view();
     if (!is_valid_http_method_token(method_view)) {
@@ -502,7 +502,7 @@ namespace {
             }
             break;
         case http_field_kind::expect:
-            block.expectations_.parse_field(value);
+            block.expectations_.update(value);
             break;
         case http_field_kind::upgrade:
             // RFC 9110 section 7.8 requires a server to ignore Upgrade in

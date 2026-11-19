@@ -190,8 +190,8 @@ void http_client_request_storage::resolve_route(const http_client_config_storage
     if (options_.authority_) {
         const auto parsed = parse_route_authority(*options_.authority_);
         const http_origin_options origin{.host_ = parsed.host(), .port_ = parsed.effective_port(default_port)};
-        authority_origin = http_origin_view::for_scheme(config.scheme_, origin);
-        route_authority_ = make_http_origin_authority(*authority_origin);
+        authority_origin = http_origin_view(config.scheme_, origin);
+        route_authority_ = format_http_origin_authority(*authority_origin);
         authority_host = parsed.host();
         if (authority_host.starts_with('[')) {
             authority_host = authority_host.substr(1, authority_host.size() - 2);
@@ -239,7 +239,7 @@ client_request_policy::client_request_policy(const http_client_config_storage& c
     config_(config),
     jar_(config.scheme_, config.host_, {.max_cookies_ = config.max_cookies_, .max_cookie_bytes_ = config.max_cookie_bytes_}) {
     for (const auto& cookie : config.cookies_) {
-        jar_.add_configured_cookie(cookie.name(), cookie.value());
+        jar_.set_cookie(cookie.name(), cookie.value());
     }
 }
 
@@ -339,7 +339,7 @@ void client_request_policy::retain_response_cookies(std::string_view request_tar
     if (config_.received_cookies_ == http_client_received_cookie_policy::ignore) {
         return;
     }
-    jar_.retain_response_cookies(request_target, headers);
+    jar_.apply_response_cookies(request_target, headers);
 }
 
 }  // namespace detail
@@ -350,7 +350,7 @@ void append_query_component(std::string& output, std::string_view value) {
         if (is_uri_unreserved_byte(byte)) {
             output.push_back(static_cast<char>(byte));
         } else {
-            http_append_percent_byte(output, byte);
+            append_percent_byte(output, byte);
         }
     }
 }
@@ -390,7 +390,7 @@ void append_request_headers(std::vector<http_header>& headers, std::span<const h
     }
     const auto parsed = detail::parse_route_authority(*options.authority_);
     const http_origin_options origin{.host_ = parsed.host(), .port_ = parsed.port()};
-    return http_origin_view::for_scheme(client.scheme(), origin);
+    return http_origin_view(client.scheme(), origin);
 }
 
 void clear_route_overrides(http_client_request_options& options) noexcept {
@@ -466,7 +466,7 @@ http_client_request& http_client_request::query(std::string_view name, std::stri
     return *this;
 }
 http_client_request& http_client_request::body(outbound_bytes value) & {
-    body_ = std::move(value).into_string();
+    body_ = std::move(value).take_string();
     has_body_ = true;
     return *this;
 }
@@ -514,7 +514,7 @@ task<http_client_response> http_client_request::send() && {
 namespace {
 
 [[nodiscard]] std::string format_origin_target_url(const http_origin_view& origin, std::string_view target) {
-    const auto authority = make_http_origin_authority(origin);
+    const auto authority = format_http_origin_authority(origin);
     const std::string_view scheme_prefix = origin.scheme() == http_scheme::https ? "https://" : "http://";
     std::string url;
     url.reserve(scheme_prefix.size() + authority.size() + target.size());
@@ -623,8 +623,8 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
                 stop_group cancellation{request.client_.options_.stop_token_, request.client_.host_stop_token_, deadline_stop.token()};
                 worker_timer_registration timer;
                 if (const auto deadline_value = total.deadline()) {
-                    (void)timer.schedule(request.client_.pool_->worker(), *deadline_value, [&deadline_stop](worker_timer_outcome outcome) noexcept {
-                        if (outcome == worker_timer_outcome::expired) {
+                    (void)timer.schedule(request.client_.pool_->worker(), *deadline_value, [&deadline_stop](worker_timer_status outcome) noexcept {
+                        if (outcome == worker_timer_status::expired) {
                             deadline_stop.request_stop();
                         }
                     });
@@ -653,7 +653,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
             if (!has_custom_policy && request.client_.scheme() == http_scheme::https && next->scheme() != http_scheme::https) {
                 co_return response;
             }
-            auto authority = make_http_origin_authority(next->origin());
+            auto authority = format_http_origin_authority(next->origin());
             // Route overrides belong to the origin that set them.
             clear_route_overrides(request.request_options_);
             if (!request.client_.pool_->config().fixed_origin_ && has_custom_policy && next->scheme() == request.client_.scheme()) {
@@ -739,7 +739,7 @@ http_client_connect_request http_client_ref::connect(std::string_view authority)
     registration_.require_active();
     return http_client_connect_request(*this, authority, {}, false);
 }
-http_client_connect_request http_client_ref::udp(std::string_view path) const {
+http_client_connect_request http_client_ref::connect_udp(std::string_view path) const {
     registration_.require_active();
     return http_client_connect_request(*this, pool_->config().authority_, path, true);
 }
@@ -768,7 +768,7 @@ http_client_connect_request& http_client_connect_request::target(std::string_vie
     target_.assign(value);
     return *this;
 }
-task<http_client_tunnel_result> http_client_connect_request::connect(http_client_tunnel_config config) && {
+task<http_client_tunnel_result> http_client_connect_request::open(http_client_tunnel_config config) && {
     client_.registration_.require_active();
     {
         detail::inline_http_header_views<16> fields(headers_.size() + (udp_ ? 1U : 0U));
@@ -933,7 +933,7 @@ std::vector<http_client_endpoint_address> http_client_ref::dns_snapshot() const 
     registration_.require_active();
     return pool_->dns_snapshot();
 }
-void http_client_ref::update_dns(argument_list<http_client_endpoint_address> addresses) {
+void http_client_ref::update_dns(argument_list<http_client_endpoint_address> addresses) const {
     registration_.require_active();
     pool_->update_dns(addresses.span());
 }
@@ -960,16 +960,16 @@ task<std::vector<ip_address>> http_client_ref::resolve_dns(std::string_view host
     }
     return registration_.attach(resolve_dns_owned(pool_->worker(), std::string(host), std::move(merged), pool_owner_, std::move(options.stop_token_), host_stop_token_));
 }
-bool http_client_ref::close_connection(std::uint64_t id) {
+bool http_client_ref::close_connection(std::uint64_t id) const {
     registration_.require_active();
     return pool_->close_connection(id);
 }
-std::optional<http_client_push> http_client_ref::next_push() {
+std::optional<http_client_push> http_client_ref::next_push() const {
     registration_.require_active();
     return pool_->next_push();
 }
 
-std::optional<http_client_advertisement> http_client_ref::next_advertisement() {
+std::optional<http_client_advertisement> http_client_ref::next_advertisement() const {
     registration_.require_active();
     return pool_->next_advertisement();
 }

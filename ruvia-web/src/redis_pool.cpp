@@ -168,11 +168,11 @@ void redis_pool::prepare_write_buffer(std::string& write_buffer, std::string_vie
     write_buffer.assign(wire.data(), wire.size());
 }
 
-task<redis_value> redis_pool::execute_owned(redis_owned_command command, operation_options options, std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics, std::optional<operation_deadline> deadline) {
+task<redis_value> redis_pool::execute(redis_owned_command command, operation_options options, std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics, std::optional<operation_deadline> deadline) {
     return execute_decoded<redis_value>(std::move(command), identity_redis_reply, std::move(options), reply_timeout, io_metrics, deadline);
 }
 
-task<redis_value> redis_pool::execute_owned(std::vector<std::string> args, operation_options options, std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics, std::optional<operation_deadline> deadline) {
+task<redis_value> redis_pool::execute(std::vector<std::string> args, operation_options options, std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics, std::optional<operation_deadline> deadline) {
     return execute_decoded<redis_value>(std::move(args), identity_redis_reply, std::move(options), reply_timeout, io_metrics, deadline);
 }
 

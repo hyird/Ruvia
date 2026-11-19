@@ -255,7 +255,7 @@ void visit_offered_upgrade_protocols(const http_request& request, visitor_type&&
 
 }  // namespace
 
-void http1_mark_connection_close(http_response& response, http1_connection_close_field_policy field_policy) {
+void mark_http1_connection_close(http_response& response, http1_connection_close_field_policy field_policy) {
     const std::string_view base = field_policy == http1_connection_close_field_policy::preserve_upgrade ? "close, Upgrade" : "close";
     std::array<char, 256> inline_buffer{};
     std::size_t inline_size = 0;
@@ -301,7 +301,7 @@ void http1_mark_connection_close(http_response& response, http1_connection_close
     }
 }
 
-http1_request_connection_plan http1_commit_final_response(http_response& response, http1_request_connection_plan plan) {
+http1_request_connection_plan commit_http1_final_response(http_response& response, http1_request_connection_plan plan) {
     const auto http1_control = detail::http1_final_response_control_plan(response);
     const auto response_options = http1_control.connection_options();
     const auto upgrade_protocols = http1_control.upgrade_protocols();
@@ -312,7 +312,7 @@ http1_request_connection_plan http1_commit_final_response(http_response& respons
         plan = plan.require_close();
     }
     if (plan.close_policy() == http1_close_policy::close_after_response) {
-        http1_mark_connection_close(response, preserve_upgrade ? http1_connection_close_field_policy::preserve_upgrade : http1_connection_close_field_policy::close_only);
+        mark_http1_connection_close(response, preserve_upgrade ? http1_connection_close_field_policy::preserve_upgrade : http1_connection_close_field_policy::close_only);
     } else {
         const bool generate_upgrade_option = preserve_upgrade && !response_options.upgrade();
         if (generate_upgrade_option) {
@@ -335,7 +335,7 @@ namespace {
         return std::nullopt;
     }
     const auto field = response.header("Content-Length");
-    return field.has_value() ? http_parse_content_length(*field) : std::nullopt;
+    return field.has_value() ? parse_http_content_length(*field) : std::nullopt;
 }
 
 }  // namespace
@@ -352,7 +352,7 @@ prepared_http1_response_stream prepare_http1_response_stream_head(http_response 
     // the response is finally known, instead of pessimistically baking close into
     // the pre-commit plan.
     const auto planned_connection = plan.request_connection_plan().close_policy() == http1_close_policy::allow_reuse && plan.close_policy() == http1_close_policy::allow_reuse && (framing.kind() != http1_framing_kind::close_delimited || body_plan.body_suppressed()) ? plan.request_connection_plan() : plan.request_connection_plan().require_close();
-    const auto connection_plan = http1_commit_final_response(response, planned_connection);
+    const auto connection_plan = commit_http1_final_response(response, planned_connection);
     auto head = prepare_http_response_stream_head(std::move(response), commit_plan);
     const auto response_head_plan = plan_http1_response_stream_head(head.commit_plan().body_plan(), connection_plan, framing);
     return prepared_http1_response_stream(std::move(head).take_response(), head.commit_plan(), response_head_plan, connection_plan);

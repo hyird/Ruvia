@@ -80,7 +80,7 @@ namespace ruvia::detail {
 
 // One inflate pass over `data`; the message limit covers everything appended
 // to `out` since `start`. A null `storage` grows `out` uncharged.
-[[nodiscard]] inline websocket_inflate_result websocket_inflate_chunk(zlib_inflate_stream& inflater, const char* data, std::size_t size, std::string& out, std::size_t start, protocol_byte_limit message_limit, websocket_receive_storage* storage) {
+[[nodiscard]] inline websocket_inflate_status websocket_inflate_chunk(zlib_inflate_stream& inflater, const char* data, std::size_t size, std::string& out, std::size_t start, protocol_byte_limit message_limit, websocket_receive_storage* storage) {
     auto& stream = inflater.native();
     const zlib_borrow_scope borrow(stream);
     stream.avail_in = 0;
@@ -94,52 +94,52 @@ namespace ruvia::detail {
         const int status = inflate(&stream, Z_NO_FLUSH);
         if (status != Z_STREAM_END && status != Z_OK && status != Z_BUF_ERROR) {
             inflater.rethrow_allocation_failure();
-            return websocket_inflate_result::error;
+            return websocket_inflate_status::error;
         }
         const auto produced = sizeof(buffer) - stream.avail_out;
         if (message_limit.addition_exceeds(out.size() - start, produced)) {
-            return websocket_inflate_result::too_large;
+            return websocket_inflate_status::too_large;
         }
         if (storage != nullptr && !storage->reserve(websocket_receive_storage::slot::inflate, out, out.size() + produced)) {
-            return websocket_inflate_result::too_large;
+            return websocket_inflate_status::too_large;
         }
         out.append(buffer, produced);
         // RFC 7692 permits BFINAL=1 followed by another DEFLATE stream.
         // Preserve the LZ77 window across streams, including takeover
         // history, while discarding the terminated stream's padding bits.
         if (status == Z_STREAM_END && inflateResetKeep(&stream) != Z_OK) {
-            return websocket_inflate_result::error;
+            return websocket_inflate_status::error;
         }
         if (stream.avail_out != 0 && stream.avail_in == 0 && supplied == size) {
             break;
         }
         if (produced == 0 && stream.avail_in == before_input && !(stream.avail_in == 0 && supplied < size)) {
-            return websocket_inflate_result::error;
+            return websocket_inflate_status::error;
         }
     }
-    return websocket_inflate_result::ok;
+    return websocket_inflate_status::ok;
 }
 
 // Decompresses a whole message: appends the 0x00 0x00 0xFF 0xFF marker that
 // the sender stripped, then raw-inflates into `out`, bounded by one explicit
 // message limit across the appended bytes to defuse decompression bombs
 // (RFC 7692 §7.2.2).
-[[nodiscard]] inline websocket_inflate_result websocket_inflate_message(zlib_inflate_stream& inflater, std::string_view input, std::string& out, protocol_byte_limit message_limit, websocket_receive_storage* storage) {
+[[nodiscard]] inline websocket_inflate_status websocket_inflate_message(zlib_inflate_stream& inflater, std::string_view input, std::string& out, protocol_byte_limit message_limit, websocket_receive_storage* storage) {
     static constexpr unsigned char flush_marker[4] = {0x00, 0x00, 0xFF, 0xFF};
     std::optional<std::string> owned_input;
     if (http_text_aliases_string(input, out)) {
         input = owned_input.emplace(input);
     }
     const auto start = out.size();
-    if (const auto result_value = websocket_inflate_chunk(inflater, input.data(), input.size(), out, start, message_limit, storage); result_value != websocket_inflate_result::ok) {
+    if (const auto result_value = websocket_inflate_chunk(inflater, input.data(), input.size(), out, start, message_limit, storage); result_value != websocket_inflate_status::ok) {
         return result_value;
     }
-    if (const auto result_value = websocket_inflate_chunk(inflater, reinterpret_cast<const char*>(flush_marker), sizeof(flush_marker), out, start, message_limit, storage); result_value != websocket_inflate_result::ok) {
+    if (const auto result_value = websocket_inflate_chunk(inflater, reinterpret_cast<const char*>(flush_marker), sizeof(flush_marker), out, start, message_limit, storage); result_value != websocket_inflate_status::ok) {
         return result_value;
     }
     // zlib reports bit 128 only at a complete DEFLATE block boundary.
     // Consuming every input byte alone does not detect a truncated block.
-    return (inflater.native().data_type & 128) != 0 ? websocket_inflate_result::ok : websocket_inflate_result::error;
+    return (inflater.native().data_type & 128) != 0 ? websocket_inflate_status::ok : websocket_inflate_status::error;
 }
 
 websocket_deflate::websocket_deflate(websocket_deflate_codecs* shared, websocket_zlib_options deflater, bool send_takeover, bool receive_takeover, int send_window, int receive_window) noexcept :
@@ -182,13 +182,13 @@ bool websocket_deflate::compress_fragment(std::string_view input, bool first, bo
     return websocket_deflate_message(*deflater_, input, out, final);
 }
 
-websocket_inflate_result websocket_deflate::decompress(std::string_view input, std::string& out, protocol_byte_limit message_limit, websocket_receive_storage& storage) {
+websocket_inflate_status websocket_deflate::decompress(std::string_view input, std::string& out, protocol_byte_limit message_limit, websocket_receive_storage& storage) {
     if (!receive_takeover_ && shared_ != nullptr) {
         // The shared inflater has a 15-bit window, which also inflates
         // every smaller negotiated window.
         auto* codec = acquire_codec(shared_->inflater_, -websocket_deflate_codecs::max_window_bits);
         if (codec == nullptr) {
-            return websocket_inflate_result::error;
+            return websocket_inflate_status::error;
         }
         const codec_reset_guard reset_guard(shared_->inflater_);
         return websocket_inflate_message(*codec, input, out, message_limit, &storage);
@@ -197,10 +197,10 @@ websocket_inflate_result websocket_deflate::decompress(std::string_view input, s
         inflater_ = std::make_unique<zlib_inflate_stream>(-receive_window_);
         if (!inflater_->initialized()) {
             inflater_.reset();
-            return websocket_inflate_result::error;
+            return websocket_inflate_status::error;
         }
     } else if (!receive_takeover_ && !inflater_->reset()) {
-        return websocket_inflate_result::error;
+        return websocket_inflate_status::error;
     }
     return websocket_inflate_message(*inflater_, input, out, message_limit, &storage);
 }
@@ -238,10 +238,10 @@ bool websocket_deflate_codecs::deflate_message(std::string_view payload, std::st
     return detail::websocket_deflate_message(*codec, payload, out);
 }
 
-websocket_inflate_result websocket_deflate_codecs::inflate_message(std::string_view payload, std::string& out, protocol_byte_limit message_limit) {
+websocket_inflate_status websocket_deflate_codecs::inflate_message(std::string_view payload, std::string& out, protocol_byte_limit message_limit) {
     auto* codec = detail::acquire_codec(inflater_, -max_window_bits);
     if (codec == nullptr) {
-        return websocket_inflate_result::error;
+        return websocket_inflate_status::error;
     }
     const detail::codec_reset_guard reset_guard(inflater_);
     return detail::websocket_inflate_message(*codec, payload, out, message_limit, nullptr);

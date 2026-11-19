@@ -383,7 +383,7 @@ void db_schema::create_table(const db_entity_table_options& options) {
         if constexpr (c_type::options.primary_key_) {
             primary.push_back(column.name_);
         }
-        if constexpr (c_type::options.generated_) {
+        if constexpr (c_type::options.identity_) {
             column.identity_ = db_identity::by_default;
         }
         for (const auto& value : options.generated_columns_) {

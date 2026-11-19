@@ -54,10 +54,10 @@ public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 
     ruvia::task<void> invoke(ruvia::context& context_value, ruvia::next& next_value) {
-        if (context_value.req().header("X-Hold-Root").has_value()) {
+        if (context_value.request().header("X-Hold-Root").has_value()) {
             held_request_started.store(true, std::memory_order_release);
             while (!release_held_request.load(std::memory_order_acquire)) {
-                if (co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(1), context_value.stop_token()) == ruvia::timer_sleep_result::stop_requested) {
+                if (co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(1), context_value.stop_token()) == ruvia::sleep_status::stop_requested) {
                     co_return;
                 }
             }
@@ -203,7 +203,7 @@ TEST(Ruvia, document_root_refresh_updates_multi_worker_application) {
     static_cast<void>(configure_application());
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, multi_worker_config(), {.worker_count_ = worker_count});
-    EXPECT_EQ(ruvia::app().workers().size(), worker_count);
+    EXPECT_EQ(ruvia::app().worker_refs().size(), worker_count);
 
     // Every version has a distinct size, so a change is indexed even where the
     // filesystem's modification time is coarse.

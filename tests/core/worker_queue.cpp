@@ -33,8 +33,9 @@ TEST(Ruvia, worker_queue_yields_to_io_context_between_batches) {
         }
     };
     asio::io_context context;
-    auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 1});
-    const auto worker_value = attachment.loop().worker();
+    auto attachment = ruvia::event_loop_attachment(context, {.queue_capacity_ = 1});
+    const auto loop_for_worker_value = attachment.loop();
+    const auto worker_value = loop_for_worker_value.worker();
     bool foreign_ran{};
     unsigned runs{};
     EXPECT_TRUE(worker_value.post(reposting_task{&worker_value, &attachment, &foreign_ran, &runs}).accepted());
@@ -61,8 +62,9 @@ TEST(Ruvia, worker_cancellation_registration_retires_before_slot_reuse) {
         }
     } state;
     asio::io_context context;
-    auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 1});
-    const auto worker_value = attachment.loop().worker();
+    auto attachment = ruvia::event_loop_attachment(context, {.queue_capacity_ = 1});
+    const auto loop_for_worker_value = attachment.loop();
+    const auto worker_value = loop_for_worker_value.worker();
     auto target = ruvia::make_worker_cancellation_target(state, worker_value);
     using registration = ruvia::worker_cancellation_registration<ruvia::worker_cancellation_target<owner>>;
     using target_owner = std::shared_ptr<ruvia::worker_cancellation_target<owner>>;
@@ -120,8 +122,9 @@ TEST(Ruvia, worker_cancellation_registration_handles_precancel_and_exception_unw
         }
     } state;
     asio::io_context context;
-    auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 1});
-    const auto worker_value = attachment.loop().worker();
+    auto attachment = ruvia::event_loop_attachment(context, {.queue_capacity_ = 1});
+    const auto loop_for_worker_value = attachment.loop();
+    const auto worker_value = loop_for_worker_value.worker();
     auto target = ruvia::make_worker_cancellation_target(state, worker_value);
     ruvia::stop_source source;
     source.request_stop();
@@ -218,8 +221,9 @@ TEST(Ruvia, worker_ref_defers_resumption_to_its_worker) {
     using worker_resume_test::before;
     for (const int hint : {ASIO_CONCURRENCY_HINT_DEFAULT, ASIO_CONCURRENCY_HINT_UNSAFE_IO}) {
         asio::io_context context(hint);
-        auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 1});
-        const auto worker_value = attachment.loop().worker();
+        auto attachment = ruvia::event_loop_attachment(context, {.queue_capacity_ = 1});
+        const auto loop_for_worker_value = attachment.loop();
+        const auto worker_value = loop_for_worker_value.worker();
         std::vector<int> order;
         bool on_worker = true;
         ruvia::test::run_worker_tasks(attachment, worker_resume_test::resume_twice(worker_value, order, 10, on_worker), worker_resume_test::resume_twice(worker_value, order, 20, on_worker));

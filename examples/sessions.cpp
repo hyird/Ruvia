@@ -43,7 +43,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> write(ruvia::context& c) {
-        const auto preference = co_await c.req().body_text();
+        const auto preference = co_await c.request().body_text();
         c.session().set(preference);
         // The middleware commits before response publication; every non-empty
         // write also rotates the ID. Mutate before a stream's first write or

@@ -259,15 +259,15 @@ inline task<http_response_file_write_result> write_http_response_file(asio::ip::
         });
         // A failed completion still reports the prefix it transferred, which
         // may cover the head: the response is committed once the head left.
-        const auto sent = static_cast<std::uint64_t>(transmit_completion.result());
+        const auto sent = static_cast<std::uint64_t>(transmit_completion.value());
         if (auto* lifecycle = progress.lifecycle()) {
-            lifecycle->note_write(transmit_completion.result());
-            lifecycle->note_error(transmit_completion.error_code());
+            lifecycle->note_write(transmit_completion.value());
+            lifecycle->note_error(transmit_completion.code());
         }
         const auto head_sent = std::min<std::uint64_t>(sent, head.size());
         const auto file_sent = sent - head_sent;
         head.remove_prefix(static_cast<std::size_t>(head_sent));
-        const auto transmit_error = transmit_completion.error_code();
+        const auto transmit_error = transmit_completion.code();
         if (transmit_error || sent == 0 || file_sent > remaining) {
             result.error_ = transmit_error ? transmit_error : std::error_code(asio::error::operation_aborted);
             result.head_written_ = head.empty();
@@ -337,7 +337,7 @@ struct http1_response_write_start final {
         return start;
     }
 
-    auto body = response_plan.send_body() ? response.body_bytes() : std::string_view{};
+    auto body = response_plan.send_body() ? response.body() : std::string_view{};
     if (!body.empty()) {
         const bool can_hold = start.head_bytes_ < hold_limit && body.size() < hold_limit - start.head_bytes_;
         if (can_hold || (coalesce_for_tls && output.can_append_on_stack(body.size()))) {
@@ -830,8 +830,8 @@ public:
                     auto read_completion = co_await ruvia::async_asio<std::size_t>([this, &body, filled, writable](auto handler) mutable {
                         stream_.async_read_some(asio::buffer(body.data() + filled, writable), asio::bind_cancellation_slot(read_cancellation_.slot(), std::move(handler)));
                     });
-                    const auto ec = read_completion.error_code();
-                    const auto bytes_read = read_completion.result();
+                    const auto ec = read_completion.code();
+                    const auto bytes_read = read_completion.value();
                     if (ec == asio::error::operation_aborted) {
                         throw_if_read_interrupted_keeping(body, filled);
                     }
@@ -1000,8 +1000,8 @@ private:
         auto read_completion = co_await ruvia::async_asio<std::size_t>([this, read_space](auto handler) mutable {
             stream_.async_read_some(asio::buffer(read_space), asio::bind_cancellation_slot(read_cancellation_.slot(), std::move(handler)));
         });
-        const auto ec = read_completion.error_code();
-        const auto bytes_read = read_completion.result();
+        const auto ec = read_completion.code();
+        const auto bytes_read = read_completion.value();
         if (ec == asio::error::operation_aborted) {
             throw_if_read_interrupted();
         }
@@ -1239,7 +1239,7 @@ struct http1_route_dispatch final {
 // response is the framework's own (an error or exception handler's output):
 // failing to commit it leaves no response to fall back to.
 [[nodiscard]] inline http1_session_request_completion close_with_framework_response(http_response& response, http1_request_connection_plan connection_plan) {
-    return http1_session_request_completion::make_buffered_closing(http1_commit_final_response(response, connection_plan.require_close()));
+    return http1_session_request_completion::make_buffered_closing(commit_http1_final_response(response, connection_plan.require_close()));
 }
 
 // Commits a route's buffered response. A response that breaks the HTTP/1
@@ -1248,7 +1248,7 @@ struct http1_route_dispatch final {
 template <typename make_completion_type>
 [[nodiscard]] inline http1_session_request_completion commit_http1_route_response(http_response& response, http1_request_connection_plan connection_plan, make_completion_type make_completion) {
     try {
-        return make_completion(http1_commit_final_response(response, connection_plan));
+        return make_completion(commit_http1_final_response(response, connection_plan));
     } catch (const http1_response_head_error& error) {
         return http1_session_request_completion::make_rejected_final_response(connection_plan, error);
     }
@@ -1460,14 +1460,14 @@ private:
                 // A terminal cancellation can race a successful read. Preserve
                 // every returned byte before inspecting the shutdown state.
                 if (first_read) {
-                    if (completion.result() != 0) {
+                    if (completion.value() != 0) {
                         input_.reserve(std::min(initial_read_buffer_bytes, allowance_));
-                        input_.append(std::string_view(&first_byte, completion.result()));
+                        input_.append(std::string_view(&first_byte, completion.value()));
                     }
                 } else {
-                    input_.commit(completion.result());
+                    input_.commit(completion.value());
                 }
-                const auto error = completion.error_code();
+                const auto error = completion.code();
                 if (error) {
                     if (closing_ && error == asio::error::operation_aborted) {
                         co_return;
@@ -1633,7 +1633,7 @@ public:
     template <typename sink>
     friend task<void> response_stream_end_thunk(void*, std::span<const http_header_view>);
     template <typename sink>
-    friend task<timer_sleep_result> response_stream_sleep_thunk(void*, timeout_duration, const stop_token&);
+    friend task<sleep_status> response_stream_sleep_thunk(void*, timeout_duration, const stop_token&);
     template <typename sink>
     friend void response_stream_bind_context_thunk(void*, context*);
     template <typename sink>
@@ -1790,7 +1790,7 @@ private:
         }
     }
 
-    task<timer_sleep_result> sleep(timeout_duration duration, const stop_token& stop_token_value) {
+    task<sleep_status> sleep(timeout_duration duration, const stop_token& stop_token_value) {
         state_.ensure_body_allowed();
         co_return co_await sleep_for(worker_, duration, stop_token_value);
     }
@@ -2105,7 +2105,7 @@ inline constexpr std::size_t pipelined_output_batch_bytes = std::size_t{16} * 10
 //     if (!output.start(body)) {
 //         auto completion = co_await async_asio<std::size_t>(
 //             [&output](auto handler) { output.write_remaining(std::move(handler)); });
-//         output.finish(completion.error_code(), completion.result());
+//         output.finish(completion.code(), completion.value());
 //     }
 //     const auto written = output.complete();
 //
@@ -2200,7 +2200,7 @@ public:
         if (!start()) {
             const connection_scanner::entry::phase_scope caller_phase(*progress_);
             const auto completion = co_await async_write_remaining();
-            finish(completion.error_code(), completion.result());
+            finish(completion.code(), completion.value());
         }
         co_return complete().error_;
     }
@@ -2228,10 +2228,10 @@ task<bool> read_more_cleartext_http2_preface(stream_type& stream, connection_sca
     auto read_completion = co_await ruvia::async_asio<std::size_t>([&stream, space](auto handler) mutable {
         stream.async_read_some(asio::buffer(space), std::move(handler));
     });
-    if (read_completion.error_code()) {
+    if (read_completion.code()) {
         co_return false;
     }
-    read_buffer.commit_read(read_completion.result());
+    read_buffer.commit_read(read_completion.value());
     scanner_entry.touch();
     co_return true;
 }
@@ -2286,8 +2286,8 @@ private:
         const auto completion = co_await async_asio<std::size_t>([&self, bytes = prepared->head()](auto handler) {
             asio::async_write(self.stream_, asio::buffer(bytes), std::move(handler));
         });
-        if (completion.error_code()) {
-            throw inbound_transport_error(completion.error_code(), "failed to write HTTP/1 interim response");
+        if (completion.code()) {
+            throw inbound_transport_error(completion.code(), "failed to write HTTP/1 interim response");
         }
     }
     stream_type& stream_;
@@ -2695,8 +2695,8 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         auto idle_completion = co_await ruvia::async_asio<std::size_t>([&stream, &idle_read_buffer](auto handler) mutable {
             stream.async_read_some(asio::buffer(idle_read_buffer), std::move(handler));
         });
-        const auto idle_ec = idle_completion.error_code();
-        const auto idle_bytes = idle_completion.result();
+        const auto idle_ec = idle_completion.code();
+        const auto idle_bytes = idle_completion.value();
         // A clean peer end or timeout is answered as in the request read loop.
         if (idle_ec) {
             co_return http1_request_head_read_close(idle_ec, scanner_entry);
@@ -2781,7 +2781,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
     for (;;) {
         // Pipelined responses held back for one coalesced write. Bound to the
         // work set, which keeps any held output until it is written.
-        http1_response_output<stream_type> response_output(stream, response_head, work_set.deferred_access_, options_.access_log_, base_route_services.get_conn_info().remote().address(), scanner_entry);
+        http1_response_output<stream_type> response_output(stream, response_head, work_set.deferred_access_, options_.access_log_, base_route_services.get_connection_info().remote().address(), scanner_entry);
 
         // Work-set storage outlives this arena. Reset the parser for the next
         // request, releasing its descriptor block, on every exit (including
@@ -3037,8 +3037,8 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
             auto read_completion = co_await ruvia::async_asio<std::size_t>([&stream, read_space](auto handler) mutable {
                 stream.async_read_some(asio::buffer(read_space), std::move(handler));
             });
-            const auto ec = read_completion.error_code();
-            const auto bytes_read = read_completion.result();
+            const auto ec = read_completion.code();
+            const auto bytes_read = read_completion.value();
             if (ec) {
                 // A clean peer end, or a timeout that cancelled the read, is
                 // answered with this side's close alert; anything else closes
@@ -3073,7 +3073,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
         if (const auto* rejected = request_completion->rejected_final_response()) {
             request_completion.emplace(co_await complete_failed_http_route(scanner_entry, std::make_exception_ptr(rejected->exception()), parsed_value, routes_value, admission->services(), response));
         }
-        const auto peer_ip = base_route_services.get_conn_info().remote().address();
+        const auto peer_ip = base_route_services.get_connection_info().remote().address();
         http_response_tail fallback_tail(parsed_value.request(), http_response_coding_policy::disabled(), peer_ip, peer_ip, request_start);
         auto& tail = admission ? admission->tail() : fallback_tail;
         auto connection_plan = request_completion->connection_plan();
@@ -3092,7 +3092,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 const auto* ready = preparation.ready();
                 const auto prepared = ready != nullptr ? *ready : co_await tail.finish_prepare(preparation, response, options_, routes_value, services);
                 if (prepared.recovered_) {
-                    connection_plan = http1_commit_final_response(response, connection_plan);
+                    connection_plan = commit_http1_final_response(response, connection_plan);
                     request_completion = request_completion->with_buffered_connection_plan(connection_plan);
                     connection_plan = request_completion->connection_plan();
                 }
@@ -3161,7 +3161,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 } else {
                     if (!response_output.start(write_start.body_, connection_plan.close_policy() == http1_close_policy::close_after_response && !stop_token_.stop_requested())) {
                         const auto completion = co_await response_output.async_write_remaining();
-                        response_output.finish(completion.error_code(), completion.result());
+                        response_output.finish(completion.code(), completion.value());
                     }
                     const auto written = response_output.complete();
                     write_result.emplace(classify_http1_buffered_response_write(response_plan, write_start.head_bytes_, written.error_, written.bytes_));

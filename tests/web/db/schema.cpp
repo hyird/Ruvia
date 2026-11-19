@@ -103,7 +103,7 @@ TEST(Ruvia, db_schema_enum_and_postgresql_only_operations_reject_mariadb) {
     }));
 }
 
-RUVIA_DB_ENTITY(app_events_entity_type, "app.events", ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true, .generated_ = true}>, ruvia::db_column<"payloads", std::vector<std::string>, ruvia::db_column_options{.data_type_ = db_data_type::jsonb}>)
+RUVIA_DB_ENTITY(app_events_entity_type, "app.events", ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true, .identity_ = true}>, ruvia::db_column<"payloads", std::vector<std::string>, ruvia::db_column_options{.data_type_ = db_data_type::jsonb}>)
 
 TEST(Ruvia, db_schema_entity_metadata_preserves_explicit_array_element_types) {
     using entity_type = app_events_entity_type;
@@ -163,7 +163,7 @@ TEST(Ruvia, db_schema_char_entity_and_column_operations_render_with_dialect_limi
 }
 
 RUVIA_DB_ENTITY(computed_events_entity_type, "computed_events", ruvia::db_column<"first_name", ruvia::string>, ruvia::db_column<"last_name", ruvia::string>, ruvia::db_column<"display_name", ruvia::string, ruvia::db_column_options{.generated_type_ = db_generated_type::stored}>)
-RUVIA_DB_ENTITY(maria_computed_entity_type, "maria_computed", ruvia::db_column<"value", std::int64_t>, ruvia::db_column<"double_value", std::int64_t, ruvia::db_column_options{.generated_type_ = db_generated_type::virtual_value, .nullable_ = true}>)
+RUVIA_DB_ENTITY(maria_computed_entity_type, "maria_computed", ruvia::db_column<"value", std::int64_t>, ruvia::db_column<"double_value", std::int64_t, ruvia::db_column_options{.generated_type_ = db_generated_type::virtual_, .nullable_ = true}>)
 
 TEST(Ruvia, db_schema_entity_computed_columns_render_and_validate) {
     using entity_type = computed_events_entity_type;
@@ -199,18 +199,18 @@ namespace db_schema_column_option_test {
 template <typename value_type, auto options>
 concept declarable_db_column = requires { typename ruvia::db_column<"value", value_type, options>; };
 
-static_assert(declarable_db_column<std::int64_t, ruvia::db_column_options{.primary_key_ = true, .generated_ = true}>);
+static_assert(declarable_db_column<std::int64_t, ruvia::db_column_options{.primary_key_ = true, .identity_ = true}>);
 static_assert(declarable_db_column<std::string, ruvia::db_column_options{.read_only_ = true}>);
 static_assert(declarable_db_column<std::string, ruvia::db_column_options{.read_only_ = true, .create_date_ = true}>);
 static_assert(declarable_db_column<std::int32_t, ruvia::db_column_options{.version_ = true}>);
 static_assert(declarable_db_column<std::string, ruvia::db_column_options{.delete_date_ = true}>);
 // Identity and computed generation exclude each other and read-only columns.
-static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.generated_ = true, .generated_type_ = db_generated_type::stored}>);
-static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.generated_ = true, .read_only_ = true}>);
+static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.identity_ = true, .generated_type_ = db_generated_type::stored}>);
+static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.identity_ = true, .read_only_ = true}>);
 static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.generated_type_ = db_generated_type::stored, .read_only_ = true}>);
 // Identity needs a non-null integer.
-static_assert(!declarable_db_column<std::string, ruvia::db_column_options{.generated_ = true}>);
-static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.generated_ = true, .nullable_ = true}>);
+static_assert(!declarable_db_column<std::string, ruvia::db_column_options{.identity_ = true}>);
+static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.identity_ = true, .nullable_ = true}>);
 // A named enum type replaces the scalar type.
 static_assert(!declarable_db_column<std::string, ruvia::db_column_options{.data_type_ = db_data_type::text, .enum_name_ = ruvia::fixed_string{"app.state"}}>);
 // version_ is a non-null integer concurrency token.

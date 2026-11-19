@@ -59,7 +59,7 @@ struct forwarded_hop final {
     if (address_text.empty()) {
         return std::nullopt;
     }
-    const auto parsed = ip_address::parse(address_text);
+    const auto parsed = ip_address::try_parse(address_text);
     if (!parsed.has_value()) {
         return std::nullopt;
     }
@@ -247,7 +247,7 @@ void http_client_ip_extractor::initialize(config_type&& config) {
     constexpr bool move_owned = std::is_rvalue_reference_v<config_type&&>;
     trusted_cidrs_.reserve(config.trusted_proxies_.size());
     for (const auto& cidr_text : config.trusted_proxies_) {
-        const auto parsed = ip_cidr::parse(cidr_text);
+        const auto parsed = ip_cidr::try_parse(cidr_text);
         if (!parsed.has_value()) {
             throw std::invalid_argument("trusted proxy entry must be a valid IP address or CIDR");
         }
@@ -290,7 +290,7 @@ bool http_client_ip_extractor::is_trusted_proxy(const ip_address& address) const
 }
 
 bool http_client_ip_extractor::is_trusted_proxy(std::string_view address_text) const noexcept {
-    const auto parsed = ip_address::parse(address_text);
+    const auto parsed = ip_address::try_parse(address_text);
     return parsed.has_value() && is_trusted_proxy(*parsed);
 }
 
@@ -314,7 +314,7 @@ http_client_ip_result http_client_ip_extractor::resolve(const ip_address& peer_i
 }
 
 std::optional<http_client_ip_result> http_client_ip_extractor::resolve(std::string_view peer_ip, const http_header_range_view& headers) const noexcept {
-    const auto parsed = ip_address::parse(peer_ip);
+    const auto parsed = ip_address::try_parse(peer_ip);
     if (!parsed.has_value()) {
         return std::nullopt;
     }

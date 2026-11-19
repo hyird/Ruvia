@@ -25,22 +25,23 @@ namespace client_operation_interruption_test {
 
 void exercise(const std::string& url, ruvia::http_client_versions versions) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
-    const auto worker = attachment.loop().worker();
+    auto attachment = ruvia::event_loop_attachment(io);
+    const auto loop_for_worker = attachment.loop();
+    const auto worker = loop_for_worker.worker();
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client owner(attachment.loop(), {.base_url_ = url, .versions_ = versions});
         try {
-            co_await ruvia::test::client_operations::exercise(owner.client(), worker);
+            co_await ruvia::test::client_operations::exercise(owner.ref(), worker);
         } catch (...) {
             failure = std::current_exception();
         }
         co_await owner.shutdown();
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
     if (failure) {
         std::rethrow_exception(failure);
     }

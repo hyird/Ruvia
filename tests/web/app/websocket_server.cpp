@@ -220,7 +220,7 @@ ruvia::task<std::string> receive_fragmented(auto& peer, bool compressed, std::si
     }
     ruvia::websocket_deflate_codecs codecs;
     std::string inflated;
-    EXPECT_TRUE(codecs.inflate_message(payload, inflated, ruvia::protocol_byte_limit::unlimited()) == ruvia::websocket_inflate_result::ok);
+    EXPECT_TRUE(codecs.inflate_message(payload, inflated, ruvia::protocol_byte_limit::unlimited()) == ruvia::websocket_inflate_status::ok);
     co_return std::string(inflated);
 }
 
@@ -434,7 +434,7 @@ public:
             if (invalid_version) {
                 throw std::logic_error("malformed extended CONNECT needs the raw wire fixture");
             }
-            result_.emplace(co_await client.client().connect(destination.authority_).protocol("websocket").target(path).header("Sec-WebSocket-Version", "13").header("Sec-WebSocket-Protocol", "standalone.v1").header("Sec-WebSocket-Extensions", "permessage-deflate").connect());
+            result_.emplace(co_await client.ref().connect(destination.authority_).protocol("websocket").target(path).header("Sec-WebSocket-Version", "13").header("Sec-WebSocket-Protocol", "standalone.v1").header("Sec-WebSocket-Extensions", "permessage-deflate").open());
             auto* tunnel = result_->tunnel();
             if (tunnel == nullptr) {
                 throw std::runtime_error("extended CONNECT was refused");
@@ -456,8 +456,8 @@ public:
         const auto connected = co_await ruvia::async_asio([&](auto completion) {
             socket_.async_connect(destination.endpoint_, std::move(completion));
         });
-        if (connected.error_code()) {
-            throw std::system_error(connected.error_code());
+        if (connected.code()) {
+            throw std::system_error(connected.code());
         }
         std::string head = "GET " + std::string(path) + " HTTP/1.1\r\nHost: " + destination.authority_ + "\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: " + (invalid_version ? "12" : "13") + "\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: standalone.v1\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n";
         if (prebuffer) {
@@ -467,10 +467,10 @@ public:
         const auto read = co_await ruvia::async_asio<std::size_t>([&](auto completion) {
             asio::async_read_until(socket_, asio::dynamic_buffer(input_), "\r\n\r\n", std::move(completion));
         });
-        if (read.error_code()) {
-            throw std::system_error(read.error_code());
+        if (read.code()) {
+            throw std::system_error(read.code());
         }
-        const auto response = input_.substr(0, read.result());
+        const auto response = input_.substr(0, read.value());
         if (invalid_version) {
             EXPECT_TRUE(response.starts_with("HTTP/1.1 400 "));
             EXPECT_NE(response.find("Sec-WebSocket-Version: 13"), std::string::npos);
@@ -499,7 +499,7 @@ public:
                 EXPECT_EQ(field.value_, "owned-handshake-field");
             }
         }
-        input_.erase(0, read.result());
+        input_.erase(0, read.value());
     }
 
     ruvia::task<void> write(std::string_view bytes) {
@@ -509,8 +509,8 @@ public:
             const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto completion) {
                 asio::async_write(socket_, asio::buffer(bytes), std::move(completion));
             });
-            if (sent.error_code()) {
-                throw std::system_error(sent.error_code());
+            if (sent.code()) {
+                throw std::system_error(sent.code());
             }
         }
     }
@@ -579,14 +579,14 @@ private:
                 const auto read = co_await ruvia::async_asio<std::size_t>([&](auto completion) {
                     socket_.async_read_some(asio::buffer(storage), std::move(completion));
                 });
-                if (read.result() != 0) {
-                    input_.append(storage.data(), read.result());
+                if (read.value() != 0) {
+                    input_.append(storage.data(), read.value());
                 }
-                if (read.error_code() == asio::error::eof) {
+                if (read.code() == asio::error::eof) {
                     co_return input_.size() >= bytes;
                 }
-                if (read.error_code()) {
-                    throw std::system_error(read.error_code());
+                if (read.code()) {
+                    throw std::system_error(read.code());
                 }
             }
         }
@@ -762,13 +762,13 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
     }
     {
         observed.scenario_ = "/shared";
-        auto websocket = co_await client.client().websocket("/shared").subprotocol("standalone.v1").deflate({.compression_ = {.enabled_ = true}}).connect();
+        auto websocket = co_await client.ref().websocket("/shared").subprotocol("standalone.v1").deflate({.compression_ = {.enabled_ = true}}).connect();
         co_await exchange_fragmented(websocket);
     }
     co_await await_retirement(server, observed);
     {
         observed.scenario_ = "/moved";
-        auto websocket = co_await client.client().websocket("/moved").subprotocol("standalone.v1").connect();
+        auto websocket = co_await client.ref().websocket("/moved").subprotocol("standalone.v1").connect();
         EXPECT_FALSE((co_await websocket.read()).has_value());
         co_await await_retirement(server, observed);
         bool expired = false;
@@ -782,7 +782,7 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
     }
     {
         observed.scenario_ = "/exchange";
-        auto websocket = co_await client.client().websocket("/exchange").subprotocol("standalone.v1").deflate({.compression_ = {.enabled_ = true}}).connect();
+        auto websocket = co_await client.ref().websocket("/exchange").subprotocol("standalone.v1").deflate({.compression_ = {.enabled_ = true}}).connect();
         EXPECT_EQ(websocket.subprotocol(), "standalone.v1");
         co_await websocket.text(std::string(4096, 'z'));
         auto message = co_await websocket.read();
@@ -839,7 +839,7 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
     }
     {
         observed.scenario_ = "/assemble";
-        auto websocket = co_await client.client().websocket("/assemble").subprotocol("standalone.v1").deflate({.compression_ = {.enabled_ = true}}).connect();
+        auto websocket = co_await client.ref().websocket("/assemble").subprotocol("standalone.v1").deflate({.compression_ = {.enabled_ = true}}).connect();
         for (const bool compress : {false, true}) {
             const auto sent_before = websocket.bytes_sent();
             auto message = websocket.begin_binary({.compress_ = compress});
@@ -873,7 +873,7 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
     }
     {
         observed.scenario_ = "/graceful";
-        auto original = co_await client.client().websocket("/graceful").subprotocol("standalone.v1").connect();
+        auto original = co_await client.ref().websocket("/graceful").subprotocol("standalone.v1").connect();
         auto cold_read = original.read({.timeout_ = 20ms});
         auto websocket = std::move(original);
         // The server stays silent until "start", so these client reads can
@@ -914,7 +914,7 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
     for (const bool deflate : {false, true}) {
         observed.scenario_ = "/count";
         const std::string payload = deflate ? std::string(4096, 'c') : std::string("hello");
-        auto request = client.client().websocket("/count");
+        auto request = client.ref().websocket("/count");
         request.subprotocol("standalone.v1");
         if (deflate) {
             request.deflate({.compression_ = {.enabled_ = true}});
@@ -942,7 +942,7 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
         observed.scenario_ = path;
         bool rejected = false;
         try {
-            auto websocket = co_await client.client().websocket(path).connect();
+            auto websocket = co_await client.ref().websocket(path).connect();
         } catch (const ruvia::http_client_error& error) {
             rejected = true;
             EXPECT_EQ(error.code(), ruvia::make_error_code(ruvia::http_client_errc::handshake_rejected));
@@ -1059,7 +1059,7 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
     {
         observed.scenario_ = "/cancel";
         std::optional<ruvia::websocket> websocket;
-        websocket.emplace(co_await client.client().websocket("/cancel").subprotocol("standalone.v1").connect());
+        websocket.emplace(co_await client.ref().websocket("/cancel").subprotocol("standalone.v1").connect());
         auto cold = websocket->read();
         bool ended = false;
         ruvia::task_scope reads(client.worker());
@@ -1145,7 +1145,7 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
 void exercise_protocol(ruvia::http_client_versions protocol) {
     asio::io_context io;
     ruvia::blocking_pool preparation({.thread_count_ = 1});
-    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &preparation});
+    auto attachment = ruvia::event_loop_attachment(io, {.blocking_pool_ = &preparation});
     ruvia::test::tcp_port_reservation plain(io), secure(io);
     ruvia::test::udp_port_reservation udp(io);
     const ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
@@ -1225,9 +1225,9 @@ void exercise_protocol(ruvia::http_client_versions protocol) {
         attachment.request_stop();
         if (failure) std::rethrow_exception(failure);
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
 }
 }  // namespace standalone_websocket_test
 

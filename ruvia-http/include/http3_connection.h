@@ -201,7 +201,7 @@ public:
     [[nodiscard]] std::int64_t stream_id() const noexcept {
         return stream_id_;
     }
-    [[nodiscard]] std::size_t bytes() const noexcept {
+    [[nodiscard]] std::size_t consumed_bytes() const noexcept {
         return bytes_;
     }
 
@@ -369,7 +369,7 @@ struct http3_datagram_prefix final {
 };
 
 struct http3_stream_output final {
-    [[nodiscard]] std::size_t size() const noexcept;
+    [[nodiscard]] std::size_t byte_size() const noexcept;
 
     std::int64_t stream_id_{-1};
     std::array<std::span<const std::byte>, 16> buffers_{};
@@ -589,7 +589,7 @@ public:
     // content total; otherwise the content is unbounded. A body-suppressed
     // response (HEAD request, 204, 304) ends the stream with its head; the
     // request method is the one the stream received.
-    [[nodiscard]] std::variant<http_response_stream_commit_plan, http_response_head_error> submit_streaming_response_head(std::int64_t stream_id, http_response head, http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
+    [[nodiscard]] std::variant<http_response_stream_commit_plan, http_response_head_error> submit_streaming_response_head(std::int64_t stream_id, http_response response, http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
     // A 1xx response before the final head (RFC 9114 §4.1). invalid_message:
     // the field section exceeds the local or peer field section limit.
     [[nodiscard]] http_submit_status submit_interim_response_head(std::int64_t stream_id, const http_interim_response_head& response);

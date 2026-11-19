@@ -110,7 +110,7 @@ public:
     sse_parse_result parse(std::string_view input) && = delete;
     // End of the stream: an active parser discards any incomplete event and
     // becomes finished. No effect otherwise.
-    void finish() noexcept;
+    void finish_input() noexcept;
     void reset() noexcept;
 
     [[nodiscard]] decoder_state state() const noexcept {

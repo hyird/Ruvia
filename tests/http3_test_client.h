@@ -189,7 +189,7 @@ public:
     void bind(http3_quic_connection& connection) noexcept {
         reference_.get_conn = get_connection;
         reference_.user_data = &connection;
-        connection.set_tls_native_handle(crypto_.get());
+        connection.set_tls_session(crypto_.get());
     }
 
     // Attaches this session to a native connection owned by `owner`, which
@@ -264,7 +264,7 @@ private:
     }
 
     static ngtcp2_conn* get_connection(ngtcp2_crypto_conn_ref* reference) {
-        return static_cast<http3_quic_connection*>(reference->user_data)->native_handle();
+        return static_cast<http3_quic_connection*>(reference->user_data)->native();
     }
 
     std::unique_ptr<SSL_CTX, free_context> context_;
@@ -624,7 +624,7 @@ public:
     // while a wait drives it, so only the peer's HTTP deadlines can end it:
     // a PING opens no stream and carries no HTTP/3 frame.
     void keep_alive(std::chrono::milliseconds interval) noexcept {
-        ngtcp2_conn_set_keep_alive_timeout(connection_->native_handle(), static_cast<ngtcp2_duration>(std::chrono::duration_cast<std::chrono::nanoseconds>(interval).count()));
+        ngtcp2_conn_set_keep_alive_timeout(connection_->native(), static_cast<ngtcp2_duration>(std::chrono::duration_cast<std::chrono::nanoseconds>(interval).count()));
     }
 
     // Abandons the request in both directions with RESET_STREAM and
@@ -686,8 +686,8 @@ public:
 
     // Only for the server's transport parameters and connection IDs, which no
     // public API reports.
-    [[nodiscard]] const ngtcp2_conn* native_handle() const noexcept {
-        return connection_->native_handle();
+    [[nodiscard]] const ngtcp2_conn* native() const noexcept {
+        return connection_->native();
     }
 
 private:
@@ -979,7 +979,7 @@ private:
                 return;
             }
             stream.unread_body_.append(data->bytes());
-            if (auto credit = data->take_credit(); credit.valid()) {
+            if (auto credit = std::move(*data).take_credit(); credit.valid()) {
                 if (stream.unread_credit_) {
                     stream.unread_credit_->merge(std::move(credit));
                 } else {
@@ -1203,7 +1203,7 @@ public:
     }
 
     // For assertions on the CONNECTION_CLOSE the peer sent.
-    [[nodiscard]] const ngtcp2_conn* native_handle() const noexcept {
+    [[nodiscard]] const ngtcp2_conn* native() const noexcept {
         return connection_;
     }
 

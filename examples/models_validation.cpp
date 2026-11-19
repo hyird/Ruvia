@@ -76,12 +76,12 @@ private:
     // Echo the requested changes: omission means leave unchanged, null means
     // clear, and a concrete value means assign. No raw JSON inspection needed.
     ruvia::task<ruvia::http_response> patch_profile(ruvia::context& c) {
-        const auto& patch = c.req().validated<profile_changes>();
+        const auto& patch = c.request().validated<profile_changes>();
         co_return c.json(patch);
     }
 
     ruvia::task<ruvia::http_response> register_user(ruvia::context& c) {
-        const auto& request = c.req().validated<register_request>();
+        const auto& request = c.request().validated<register_request>();
 
         register_response response;
         const auto& username = request.get<"username">();
@@ -98,14 +98,14 @@ private:
     // json_if/form_if parse and validate when the media type matches. A malformed
     // selected body is 400; only a different Content-Type yields nullopt.
     ruvia::task<ruvia::http_response> feedback(ruvia::context& c) {
-        if (const auto json = co_await c.req().json_if<contact_form>()) {
+        if (const auto json = co_await c.request().json_if<contact_form>()) {
             std::string body;
             body.append("json feedback from ");
             body.append(json->get<"name">().has_value() ? json->get<"name">()->view() : "anonymous");
             body.push_back('\n');
             co_return c.text(std::move(body));
         }
-        if (const auto form = co_await c.req().form_if<contact_form>()) {
+        if (const auto form = co_await c.request().form_if<contact_form>()) {
             std::string body;
             body.append("form feedback from ");
             body.append(form->get<"name">().has_value() ? form->get<"name">()->view() : "anonymous");
@@ -116,7 +116,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> contact(ruvia::context& c) {
-        const auto& form = c.req().validated<contact_form>();
+        const auto& form = c.request().validated<contact_form>();
         std::string body;
         body.append("message from ");
         body.append(form.get<"name">() ? form.get<"name">()->view() : "anonymous");
@@ -125,8 +125,8 @@ private:
     }
 
     ruvia::task<ruvia::http_response> search(ruvia::context& c) {
-        const auto& query = c.req().validated<search_query>();
-        const auto request_query = c.req().query("q");
+        const auto& query = c.request().validated<search_query>();
+        const auto request_query = c.request().query("q");
         std::string body;
         body.append("search=");
         const auto query_value = query.get<"q">().view();
@@ -149,7 +149,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> category_by_id(ruvia::context& c) {
-        const auto& params = c.req().validated<category_params>();
+        const auto& params = c.request().validated<category_params>();
         std::string body;
         body.append("category=");
         body.append(params.get<"id">().view());
@@ -158,7 +158,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> headers(ruvia::context& c) {
-        const auto& headers = c.req().validated<request_headers>();
+        const auto& headers = c.request().validated<request_headers>();
         std::string body;
         body.append("request-id=");
         body.append(headers.get<"request_id">().view());
@@ -167,7 +167,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> cookies(ruvia::context& c) {
-        const auto& cookies = c.req().validated<preferences_cookie>();
+        const auto& cookies = c.request().validated<preferences_cookie>();
         std::string body;
         body.append("theme=");
         body.append(cookies.get<"theme">().view());

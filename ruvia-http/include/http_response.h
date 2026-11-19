@@ -65,26 +65,26 @@ public:
     // allocation. The staged block is left empty and independent.
     void commit_headers(http_response_headers&& staged) noexcept;
     // Borrowed byte representation; file and empty bodies return an empty view.
-    [[nodiscard]] std::string_view body() const& noexcept RUVIA_LIFETIMEBOUND {
-        return body_bytes();
-    }
+    [[nodiscard]] std::string_view body() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view body() const&& = delete;
-    [[nodiscard]] std::string_view body_bytes() const& noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] std::string_view body_bytes() const&& = delete;
+    [[nodiscard]] std::span<const std::byte> body_bytes() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::as_bytes(std::span<const char>(body()));
+    }
+    [[nodiscard]] std::span<const std::byte> body_bytes() const&& = delete;
     // Transfers owned bytes or copies static/shared bytes, then empties the body.
     // File plans require a driver and throw without changing the response.
-    [[nodiscard]] std::string take_body_bytes() &&;
+    [[nodiscard]] std::string take_body() &&;
     [[nodiscard]] std::optional<http_response_file_view> file_body() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<http_response_file_view> file_body() const&& = delete;
     [[nodiscard]] bool has_multipart_file_body() const noexcept;
-    // True for file_body(), multipart_file_body() and file_bytes_body() bodies:
+    // True for file_body(), multipart_file_body() and file_representation_body() bodies:
     // the bytes are a file's representation, which a sender transmits as is.
     [[nodiscard]] bool has_file_representation() const noexcept;
     // 将正文替换为仅描述 HEAD 所选表示的空正文，保留首部并释放原正文资源。
     // 序列化 HEAD 时保留显式 Content-Length；未提供长度时不推断为零。
     // 标记随移动转移；重新设置正文会清除它，不影响 GET 等方法的正文规则。
-    void head_metadata_body() noexcept;
-    [[nodiscard]] bool has_head_metadata_body() const noexcept;
+    void mark_head_metadata_only() noexcept;
+    [[nodiscard]] bool has_head_metadata_only() const noexcept;
     // File segments retain their path and identity even when their length is
     // zero. Empty byte bodies have no segments; multipart bodies retain their
     // planned sequence of file ranges and boundary bytes.
@@ -101,9 +101,9 @@ public:
     // Own bytes read from a file: all of it, a byte range, or a multipart
     // byte-range payload of it. Unlike body(), the body remains a file
     // representation, even when empty.
-    void file_bytes_body(std::string&& value) noexcept;
+    void file_representation_body(std::string&& value) noexcept;
     // The owner must keep the backing string alive and immutable.
-    void file_bytes_body(std::shared_ptr<const std::string> value);
+    void file_representation_body(std::shared_ptr<const std::string> value);
     // Owns the path and the optional opened descriptor. Rvalue paths transfer
     // their storage. Validation precedes body replacement; a rejected call
     // releases the incoming descriptor.

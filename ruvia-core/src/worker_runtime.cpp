@@ -709,7 +709,7 @@ worker_runtime::thread_join_operation worker_runtime::prepare_thread_join(worker
 }
 #endif
 
-std::exception_ptr worker_runtime::take_failure() noexcept {
+std::exception_ptr worker_runtime::observe_failure() noexcept {
     const std::lock_guard lock(impl_->mutex_);
     return impl_->failure_.observe();
 }

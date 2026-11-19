@@ -70,7 +70,7 @@ namespace ruvia::detail {
     if (value.front() != '"') {
         return std::ranges::all_of(value, http_mime_token_char);
     }
-    return http_is_quoted_string(value);
+    return is_http_quoted_string(value);
 }
 
 [[nodiscard]] inline bool http_parse_mime_parameter(std::string_view parameter, std::string_view& name, std::string_view& value, bool strict_equals = true) noexcept {
@@ -478,7 +478,7 @@ std::variant<multipart_boundary, multipart_boundary_error> parse_multipart_bound
         }
         if (http_ascii_equals_ignore_case(key, "boundary")) {
             const auto decoded_value = decode_multipart_boundary_parameter(value, decoded);
-            boundary = decoded_value.has_value() ? multipart_boundary::try_from_value(*decoded_value) : std::nullopt;
+            boundary = decoded_value.has_value() ? multipart_boundary::try_parse(*decoded_value) : std::nullopt;
             if (!boundary) {
                 return false;
             }

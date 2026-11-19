@@ -153,6 +153,9 @@ class redis_connection final {
 public:
     redis_connection(asio::io_context& io_context, asio::ssl::context& tls_context, const worker_ref& worker_value, const redis_config_storage& config, client_wire_counters& counters);
     redis_connection(asio::io_context&, asio::ssl::context&, worker_ref&&, const redis_config_storage&, client_wire_counters&) = delete;
+    redis_connection(asio::io_context&, asio::ssl::context&, const worker_ref&&, const redis_config_storage&, client_wire_counters&) = delete;
+    redis_connection(asio::io_context&, asio::ssl::context&, const worker_ref&, redis_config_storage&&, client_wire_counters&) = delete;
+    redis_connection(asio::io_context&, asio::ssl::context&, const worker_ref&, const redis_config_storage&&, client_wire_counters&) = delete;
     ~redis_connection();
 
     redis_connection(const redis_connection&) = delete;
@@ -249,8 +252,8 @@ public:
     // `io_metrics` is the request's counter block, or null outside a request.
     template <typename result_type, typename source_type, typename decoder_type>
     [[nodiscard]] task<result_type> execute_decoded(source_type source, decoder_type decoder, operation_options options = {}, std::optional<timeout_duration> reply_timeout = std::nullopt, request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
-    task<redis_value> execute_owned(redis_owned_command command, operation_options options = {}, std::optional<timeout_duration> reply_timeout = std::nullopt, request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
-    task<redis_value> execute_owned(std::vector<std::string> args, operation_options options = {}, std::optional<timeout_duration> reply_timeout = std::nullopt, request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
+    task<redis_value> execute(redis_owned_command command, operation_options options = {}, std::optional<timeout_duration> reply_timeout = std::nullopt, request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
+    task<redis_value> execute(std::vector<std::string> args, operation_options options = {}, std::optional<timeout_duration> reply_timeout = std::nullopt, request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
     // The caller keeps `wire` alive until completion; `deadline` is copied so
     // script fallback shares the operation's absolute bound.
     task<redis_value> execute_borrowed_wire(std::string_view wire, operation_options options, operation_deadline deadline);
@@ -437,6 +440,9 @@ class redis_subscription_set final {
 public:
     redis_subscription_set(asio::io_context& io_context, asio::ssl::context& tls_context, const redis_config_storage& config, const worker_ref& worker_value);
     redis_subscription_set(asio::io_context&, asio::ssl::context&, const redis_config_storage&, worker_ref&&) = delete;
+    redis_subscription_set(asio::io_context&, asio::ssl::context&, const redis_config_storage&, const worker_ref&&) = delete;
+    redis_subscription_set(asio::io_context&, asio::ssl::context&, redis_config_storage&&, const worker_ref&) = delete;
+    redis_subscription_set(asio::io_context&, asio::ssl::context&, const redis_config_storage&&, const worker_ref&) = delete;
     ~redis_subscription_set();
 
     redis_subscription_set(const redis_subscription_set&) = delete;
@@ -497,10 +503,10 @@ public:
     [[nodiscard]] const redis_config_storage& config() const noexcept {
         return config_;
     }
-    // The configuration of the runtime behind an active handle, for a
+    // The configuration of the runtime behind an active executor, for a
     // consumer that sizes its own use of that store (the DB query cache).
-    [[nodiscard]] static const redis_config_storage& executor_config(const redis_executor& handle) noexcept {
-        return handle.runtime_->config();
+    [[nodiscard]] static const redis_config_storage& executor_config(const redis_executor& executor) noexcept {
+        return executor.runtime_->config();
     }
     [[nodiscard]] redis_pool& general() noexcept {
         return general_;
@@ -542,7 +548,7 @@ public:
     redis_registry(const redis_registry&) = delete;
     redis_registry& operator=(const redis_registry&) = delete;
 
-    task<void> connect();
+    task<void> connect(operation_options options = {});
     void close_now() noexcept;
 
     [[nodiscard]] bool empty() const noexcept;

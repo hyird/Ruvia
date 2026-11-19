@@ -39,7 +39,7 @@ struct client_host_resolver::query final {
 };
 
 bool client_host_needs_lookup(std::string_view host) {
-    return !parse_ip_address(host).has_value();
+    return !try_parse_asio_ip_address(host).has_value();
 }
 
 void require_client_host_lookup(std::string_view host, const worker_ref& worker) {

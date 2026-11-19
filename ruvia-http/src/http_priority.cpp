@@ -27,7 +27,7 @@ std::variant<std::monostate, http_priority_error> parse_priority_members(http_st
             return http_priority_error::invalid_syntax;
         }
         item_type item{.kind_ = item_type::kind_type::boolean, .boolean_ = true};
-        if (parser.take('=')) {
+        if (parser.consume('=')) {
             item = {};
             if (!parser.member(item, false)) {
                 return http_priority_error::invalid_syntax;
@@ -45,7 +45,7 @@ std::variant<std::monostate, http_priority_error> parse_priority_members(http_st
         if (parser.empty()) {
             break;
         }
-        if (!parser.take(',')) {
+        if (!parser.consume(',')) {
             return http_priority_error::invalid_syntax;
         }
         parser.ows();

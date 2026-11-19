@@ -39,7 +39,7 @@ enum class http1_body_decode_error : std::uint8_t {
 [[nodiscard]] http_protocol_error make_http_protocol_error(http1_body_decode_error error) noexcept;
 
 // The diagnostic a client reports for a response whose body failed to decode.
-[[nodiscard]] std::string_view http1_response_body_error_message(http1_body_decode_error error) noexcept;
+[[nodiscard]] std::string_view http1_body_decode_error_message(http1_body_decode_error error) noexcept;
 
 // The trailer section that ended a chunked body, possibly empty. The fields
 // are validated and owned by the decoder, allocated only for a section that

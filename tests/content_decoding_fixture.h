@@ -443,7 +443,7 @@ namespace ruvia::test {
 // connection keeps its bytes and the exception propagates.
 inline void drain_output(ruvia::http2_connection& connection, std::string& into) {
     into.clear();
-    (void)connection.take_output_batch(std::numeric_limits<std::size_t>::max(), into);
+    (void)connection.drain_output_batch(std::numeric_limits<std::size_t>::max(), into);
 }
 
 // Collects every pending outbound frame into an owning string so a test can

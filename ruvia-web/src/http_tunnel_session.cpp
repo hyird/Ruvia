@@ -145,14 +145,14 @@ task<void> tls_tunnel_output::run_writer() {
                 asio::async_write(socket_, asio::buffer(bytes_.data() + head_, count), std::move(handler));
             });
             if (lifecycle_ != nullptr) {
-                lifecycle_->note_write(result_value.result());
+                lifecycle_->note_write(result_value.value());
             }
-            if (result_value.error_code()) {
-                fail(result_value.error_code());
+            if (result_value.code()) {
+                fail(result_value.code());
                 co_return;
             }
-            head_ = (head_ + result_value.result()) % bytes_.size();
-            size_ -= result_value.result();
+            head_ = (head_ + result_value.value()) % bytes_.size();
+            size_ -= result_value.value();
             flushed_.notify();
         }
     } catch (...) {

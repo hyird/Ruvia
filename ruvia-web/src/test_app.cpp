@@ -71,7 +71,7 @@ struct test_app::impl_type final {
         if (lifecycle_ == lifecycle_type::ready) {
             stop_source_.request_stop();
             try {
-                event_loop_.start(capabilities_->stop()).get();
+                event_loop_.submit(capabilities_->stop()).take_value().take_value();
             } catch (...) {
                 std::terminate();
             }
@@ -84,7 +84,7 @@ struct test_app::impl_type final {
 
     void require_configurable() const {
         if (lifecycle_ != lifecycle_type::configuring) {
-            throw std::logic_error("test_app must be configured before its first request()");
+            throw std::logic_error("test_app must be configured before its first dispatch()");
         }
     }
 
@@ -93,7 +93,7 @@ struct test_app::impl_type final {
             return;
         }
         if (lifecycle_ == lifecycle_type::initializing) {
-            throw std::logic_error("test_app request() cannot be reentered during startup");
+            throw std::logic_error("test_app dispatch() cannot be reentered during startup");
         }
         if (lifecycle_ == lifecycle_type::failed) {
             std::rethrow_exception(startup_failure_);
@@ -120,7 +120,7 @@ struct test_app::impl_type final {
                     .connection_failure_ = &options_.connection_failure_,
                 });
             event_loop_pool_.start();
-            event_loop_.start(capabilities_->start()).get();
+            event_loop_.submit(capabilities_->start()).take_value().take_value();
             lifecycle_ = lifecycle_type::ready;
         } catch (...) {
             startup_failure_ = std::current_exception();
@@ -141,10 +141,10 @@ struct test_app::impl_type final {
         std::optional<http_protocol_error> parse_error;
         auto parsed_value = [&]() {
             try {
-                return make_parsed_http_request(request.method_, request.target_, active_headers.view(), std::as_bytes(std::span(request.body_.data(), request.body_.size())));
+                return make_http_request(request.method_, request.target_, active_headers.view(), std::as_bytes(std::span(request.body_.data(), request.body_.size())));
             } catch (const http_protocol_error& error) {
                 parse_error = error;
-                return make_parsed_http_request("GET", "/", {}, {});
+                return make_http_request("GET", "/", {}, {});
             }
         }();
 
@@ -175,7 +175,7 @@ struct test_app::impl_type final {
             admission.emplace(std::move(admitted));
         }
         const auto& request_services = admission ? admission->services() : services;
-        const auto remote_ip = ip_address::parse(request.remote_address_).value_or(ip_address{});
+        const auto remote_ip = ip_address::try_parse(request.remote_address_).value_or(ip_address{});
         const auto tail = admission ? admission->tail() : detail::http_response_tail(parsed_value, detail::http_response_coding_policy::disabled(), remote_ip, remote_ip, request_start);
         const auto preparation = tail.prepare(response, options_, worker_);
         const auto* ready = preparation.ready();
@@ -200,7 +200,7 @@ struct test_app::impl_type final {
                     result_value.body_.append(chunk.bytes());
                 }
             } else {
-                result_value.body_ = std::move(response).take_body_bytes();
+                result_value.body_ = std::move(response).take_body();
             }
         }
         co_return result_value;
@@ -241,10 +241,10 @@ test_app& test_app::add_controllers(std::span<const detail::controller_registrar
     return *this;
 }
 
-dispatch_response test_app::request(const test_request& request) & {
+dispatch_response test_app::dispatch(const test_request& request) & {
     impl_->finalize();
 
-    return impl_->event_loop_.start(impl_->execute_request(request)).get();
+    return impl_->event_loop_.submit(impl_->execute_request(request)).take_value().take_value();
 }
 
 }  // namespace ruvia

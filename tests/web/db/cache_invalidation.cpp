@@ -347,7 +347,7 @@ ruvia::task<void> wait_until(const ruvia::worker_ref& worker, predicate_type rea
 template <typename scenario_type>
 void run_with_query_cache(redis_store_peer& redis_peer, const ruvia::db_config& database_config, scenario_type& scenario, std::optional<std::size_t> max_reply_bytes = ruvia::redis_config{}.max_reply_bytes_) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     ruvia::redis_config redis_config{.host_ = "127.0.0.1", .port_ = redis_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
     redis_config.max_reply_bytes_ = max_reply_bytes;
     auto exercise = [&]() -> ruvia::task<void> {
@@ -404,7 +404,7 @@ TEST(Ruvia, db_query_result_cache_remove_invalidates_repository_result_shapes) {
             {.rows_ = std::vector<std::string>({std::string("epsilon")})},
         }));
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const ruvia::redis_config redis_config{.host_ = "127.0.0.1", .port_ = redis_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
     auto exercise = [&]() -> ruvia::task<void> {
         ruvia::redis_client redis(attachment.loop(), redis_config);
@@ -491,7 +491,7 @@ TEST(Ruvia, db_query_result_cache_distinguishes_sql_parameter_values) {
     redis_store_peer redis_peer;
     ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false, ruvia::test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("first")})}, {.rows_ = std::vector<std::string>({std::string("second")})}}));
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const ruvia::redis_config redis_config{.host_ = "127.0.0.1", .port_ = redis_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
     auto exercise = [&]() -> ruvia::task<void> {
         ruvia::redis_client redis(attachment.loop(), redis_config);
@@ -542,7 +542,7 @@ TEST(Ruvia, db_query_result_cache_preserves_empty_and_zero_column_results) {
     redis_peer.poison_reads(empty);
     ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false, ruvia::test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>());
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const ruvia::redis_config redis_config{.host_ = "127.0.0.1", .port_ = redis_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
     auto exercise = [&]() -> ruvia::task<void> {
         ruvia::redis_client redis(attachment.loop(), redis_config);
@@ -608,7 +608,7 @@ TEST(Ruvia, db_query_result_cache_rejects_corrupt_zero_column_entries) {
     redis_peer.poison_reads(std::move(corrupt));
     ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false, ruvia::test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("fresh")})}}));
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const ruvia::redis_config redis_config{.host_ = "127.0.0.1", .port_ = redis_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
     auto exercise = [&]() -> ruvia::task<void> {
         ruvia::redis_client redis(attachment.loop(), redis_config);
@@ -648,7 +648,7 @@ TEST(Ruvia, db_client_shutdown_cancels_inflight_cache_without_closing_borrowed_r
     redis_store_peer redis_peer;
     ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false, ruvia::test::backend_startup_peer::after_startup::idle);
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const ruvia::redis_config redis_config{.host_ = "127.0.0.1", .port_ = redis_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
     auto exercise = [&]() -> ruvia::task<void> {
         ruvia::redis_client redis(attachment.loop(), redis_config);

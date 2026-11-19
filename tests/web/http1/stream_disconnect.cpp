@@ -73,7 +73,7 @@ class routes final {
 
     ruvia::task<void> events(ruvia::context& c) {
         completion done;
-        const auto mode = c.req().query("mode").value_or("token");
+        const auto mode = c.request().query("mode").value_or("token");
         const auto original = c.stop_token();
         auto writer = c.stream_sse();
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
@@ -92,7 +92,7 @@ class routes final {
         // 超大无符号等待不得窄化成负值后立即完成；客户端断开仍须唤醒它。
         const auto huge = std::chrono::duration<std::uint64_t, std::milli>{(std::numeric_limits<std::uint64_t>::max)()};
         const auto result = mode == "writer" ? co_await writer.sleep(huge, original) : co_await ruvia::sleep_for(c.worker(), 10s, token);
-        if (result == ruvia::timer_sleep_result::stop_requested) {
+        if (result == ruvia::sleep_status::stop_requested) {
             cancelled.fetch_add(1);
         }
         if (original.stop_requested()) {
@@ -106,7 +106,7 @@ class routes final {
             co_return;
         }
         co_await writer.write("pipeline-first");
-        if (co_await ruvia::sleep_for(c.worker(), 100ms, c.stop_token()) == ruvia::timer_sleep_result::stop_requested) {
+        if (co_await ruvia::sleep_for(c.worker(), 100ms, c.stop_token()) == ruvia::sleep_status::stop_requested) {
             pipeline_cancelled.fetch_add(1);
         }
         co_await writer.write("pipeline-last");
@@ -119,7 +119,7 @@ class routes final {
             co_return;
         }
         co_await writer.write("wait-first");
-        if (co_await ruvia::sleep_for(c.worker(), 150ms, c.stop_token()) == ruvia::timer_sleep_result::stop_requested) {
+        if (co_await ruvia::sleep_for(c.worker(), 150ms, c.stop_token()) == ruvia::sleep_status::stop_requested) {
             pipeline_cancelled.fetch_add(1);
         }
         co_await writer.write("wait-last");
@@ -129,27 +129,27 @@ class routes final {
     // begins with the read that completes it, early commit or not.
     ruvia::task<void> body(ruvia::context& c) {
         auto& writer = c.stream();
-        const bool early = c.req().query("early").has_value();
+        const bool early = c.request().query("early").has_value();
         if (early) {
             if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
-                static_cast<void>(co_await c.req().body_text());
+                static_cast<void>(co_await c.request().body_text());
                 co_return;
             }
             co_await writer.write("early");
         }
-        const auto received = co_await c.req().body_text();
+        const auto received = co_await c.request().body_text();
         body_complete.fetch_add(1);
         if (!early && co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }
         co_await writer.write(received);
-        if (c.req().query("wait").has_value() && co_await ruvia::sleep_for(c.worker(), 10s, c.stop_token()) == ruvia::timer_sleep_result::stop_requested) {
+        if (c.request().query("wait").has_value() && co_await ruvia::sleep_for(c.worker(), 10s, c.stop_token()) == ruvia::sleep_status::stop_requested) {
             body_cancelled.fetch_add(1);
         }
     }
 
     ruvia::task<void> post_sse(ruvia::context& c) {
-        const auto received = co_await c.req().body_text();
+        const auto received = co_await c.request().body_text();
         auto writer = c.stream_sse();
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
@@ -158,7 +158,7 @@ class routes final {
     }
 
     ruvia::task<ruvia::http_response> echo(ruvia::context& c) {
-        const auto text = co_await c.req().body_text();
+        const auto text = co_await c.request().body_text();
         co_return c.text(text);
     }
 

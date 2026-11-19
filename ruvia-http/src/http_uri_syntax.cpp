@@ -66,7 +66,7 @@ template <typename is_allowed_type>
     for (std::size_t index = 0; index < value.size(); ++index) {
         const auto byte = static_cast<unsigned char>(value[index]);
         if (byte == '%') {
-            const auto decoded = http_try_decode_percent_byte(value, index);
+            const auto decoded = decode_percent_byte(value, index);
             if (!decoded || (reject_encoded_nul && *decoded == 0)) {
                 return false;
             }

@@ -117,7 +117,7 @@ public:
     // result, so the caller decides where it is destroyed. Callable moves and
     // destruction may query stats(), post(), or request_stop(). Admission
     // includes posts whose callable move has not finished.
-    [[nodiscard]] post_outcome<> post(move_only_function<void()> task);
+    [[nodiscard]] post_result<> post(move_only_function<void()> task);
 
     // Stops accepting, discards tasks that have not started, and wakes the
     // threads. Tasks already running are not interrupted -- a blocking call
@@ -244,7 +244,7 @@ private:
 // The outcome category is fixed after construction. Moving a failed result
 // preserves its failure in the source as well; it must not become a successful
 // result without a value. Replace an owning optional by emplacing a new result.
-// with_value(), with_error() and with_status() build the same outcomes for a
+// from_value(), from_error() and from_status() build the same outcomes for a
 // composed offload.
 template <typename t_type>
 class blocking_result final {
@@ -318,20 +318,20 @@ public:
     // The callable completed with this value.
     template <typename u_type>
         requires(!std::is_void_v<t_type> && std::constructible_from<t_type, u_type&&>)
-    [[nodiscard]] static blocking_result with_value(u_type&& value) {
+    [[nodiscard]] static blocking_result from_value(u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type&&>) {
         blocking_result result_value(blocking_status::completed);
         result_value.payload_.value_.emplace(std::forward<u_type>(value));
         return result_value;
     }
 
-    [[nodiscard]] static blocking_result with_value() noexcept
+    [[nodiscard]] static blocking_result from_value() noexcept
         requires std::is_void_v<t_type>
     {
         return blocking_result(blocking_status::completed);
     }
 
     // Execution or result delivery failed with this non-null exception.
-    [[nodiscard]] static blocking_result with_error(std::exception_ptr error) {
+    [[nodiscard]] static blocking_result from_error(std::exception_ptr error) {
         if (error == nullptr) {
             throw std::invalid_argument("blocking error result requires an exception");
         }
@@ -341,7 +341,7 @@ public:
     }
 
     // The operation produced no result of its own; rejection statuses only.
-    [[nodiscard]] static blocking_result with_status(blocking_status status) {
+    [[nodiscard]] static blocking_result from_status(blocking_status status) {
         if (status == blocking_status::completed || status == blocking_status::failed) {
             throw std::invalid_argument("blocking status result requires a rejection status");
         }
@@ -385,7 +385,7 @@ struct blocking_pool_access final {
 template <typename t_type>
 [[nodiscard]] blocking_result<t_type> completed_blocking_result(blocking_payload<t_type>&& payload_value) {
     if (payload_value.error_ != nullptr) {
-        return blocking_result<t_type>::with_error(std::move(payload_value.error_));
+        return blocking_result<t_type>::from_error(std::move(payload_value.error_));
     }
     return blocking_result<t_type>(std::move(payload_value));
 }
@@ -432,16 +432,16 @@ template <typename fn_type>
     }
     auto* const pool = worker_value.blocking_pool();
     if (pool == nullptr) {
-        co_return outcome_type::with_status(blocking_status::unavailable);
+        co_return outcome_type::from_status(blocking_status::unavailable);
     }
     if (stop_token_value.stop_requested()) {
-        co_return outcome_type::with_status(blocking_status::cancelled);
+        co_return outcome_type::from_status(blocking_status::cancelled);
     }
     if (deadline.expired()) {
-        co_return outcome_type::with_status(blocking_status::timed_out);
+        co_return outcome_type::from_status(blocking_status::timed_out);
     }
     if (!worker_value.accepting()) {
-        co_return outcome_type::with_status(blocking_status::worker_stopping);
+        co_return outcome_type::from_status(blocking_status::worker_stopping);
     }
 
     // A worker that is already stopping refuses the registration. That is the
@@ -452,7 +452,7 @@ template <typename fn_type>
     try {
         channel.emplace(make_one_shot<payload>(std::move(worker_value)));
     } catch (const std::runtime_error&) {
-        co_return outcome_type::with_status(blocking_status::worker_stopping);
+        co_return outcome_type::from_status(blocking_status::worker_stopping);
     }
     auto& [completion, receiver] = *channel;
     const auto posted = detail::blocking_pool_access::post_factory(*pool, [&] {
@@ -472,7 +472,7 @@ template <typename fn_type>
         });
     });
     if (posted != post_status::accepted) {
-        co_return outcome_type::with_status(posted == post_status::queue_full ? blocking_status::queue_full : blocking_status::pool_stopped);
+        co_return outcome_type::from_status(posted == post_status::queue_full ? blocking_status::queue_full : blocking_status::pool_stopped);
     }
 
     try {
@@ -480,25 +480,25 @@ template <typename fn_type>
         if (waited.has_value()) {
             auto payload_value = std::move(waited).take_value();
             if (payload_value.error_ != nullptr) {
-                co_return outcome_type::with_error(std::move(payload_value.error_));
+                co_return outcome_type::from_error(std::move(payload_value.error_));
             }
             if (payload_value.status_ != blocking_status::completed) {
-                co_return outcome_type::with_status(payload_value.status_);
+                co_return outcome_type::from_status(payload_value.status_);
             }
             co_return detail::completed_blocking_result(std::move(payload_value));
         }
         if (waited.status() == wait_status::timed_out) {
-            co_return outcome_type::with_status(blocking_status::timed_out);
+            co_return outcome_type::from_status(blocking_status::timed_out);
         }
         if (waited.status() == wait_status::cancelled) {
-            co_return outcome_type::with_status(blocking_status::cancelled);
+            co_return outcome_type::from_status(blocking_status::cancelled);
         }
         // Closed cannot happen -- this coroutine owns the receiver and is the only
         // waiter -- so anything else is the worker going away under the operation.
-        co_return outcome_type::with_status(blocking_status::worker_stopping);
+        co_return outcome_type::from_status(blocking_status::worker_stopping);
     } catch (...) {
         // Payload delivery now moves the result on the receiving worker.
-        co_return outcome_type::with_error(std::current_exception());
+        co_return outcome_type::from_error(std::current_exception());
     }
 }
 

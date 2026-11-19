@@ -76,7 +76,7 @@ private:
         }
         co_await stream.write("part 1\n");
         co_await stream.writeln("part 2");
-        if (co_await stream.sleep(std::chrono::milliseconds(20)) == ruvia::timer_sleep_result::stop_requested) {
+        if (co_await stream.sleep(std::chrono::milliseconds(20)) == ruvia::sleep_status::stop_requested) {
             co_return;
         }
         if (!stream.aborted()) {
@@ -92,7 +92,7 @@ private:
         // 客户端断开（FIN/RST）会停止 c.stop_token()；把它传给业务订阅等待。
         const auto stop = c.stop_token();
         co_await events_value.write({.data_ = "connected", .event_ = "open", .id_ = "1"});
-        if (co_await ruvia::sleep_for(c.worker(), std::chrono::milliseconds(20), stop) == ruvia::timer_sleep_result::stop_requested) {
+        if (co_await ruvia::sleep_for(c.worker(), std::chrono::milliseconds(20), stop) == ruvia::sleep_status::stop_requested) {
             co_return;
         }
         if (!events_value.aborted()) {

@@ -82,7 +82,7 @@ class sleeping_stream_routes final {
 
     // HEAD 正常完成，不启动生产循环，也不会取消业务等待 token。
     ruvia::task<void> head_loop_sse(ruvia::context& context_value) {
-        const auto status = context_value.req().query("not-modified").has_value() ? std::optional(ruvia::http_status::not_modified) : std::nullopt;
+        const auto status = context_value.request().query("not-modified").has_value() ? std::optional(ruvia::http_status::not_modified) : std::nullopt;
         auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         auto writer = context_value.stream_sse({.status_ = status});
         const auto token = context_value.stop_token();
@@ -174,12 +174,12 @@ class sleeping_stream_routes final {
     }
 
     ruvia::task<ruvia::http_response> bounded_buffered(ruvia::context& context_value) {
-        co_return context_value.text(co_await context_value.req().body_text());
+        co_return context_value.text(co_await context_value.request().body_text());
     }
 
     ruvia::task<ruvia::http_response> bounded_delayed_stream(ruvia::context& context_value) {
         (void)co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(40));
-        if (context_value.req().query("read").has_value()) {
+        if (context_value.request().query("read").has_value()) {
             static_cast<void>(co_await context_value.request_body().read());
         }
         co_return context_value.text("accepted");
@@ -188,7 +188,7 @@ class sleeping_stream_routes final {
     // Streams the request body and answers with the byte count.
     // A buffered POST body is readable before the SSE response starts.
     ruvia::task<void> post_sse(ruvia::context& context_value) {
-        const auto received = co_await context_value.req().body_text();
+        const auto received = co_await context_value.request().body_text();
         auto writer = context_value.stream_sse();
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
@@ -227,9 +227,9 @@ class sleeping_stream_routes final {
         // The request's own stop: RST_STREAM of this stream requests it.
         const auto stop = context_value.stop_token();
         co_await writer.write({.data_ = "ready"});
-        if (context_value.req().query("writer").has_value()) {
+        if (context_value.request().query("writer").has_value()) {
             try {
-                observed.sleep_elapsed_ = co_await writer.sleep(std::chrono::seconds(30)) == ruvia::timer_sleep_result::elapsed;
+                observed.sleep_elapsed_ = co_await writer.sleep(std::chrono::seconds(30)) == ruvia::sleep_status::elapsed;
             } catch (const std::system_error&) {
                 observed.sleep_failed_ = true;
                 throw;
@@ -237,7 +237,7 @@ class sleeping_stream_routes final {
             co_return;
         }
         try {
-            observed.sse_wait_cancelled_ = co_await ruvia::sleep_for(context_value.worker(), std::chrono::seconds(30), stop) == ruvia::timer_sleep_result::stop_requested;
+            observed.sse_wait_cancelled_ = co_await ruvia::sleep_for(context_value.worker(), std::chrono::seconds(30), stop) == ruvia::sleep_status::stop_requested;
         } catch (...) {
             observed.sse_wait_failed_ = true;
             throw;
@@ -255,7 +255,7 @@ class sleeping_stream_routes final {
         }
         co_await writer.write("first\n");
         try {
-            if (co_await writer.sleep(std::chrono::seconds(30)) == ruvia::timer_sleep_result::elapsed) {
+            if (co_await writer.sleep(std::chrono::seconds(30)) == ruvia::sleep_status::elapsed) {
                 observed.sleep_elapsed_ = true;
             }
         } catch (const std::system_error&) {
@@ -977,11 +977,11 @@ public:
 
     ruvia::task<ruvia::http_response> parent(ruvia::context& context_value) {
         auto& owner_value = *context_value.worker_state<std::shared_ptr<push_observation>>();
-        const auto count = context_value.req().path() == "/two" ? 2U : 1U;
-        const auto path = context_value.req().path() == "/large" ? "/large-asset" : (context_value.req().path() == "/delayed-parent" ? "/delayed-asset" : "/asset");
+        const auto count = context_value.request().path() == "/two" ? 2U : 1U;
+        const auto path = context_value.request().path() == "/large" ? "/large-asset" : (context_value.request().path() == "/delayed-parent" ? "/delayed-asset" : "/asset");
         const std::array<ruvia::http_header_view, 1> headers{{{"x-promise", "owned-request"}}};
         for (unsigned i = 0; i != count; ++i) {
-            if (context_value.push({.scheme_ = "http", .authority_ = context_value.req().authority(), .target_ = path, .headers_ = headers})) {
+            if (context_value.push({.scheme_ = "http", .authority_ = context_value.request().authority(), .target_ = path, .headers_ = headers})) {
                 ++owner_value.promised_;
             } else {
                 ++owner_value.refused_;
@@ -990,7 +990,7 @@ public:
         co_return context_value.text("parent");
     }
     ruvia::task<ruvia::http_response> asset(ruvia::context& context_value) {
-        if (context_value.req().header("x-promise") != "owned-request") {
+        if (context_value.request().header("x-promise") != "owned-request") {
             throw std::runtime_error("lost push request metadata");
         }
         const ruvia::http_header_view headers[] = {{"x-asset", "metadata"}};
@@ -1019,7 +1019,7 @@ public:
 
 TEST(Ruvia, http2_push_routes_and_client_preserve_owners_flow_control_cold_reads_and_shutdown) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const auto observed = prepare_observation();
     ruvia::test::http_server_fixture server(io);
     auto run = [&]() -> ruvia::task<void> {
@@ -1028,7 +1028,7 @@ TEST(Ruvia, http2_push_routes_and_client_preserve_owners_flow_control_cold_reads
         {
             const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(server.endpoint().port())));
             ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .versions_ = ruvia::http_client_versions{.http1_ = false}, .push_ = {.enabled_ = true}});
-            auto client_origin = client.client();
+            auto client_origin = client.ref();
             std::exception_ptr failure;
             try {
                 for (unsigned repeat = 0; repeat != 128; ++repeat) {
@@ -1074,7 +1074,7 @@ TEST(Ruvia, http2_push_routes_and_client_preserve_owners_flow_control_cold_reads
                 }
                 auto response = co_await pushed->response();
                 std::size_t bytes_value = 0;
-                while (auto chunk = co_await response.stream().read_text()) {
+                while (auto chunk = co_await response.body().read_text()) {
                     EXPECT_TRUE(chunk->find_first_not_of('p') == std::string_view::npos);
                     bytes_value += chunk->size();
                 }
@@ -1110,21 +1110,21 @@ TEST(Ruvia, http2_push_routes_and_client_preserve_owners_flow_control_cold_reads
         retained.reset();
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
 }
 
 TEST(Ruvia, http2_push_queue_overflow_and_disabled_permission_keep_parent_response_usable) {
     for (const bool enabled : {false, true}) {
         auto& io = ruvia::test::new_test_io_context();
-        auto attachment = ruvia::attach_event_loop(io);
+        auto attachment = ruvia::event_loop_attachment(io);
         const auto observed = prepare_observation();
         ruvia::test::http_server_fixture server(io);
         auto run = [&]() -> ruvia::task<void> {
             const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(server.endpoint().port())));
             ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .versions_ = ruvia::http_client_versions{.http1_ = false}, .push_ = {.enabled_ = enabled, .max_queued_pushes_ = 1}});
-            auto client_origin = client.client();
+            auto client_origin = client.ref();
             std::exception_ptr failure;
             try {
                 auto parent_value = co_await client_origin.get("/two").send();
@@ -1148,9 +1148,9 @@ TEST(Ruvia, http2_push_queue_overflow_and_disabled_permission_keep_parent_respon
             }
             attachment.request_stop();
         };
-        auto root = attachment.loop().start(run());
+        auto root = attachment.loop().submit(run()).take_value();
         attachment.run();
-        std::move(root).get();
+        std::move(root).take_value();
     }
 }
 
@@ -1158,13 +1158,13 @@ TEST(Ruvia, http2_push_queue_overflow_and_disabled_permission_keep_parent_respon
 // token ends only that wait, and a later response() still receives it.
 TEST(Ruvia, http2_push_response_wait_honours_its_operation) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    auto attachment = ruvia::event_loop_attachment(io);
     const auto observed = prepare_observation();
     ruvia::test::http_server_fixture server(io);
     auto run = [&]() -> ruvia::task<void> {
         const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(server.endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .versions_ = ruvia::http_client_versions{.http1_ = false}, .push_ = {.enabled_ = true}});
-        auto client_origin = client.client();
+        auto client_origin = client.ref();
         std::exception_ptr failure;
         try {
             auto parent_value = co_await client_origin.get("/delayed-parent").send();
@@ -1199,7 +1199,7 @@ TEST(Ruvia, http2_push_response_wait_honours_its_operation) {
         }
         attachment.request_stop();
     };
-    auto root = attachment.loop().start(run());
+    auto root = attachment.loop().submit(run()).take_value();
     attachment.run();
-    std::move(root).get();
+    std::move(root).take_value();
 }

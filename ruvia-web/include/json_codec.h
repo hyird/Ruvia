@@ -492,9 +492,11 @@ template <typename escaped_budget_type>
 }
 
 // The text of a string scanned by parse_json_string(input, &decoded).
-[[nodiscard]] inline std::string_view json_string_text(const json_string_token& token, const std::string& decoded) noexcept {
+[[nodiscard]] inline std::string_view json_string_text(const json_string_token& token, const std::string& decoded RUVIA_LIFETIMEBOUND) noexcept {
     return token.encoding() == json_string_encoding::literal ? token.raw() : std::string_view(decoded);
 }
+std::string_view json_string_text(const json_string_token&, std::string&&) = delete;
+std::string_view json_string_text(const json_string_token&, const std::string&&) = delete;
 
 struct json_number_token final {
     // Bytes of the RFC 8259 number at the start of the input; 0 when none.

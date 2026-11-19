@@ -38,7 +38,7 @@ enum class http_content_coding : std::uint8_t {
 
 // The coding a trimmed token names, case-insensitively; x-gzip is gzip. Null
 // for any other token, including an empty one.
-[[nodiscard]] std::optional<http_content_coding> http_content_coding_from_token(std::string_view token) noexcept;
+[[nodiscard]] std::optional<http_content_coding> parse_http_content_coding_token(std::string_view token) noexcept;
 
 // Parsing is bounded to prevent attacker-controlled unbounded decode stages: a
 // longer Content-Encoding stack is reported as unsupported, and a longer
@@ -101,7 +101,7 @@ enum class http_content_decode_error : std::uint8_t {
 };
 
 // RFC 9110 section 8.4.1.3 treats x-gzip as gzip. The token is already trimmed.
-[[nodiscard]] inline bool http_is_gzip_coding_token(std::string_view token) noexcept {
+[[nodiscard]] inline bool is_http_gzip_coding_token(std::string_view token) noexcept {
     return http_ascii_equals_ignore_case(token, "gzip") || http_ascii_equals_ignore_case(token, "x-gzip");
 }
 
@@ -189,7 +189,7 @@ private:
 // Uses the parser's classified header descriptors without rescanning wire names.
 // Admission keeps Content-Encoding opaque. Inspect invalid()/unsupported()
 // before using codings(); an empty span in either error state is not identity.
-[[nodiscard]] http_content_coding_field_result request_content_coding(const http_request& request) noexcept;
+[[nodiscard]] http_content_coding_field_result parse_http_request_content_coding(const http_request& request) noexcept;
 
 // Allowlist compressibility policy for dynamic response compression and static
 // precompression: text/*, +json, +xml, and common text/font/wasm/icon media

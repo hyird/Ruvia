@@ -323,7 +323,7 @@ template <typename predicate_type>
     if (value.empty()) {
         return false;
     }
-    return value.front() == '"' ? http_is_quoted_string(value) : is_valid_http_header_name(value);
+    return value.front() == '"' ? is_http_quoted_string(value) : is_valid_http_header_name(value);
 }
 
 [[nodiscard]] inline std::string_view http_header_token_before_parameters(std::string_view value RUVIA_LIFETIMEBOUND) noexcept {

@@ -32,7 +32,7 @@ void submit_buffered_response(ruvia::http2_connection& server, std::uint32_t str
     EXPECT_TRUE(std::holds_alternative<ruvia::http_buffered_response_write_plan>(head));
     if (const auto* plan = std::get_if<ruvia::http_buffered_response_write_plan>(&head)) {
         if (plan->send_body()) {
-            EXPECT_TRUE(server.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535).status_ == ruvia::http_data_submit_status::complete);
+            EXPECT_TRUE(server.submit_data(stream_id, response.body(), ruvia::http2_end_stream::end_stream, 65535).status_ == ruvia::http_data_submit_status::complete);
         }
     }
 }
@@ -73,7 +73,7 @@ TEST(Ruvia, http2_push_promise_fragmentation_response_and_detached_metadata) {
     auto data = client.next_event();
     EXPECT_TRUE(data && data->data());
     EXPECT_TRUE(data->data()->bytes() == "asset");
-    (void)data->data()->take_credit();
+    (void)std::move(*data->data()).take_credit();
     auto end = client.next_event();
     EXPECT_TRUE(end && end->message_end());
     EXPECT_TRUE(promise->push_promise()->request_.headers_[0].value() == value);
@@ -355,7 +355,7 @@ TEST(Ruvia, http2_push_response_events_survive_a_reset_in_the_same_input_batch) 
         EXPECT_TRUE(parent_head && parent_head->response_head() && parent_head->response_head()->stream_id() == 1);
         EXPECT_TRUE(body && body->data() && body->data()->bytes() == "parent");
         if (body && body->data()) {
-            (void)body->data()->take_credit();
+            (void)std::move(*body->data()).take_credit();
         }
         auto end = client.next_event();
         EXPECT_TRUE(end && end->message_end());
@@ -516,7 +516,7 @@ TEST(Ruvia, http2_push_repeated_response_and_cancellation_preserve_promises) {
                     auto data = client.next_event();
                     EXPECT_TRUE(data && data->data());
                     if (data && data->data()) {
-                        (void)data->data()->take_credit();
+                        (void)std::move(*data->data()).take_credit();
                     }
                     auto end = client.next_event();
                     EXPECT_TRUE(head && head->response_head());

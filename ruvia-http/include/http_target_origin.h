@@ -100,7 +100,7 @@ public:
         return origin;
     }
 
-    [[nodiscard]] static constexpr http_target_origin ip_address(http_target_host_kind kind, std::span<const std::uint8_t> address) noexcept {
+    [[nodiscard]] static constexpr http_target_origin from_ip_address(http_target_host_kind kind, std::span<const std::uint8_t> address) noexcept {
         if ((kind == http_target_host_kind::ipv4 && address.size() != 4) || (kind == http_target_host_kind::ipv6 && address.size() != 16) || (kind != http_target_host_kind::ipv4 && kind != http_target_host_kind::ipv6)) {
             return misdirected();
         }

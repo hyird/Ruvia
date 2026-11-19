@@ -622,7 +622,7 @@ struct jwt_decoded_section final {
     return {};
 }
 
-// The base64url JOSE header jwt_sign emits: {"alg":"<name>","typ":"JWT"}.
+// The base64url JOSE header sign_jwt emits: {"alg":"<name>","typ":"JWT"}.
 [[nodiscard]] std::string_view jwt_encoded_header(jwt_algorithm algorithm) {
     switch (algorithm) {
         case jwt_algorithm::hs256:
@@ -828,7 +828,7 @@ std::optional<std::string_view> jwt_payload::claim(std::string_view name) const&
     return std::nullopt;
 }
 
-std::string jwt_sign(const jwt_sign_options& options) {
+std::string sign_jwt(const jwt_sign_options& options) {
     detail::validate_jwt_custom_claims(options.claims_);
     if ((options.expires_in_.has_value() && options.expires_in_->count() < 0) || (options.not_before_delay_.has_value() && options.not_before_delay_->count() < 0)) {
         throw std::invalid_argument("JWT signing time offsets must not be negative");
@@ -891,7 +891,7 @@ std::string jwt_sign(const jwt_sign_options& options) {
     return token;
 }
 
-jwt_result jwt_verify(const jwt_verify_options& options) {
+jwt_result verify_jwt(const jwt_verify_options& options) {
     using code_type = jwt_error_code;
     using access = detail::jwt_payload_access;
     if (options.leeway_.count() < 0) {
@@ -962,7 +962,7 @@ jwt_result jwt_verify(const jwt_verify_options& options) {
     return access::result(std::move(*payload_value));
 }
 
-jwt_result jwt_decode_unverified(const jwt_decode_unverified_options& options) {
+jwt_result decode_jwt_unverified(const jwt_decode_unverified_options& options) {
     using code_type = jwt_error_code;
     using access = detail::jwt_payload_access;
     const auto parts = detail::jwt_split_token(options.token_.view());
@@ -997,7 +997,7 @@ jwt_payload jwt_result::take_value() && {
     return std::move(detail::jwt_payload_access::stored_payload(*this));
 }
 
-std::optional<std::string_view> jwt_bearer_token(std::string_view authorization) noexcept {
+std::optional<std::string_view> extract_bearer_token(std::string_view authorization) noexcept {
     constexpr std::string_view scheme = "Bearer";
     if (authorization.size() <= scheme.size() || !http_ascii_equals_ignore_case(authorization.substr(0, scheme.size()), scheme)) {
         return std::nullopt;

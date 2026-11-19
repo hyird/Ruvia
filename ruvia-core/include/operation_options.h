@@ -282,7 +282,7 @@ public:
         return kind;
     }
 
-    [[nodiscard]] bool clear() noexcept {
+    [[nodiscard]] bool take_expired() noexcept {
         const bool was_expired = expired();
         reset();
         return was_expired;

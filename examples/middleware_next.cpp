@@ -25,7 +25,7 @@ public:
 class require_demo_key final {
 public:
     ruvia::task<void> invoke(ruvia::context& context_value, ruvia::next& next_value) {
-        if (context_value.req().header("X-Demo-Key") != "example") {
+        if (context_value.request().header("X-Demo-Key") != "example") {
             // An early response skips this branch. Outer middleware still
             // resumes after its own awaited next(). A 401 must carry a
             // challenge (RFC 9110 15.5.2); this demo's credential is the

@@ -434,7 +434,7 @@ inline void cleanse_identity(tls_identity_config& identity) noexcept {
     if (address.empty()) {
         throw std::invalid_argument("listen address must not be empty");
     }
-    const auto normalized = ruvia::parse_ip_address(address);
+    const auto normalized = ruvia::try_parse_asio_ip_address(address);
     if (!normalized) {
         throw std::invalid_argument("listen address must be a numeric IP address");
     }

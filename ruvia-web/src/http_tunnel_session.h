@@ -131,22 +131,22 @@ public:
             stream_.async_read_some(asio::buffer(bytes_value.data() + old_size, read_bytes), asio::bind_cancellation_slot(slot, std::move(handler)));
         });
         if (reservation != nullptr) {
-            inbound_resize(bytes_value, *reservation, old_size + result_value.result());
+            inbound_resize(bytes_value, *reservation, old_size + result_value.value());
         } else {
-            bytes_value.resize(old_size + result_value.result());
+            bytes_value.resize(old_size + result_value.value());
         }
         // A TLS peer that closed TCP without close_notify ends the tunnel byte
         // stream exactly like an orderly FIN or close_notify.
-        if (is_stream_read_end(result_value.error_code())) {
+        if (is_stream_read_end(result_value.code())) {
             co_return false;
         }
-        if (result_value.error_code()) {
-            if (result_value.error_code() == asio::error::operation_aborted) {
+        if (result_value.code()) {
+            if (result_value.code() == asio::error::operation_aborted) {
                 check();
             }
-            throw inbound_transport_error(result_value.error_code(), "HTTP tunnel read");
+            throw inbound_transport_error(result_value.code(), "HTTP tunnel read");
         }
-        co_return result_value.result() != 0;
+        co_return result_value.value() != 0;
     }
 
     // A cancellation emitted on `slot` ends only this transport read (a TLS
@@ -158,17 +158,17 @@ public:
         const auto result = co_await async_asio<std::size_t>([&](auto completion) {
             stream_.async_read_some(asio::buffer(writable.data(), writable.size()), asio::bind_cancellation_slot(slot, std::move(completion)));
         });
-        bytes.commit(result.result());
-        if (is_stream_read_end(result.error_code())) {
+        bytes.commit(result.value());
+        if (is_stream_read_end(result.code())) {
             co_return false;
         }
-        if (result.error_code()) {
-            if (result.error_code() == asio::error::operation_aborted) {
+        if (result.code()) {
+            if (result.code() == asio::error::operation_aborted) {
                 check();
             }
-            throw inbound_transport_error(result.error_code(), "WebSocket read");
+            throw inbound_transport_error(result.code(), "WebSocket read");
         }
-        co_return result.result() != 0;
+        co_return result.value() != 0;
     }
     // `completed_bytes` receives the plaintext prefix accepted by the stream,
     // including progress reported with the terminal error.
@@ -186,10 +186,10 @@ public:
                     asio::async_write(stream_, asio::buffer(bytes_value), std::move(handler));
                 });
                 if (completed_bytes != nullptr) {
-                    *completed_bytes = result_value.result();
+                    *completed_bytes = result_value.value();
                 }
-                if (result_value.error_code()) {
-                    co_return result_value.error_code();
+                if (result_value.code()) {
+                    co_return result_value.code();
                 }
             }
         } else {
@@ -201,10 +201,10 @@ public:
                     asio::async_write(stream_, asio::buffer(chunk), std::move(handler));
                 });
                 if (completed_bytes != nullptr) {
-                    *completed_bytes += result_value.result();
+                    *completed_bytes += result_value.value();
                 }
-                if (result_value.error_code()) {
-                    co_return result_value.error_code();
+                if (result_value.code()) {
+                    co_return result_value.code();
                 }
                 if (const auto error = co_await tls_output_->flush()) {
                     co_return error;

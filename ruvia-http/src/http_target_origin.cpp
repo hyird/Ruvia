@@ -18,7 +18,7 @@ namespace {
 
 [[nodiscard]] http_target_origin classify_reg_name(std::string_view host, bool decoded) noexcept {
     if (const auto address = detail::parse_ipv4_address(host)) {
-        return http_target_origin::ip_address(http_target_host_kind::ipv4, *address);
+        return http_target_origin::from_ip_address(http_target_host_kind::ipv4, *address);
     }
     // An absolute domain name names the same host as its relative spelling.
     const bool trailing_dot = host.size() > 1 && host.back() == '.';
@@ -48,7 +48,7 @@ namespace {
             address[2 * i] = static_cast<std::uint8_t>((*groups)[i] >> 8);
             address[2 * i + 1] = static_cast<std::uint8_t>((*groups)[i] & 0xFFU);
         }
-        return http_target_origin::ip_address(http_target_host_kind::ipv6, address);
+        return http_target_origin::from_ip_address(http_target_host_kind::ipv6, address);
     }
     if (host.find('%') == std::string_view::npos) {
         return classify_reg_name(host, false);
@@ -60,7 +60,7 @@ namespace {
     bool decoded_any = false;
     for (std::size_t i = 0; i < host.size();) {
         if (host[i] == '%') {
-            if (const auto byte = http_try_decode_percent_byte(host, i); byte.has_value() && is_uri_unreserved_byte(*byte)) {
+            if (const auto byte = decode_percent_byte(host, i); byte.has_value() && is_uri_unreserved_byte(*byte)) {
                 if (size == decoded.size()) {
                     return http_target_origin::misdirected();
                 }

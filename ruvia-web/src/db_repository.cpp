@@ -320,11 +320,11 @@ void db_relation_plan::conjunction(db_query& query, db_expression& predicate, db
     predicate = predicate.empty() ? term : query.binary(predicate, db_binary_operator::and_, term);
 }
 
-db_projection apply_projection(db_query& query, std::span<const db_selection> selection, std::string_view qualifier, bool returning, std::string_view root_table, const db_projection* previous) {
+db_selected_projection apply_projection(db_query& query, std::span<const db_selection> selection, std::string_view qualifier, bool returning, std::string_view root_table, const db_selected_projection* previous) {
     if (selection.empty()) {
         throw std::invalid_argument("projection requires at least one field");
     }
-    db_projection result;
+    db_selected_projection result;
     const auto named_count = static_cast<std::size_t>(std::ranges::count_if(selection, [](const auto& field) {
         return !field.is_wildcard();
     }));

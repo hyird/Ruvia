@@ -253,7 +253,7 @@ private:
     // which may trail its deadline.
     void check_liveness(std::uint64_t generation) noexcept;
 
-    void take_output_batch(std::string& output);
+    void drain_output_batch(std::string& output);
 
     [[nodiscard]] bool feed(std::string_view bytes_value);
 

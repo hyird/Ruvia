@@ -25,7 +25,7 @@ namespace route_dispatch_isolation_test {
 
 using namespace std::chrono_literals;
 
-ruvia::event_loop control_loop() {
+const ruvia::event_loop& control_loop() {
     struct runtime final {
         ruvia::blocking_pool blocking_{{.thread_count_ = 1}};
         ruvia::event_loop_pool loops_{{.loop_count_ = 1, .blocking_pool_ = &blocking_}};
@@ -38,7 +38,8 @@ ruvia::event_loop control_loop() {
         }
     };
     static runtime value;
-    return value.loops_.loop(0);
+    static const ruvia::event_loop loop = value.loops_.loop(0);
+    return loop;
 }
 
 std::atomic<int> controller_constructions{0};
@@ -154,14 +155,14 @@ TEST(Ruvia, adding_first_routed_listener_rejects_conflicts_without_interrupting_
     ASSERT_TRUE(started.try_acquire_for(10s));
     ruvia::test::wait_until([&app] {
         try {
-            control_loop().start(app.remove_listener(control_loop().worker(), {.address_ = "0.0.0.0", .port_ = 9})).get();
+            control_loop().submit(app.remove_listener(control_loop().worker(), {.address_ = "0.0.0.0", .port_ = 9})).take_value().take_value();
         } catch (const std::invalid_argument&) {
             return true;
         } catch (const std::logic_error&) {
         }
         return false;
     }, 10s);
-    EXPECT_THROW(control_loop().start(app.add_listener(control_loop().worker(), {.address_ = "127.0.0.1", .http_ = routed.endpoint().port()})).get(), std::invalid_argument);
+    EXPECT_THROW(control_loop().submit(app.add_listener(control_loop().worker(), {.address_ = "127.0.0.1", .http_ = routed.endpoint().port()})).take_value().take_value(), std::invalid_argument);
     EXPECT_TRUE(ruvia::test::exchange(io, raw.endpoint(), "GET /still-serving HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").ends_with("connection"));
     app.request_stop();
     run.join();

@@ -7,11 +7,11 @@
 #include "http2_frame.h"
 
 namespace ruvia {
-http2_akamai_fingerprint_collector::http2_akamai_fingerprint_collector(http_fingerprint_options options) :
+http2_fingerprint_collector::http2_fingerprint_collector(http_fingerprint_options options) :
     max_frames_(options.max_frames_),
     max_bytes_(options.max_bytes_) {}
 
-void http2_akamai_fingerprint_collector::reset() noexcept {
+void http2_fingerprint_collector::reset() noexcept {
     settings_.clear();
     priorities_.clear();
     pseudo_headers_.clear();
@@ -25,7 +25,7 @@ void http2_akamai_fingerprint_collector::reset() noexcept {
     phase_ = phase::collecting;
 }
 
-void http2_akamai_fingerprint_collector::observe_frame(const http2_frame_metadata& frame) noexcept {
+void http2_fingerprint_collector::observe_frame(const http2_frame_metadata& frame) noexcept {
     if (phase_ != phase::collecting) {
         return;
     }
@@ -93,7 +93,7 @@ void http2_akamai_fingerprint_collector::observe_frame(const http2_frame_metadat
     }
 }
 
-void http2_akamai_fingerprint_collector::observe_header(const http2_header_metadata& header) noexcept {
+void http2_fingerprint_collector::observe_header(const http2_header_metadata& header) noexcept {
     if (phase_ != phase::collecting) {
         return;
     }

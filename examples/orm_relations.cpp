@@ -163,7 +163,7 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
         if (!second || second->get<"id">() != 2 || second->get<"employees">().size() != 1) {
             throw std::runtime_error("relation query offset did not page departments");
         }
-        next_page.set_lock({.mode_ = db_row_lock::update});
+        next_page.lock({.mode_ = db_row_lock::update});
         if (co_await next_page.get_count() != 2) {
             throw std::runtime_error("relation count did not count root entities");
         }
@@ -226,12 +226,12 @@ int main(int argc, char** argv) {
         }
         if (execute) {
             asio::io_context context_value(asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));
-            auto attachment = ruvia::attach_event_loop(context_value);
+            auto attachment = ruvia::event_loop_attachment(context_value);
             auto settings = ruvia::examples::config();
             ruvia::db_client db(attachment.loop(), settings);
-            auto root = attachment.loop().start(ruvia::examples::run(db, attachment));
+            auto root = attachment.loop().submit(ruvia::examples::run(db, attachment)).take_value();
             attachment.run();
-            std::move(root).get();
+            std::move(root).take_value();
         }
         return 0;
     } catch (...) {

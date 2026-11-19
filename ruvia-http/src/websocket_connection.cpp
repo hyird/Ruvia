@@ -544,10 +544,10 @@ std::optional<websocket_event> websocket_connection::next_event() & {
             impl_->inbound_inflated_.clear();
             // Only a negotiated deflate admits RSV1, so a compressed message implies deflate_.
             const auto inflate_result = impl_->deflate_->decompress(message.payload(), impl_->inbound_inflated_, impl_->receive_message_limit_, impl_->receive_storage_);
-            if (inflate_result == websocket_inflate_result::too_large) {
+            if (inflate_result == websocket_inflate_status::too_large) {
                 return protocol_failure_event(detail::websocket_protocol_failure::message_too_large);
             }
-            if (inflate_result != websocket_inflate_result::ok) {
+            if (inflate_result != websocket_inflate_status::ok) {
                 return protocol_failure_event(detail::websocket_protocol_failure::protocol_error);
             }
             const std::string_view view = impl_->inbound_inflated_;

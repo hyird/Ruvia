@@ -37,14 +37,14 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> info(ruvia::context& c) {
-        const auto connection = c.conn();
+        const auto connection = c.connection();
         const std::array<ruvia::http_header_view, 1> hints{{
             {"link", "</features/asset>; rel=preload; as=style"},
         }};
         // An interim head is separate from the final response. The Web API
         // copies its input, but the operation must still finish in this request.
         co_await c.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, hints));
-        const auto protocol = c.req().protocol_version();
+        const auto protocol = c.request().protocol_version();
         if ((protocol == ruvia::http_protocol_version::http2 || protocol == ruvia::http_protocol_version::http3) && connection.tls()) {
             // Advertisements never change the client's trusted origin.
             const std::array<std::string_view, 1> origins{"https://localhost:8444"};
@@ -60,7 +60,7 @@ private:
             // available through an ordinary request.
             const bool pushed = c.push({
                 .scheme_ = connection.tls() ? "https" : "http",
-                .authority_ = c.req().header("host").value_or(connection.tls() ? "localhost:8444" : "localhost:8093"),
+                .authority_ = c.request().header("host").value_or(connection.tls() ? "localhost:8444" : "localhost:8093"),
                 .target_ = "/features/asset",
             });
             push_header[push_header_count++] = {"X-Push-Accepted", pushed ? "yes" : "no"};

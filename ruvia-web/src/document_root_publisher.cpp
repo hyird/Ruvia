@@ -201,7 +201,7 @@ task<void> static_root_runtime::refresh(const stop_token& stop) {
         if (!http_server_worker_running(state_)) {
             co_return;
         }
-        if (co_await sleep_for(worker_, interval, stop) == timer_sleep_result::stop_requested) {
+        if (co_await sleep_for(worker_, interval, stop) == sleep_status::stop_requested) {
             co_return;
         }
         if (!http_server_worker_running(state_)) {

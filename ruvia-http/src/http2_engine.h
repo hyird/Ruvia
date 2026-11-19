@@ -404,18 +404,18 @@ struct http2_message_end_record final {
 // One queued protocol event. Events that need no owner binding are stored in
 // their public form and moved out unchanged. There is deliberately no none
 // alternative: an empty queue is represented by peek_event() returning null.
-class http2_event final {
+class http2_queued_event final {
 public:
     using value_type = std::variant<http2_informational_head_event, http2_message_head_record, http2_message_data_record, http2_message_end_record, http2_tunnel_data_record, http2_tunnel_end_event, http2_stream_closed_event, http2_request_unprocessed_event, http2_goaway_event, http2_push_promise_event, http_priority_update, http_origin_advertisement, http_alternative_service_advertisement, http2_received_settings, http2_received_window_update, http2_received_priority>;
 
     template <typename event_type>
-        requires(!std::is_same_v<event_type, http2_event>)
-    explicit http2_event(event_type event) noexcept :
+        requires(!std::is_same_v<event_type, http2_queued_event>)
+    explicit http2_queued_event(event_type event) noexcept :
         value_(std::move(event)) {}
-    http2_event(const http2_event&) = delete;
-    http2_event& operator=(const http2_event&) = delete;
-    http2_event(http2_event&&) noexcept = default;
-    http2_event& operator=(http2_event&&) = delete;
+    http2_queued_event(const http2_queued_event&) = delete;
+    http2_queued_event& operator=(const http2_queued_event&) = delete;
+    http2_queued_event(http2_queued_event&&) noexcept = default;
+    http2_queued_event& operator=(http2_queued_event&&) = delete;
 
     // Visits each stream id whose storage the owner may read when taking this event.
     template <typename visitor_type>
@@ -488,7 +488,7 @@ public:
         segments_.push_back(segment_type{begin, bytes_.size(), stream_id, is_data});
     }
 
-    [[nodiscard]] http2_output_batch_result take_batch(std::size_t max_bytes, std::string& into, http2_data_output_observer_type observer, void* observer_context) {
+    [[nodiscard]] http2_output_batch_result drain_batch(std::size_t max_bytes, std::string& into, http2_data_output_observer_type observer, void* observer_context) {
         if (consumed_ == bytes_.size()) {
             return {http2_output_batch_status::empty, 0};
         }
@@ -553,7 +553,7 @@ public:
                 }
             }
         }
-        return {http2_output_batch_status::taken, batch_bytes};
+        return {http2_output_batch_status::drained, batch_bytes};
     }
 
     [[nodiscard]] std::size_t pending_data_bytes(std::uint32_t stream_id) const noexcept {
@@ -1081,12 +1081,12 @@ struct http2_extension_payload final {
     std::string_view field_value_{};
 };
 
-class http2_connection final {
+class http2_engine final {
 public:
-    http2_connection(http_connection_role role, const http2_connection_options& options);
-    ~http2_connection();
-    http2_connection(const http2_connection&) = delete;
-    http2_connection& operator=(const http2_connection&) = delete;
+    http2_engine(http_connection_role role, const http2_connection_options& options);
+    ~http2_engine();
+    http2_engine(const http2_engine&) = delete;
+    http2_engine& operator=(const http2_engine&) = delete;
 
     [[nodiscard]] http_connection_role role() const noexcept {
         return role_;
@@ -1103,8 +1103,8 @@ public:
     http2_feed_status feed(input_type&&) = delete;
     // The owner materializes the front event before consuming it, so an exception
     // never consumes the only protocol notification for a stream.
-    [[nodiscard]] http2_event* peek_event() & noexcept;
-    [[nodiscard]] http2_event* peek_event() && = delete;
+    [[nodiscard]] http2_queued_event* peek_event() & noexcept;
+    [[nodiscard]] http2_queued_event* peek_event() && = delete;
     void consume_event() noexcept;
 
     // Access an assembled request head / stream for the owner to build an http_request.
@@ -1117,7 +1117,7 @@ public:
     [[nodiscard]] std::optional<http2_server_request_view> server_request_view(std::uint32_t stream_id) const noexcept;
 
     // --- outbound --------------------------------------------------------------
-    [[nodiscard]] http2_output_batch_result take_output_batch(std::size_t max_bytes, std::string& into, http2_data_output_observer_type observer, void* observer_context);
+    [[nodiscard]] http2_output_batch_result drain_output_batch(std::size_t max_bytes, std::string& into, http2_data_output_observer_type observer, void* observer_context);
     [[nodiscard]] bool wants_write() const noexcept {
         return output_.wants_write();
     }
@@ -1365,7 +1365,7 @@ private:
     [[nodiscard]] std::uint32_t peer_setting(nghttp2_settings_id id) const noexcept;
 
     // Appends an event into reserved capacity and counts it on every stream it names.
-    void publish_event(http2_event event);
+    void publish_event(http2_queued_event event);
 
     // Peer-induced output is bounded without a clock; every limit ends in
     // GOAWAY(ENHANCE_YOUR_CALM). PING ACK, SETTINGS ACK and each RST_STREAM that
@@ -1411,7 +1411,7 @@ private:
         http_priority_fields fields_{};
     };
     std::vector<idle_priority_entry> priorities_;
-    std::vector<http2_event> events_;
+    std::vector<http2_queued_event> events_;
     std::size_t event_offset_{0};
     http2_stream_lease_ledger leases_;
     std::vector<std::uint32_t> owner_resets_;

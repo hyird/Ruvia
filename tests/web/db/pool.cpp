@@ -80,8 +80,9 @@ TEST(Ruvia, db_native_startup_cancellation_joins_offloaded_steps_before_retireme
                 gate.wait();
             }),
                 ruvia::post_status::accepted);
-            auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &blocking});
-            const auto worker = attachment.loop().worker();
+            auto attachment = ruvia::event_loop_attachment(io, {.blocking_pool_ = &blocking});
+            const auto loop_for_worker = attachment.loop();
+            const auto worker = loop_for_worker.worker();
             const auto run = [&]() -> ruvia::task<void> {
                 ruvia::db_client client(attachment.loop(), {.driver_ = driver, .host_ = "127.0.0.1", .tls_ = {.ca_file_ = "absent-startup-ca.pem"}});
                 ruvia::stop_source stop;
@@ -160,7 +161,7 @@ TEST(Ruvia, db_pool_opens_the_configured_number_of_connections) {
         config.driver_ = driver;
         config.pool_size_per_worker_ = 3;
         auto& io = ruvia::test::new_test_io_context();
-        auto attachment = ruvia::attach_event_loop(io);
+        auto attachment = ruvia::event_loop_attachment(io);
         ruvia::db_client client(attachment.loop(), config);
         // Retained configuration owns its values independently of the caller.
         config.host_ = "invalid host";
@@ -187,7 +188,7 @@ TEST(Ruvia, db_pool_failed_startup_retires_already_connected_slots) {
         config.pool_size_per_worker_ = 3;
         config.connect_timeout_ = std::chrono::seconds(1);
         auto& io = ruvia::test::new_test_io_context();
-        auto attachment = ruvia::attach_event_loop(io);
+        auto attachment = ruvia::event_loop_attachment(io);
         ruvia::db_client client(attachment.loop(), config);
         bool entered = false;
         bool timed_out = false;
@@ -223,7 +224,7 @@ TEST(Ruvia, db_client_connect_options_cover_authentication_and_own_their_values)
             auto cold = client.connect(options);
             options = {};
             loops.start();
-            auto connecting = loops.loop(0).start(std::move(cold));
+            auto connecting = loops.loop(0).submit(std::move(cold)).take_value();
             peer.wait_for_startup();
             if (cancel) {
                 stop.request_stop();
@@ -231,13 +232,13 @@ TEST(Ruvia, db_client_connect_options_cover_authentication_and_own_their_values)
             connecting.wait();
             std::optional<std::error_code> code;
             try {
-                std::move(connecting).get();
+                std::move(connecting).take_value();
             } catch (const db_error& error) {
                 code = error.code();
             }
-            auto shutdown = loops.loop(0).start(client.shutdown());
+            auto shutdown = loops.loop(0).submit(client.shutdown()).take_value();
             shutdown.wait();
-            std::move(shutdown).get();
+            std::move(shutdown).take_value();
             loops.join();
             EXPECT_TRUE(code == (cancel ? backend_error_code::cancelled : backend_error_code::timeout));
             // Release the peer's authentication gate so it can observe EOF.
@@ -259,15 +260,15 @@ TEST(Ruvia, db_client_connect_relative_timeout_starts_when_the_cold_task_starts)
         auto cold = client.connect({.timeout_ = std::chrono::seconds(1)});
         std::this_thread::sleep_for(std::chrono::milliseconds(1100));
         loops.start();
-        auto connecting = loops.loop(0).start(std::move(cold));
+        auto connecting = loops.loop(0).submit(std::move(cold)).take_value();
         peer.wait_for_startup();
         peer.authenticate();
         connecting.wait();
-        auto shutdown = loops.loop(0).start(client.shutdown());
+        auto shutdown = loops.loop(0).submit(client.shutdown()).take_value();
         shutdown.wait();
         loops.join();
-        EXPECT_NO_THROW(std::move(connecting).get());
-        std::move(shutdown).get();
+        EXPECT_NO_THROW(std::move(connecting).take_value());
+        std::move(shutdown).take_value();
     }
 }
 
@@ -289,7 +290,7 @@ TEST(Ruvia, db_client_connect_options_cancel_and_timeout_queued_dns_without_wait
             db_client client(loops.loop(0), {.driver_ = driver, .host_ = "localhost", .port_ = 9, .tls_ = {.mode_ = client_tls_mode::disabled}});
             stop_source stop;
             loops.start();
-            auto connecting = loops.loop(0).start(client.connect({.timeout_ = cancel ? std::chrono::seconds(5) : std::chrono::milliseconds(500), .stop_token_ = stop.token()}));
+            auto connecting = loops.loop(0).submit(client.connect({.timeout_ = cancel ? std::chrono::seconds(5) : std::chrono::milliseconds(500), .stop_token_ = stop.token()})).take_value();
             const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(1);
             while (lookups.stats().queued_ == 0 && std::chrono::steady_clock::now() < until) {
                 std::this_thread::yield();
@@ -301,13 +302,13 @@ TEST(Ruvia, db_client_connect_options_cancel_and_timeout_queued_dns_without_wait
             connecting.wait();
             std::optional<std::error_code> code;
             try {
-                std::move(connecting).get();
+                std::move(connecting).take_value();
             } catch (const db_error& error) {
                 code = error.code();
             }
-            auto shutdown = loops.loop(0).start(client.shutdown());
+            auto shutdown = loops.loop(0).submit(client.shutdown()).take_value();
             shutdown.wait();
-            std::move(shutdown).get();
+            std::move(shutdown).take_value();
             loops.join();
             release.set_value();
             lookups.join();
@@ -335,7 +336,7 @@ TEST(Ruvia, db_pool_transaction_retirement_checks_server_state_before_reuse) {
             config.driver_ = db_driver::mariadb;
             config.pool_size_per_worker_ = 1;
             auto& io = test::new_test_io_context();
-            auto attachment = attach_event_loop(io);
+            auto attachment = event_loop_attachment(io);
             db_client client(attachment.loop(), config);
             test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
                 const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
@@ -375,7 +376,7 @@ TEST(Ruvia, db_pool_allows_parallel_transactions_and_reuses_released_connections
     config.pool_size_per_worker_ = 2;
     config.acquire_timeout_ = std::chrono::milliseconds(100);
     auto& io = test::new_test_io_context();
-    auto attachment = attach_event_loop(io);
+    auto attachment = event_loop_attachment(io);
     db_client client(attachment.loop(), config);
     test::drive_backend_client(attachment, client, [&](db_client& value) -> task<void> {
         auto handle = value.db();
@@ -425,7 +426,7 @@ TEST(Ruvia, db_pool_shutdown_wakes_waiters_while_all_connections_are_leased) {
     auto config = peer.config();
     config.pool_size_per_worker_ = 2;
     auto& io = test::new_test_io_context();
-    auto attachment = attach_event_loop(io);
+    auto attachment = event_loop_attachment(io);
     db_client client(attachment.loop(), config);
     test::drive_backend_client(attachment, client, [&](db_client& value) -> task<void> {
         auto handle = value.db();
@@ -758,7 +759,7 @@ void check_session_ended_while_idle(ruvia::test::backend_startup_peer& peer, ruv
     auto config = peer.config();
     config.driver_ = driver;
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config);
     std::string before{};
     std::optional<std::error_code> code;
@@ -802,7 +803,7 @@ TEST(Ruvia, db_connection_lost_mid_result_is_an_io_error) {
     for (const auto driver : drivers) {
         for (const auto kind : {statement_kind::query, statement_kind::execute, statement_kind::stream}) {
             auto& context_value = test::new_test_io_context();
-            auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+            auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
             std::optional<std::error_code> code;
             test::with_connected_db_client(attachment, db_config{.driver_ = driver}, test::backend_startup_peer::after_startup::drop_mid_result, [&](db_client& client) -> task<void> {
                 auto handle = client.db();
@@ -845,7 +846,7 @@ TEST(Ruvia, db_rejected_statement_keeps_the_pooled_connection) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.error_ = std::string("duplicate key value violates unique constraint"), .sql_state_ = std::string("23505")}, {.rows_ = std::vector<std::string>({std::string("kept")})}}));
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     std::optional<std::error_code> code;
     std::string sql_state{};
@@ -873,7 +874,7 @@ TEST(Ruvia, db_postgresql_statement_error_omits_server_text) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.error_ = std::string("duplicate key value violates unique constraint for secret@example.com"), .sql_state_ = std::string("23505")}}));
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     std::optional<std::error_code> code;
     std::string sql_state{};
@@ -901,7 +902,7 @@ TEST(Ruvia, db_rejected_transaction_statement_rolls_back_on_the_kept_connection)
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.status_ = 'E', .error_ = std::string("syntax error at or near \"SELEC\"")}, {.column_ = std::string(""), .command_ = std::string("ROLLBACK")}, {.rows_ = std::vector<std::string>({std::string("after")})}}));
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     std::optional<std::error_code> code;
     bool transaction_failed = false;
@@ -938,7 +939,7 @@ TEST(Ruvia, db_copy_result_fails_the_statement_and_closes_the_connection) {
         for (const auto kind : {statement_kind::query, statement_kind::execute}) {
             test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::reaccept, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.copy_ = copy}, {.rows_ = std::vector<std::string>({std::string("fresh")})}}));
             auto& context_value = test::new_test_io_context();
-            auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+            auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
             db_client client(attachment.loop(), peer.config());
             std::optional<std::error_code> code;
             std::string fresh{};
@@ -975,7 +976,7 @@ TEST(Ruvia, db_mariadb_statement_error_omits_server_text) {
     const peer_type::maria_reply duplicate{.column_ = std::string(""), .error_ = std::string("Duplicate entry 'secret@example.com' for key 'email'"), .code_ = 1062, .sql_state_ = std::string("23000")};
     peer_type peer(std::vector<peer_type::maria_reply>({duplicate, duplicate}), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     auto config = peer.config();
     config.driver_ = db_driver::mariadb;
     db_client client(attachment.loop(), config);
@@ -1034,7 +1035,7 @@ TEST(Ruvia, db_postgresql_repeated_statement_is_parsed_once_per_connection) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}, {.rows_ = std::vector<std::string>({std::string("e")})}, {.rows_ = std::vector<std::string>({std::string("f")})}}));
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     std::vector<std::string> values{};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -1075,7 +1076,7 @@ TEST(Ruvia, db_postgresql_stale_cached_statement_is_retried) {
     for (const auto stale : {stale_case{"0A000", "RevalidateCachedQuery"}, stale_case{"26000", "FetchPreparedStatement"}}) {
         test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.error_ = std::string("stale statement"), .sql_state_ = std::string(stale.sql_state_), .routine_ = std::string(stale.routine_)}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
         auto& context_value = test::new_test_io_context();
-        auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+        auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
         db_client client(attachment.loop(), peer.config());
         std::vector<std::string> values{};
         test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
@@ -1097,7 +1098,7 @@ TEST(Ruvia, db_postgresql_stale_statement_in_transaction_fails_and_is_parsed_aga
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("a")}), .status_ = 'T'}, {.rows_ = std::vector<std::string>({std::string("b")}), .status_ = 'T'}, {.status_ = 'E', .error_ = std::string("cached plan must not change result type"), .sql_state_ = std::string("0A000"), .routine_ = std::string("RevalidateCachedQuery")}, {.column_ = std::string(""), .command_ = std::string("ROLLBACK")}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     std::string sql_state{};
     bool transaction_failed = false;
@@ -1134,7 +1135,7 @@ TEST(Ruvia, db_postgresql_stale_sql_state_raised_by_the_statement_is_not_retried
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false, test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.error_ = std::string("not supported"), .sql_state_ = std::string("0A000"), .routine_ = std::string("ExecInitNode")}, {.rows_ = std::vector<std::string>({std::string("c")})}}));
     auto& context_value = test::new_test_io_context();
-    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    auto attachment = event_loop_attachment(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     std::optional<std::error_code> code;
     std::string after{};
@@ -1418,7 +1419,7 @@ template <typename lock_requested_type>
     const ruvia::db_migrator migrator(loops.loop(0), config);
     auto migration = migrator.migrate(migrations, std::move(operation));
     loops.start();
-    auto run = loops.loop(0).start(std::move(migration));
+    auto run = loops.loop(0).submit(std::move(migration)).take_value();
     const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (!lock_requested() && std::chrono::steady_clock::now() < give_up) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -1430,7 +1431,7 @@ template <typename lock_requested_type>
     EXPECT_TRUE(run.wait_for(std::chrono::seconds(5)));
     loops.join();
     try {
-        (void)std::move(run).get();
+        (void)std::move(run).take_value();
     } catch (const ruvia::db_error& error) {
         return error.code();
     }
@@ -1571,10 +1572,10 @@ TEST(Ruvia, db_migrator_requires_a_valid_loop_and_runs_only_on_it) {
     const ruvia::db_migrator migrator(without_lookups.loop(0), ruvia::db_config{.driver_ = ruvia::db_driver::postgresql, .host_ = "127.0.0.1", .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}});
     auto migration = migrator.migrate({});
     without_lookups.start();
-    auto run = without_lookups.loop(1).start(std::move(migration));
+    auto run = without_lookups.loop(1).submit(std::move(migration)).take_value();
     run.wait();
     without_lookups.join();
-    EXPECT_THROW((void)std::move(run).get(), std::logic_error);
+    EXPECT_THROW((void)std::move(run).take_value(), std::logic_error);
 }
 #endif
 

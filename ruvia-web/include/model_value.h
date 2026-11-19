@@ -362,17 +362,17 @@ public:
         return left.view() == right.view();
     }
 
-    void assign_owned(std::string_view value) & {
+    void assign(std::string_view value) & {
         storage_.assign_owned(value);
     }
-    void assign_owned(std::string_view) && = delete;
+    void assign(std::string_view) && = delete;
 
     template <std::same_as<std::string> string_type>
-    void assign_owned(string_type&& value) & noexcept {
+    void assign(string_type&& value) & noexcept {
         storage_.assign_owned(std::move(value));
     }
     template <std::same_as<std::string> string_type>
-    void assign_owned(string_type&&) && = delete;
+    void assign(string_type&&) && = delete;
 
     [[nodiscard]] std::string take_string() && {
         return std::move(storage_).take();
@@ -467,6 +467,14 @@ struct integer_value final {
     [[nodiscard]] constexpr operator t_type() const noexcept {
         return value_;
     }
+    template <typename u_type>
+        requires detail::is_model_integer<u_type>
+    [[nodiscard]] static constexpr std::optional<integer_value> try_from_value(u_type value) noexcept {
+        if (!std::in_range<t_type>(value)) {
+            return std::nullopt;
+        }
+        return integer_value(static_cast<t_type>(value));
+    }
 };
 
 using int8 = integer_value<std::int8_t>;
@@ -524,18 +532,18 @@ public:
         return items_.empty();
     }
 
-    void assign_owned(std::span<const std::uint8_t> value) & {
+    void assign(std::span<const std::uint8_t> value) & {
         std::vector<std::uint8_t> owned(value.begin(), value.end());
         items_ = std::move(owned);
     }
-    void assign_owned(std::span<const std::uint8_t>) && = delete;
+    void assign(std::span<const std::uint8_t>) && = delete;
 
     template <std::same_as<std::vector<std::uint8_t>> vector_type>
-    void assign_owned(vector_type&& value) & noexcept {
+    void assign(vector_type&& value) & noexcept {
         items_ = std::move(value);
     }
     template <std::same_as<std::vector<std::uint8_t>> vector_type>
-    void assign_owned(vector_type&&) && = delete;
+    void assign(vector_type&&) && = delete;
 
     [[nodiscard]] std::vector<std::uint8_t> take_bytes() && noexcept {
         std::vector<std::uint8_t> taken(std::move(items_));
@@ -579,6 +587,10 @@ public:
     using const_iterator = typename std::vector<t_type>::const_iterator;
 
     array() noexcept = default;
+
+    template <std::same_as<std::vector<t_type>> vector_type>
+    explicit array(vector_type&& items) noexcept :
+        items_(std::move(items)) {}
 
     array(const array&) = delete;
     array& operator=(const array&) = delete;
@@ -707,6 +719,18 @@ public:
         }
     }
     void resize(size_type, const t_type&) && = delete;
+
+    [[nodiscard]] std::span<const t_type> items() const& noexcept RUVIA_LIFETIMEBOUND {
+        return items_;
+    }
+    std::span<const t_type> items() const&& = delete;
+
+    template <std::same_as<std::vector<t_type>> vector_type>
+    void assign(vector_type&& value) & noexcept {
+        items_ = std::move(value);
+    }
+    template <std::same_as<std::vector<t_type>> vector_type>
+    void assign(vector_type&&) && = delete;
 
     [[nodiscard]] std::vector<t_type> take_items() && {
         own_for_model();

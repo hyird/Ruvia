@@ -448,11 +448,11 @@ http_connection_role http3_quic_connection::role() const noexcept {
     return impl_->role_;
 }
 
-ngtcp2_conn* http3_quic_connection::native_handle() & noexcept {
+ngtcp2_conn* http3_quic_connection::native() & noexcept {
     return impl_->connection_;
 }
 
-const ngtcp2_conn* http3_quic_connection::native_handle() const& noexcept {
+const ngtcp2_conn* http3_quic_connection::native() const& noexcept {
     return impl_->connection_;
 }
 
@@ -460,8 +460,8 @@ void* http3_quic_connection::callback_context() const noexcept {
     return impl_->callback_context_;
 }
 
-void http3_quic_connection::set_tls_native_handle(void* tls_native_handle) noexcept {
-    ngtcp2_conn_set_tls_native_handle(impl_->connection_, tls_native_handle);
+void http3_quic_connection::set_tls_session(void* tls_session) noexcept {
+    ngtcp2_conn_set_tls_native_handle(impl_->connection_, tls_session);
 }
 
 bool http3_quic_connection::handshake_completed() const noexcept {
@@ -886,7 +886,7 @@ std::optional<http3_event> http3_quic_connection::next_event() & {
             return std::nullopt;
         }
         if (const auto* deferred = event->deferred_consume()) {
-            impl_->extend_receive_windows(deferred->stream_id(), deferred->bytes());
+            impl_->extend_receive_windows(deferred->stream_id(), deferred->consumed_bytes());
             continue;
         }
         if (const auto* action = event->transport_action(); action != nullptr && action->origin() == http3_transport_action_origin::local) {

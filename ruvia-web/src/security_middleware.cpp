@@ -54,20 +54,20 @@ csrf_middleware::csrf_middleware(const csrf_config& config) :
     header_name_(config.header_name_) {}
 
 task<void> csrf_middleware::invoke(context& c, next& next_value) {
-    const auto method = c.req().known_method();
+    const auto method = c.request().known_method();
     const bool safe = method == http_known_method::get || method == http_known_method::head || method == http_known_method::options;
     // Repeated cookie or header occurrences never resolve to one token.
-    const auto cookie = c.req().unique_cookie(cookie_name_);
+    const auto cookie = c.request().unique_cookie(cookie_name_);
     const bool has_cookie = cookie.status_ == unique_lookup_status::found && !cookie.value_.empty();
     if (!safe) {
-        const auto header_value = c.req().unique_header(header_name_);
+        const auto header_value = c.request().unique_header(header_name_);
         if (!has_cookie || header_value.status_ != unique_lookup_status::found || header_value.value_.empty() || !constant_time_bytes_equal(cookie.value_, header_value.value_)) {
             throw http_error({.status_ = ruvia::http_status::forbidden, .code_ = "csrf_token_mismatch", .message_ = "CSRF token missing or invalid"});
         }
     } else if (!has_cookie) {
         std::array<char, detail::secure_token_size> buffer;
         const auto token = detail::generate_secure_token(buffer);
-        const auto connection = c.conn();
+        const auto connection = c.connection();
         const cookie_options options{
             .path_ = "/",
             .same_site_ = cookie_same_site::lax,
@@ -149,7 +149,7 @@ security_headers_middleware::security_headers_middleware(const security_headers_
 }
 
 task<void> security_headers_middleware::invoke(context& context_value, next& next_value) {
-    const bool secure_transport = context_value.conn().scheme() == http_scheme::https;
+    const bool secure_transport = context_value.connection().scheme() == http_scheme::https;
     const auto set_header = [&context_value, replace_existing = replace_existing_](std::string_view name, std::string_view value, bool skip_empty) {
         if (skip_empty && value.empty()) {
             return;

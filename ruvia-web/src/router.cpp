@@ -301,7 +301,7 @@ public:
         services.bind_router_capabilities(self->clients_.empty() ? nullptr : &self->clients_, self->worker_states_ ? &*self->worker_states_ : nullptr);
         // Only this router's own rule: the host's application-wide rule never
         // covers a request stream.
-        if (const auto rejection = decide_request_rate_limit(self->limiter_.get(), context_value.conn().client().address(), services.pinned_arrival())) {
+        if (const auto rejection = decide_request_rate_limit(self->limiter_.get(), context_value.connection().client().address(), services.pinned_arrival())) {
             auto response = co_await table.respond_error(request, rate_limit_rejection_error(), services);
             apply_rate_limit_rejection_headers(response, *rejection);
             context_access::set_response(context_value, std::move(response));
@@ -337,7 +337,7 @@ public:
             // send 100 Continue or run application code for an oversized body.
             if (limit) {
                 if (const auto length = request.header("Content-Length")) {
-                    if (const auto declared = http_parse_content_length(*length); declared.has_value() && *declared > *limit) {
+                    if (const auto declared = parse_http_content_length(*length); declared.has_value() && *declared > *limit) {
                         throw make_http_protocol_error(http_request_body_failure::too_large);
                     }
                 }

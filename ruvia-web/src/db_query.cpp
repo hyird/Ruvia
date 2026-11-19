@@ -526,7 +526,7 @@ struct expression_nodes final {
     }
 
     [[nodiscard]] db_query_node value(const db_value& value) const {
-        return db_query_node(db_node_kind::value, clone_db_value_for_resource(value));
+        return db_query_node(db_node_kind::value, clone_db_value(value));
     }
 
     [[nodiscard]] db_query_node named(db_node_kind kind, std::string_view text = {}, std::string_view qualifier = {}, bool explicit_alias = false) const {
@@ -909,7 +909,7 @@ std::size_t db_owned_expression::append_to_tree(db_expr_tree& target) const {
     return no_db_node;
 }
 
-db_owned_expression db_owned_expression::from_expression(db_expression expression, std::string_view table, bool aliased) {
+db_owned_expression db_owned_expression::clone_expression(db_expression expression, std::string_view table, bool aliased) {
     if (expression.empty() || expression.node_ >= expression.owner_->nodes_.size()) {
         throw std::invalid_argument("cannot construct an owned expression from an empty expression");
     }

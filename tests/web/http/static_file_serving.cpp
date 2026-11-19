@@ -350,13 +350,13 @@ TEST(Ruvia, static_file_responses_share_resident_bytes_beyond_root_lifetime) {
             const auto second = co_await context_value.static_file(root, {.relative_path_ = "resident.txt"});
             EXPECT_TRUE(retained->has_file_representation());
             EXPECT_FALSE(retained->file_body().has_value());
-            EXPECT_EQ(second.body_bytes().data(), retained->body_bytes().data());
-            EXPECT_EQ(second.body_bytes(), expected);
+            EXPECT_EQ(second.body().data(), retained->body().data());
+            EXPECT_EQ(second.body(), expected);
         }
-        EXPECT_EQ(retained->body_bytes(), expected);
-        auto extracted = std::move(*retained).take_body_bytes();
+        EXPECT_EQ(retained->body(), expected);
+        auto extracted = std::move(*retained).take_body();
         EXPECT_EQ(extracted, expected);
-        EXPECT_TRUE(retained->body_bytes().empty());
+        EXPECT_TRUE(retained->body().empty());
     });
 }
 
@@ -815,7 +815,7 @@ TEST(Ruvia, file_if_range_same_second_updates_require_an_etag) {
     // The bytes a response carries: in memory, or the file range it names.
     const auto served_bytes = [](const ruvia::http_response& response) {
         const auto file = response.file_body();
-        return file ? static_file_test::read_file_response_body(*file) : std::string(response.body_bytes());
+        return file ? static_file_test::read_file_response_body(*file) : std::string(response.body());
     };
     struct observation {
         ruvia::http_status_code status{ruvia::http_status::internal_server_error};
@@ -1495,7 +1495,7 @@ TEST(Ruvia, static_file_directory_indexes_survive_path_normalization_storage_gro
             const auto response = with_static_context(request, [&](ruvia::context& ctx) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
                 try {
                     const auto result = co_await ctx.static_file(root, {.relative_path_ = path});
-                    co_return std::pair(result.status(), std::string(result.body_bytes()));
+                    co_return std::pair(result.status(), std::string(result.body()));
                 } catch (const ruvia::http_error& error) {
                     co_return std::pair(error.info().status(), std::string{});
                 }

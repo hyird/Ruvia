@@ -99,7 +99,7 @@ public:
         auto& state_value = state();
         state_value.stuck_entered_ = true;
         const auto result = co_await ruvia::sleep_for(context.worker(), 1h, context.stop_token());
-        state_value.stuck_cancelled_ = result == ruvia::timer_sleep_result::stop_requested;
+        state_value.stuck_cancelled_ = result == ruvia::sleep_status::stop_requested;
         co_return context.text(std::string_view("stuck-done"));
     }
 
@@ -212,7 +212,7 @@ TEST(Ruvia, app_multi_worker_restarts_after_idle_connections_and_pending_accepts
         app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
         app_run run(app);
         EXPECT_TRUE(state().started_.try_acquire_for(3s));
-        EXPECT_EQ(app.workers().size(), std::size_t{2});
+        EXPECT_EQ(app.worker_refs().size(), std::size_t{2});
         std::vector<asio::ip::tcp::socket> idle{};
         if (cycle != 0) {
             // Connecting without sending data must not hold up later accepts.
@@ -249,7 +249,7 @@ TEST(Ruvia, app_multi_worker_restarts_after_idle_connections_and_pending_accepts
             EXPECT_TRUE(read_to_end(socket, response));
             EXPECT_TRUE(response.empty());
         }
-        EXPECT_TRUE(app.workers().empty());
+        EXPECT_TRUE(app.worker_refs().empty());
         EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
         asio::ip::tcp::socket stopped(io);
         asio::error_code error;
@@ -629,7 +629,7 @@ TEST(Ruvia, app_stop_during_capability_connect_returns_normally) {
         return !value.empty();
     }));
     EXPECT_TRUE(!auth.empty());
-    EXPECT_TRUE(app.workers().empty());
+    EXPECT_TRUE(app.worker_refs().empty());
     EXPECT_TRUE(!app.worker_for(std::uint64_t{0}).valid());
 
     app.request_stop();

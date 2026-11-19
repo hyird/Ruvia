@@ -67,7 +67,7 @@ public:
 
     class acquire_awaiter final {
     public:
-        acquire_awaiter(owner_type& owner, pool_lease_acquire acquire) noexcept :
+        acquire_awaiter(owner_type& owner, pool_lease_acquire_operation acquire) noexcept :
             owner_(owner),
             acquire_(std::move(acquire)) {}
         acquire_awaiter(const acquire_awaiter&) = delete;
@@ -92,7 +92,7 @@ public:
 
     private:
         owner_type& owner_;
-        pool_lease_acquire acquire_;
+        pool_lease_acquire_operation acquire_;
     };
 
     // The common free-slot path completes directly in the caller's frame.
@@ -139,7 +139,7 @@ public:
     }
 
     [[nodiscard]] bool closing() const noexcept {
-        return scheduler_.closing();
+        return scheduler_.closed();
     }
 
     // Starts an operation on a leased slot: clears a cancellation its previous
@@ -246,8 +246,8 @@ public:
         const auto deadline_value = *deadline;
         state.deadline_.arm(deadline_value, kind);
         try {
-            (void)state.deadline_timer_.schedule(worker_, deadline_value, [this, slot](worker_timer_outcome outcome) noexcept {
-                if (outcome != worker_timer_outcome::expired) {
+            (void)state.deadline_timer_.schedule(worker_, deadline_value, [this, slot](worker_timer_status outcome) noexcept {
+                if (outcome != worker_timer_status::expired) {
                     return;
                 }
                 const auto expired = slots_[slot].deadline_.expire(std::chrono::steady_clock::now());
@@ -267,7 +267,7 @@ public:
     [[nodiscard]] bool clear_deadline(std::size_t slot) noexcept {
         auto& state = slots_[slot];
         state.deadline_timer_.cancel();
-        return state.deadline_.clear();
+        return state.deadline_.take_expired();
     }
 
     // Expires an armed deadline whose time has passed without waiting for the

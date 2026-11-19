@@ -294,11 +294,19 @@ task<std::optional<std::span<const std::byte>>> tcp_client::read(operation_optio
     return state_->read(std::move(operation));
 }
 
-task<void> tcp_client::write(outbound_bytes bytes, operation_options operation) & {
-    return state_->write(std::move(bytes).into_string(), std::move(operation));
+task<std::optional<std::string_view>> tcp_client::read_text(operation_options operation) & {
+    const auto chunk = co_await read(std::move(operation));
+    if (!chunk) {
+        co_return std::nullopt;
+    }
+    co_return as_chars(*chunk);
 }
 
-void tcp_client::request_stop() noexcept {
+task<void> tcp_client::write(outbound_bytes bytes, operation_options operation) & {
+    return state_->write(std::move(bytes).take_string(), std::move(operation));
+}
+
+void tcp_client::request_stop() & noexcept {
     state_->request_close();
 }
 

@@ -42,7 +42,7 @@ enum class http_connect_udp_error : std::uint8_t {
 };
 // RFC 9298's default URI template. IPv6 hosts have no brackets or zone ID;
 // all reserved bytes are percent-encoded during template expansion.
-[[nodiscard]] std::variant<std::string, http_connect_udp_error> encode_http_connect_udp_path(http_connect_udp_target_view target);
+[[nodiscard]] std::variant<std::string, http_connect_udp_error> format_http_connect_udp_path(http_connect_udp_target_view target);
 [[nodiscard]] std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect_udp_path(std::string_view path);
 
 // Recipient checks of a CONNECT-UDP request head in the wire form of

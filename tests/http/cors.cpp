@@ -94,7 +94,7 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
         const std::array<ruvia::http_header_view, 1> bad_origin_headers{
             ruvia::http_header_view{"Origin", "https://untrusted.example"},
         };
-        const auto get_bad_origin = ruvia::make_parsed_http_request("GET", "/resource", bad_origin_headers, {});
+        const auto get_bad_origin = ruvia::make_http_request("GET", "/resource", bad_origin_headers, {});
         ruvia::http_response get_resp;
         EXPECT_FALSE(policy.apply_response_headers(get_bad_origin, get_resp));
         EXPECT_FALSE(get_resp.header("Access-Control-Allow-Origin").has_value());
@@ -105,7 +105,7 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
             ruvia::http_header_view{"Access-Control-Request-Method", "POST"},
             ruvia::http_header_view{"Access-Control-Request-Headers", "X-Forbidden"},
         };
-        const auto opts_bad = ruvia::make_parsed_http_request("OPTIONS", "/resource", bad_options_headers, {});
+        const auto opts_bad = ruvia::make_http_request("OPTIONS", "/resource", bad_options_headers, {});
         ruvia::http_response opts_resp;
         EXPECT_FALSE(policy.apply_response_headers(opts_bad, opts_resp));
         EXPECT_FALSE(opts_resp.header("Access-Control-Allow-Origin").has_value());
@@ -171,7 +171,7 @@ TEST(RuviaHttpPublicApi, cors_preflight_matches_the_exact_method_token) {
             ruvia::http_header_view{"Origin", "https://app.example.com"},
             ruvia::http_header_view{"Access-Control-Request-Method", method},
         };
-        const auto request = ruvia::make_parsed_http_request("OPTIONS", "/resource", fields, {});
+        const auto request = ruvia::make_http_request("OPTIONS", "/resource", fields, {});
         const bool allowed = method == "Report";
         EXPECT_EQ(policy.evaluate_preflight(request).accepted(), allowed);
         ruvia::http_response response;
@@ -190,7 +190,7 @@ TEST(RuviaHttpPublicApi, cors_preflight_wildcard_supersedes_explicit_methods) {
         ruvia::http_header_view{"Origin", "https://app.example.com"},
         ruvia::http_header_view{"Access-Control-Request-Method", "Report"},
     };
-    const auto request = ruvia::make_parsed_http_request("OPTIONS", "/resource", fields, {});
+    const auto request = ruvia::make_http_request("OPTIONS", "/resource", fields, {});
     const auto preflight = policy.evaluate_preflight(request);
     ASSERT_TRUE(preflight.accepted());
     const auto methods = ruvia::find_unique_http_header(preflight.headers(), "Access-Control-Allow-Methods");
@@ -212,7 +212,7 @@ TEST(RuviaHttpPublicApi, cors_policy_rejects_credentials_with_any_origin) {
     const std::array<ruvia::http_header_view, 1> headers{
         ruvia::http_header_view{"Origin", "https://example.com"},
     };
-    const auto request = ruvia::make_parsed_http_request("GET", "/resource", headers, {});
+    const auto request = ruvia::make_http_request("GET", "/resource", headers, {});
     ruvia::http_response response;
     EXPECT_TRUE(policy.apply_response_headers(request, response));
     EXPECT_EQ(response.header("Access-Control-Allow-Origin"), std::optional<std::string_view>("https://example.com"));

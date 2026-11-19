@@ -283,7 +283,7 @@ private:
 }  // namespace detail
 template <typename t_type, typename completion_token_type>
     requires detail::asio_task_result<t_type>
-auto async_start(task<t_type>&& task_value, completion_token_type&& token);
+auto async_start(task<t_type> task_value, completion_token_type&& token);
 
 // task is a structured, lazy coroutine owner. A cold task may be discarded and
 // a completed task may be destroyed, but a started task must run to completion.
@@ -343,7 +343,7 @@ private:
     friend class detail::root_task_state;
     template <typename u_type, typename completion_token_type>
         requires detail::asio_task_result<u_type>
-    friend auto async_start(task<u_type>&&, completion_token_type&&);
+    friend auto async_start(task<u_type>, completion_token_type&&);
     friend class task_scope;
     friend class detail::operation_scope;
 

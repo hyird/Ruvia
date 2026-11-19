@@ -227,8 +227,8 @@ void http_client_connection::begin_idle() noexcept {
         return;
     }
     try {
-        (void)idle_timer_.schedule(pool_.worker(), deadline_after(idle_timeout->value()), [this](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired) {
+        (void)idle_timer_.schedule(pool_.worker(), deadline_after(idle_timeout->value()), [this](worker_timer_status outcome) noexcept {
+            if (outcome == worker_timer_status::expired) {
                 close_idle();
             }
         });
@@ -303,8 +303,8 @@ task<void> http_client_connection::watch_idle_http1() {
         if (status == client_idle_transport_status::reusable) {
             continue;
         }
-        if (status == client_idle_transport_status::pending_data) {
-            pool_.record_idle_connection_with_pending_data();
+        if (status == client_idle_transport_status::pending_input) {
+            pool_.record_idle_connection_with_pending_input();
         }
         close();
     }
@@ -424,8 +424,8 @@ task<bool> http_client_connection::ensure_connected(const operation_deadline& op
             if (idle_status == client_idle_transport_status::reusable) {
                 co_return true;
             }
-            if (idle_status == client_idle_transport_status::pending_data) {
-                pool_.record_idle_connection_with_pending_data();
+            if (idle_status == client_idle_transport_status::pending_input) {
+                pool_.record_idle_connection_with_pending_input();
             }
             close();
         }

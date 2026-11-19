@@ -60,7 +60,7 @@ public:
         auto& state = observed();
         state.entered_ = true;
         const auto result = co_await ruvia::sleep_for(context.worker(), 1h, context.stop_token());
-        state.cancelled_ = result == ruvia::timer_sleep_result::stop_requested;
+        state.cancelled_ = result == ruvia::sleep_status::stop_requested;
         co_return context.text("held");
     }
     ruvia::task<ruvia::http_response> brief(ruvia::context& context) {
@@ -70,7 +70,7 @@ public:
         co_return context.text(std::string(std::size_t{64} * 1024, 'x'));
     }
     ruvia::task<ruvia::http_response> upload(ruvia::context& context) {
-        const auto body = co_await context.req().body_text();
+        const auto body = co_await context.request().body_text();
         observed().uploaded_bytes_ = body.size();
         ++observed().uploads_;
         co_return context.text("uploaded");

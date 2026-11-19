@@ -305,7 +305,7 @@ struct normalized_host_unit final {
     auto byte = static_cast<unsigned char>(value[cursor_value++]);
     bool encoded_reserved = false;
     if (byte == '%') {
-        if (const auto decoded = http_try_decode_percent_byte(value, cursor_value - 1)) {
+        if (const auto decoded = decode_percent_byte(value, cursor_value - 1)) {
             byte = *decoded;
             cursor_value += 2;
             // RFC 3986 sections 2.2, 2.3, and 6.2.2.2: percent-encoded
@@ -454,18 +454,19 @@ bool http_authorities_equal(borrowed_text left, borrowed_text right, std::option
     return detail::authorities_equal(left.view(), right.view(), default_port ? std::optional<std::uint16_t>(default_port->value()) : std::nullopt);
 }
 
-http_origin_view http_origin_view::for_scheme(http_scheme scheme, http_origin_options options) {
-    const auto host = options.host_.view();
-    if (host.empty()) {
+http_origin_view::http_origin_view(http_scheme scheme, http_origin_options options) :
+    host_(options.host_.view()),
+    port_(options.port_.has_value() ? options.port_->value() : detail::http_scheme_default_port(scheme)),
+    scheme_(scheme) {
+    if (host_.empty()) {
         throw std::invalid_argument("HTTP origin host must not be empty");
     }
-    if (!detail::is_valid_http_host(host)) {
+    if (!detail::is_valid_http_host(host_)) {
         throw std::invalid_argument("HTTP origin host is invalid");
     }
-    return http_origin_view(scheme, host, options.port_.has_value() ? options.port_->value() : detail::http_scheme_default_port(scheme));
 }
 
-std::string make_http_origin_authority(const http_origin_view& origin) {
+std::string format_http_origin_authority(const http_origin_view& origin) {
     const auto host = origin.host();
     const bool include_port = origin.port() != detail::http_scheme_default_port(origin.scheme());
     std::string authority;

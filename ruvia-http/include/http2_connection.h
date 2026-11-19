@@ -32,7 +32,7 @@ namespace ruvia {
 
 class http2_connection;
 namespace detail {
-class http2_connection;
+class http2_engine;
 }  // namespace detail
 
 // Read-only receive-side state for one stream; never exposes stream storage.
@@ -87,7 +87,7 @@ public:
     [[nodiscard]] http2_setting_entry at(std::size_t index) const;
 
 private:
-    friend class detail::http2_connection;
+    friend class detail::http2_engine;
     std::array<http2_setting_entry, max_entries> entries_{};
     std::size_t size_{0};
 };
@@ -147,7 +147,7 @@ enum class http2_end_stream : std::uint8_t {
     return value == http2_end_stream::end_stream;
 }
 
-enum class http2_output_batch_status : std::uint8_t { taken,
+enum class http2_output_batch_status : std::uint8_t { drained,
     empty };
 
 struct http2_output_batch_result final {
@@ -298,7 +298,7 @@ public:
     }
 
 private:
-    friend class detail::http2_connection;
+    friend class detail::http2_engine;
     explicit constexpr http2_tunnel_end_event(std::uint32_t stream_id) noexcept :
         stream_id_(stream_id) {}
     std::uint32_t stream_id_;
@@ -317,7 +317,7 @@ public:
     }
 
 private:
-    friend class detail::http2_connection;
+    friend class detail::http2_engine;
     constexpr http2_goaway_event(std::uint32_t last_stream_id, http2_error_code error) noexcept :
         last_stream_id_(last_stream_id),
         error_(error) {}
@@ -488,7 +488,7 @@ struct http2_connection_options final {
 };
 
 // Stable HTTP/2 sans-I/O driver backed by one nghttp2 session per connection.
-// Feed transport bytes, drain typed events, and write out take_output_batch().
+// Feed transport bytes, drain typed events, and write out drain_output_batch().
 // nghttp2 owns framing, HPACK, stream states, flow control and SETTINGS/PING/
 // GOAWAY handling; this class owns HTTP message semantics, leases, credits and
 // the abuse budgets. nghttp2 buffers an incomplete trailing frame itself.
@@ -586,7 +586,7 @@ public:
     // The cursor is committed before DATA observations. An observer may
     // submit or drain more output; those frames remain independent of this batch.
     // A client preface is treated as one indivisible segment.
-    [[nodiscard]] http2_output_batch_result take_output_batch(std::size_t max_bytes, std::string& output, http2_data_output_observer_type observer = nullptr, void* observer_context = nullptr);
+    [[nodiscard]] http2_output_batch_result drain_output_batch(std::size_t max_bytes, std::string& output, http2_data_output_observer_type observer = nullptr, void* observer_context = nullptr);
     [[nodiscard]] bool wants_write() const noexcept;
 
     // Point-in-time client request-stream capacity. This does not reserve a
@@ -781,19 +781,19 @@ private:
 // Collects HTTP/2 frame and HPACK header observations up to the end of the
 // client's first request header block and builds the standard Akamai HTTP/2
 // fingerprint string: "SETTINGS|WINDOW_UPDATE|PRIORITY|PSEUDO_HEADER_ORDER".
-class http2_akamai_fingerprint_collector final {
+class http2_fingerprint_collector final {
 public:
-    explicit http2_akamai_fingerprint_collector(http_fingerprint_options options = {});
+    explicit http2_fingerprint_collector(http_fingerprint_options options = {});
 
     void observe_frame(const http2_frame_metadata& frame) noexcept;
     void observe_header(const http2_header_metadata& header) noexcept;
     void reset() noexcept;
 
     static void on_frame(void* context, const http2_frame_metadata& frame) noexcept {
-        static_cast<http2_akamai_fingerprint_collector*>(context)->observe_frame(frame);
+        static_cast<http2_fingerprint_collector*>(context)->observe_frame(frame);
     }
     static void on_header(void* context, const http2_header_metadata& header) noexcept {
-        static_cast<http2_akamai_fingerprint_collector*>(context)->observe_header(header);
+        static_cast<http2_fingerprint_collector*>(context)->observe_header(header);
     }
 
     [[nodiscard]] constexpr bool complete() const noexcept {

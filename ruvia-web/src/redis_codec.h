@@ -167,7 +167,7 @@ template <typename enumerate_type>
 [[nodiscard]] redis_owned_command redis_command_with_key_fields(std::string_view command, std::string_view key, std::span<const std::string_view> fields_value);
 [[nodiscard]] redis_owned_command redis_eval_args(std::string_view command, std::string_view script, std::span<const std::string_view> keys, std::span<const std::string_view> argv);
 [[nodiscard]] redis_owned_command redis_blocking_pop_args(std::string_view command, std::span<const std::string_view> keys, redis_block_wait wait);
-[[nodiscard]] redis_owned_command redis_x_read_group_args(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, const redis_x_read_group_options& options);
+[[nodiscard]] redis_owned_command redis_xread_group_args(std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams, const redis_xread_group_options& options);
 
 struct redis_types_access final {
     [[nodiscard]] static redis_set_result set_result(bool applied, std::optional<std::string> previous = std::nullopt) {
@@ -271,31 +271,31 @@ void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_
 
 // Reply decoders. Those taking only (redis_value&&) are mappers for
 // map_redis_command; results own their storage.
-[[nodiscard]] std::optional<std::string> parse_redis_optional_string(redis_value&& value);
-[[nodiscard]] std::int64_t parse_redis_integer(redis_value&& value);
-[[nodiscard]] bool parse_redis_integer_bool(redis_value&& value);
+[[nodiscard]] std::optional<std::string> decode_redis_optional_string(redis_value&& value);
+[[nodiscard]] std::int64_t decode_redis_integer(redis_value&& value);
+[[nodiscard]] bool decode_redis_integer_bool(redis_value&& value);
 // Accept only the OK / PONG status reply, compared case-insensitively.
-void parse_redis_ok(redis_value&& value);
-void parse_redis_pong(redis_value&& value);
-[[nodiscard]] std::vector<bool> parse_redis_bool_array(redis_value&& value);
+void decode_redis_ok(redis_value&& value);
+void decode_redis_pong(redis_value&& value);
+[[nodiscard]] std::vector<bool> decode_redis_bool_array(redis_value&& value);
 // Every element must be a string; a nil element is a protocol error.
-[[nodiscard]] std::vector<std::string> parse_redis_string_array(redis_value&& value);
-[[nodiscard]] std::vector<std::optional<std::string>> parse_redis_optional_string_array(redis_value&& value);
-[[nodiscard]] std::vector<redis_scored_value> parse_redis_scored_array(redis_value&& value);
-[[nodiscard]] redis_scan_result parse_redis_scan_result(redis_value&& value);
-[[nodiscard]] redis_hash_scan_result parse_redis_hash_scan_result(redis_value&& value);
-[[nodiscard]] redis_z_scan_result parse_redis_z_scan_result(redis_value&& value);
-[[nodiscard]] std::optional<redis_key_value> parse_redis_blocking_pop_reply(redis_value&& value);
-[[nodiscard]] std::optional<std::vector<redis_stream_read_result>> parse_redis_x_read_group_reply(redis_value&& value);
+[[nodiscard]] std::vector<std::string> decode_redis_string_array(redis_value&& value);
+[[nodiscard]] std::vector<std::optional<std::string>> decode_redis_optional_string_array(redis_value&& value);
+[[nodiscard]] std::vector<redis_scored_value> decode_redis_scored_array(redis_value&& value);
+[[nodiscard]] redis_scan_result decode_redis_scan_result(redis_value&& value);
+[[nodiscard]] redis_hscan_result decode_redis_hscan_result(redis_value&& value);
+[[nodiscard]] redis_zscan_result decode_redis_zscan_result(redis_value&& value);
+[[nodiscard]] std::optional<redis_key_value> decode_redis_blocking_pop_reply(redis_value&& value);
+[[nodiscard]] std::optional<std::vector<redis_stream_read_result>> decode_redis_xread_group_reply(redis_value&& value);
 
-[[nodiscard]] double parse_redis_double(std::string_view value, std::string_view context_value);
-[[nodiscard]] std::optional<double> parse_redis_optional_double(redis_value&& value, std::string_view context_value);
-[[nodiscard]] std::vector<redis_key_value> parse_redis_key_value_array(redis_value&& value, std::string_view context_value);
-[[nodiscard]] redis_set_result parse_redis_set_reply(redis_value&& value, const redis_set_options& options);
+[[nodiscard]] double decode_redis_double(std::string_view value, std::string_view context_value);
+[[nodiscard]] std::optional<double> decode_redis_optional_double(redis_value&& value, std::string_view context_value);
+[[nodiscard]] std::vector<redis_key_value> decode_redis_key_value_array(redis_value&& value, std::string_view context_value);
+[[nodiscard]] redis_set_result decode_redis_set_reply(redis_value&& value, const redis_set_options& options);
 // TTL/PTTL: -2 is a missing key, -1 a key without expiry.
-[[nodiscard]] redis_ttl parse_redis_ttl(redis_value&& value, bool seconds_precision);
+[[nodiscard]] redis_ttl decode_redis_ttl(redis_value&& value, bool seconds_precision);
 // A pushed reply of a subscribed connection. Views borrow `value`.
-[[nodiscard]] redis_pubsub_event parse_redis_pubsub_event(const redis_value& value);
+[[nodiscard]] redis_pubsub_event decode_redis_pubsub_event(const redis_value& value);
 // The reply to an argument-less PING on a subscription connection.
 [[nodiscard]] bool is_redis_subscription_pong(const redis_value& value);
 

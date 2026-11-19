@@ -188,7 +188,7 @@ concept http_header_vector_target = std::same_as<target_type, std::vector<http_h
 
 }  // namespace
 
-http_header_range_view editable_http_headers::fields() const noexcept {
+http_header_range_view editable_http_headers::headers() const noexcept {
     // The view cannot be moved: each branch returns a prvalue.
     if (const auto* const lines = std::get_if<std::vector<http_header>*>(&target_)) {
         return http_header_range_view(**lines);
@@ -230,7 +230,7 @@ void editable_http_headers::remove_if(bool (*matches)(std::string_view field_nam
     // restarts until no line matches.
     for (bool removed = true; removed;) {
         removed = false;
-        for (const auto field : fields()) {
+        for (const auto field : headers()) {
             if (matches(field.name())) {
                 remove(field.name());
                 removed = true;

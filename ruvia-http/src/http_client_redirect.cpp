@@ -190,7 +190,7 @@ http_client_origin_authority_status classify_http_client_origin_authority(const 
 }
 
 http_origin_view http_client_resolved_redirect::origin() const& {
-    return http_origin_view::for_scheme(scheme_, {.host_ = host(), .port_ = port_});
+    return http_origin_view(scheme_, {.host_ = host(), .port_ = port_});
 }
 
 std::variant<http_client_resolved_redirect, http_client_redirect_resolution_error> resolve_http_client_redirect_target(const http_origin_view& origin, http_client_redirect_target_options options) {

@@ -185,9 +185,9 @@ TEST(Ruvia, http2_connect_data_before_accept_is_held_and_delivered_as_tunnel_dat
                 EXPECT_EQ(data->stream_id(), 1U);
                 received.append(data->bytes());
                 if (credit) {
-                    credit->merge(data->take_credit());
+                    credit->merge(std::move(*data).take_credit());
                 } else {
-                    credit.emplace(data->take_credit());
+                    credit.emplace(std::move(*data).take_credit());
                 }
             } else {
                 EXPECT_TRUE(event->stream_closed() == nullptr);
@@ -1386,9 +1386,9 @@ TEST(Ruvia, http2_public_receive_credit_restores_exact_window) {
     while (auto event = client.next_event()) {
         if (auto* body = event->data()) {
             if (credit) {
-                credit->merge(body->take_credit());
+                credit->merge(std::move(*body).take_credit());
             } else {
-                credit.emplace(body->take_credit());
+                credit.emplace(std::move(*body).take_credit());
             }
         }
     }

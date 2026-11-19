@@ -211,7 +211,7 @@ void http_client_response_memory_domain::detach_transport_bindings(http_client_p
 
 http_client_response_state::http_client_response_state(http_client_response_memory_domain& memory_domain) :
     head_signal_(memory_domain.worker()),
-    data_signal_(memory_domain.worker()),
+    body_signal_(memory_domain.worker()),
     space_signal_(memory_domain.worker()),
     memory_domain_(memory_domain) {
     body_operation_scope_.bind_worker(memory_domain.worker());
@@ -243,7 +243,7 @@ void http_client_response_state::detach_transport_bindings() noexcept {
         complete_ = true;
     }
     head_signal_.notify();
-    data_signal_.notify();
+    body_signal_.notify();
     space_signal_.notify();
 }
 
@@ -768,6 +768,11 @@ std::vector<http_header> http_client_response::take_headers() && {
 std::span<const http_header> http_client_response::trailers() const& {
     return require_response_state(state_).trailers_;
 }
+std::vector<http_header> http_client_response::take_trailers() && {
+    auto& state_value = require_response_state(state_);
+    check_response_operation_affinity(&state_value);
+    return std::exchange(state_value.trailers_, {});
+}
 
 void detail::http_client_response_state::retain_reference() noexcept {
     check_response_operation_affinity(this);
@@ -821,8 +826,8 @@ task<void> detail::http_client_response_state::dispatch_informational(const oper
         stop_group cancellation{informational_stop_, informational_abort_->token(), deadline_stop.token()};
         worker_timer_registration timer;
         if (const auto deadline = timeout.deadline()) {
-            (void)timer.schedule(memory_domain_.worker(), *deadline, [&deadline_stop](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired) {
+            (void)timer.schedule(memory_domain_.worker(), *deadline, [&deadline_stop](worker_timer_status outcome) noexcept {
+                if (outcome == worker_timer_status::expired) {
                     deadline_stop.request_stop();
                 }
             });
@@ -864,7 +869,7 @@ task<void> detail::http_client_response_state::await_head(std::string_view head_
     notify_producer_space();
     while (!complete_) {
         throw_if_read_interrupted();
-        co_await data_signal_.wait();
+        co_await body_signal_.wait();
     }
     rethrow_response_failure();
     if (pool_closed_) {
@@ -927,7 +932,7 @@ detail::http_client_operation_interruption::~http_client_operation_interruption(
 void detail::http_client_operation_interruption::wake_reader(void* state) noexcept {
     auto& state_value = *static_cast<http_client_response_state*>(state);
     state_value.head_signal_.notify();
-    state_value.data_signal_.notify();
+    state_value.body_signal_.notify();
 }
 
 void detail::http_client_operation_interruption::abort_output(void* state) noexcept {
@@ -977,7 +982,7 @@ void detail::http_client_response_state::release_consumed_body_prefix() {
     notify_producer_space();
 }
 
-void detail::http_client_response_state::promote_pending_data() {
+void detail::http_client_response_state::promote_pending_body() {
     auto& state_value = *this;
     if (state_value.offset_ != state_value.buffered_.size() || state_value.pending_.empty()) {
         return;
@@ -1048,9 +1053,9 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
         state_value.release_consumed_body_prefix();
         while ((state_value.body_decode_required_ && !state_value.receive_complete()) || (state_value.buffered_.empty() && state_value.pending_.empty() && !state_value.receive_complete())) {
             state_value.throw_if_read_interrupted();
-            co_await state_value.data_signal_.wait();
+            co_await state_value.body_signal_.wait();
         }
-        promote_pending_data();
+        promote_pending_body();
         if (state_value.offset_ == state_value.buffered_.size()) {
             state_value.rethrow_response_failure();
             if (state_value.pool_closed_) {
@@ -1202,7 +1207,7 @@ task<result_type> detail::http_client_response_state::collect_body(std::size_t m
         }
         state_value.notify_producer_space();
         while (!state_value.receive_complete() && !state_value.exceeds_body_limit(effective_limit) && !state_value.read_interrupted() && !deadline.expired()) {
-            co_await state_value.data_signal_.wait();
+            co_await state_value.body_signal_.wait();
         }
         state_value.collection_limit_.reset();
     }
@@ -1246,7 +1251,9 @@ task<void> http_client_response::pipe_to_destination(context& output, response_s
     if (!state_->body_operation_scope_.active() || !destination.active()) {
         throw std::logic_error("HTTP response pipe_to scope is closed");
     }
-    detail::http_client_response_output target{writer, detail::http_client_forwarded_response{output, output.req().known_method(), output.req().protocol_version()}};
+    detail::http_client_response_output target{
+        writer, detail::http_client_forwarded_response{output, output.request().known_method(), output.request().protocol_version()}
+    };
     auto source = state_->body_operation_scope_.attach(state_->consume_body<void>(std::move(operation), target));
     return destination.attach(pipe_response_in_destination(http_client_response(state_), std::move(source)));
 }

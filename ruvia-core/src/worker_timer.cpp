@@ -128,8 +128,8 @@ bool wait_bounds::arm_deadline(void* owner, end_type end, bool watch_worker) & {
     if (!deadline.has_value() && !watch_worker) {
         return true;
     }
-    auto completion = [owner, end](worker_timer_outcome outcome) noexcept {
-        end(owner, outcome == worker_timer_outcome::expired ? wait_status::timed_out : wait_status::worker_stopping);
+    auto completion = [owner, end](worker_timer_status outcome) noexcept {
+        end(owner, outcome == worker_timer_status::expired ? wait_status::timed_out : wait_status::worker_stopping);
     };
     static_assert(detail::move_only_function_fits_inline<decltype(completion)>);
     return timer_.schedule(*worker_, deadline.value_or(std::chrono::steady_clock::time_point::max()), std::move(completion));
@@ -147,7 +147,7 @@ bool sleep_operation::await_ready() {
     }
     bounds_.start(*worker_, "sleep must run on its bound worker");
     if (bounds_.stop_requested()) {
-        result_ = timer_sleep_result::stop_requested;
+        result_ = sleep_status::stop_requested;
         return true;
     }
     if (!bounds_.deadline_passed()) {
@@ -155,7 +155,7 @@ bool sleep_operation::await_ready() {
     }
     // The immediate path must honor the same shutdown outcome as timer arming.
     if (detail::worker_dispatcher::of(*worker_)->timers_stopping()) {
-        result_ = timer_sleep_result::stop_requested;
+        result_ = sleep_status::stop_requested;
     }
     return true;
 }
@@ -165,7 +165,7 @@ bool sleep_operation::await_ready() {
 bool sleep_operation::await_suspend(std::coroutine_handle<> continuation) {
     continuation_ = continuation;
     if (!bounds_.arm_deadline<sleep_operation, &sleep_operation::on_end>(*this)) {
-        result_ = timer_sleep_result::stop_requested;
+        result_ = sleep_status::stop_requested;
         return false;
     }
     if (bounds_.token().stoppable()) {
@@ -178,11 +178,11 @@ bool sleep_operation::await_suspend(std::coroutine_handle<> continuation) {
 
 void sleep_operation::on_end(wait_status status) noexcept {
     // Commit the outcome before posting; a later stop cannot change it.
-    result_ = status == wait_status::timed_out && !bounds_.stop_requested() ? timer_sleep_result::elapsed : timer_sleep_result::stop_requested;
+    result_ = status == wait_status::timed_out && !bounds_.stop_requested() ? sleep_status::elapsed : sleep_status::stop_requested;
     worker_->defer_resume(std::exchange(continuation_, {}));
 }
 
-timer_sleep_result sleep_operation::await_resume() const noexcept {
+sleep_status sleep_operation::await_resume() const noexcept {
     return result_;
 }
 
@@ -199,7 +199,7 @@ sleep_operation sleep_until(const worker_ref& worker_value, std::chrono::steady_
 
 namespace ruvia::detail {
 
-bool worker_dispatcher::schedule_timer(worker_timer_registration& registration, std::chrono::steady_clock::time_point deadline_value, move_only_function<void(worker_timer_outcome)> completion) {
+bool worker_dispatcher::schedule_timer(worker_timer_registration& registration, std::chrono::steady_clock::time_point deadline_value, move_only_function<void(worker_timer_status)> completion) {
     if (!is_current()) {
         throw std::logic_error("worker timers must be scheduled on their worker");
     }
@@ -307,7 +307,7 @@ void worker_dispatcher::request_timer_cancellation(std::size_t slot, std::uint64
                 asio::post(io_context_, [self = shared_from_this(), slot, generation, notify] {
                     auto completion = self->take_timer(slot, generation);
                     if (notify && completion) {
-                        completion(worker_timer_outcome::cancelled);
+                        completion(worker_timer_status::cancelled);
                     }
                 });
             } catch (...) {
@@ -336,7 +336,7 @@ void worker_dispatcher::request_timer_cancellation(std::size_t slot, std::uint64
     defer_or_terminate([self = shared_from_this(), slot, generation] {
         auto completion = self->take_timer(slot, generation);
         if (completion) {
-            completion(worker_timer_outcome::cancelled);
+            completion(worker_timer_status::cancelled);
         }
     });
 }
@@ -385,7 +385,7 @@ void worker_dispatcher::release_drained_timer_heap() noexcept {
     }
 }
 
-move_only_function<void(worker_timer_outcome)> worker_dispatcher::take_timer(std::size_t slot_index, std::uint64_t generation) noexcept {
+move_only_function<void(worker_timer_status)> worker_dispatcher::take_timer(std::size_t slot_index, std::uint64_t generation) noexcept {
     if (!has_occupied_timer(slot_index, generation)) {
         return {};
     }
@@ -397,7 +397,7 @@ move_only_function<void(worker_timer_outcome)> worker_dispatcher::take_timer(std
         note_stale_timer();
     }
     auto completion = release_timer_slot(slot_index);
-    return active ? std::move(completion) : move_only_function<void(worker_timer_outcome)>{};
+    return active ? std::move(completion) : move_only_function<void(worker_timer_status)>{};
 }
 
 void worker_dispatcher::stop_timers() noexcept {
@@ -427,7 +427,7 @@ void worker_dispatcher::stop_timers() noexcept {
         auto completion = release_timer_slot(index);
         try {
             if (active && completion) {
-                completion(worker_timer_outcome::cancelled);
+                completion(worker_timer_status::cancelled);
             }
         } catch (...) {
             std::terminate();
@@ -485,7 +485,7 @@ void worker_dispatcher::fire_timers() {
             const bool active = has_timer(entry_value.slot_, entry_value.generation_);
             auto completion = release_timer_slot(entry_value.slot_);
             if (active && completion) {
-                completion(worker_timer_outcome::expired);
+                completion(worker_timer_status::expired);
             }
         }
     } catch (...) {
@@ -526,7 +526,7 @@ bool worker_dispatcher::has_live_timer_entry(std::size_t slot, std::uint64_t gen
     return has_occupied_timer(slot, generation) && !timer_slots_[slot].cancel_requested_;
 }
 
-move_only_function<void(worker_timer_outcome)> worker_dispatcher::release_timer_slot(std::size_t slot_index) noexcept {
+move_only_function<void(worker_timer_status)> worker_dispatcher::release_timer_slot(std::size_t slot_index) noexcept {
     auto& slot = timer_slots_[slot_index];
     slot.occupied_ = false;
     slot.cancel_requested_ = false;
