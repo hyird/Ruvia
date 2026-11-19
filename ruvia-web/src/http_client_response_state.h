@@ -134,7 +134,7 @@ void retain_http_client_binary_response_head(http_client_response_state& state_v
 // response completed, records status, version and body plan, retains origin
 // cookies, settles tunnel acceptance (rejecting an invalid CONNECT-UDP head),
 // selects collection of an encoded body, then wakes the head consumer.
-void publish_http_client_final_head(http_client_response_state& state_value, client_request_policy& policy, const http_client_final_head& head);
+void publish_http_client_final_head(http_client_response_state& state_value, client_request_policy& policy, const http_client_final_head& head, bool notify_head = true);
 
 // Validates an RFC 8441 Extended CONNECT WebSocket response head (HTTP/2 or
 // HTTP/3) and records the negotiated subprotocol and compression on `websocket`.

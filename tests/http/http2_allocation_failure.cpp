@@ -40,6 +40,7 @@ std::atomic<std::size_t> live_allocations{};
 thread_local bool counting = false;
 thread_local std::size_t allocation_index = 0;
 thread_local std::size_t failure_index = (std::numeric_limits<std::size_t>::max)();
+thread_local const void* last_allocation = nullptr;
 thread_local const void* observed_allocation = nullptr;
 thread_local const ruvia::http_response_head_buffer* observed_head = nullptr;
 thread_local bool retired_after_publish = false;
@@ -50,12 +51,16 @@ void before_allocation() {
     }
 }
 
+void observe_retirement(const void* pointer) noexcept {
+    if (pointer == observed_allocation) {
+        observed_allocation = nullptr;
+        retired_after_publish = observed_head->can_append_on_stack(1) && observed_head->view() == "replacement";
+    }
+}
+
 void release_allocation(void* pointer) noexcept {
     if (pointer != nullptr) {
-        if (pointer == observed_allocation) {
-            observed_allocation = nullptr;
-            retired_after_publish = observed_head->can_append_on_stack(1) && observed_head->view() == "replacement";
-        }
+        observe_retirement(pointer);
         std::free(pointer);
         --live_allocations;
     }
@@ -63,6 +68,7 @@ void release_allocation(void* pointer) noexcept {
 
 void release_aligned_allocation(void* pointer) noexcept {
     if (pointer != nullptr) {
+        observe_retirement(pointer);
         void* storage = nullptr;
         std::memcpy(&storage, static_cast<char*>(pointer) - sizeof(storage), sizeof(storage));
         std::free(storage);
@@ -101,6 +107,7 @@ void* operator new(std::size_t bytes) {
         throw std::bad_alloc();
     }
     ++live_allocations;
+    last_allocation = pointer;
     return pointer;
 }
 void* operator new(std::size_t bytes, std::align_val_t alignment) {
@@ -122,6 +129,7 @@ void* operator new(std::size_t bytes, std::align_val_t alignment) {
     }
     std::memcpy(static_cast<char*>(pointer) - sizeof(storage), &storage, sizeof(storage));
     ++live_allocations;
+    last_allocation = pointer;
     return pointer;
 }
 void* operator new[](std::size_t bytes) {
@@ -273,12 +281,17 @@ outbound_allocation_observation exercise_warmed_outbound_compression(std::size_t
 }
 
 TEST(Ruvia, http1_response_head_move_publishes_before_retiring_heap_storage) {
+    const std::string payload(ruvia::response_head_retained_heap_bytes + 1, 'a');
     ruvia::http_response_head_buffer destination;
-    destination.append(std::string(ruvia::response_head_retained_heap_bytes + 1, 'a'));
+    last_allocation = nullptr;
+    destination.append(payload);
+    const void* const destination_allocation = last_allocation;
+    ASSERT_NE(destination_allocation, nullptr);
+
     ruvia::http_response_head_buffer source;
     source.append("replacement");
 
-    observed_allocation = destination.view().data();
+    observed_allocation = destination_allocation;
     observed_head = &destination;
     retired_after_publish = false;
     destination = std::move(source);

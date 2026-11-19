@@ -21,7 +21,7 @@ function(ruvia_configure_library target component)
         target_compile_definitions(${target} PUBLIC _WIN32_WINNT=0x0A00)
         target_compile_options(${target}
             PUBLIC /utf-8 /Zc:preprocessor
-            PRIVATE /W4 /permissive- /bigobj /FS)
+            PRIVATE /W4 /permissive- /bigobj /FS /MP)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
         # Reject local/parameter shadowing without rejecting member names.

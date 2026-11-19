@@ -432,7 +432,17 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     // Parsed fields already use the response resource: transfer, not copy.
     state_value.headers_ = std::move(*head).take_head().take_headers();
     read_buffer.consume(head_bytes);
-    publish_http_client_final_head(state_value, pool_.policy(), final_head);
+    publish_http_client_final_head(state_value, pool_.policy(), final_head, false);
+    bool head_notified = false;
+    const auto notify_head_once = [&]() noexcept {
+        if (!head_notified) {
+            head_notified = true;
+            state_value.head_signal_.notify();
+        }
+    };
+    if (tunnel_opened || (state_value.upload_ && !state_value.upload_->output_.ended_)) {
+        notify_head_once();
+    }
     if (tunnel_opened) {
         // The HTTP request deadline ends at a WebSocket's accepted Upgrade.
         // Its subsequent operations carry their own deadlines.
@@ -465,6 +475,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         // Drain it within the queue limit before waiting for the consumer, so
         // a complete retained response does not depend on a later body read.
         if (!state_value.collecting_body() && state_value.pending_.size() >= max_response_bytes) {
+            notify_head_once();
             co_await wait_for_body_space(state_value, timeout);
         }
         connection_.throw_if_aborted();
@@ -494,8 +505,10 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         // (including the last borrowed chunk) postpones that read, not decoder
         // completion on bytes already received.
         if (!state_value.collecting_body() && (!state_value.pending_.empty() || !state_value.buffered_.empty())) {
+            notify_head_once();
             co_await wait_for_body_space(state_value, timeout);
         }
+        notify_head_once();
         const auto read = co_await read_append(read_buffer, response_read_chunk_bytes, timeout);
         // A TLS peer that drops TCP without close_notify leaves the message end
         // unauthenticated: an attacker could cut a close-delimited body short

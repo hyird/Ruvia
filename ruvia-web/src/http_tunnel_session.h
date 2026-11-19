@@ -183,7 +183,16 @@ public:
         if constexpr (!requires { stream_.next_layer(); }) {
             if (!bytes_value.empty()) {
                 const auto result_value = co_await async_asio<std::size_t>([&](auto handler) {
+#if defined(_WIN32)
+                    asio::async_write(
+                        stream_, asio::buffer(bytes_value),
+                        [](const std::error_code& error, std::size_t) noexcept -> std::size_t {
+                        return error ? 0 : std::size_t{64} * 1024;
+                    },
+                        std::move(handler));
+#else
                     asio::async_write(stream_, asio::buffer(bytes_value), std::move(handler));
+#endif
                 });
                 if (completed_bytes != nullptr) {
                     *completed_bytes = result_value.value();

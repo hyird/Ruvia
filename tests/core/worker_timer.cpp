@@ -989,7 +989,11 @@ TEST(Ruvia, TimerReentrantCancellationPreservesLaterExpiration) {
         }));
         third.cancel();
     });
-    io_context.poll();
+    while (!outcome.has_value()) {
+        if (io_context.run_one_for(std::chrono::seconds(1)) == 0) {
+            break;
+        }
+    }
     EXPECT_EQ(outcome, ruvia::worker_timer_status::expired);
     attachment.request_stop();
     attachment.run();

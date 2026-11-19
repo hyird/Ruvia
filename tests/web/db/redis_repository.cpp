@@ -2644,7 +2644,7 @@ TEST(Ruvia, redis_repository_by_id_enforces_pk_types_and_wire_keys) {
                 (void)unsigned_repo.ttl_by_id(-1);
             }));
 
-            constexpr auto too_large_for_signed = std::numeric_limits<std::uint64_t>::max();
+            const auto too_large_for_signed = std::numeric_limits<std::uint64_t>::max();
             EXPECT_TRUE(throws_invalid_argument([&] {
                 (void)signed_repo.update_by_id(too_large_for_signed, signed_changes);
             }));

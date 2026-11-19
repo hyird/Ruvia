@@ -1,8 +1,14 @@
 # Keep useful diagnostics without the noise from partially initialized fixtures.
 function(ruvia_apply_test_warnings name)
     if(MSVC)
-        target_compile_options(${name} PRIVATE /W4 /permissive- /bigobj /FS)
+        target_compile_options(${name} PRIVATE /W4 /permissive- /bigobj /FS /MP)
         target_compile_definitions(${name} PRIVATE _CRT_SECURE_NO_WARNINGS)
+        set_target_properties(${name} PROPERTIES
+            INTERPROCEDURAL_OPTIMIZATION OFF
+            INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF)
+        if(CMAKE_INTERPROCEDURAL_OPTIMIZATION OR CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE)
+            target_link_options(${name} PRIVATE "$<$<CONFIG:Release>:/LTCG>")
+        endif()
     else()
         target_compile_options(${name} PRIVATE -Wall)
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")

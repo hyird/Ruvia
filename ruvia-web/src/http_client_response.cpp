@@ -426,7 +426,7 @@ void retain_http_client_binary_response_head(http_client_response_state& state_v
         : http_client_response_framing::stream;
 }
 
-void publish_http_client_final_head(http_client_response_state& state_value, client_request_policy& policy, const http_client_final_head& head) {
+void publish_http_client_final_head(http_client_response_state& state_value, client_request_policy& policy, const http_client_final_head& head, bool notify_head) {
     if (state_value.upload_ && !state_value.upload_->output_.ended_) {
         const auto status = head.status_.status();
         const bool rewrite_upload_redirect = state_value.upload_->redirect_request_ != nullptr && (status == http_status::see_other || ((status == http_status::moved_permanently || status == http_status::found) && state_value.request_method_ == http_known_method::post));
@@ -464,7 +464,9 @@ void publish_http_client_final_head(http_client_response_state& state_value, cli
         configure_http_client_response_decoding(state_value);
     }
     state_value.head_ready_ = true;
-    state_value.head_signal_.notify();
+    if (notify_head) {
+        state_value.head_signal_.notify();
+    }
 }
 
 void finish_http_client_response_body(http_client_response_state& state_value, const operation_deadline& timeout, bool content_semantics_present, std::size_t max_decoded_bytes) {

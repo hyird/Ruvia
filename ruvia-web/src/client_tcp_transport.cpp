@@ -384,7 +384,16 @@ task<client_transport_result> client_tcp_transport::write_buffers(buffers_type b
         asio::async_write(*stream_, buffers, std::move(handler));
     })
         : co_await async_asio<std::size_t>([this, buffers](auto handler) mutable {
+#if defined(_WIN32)
+        asio::async_write(
+            stream_->next_layer().socket(), buffers,
+            [](const std::error_code& error, std::size_t) noexcept -> std::size_t {
+            return error ? 0 : std::size_t{64} * 1024;
+        },
+            std::move(handler));
+#else
         asio::async_write(stream_->next_layer().socket(), buffers, std::move(handler));
+#endif
     });
     if (completion.code()) {
         tls_close_ready_ = false;

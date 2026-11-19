@@ -229,7 +229,7 @@ jobs:
         uses: actions/cache/restore@v6.1.0
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-msvc-x64-windows-static-${{ needs.resolve_toolchain.outputs.vcpkg_commit }}-${{ hashFiles('vcpkg.json', 'CMakeLists.txt', '.github/workflows/build.yml') }}
+          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-msvc-x64-windows-static-${{ needs.resolve_toolchain.outputs.vcpkg_commit }}-${{ hashFiles('vcpkg.json', 'CMakeLists.txt', '.github/workflows/build.yml', 'cmake/triplets/x64-windows-static.cmake') }}
           restore-keys: |
             vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-msvc-x64-windows-static-${{ needs.resolve_toolchain.outputs.vcpkg_commit }}-
             vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-msvc-x64-windows-static-
@@ -240,7 +240,7 @@ jobs:
           cmake -S . -B build/ci -A x64 `
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON `
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON `
-            '-DCMAKE_EXE_LINKER_FLAGS=/CGTHREADS:2' `
+            '-DCMAKE_EXE_LINKER_FLAGS=/CGTHREADS:4' `
             -DRUVIA_ENABLE_MARIADB=ON -DRUVIA_ENABLE_POSTGRESQL=ON `
             -DRUVIA_ENABLE_REDIS=ON -DRUVIA_ENABLE_JWT=ON `
             -DRUVIA_BUILD_EXAMPLES=ON -DRUVIA_BUILD_TESTS=ON `
@@ -256,8 +256,9 @@ jobs:
           key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
 
       - name: Build
-        # Each concurrent MSBuild project can run a separate LTCG linker.
-        run: cmake --build build/ci --config $env:BUILD_TYPE --parallel 2
+        # Serialize MSBuild projects so at most one ~7.8 GB LTCG link.exe runs
+        # on the 16 GB runner; /MP and /CGTHREADS:4 still use all 4 vCPUs.
+        run: cmake --build build/ci --config $env:BUILD_TYPE --parallel 1
 
       - name: Test
         run: ctest --test-dir build/ci --output-on-failure --no-tests=error --build-config $env:BUILD_TYPE

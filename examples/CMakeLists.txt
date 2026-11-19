@@ -3,7 +3,13 @@ function(ruvia_add_example name)
     add_executable(${name} ${ARGN})
     target_link_libraries(${name} PRIVATE ruvia::web)
     if(MSVC)
-        target_compile_options(${name} PRIVATE /bigobj /FS)
+        target_compile_options(${name} PRIVATE /bigobj /FS /MP)
+        set_target_properties(${name} PROPERTIES
+            INTERPROCEDURAL_OPTIMIZATION OFF
+            INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF)
+        if(CMAKE_INTERPROCEDURAL_OPTIMIZATION OR CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE)
+            target_link_options(${name} PRIVATE "$<$<CONFIG:Release>:/LTCG>")
+        endif()
     endif()
 endfunction()
 

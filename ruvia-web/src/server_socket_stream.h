@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -126,7 +127,21 @@ public:
     }
     template <typename buffers_type>
     std::size_t send(const buffers_type& buffers, asio::socket_base::message_flags flags, std::error_code& error) {
+#if defined(_WIN32)
+        // Windows Winsock accepts an arbitrarily large single WSASend whenever
+        // currently buffered bytes are below SO_SNDBUF; slice transfers to
+        // preserve socket backpressure and write timeouts.
+        const auto bytes = [&] {
+            if constexpr (std::is_convertible_v<const buffers_type&, asio::const_buffer>) {
+                return socket_.send(asio::buffer(asio::const_buffer(buffers), max_native_write_bytes), flags, error);
+            } else {
+                const bounded_const_buffers bounded(buffers);
+                return socket_.send(bounded, flags, error);
+            }
+        }();
+#else
         const auto bytes = socket_.send(buffers, flags, error);
+#endif
         if (bytes != 0 && remaining_inline_writes_ != 0) {
             --remaining_inline_writes_;
         }
@@ -165,13 +180,58 @@ public:
 
     template <typename buffers_type, typename handler_type>
     void async_write_some(const buffers_type& buffers, handler_type&& handler) {
-        socket_.async_write_some(buffers, inbound_socket_completion<std::decay_t<handler_type>, true>{std::forward<handler_type>(handler), this});
+        inbound_socket_completion<std::decay_t<handler_type>, true> completion{std::forward<handler_type>(handler), this};
+#if defined(_WIN32)
+        if constexpr (std::is_convertible_v<const buffers_type&, asio::const_buffer>) {
+            socket_.async_write_some(asio::buffer(asio::const_buffer(buffers), max_native_write_bytes), std::move(completion));
+        } else {
+            const bounded_const_buffers bounded(buffers);
+            socket_.async_write_some(bounded, std::move(completion));
+        }
+#else
+        socket_.async_write_some(buffers, std::move(completion));
+#endif
     }
 
 private:
     friend class inbound_immediate_executor;
     template <typename, bool>
     friend struct inbound_socket_completion;
+
+#if defined(_WIN32)
+    static constexpr std::size_t max_native_write_bytes = std::size_t{64} * 1024;
+
+    struct bounded_const_buffers final {
+        using value_type = asio::const_buffer;
+        using const_iterator = const asio::const_buffer*;
+
+        std::array<asio::const_buffer, 16> pieces_{};
+        std::size_t count_{0};
+
+        template <typename buffers_type>
+        explicit bounded_const_buffers(const buffers_type& buffers) noexcept {
+            std::size_t remaining = max_native_write_bytes;
+            auto current = asio::buffer_sequence_begin(buffers);
+            const auto end = asio::buffer_sequence_end(buffers);
+            for (; current != end && remaining != 0 && count_ != pieces_.size(); ++current) {
+                const asio::const_buffer piece(*current);
+                if (piece.size() == 0) {
+                    continue;
+                }
+                const auto sliced = asio::buffer(piece, remaining);
+                remaining -= sliced.size();
+                pieces_[count_++] = sliced;
+            }
+        }
+
+        [[nodiscard]] const_iterator begin() const noexcept {
+            return pieces_.data();
+        }
+        [[nodiscard]] const_iterator end() const noexcept {
+            return pieces_.data() + count_;
+        }
+    };
+#endif
 
     [[nodiscard]] static asio::io_context::executor_type worker_io_executor(asio::ip::tcp::socket& socket) noexcept {
         const auto executor = socket.get_executor();

@@ -890,6 +890,7 @@ task<void> db_pool<driver_type>::close_stream(std::size_t index, const operation
     }
     cancellation.finish();
     release_slot(index);
+    co_return;
 }
 
 template <typename driver_type>
