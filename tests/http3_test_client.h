@@ -525,6 +525,12 @@ public:
     void rebind() {
         auto replacement = replacement_socket();
         local_ = replacement.local_endpoint();
+        // Reserve the logical QUIC port without using it for I/O. Otherwise
+        // an ephemeral replacement could reuse it as a migration candidate
+        // even though it is still QUIC's current path.
+        if (!quic_port_reservation_) {
+            quic_port_reservation_.emplace(std::move(socket_));
+        }
         socket_ = std::move(replacement);
     }
 
@@ -556,6 +562,7 @@ public:
         quic_local_ = migration_local_;
         socket_ = std::move(*migration_socket_);
         migration_socket_.reset();
+        quic_port_reservation_.reset();
         flush();
     }
 
@@ -1045,6 +1052,7 @@ private:
     asio::ip::udp::endpoint quic_local_;
     asio::io_context io_;
     asio::ip::udp::socket socket_;
+    std::optional<asio::ip::udp::socket> quic_port_reservation_;
     std::optional<asio::ip::udp::socket> migration_socket_;
     asio::ip::udp::endpoint migration_local_;
     http3_test_client_tls tls_;

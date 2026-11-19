@@ -1742,7 +1742,7 @@ TEST(Ruvia, db_query_span_overloads_cover_expression_and_statement_builders) {
     const auto left = db_expr::column("left");
     const auto right = db_expr::column("right");
     const std::array<db_expr, 2> expressions{left, right};
-    const auto call = db_expr::call("coalesce", std::span<const db_expr>(expressions));
+    const auto call = db_expr::call("concat", std::span<const db_expr>(expressions));
     const auto aggregate = db_expr::aggregate("count", std::span<const db_expr>(expressions));
     const auto coalesced = db_expr::coalesce(std::span<const db_expr>(expressions));
     const auto greatest = db_expr::greatest(std::span<const db_expr>(expressions));
@@ -1757,6 +1757,7 @@ TEST(Ruvia, db_query_span_overloads_cover_expression_and_statement_builders) {
     const std::array<db_selection, 2> selections{left, right};
     query.select(std::span<const db_selection>(selections)).add_select(call).from("cq_span").group_by(std::span<const db_expr>(&left, 1)).add_group_by(right).having(db_expr::unary(db_unary_operator::is_not_null, coalesced)).and_having(db_expr::binary(greatest, db_binary_operator::greater, least)).order_by(left).add_order_by(right);
     const auto statement = query.compile(db_driver::postgresql);
+    EXPECT_TRUE(statement.sql().starts_with("SELECT \"left\", \"right\", \"concat\"(\"left\", \"right\")"));
     EXPECT_TRUE(statement.sql().find("GROUP BY") != std::string_view::npos);
     EXPECT_TRUE(statement.sql().find("HAVING") != std::string_view::npos);
 

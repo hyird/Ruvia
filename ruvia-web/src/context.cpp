@@ -714,13 +714,15 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
         .verify_target_origin_ = false,
     };
     http_response response;
-    auto admission = co_await detail::admit_and_dispatch_buffered_request(routes,
-        {
-            .request_ = request,
-            .resolution_ = resolution,
-            .coding_ = http_response_coding_selection_for(request),
-        },
-        policy, runtime_services().for_subrequest(stop), response);
+    // The child borrows these across suspension. Name them in the parent
+    // frame so MSVC can tail-transfer without co_await argument temporaries.
+    const detail::http_request_admission_input input{
+        .request_ = request,
+        .resolution_ = resolution,
+        .coding_ = http_response_coding_selection_for(request),
+    };
+    const auto services = runtime_services().for_subrequest(stop);
+    auto admission = co_await detail::admit_and_dispatch_buffered_request(routes, input, policy, services, response);
     if (detail::http_response_needs_not_acceptable(admission.tail().coding_policy(), request, response) && !response.status().is_error()) {
         response = co_await routes.respond_error(request, http_error_info(detail::http_not_acceptable_coding_error()), admission.services());
     }

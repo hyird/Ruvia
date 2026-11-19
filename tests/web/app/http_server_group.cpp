@@ -432,11 +432,21 @@ TEST(Ruvia, independent_group_shared_http3_endpoint_survives_repeated_migration_
     for (int generation = 0; generation != 3; ++generation) {
         for (const bool migrate : {true, false}) {
             for (int change = 0; change != 8; ++change) {
+                const auto previous_port = client.local_port();
                 if (migrate) {
                     client.migrate();
                 } else {
                     client.rebind();
+                    if (change == 0) {
+                        // NAT moved the UDP socket, not the logical QUIC path.
+                        // Its port must stay unavailable to a migration candidate.
+                        asio::ip::udp::socket competing(ports, asio::ip::udp::v4());
+                        asio::error_code error;
+                        competing.bind({asio::ip::address_v4::any(), previous_port}, error);
+                        EXPECT_EQ(error, asio::error::address_in_use);
+                    }
                 }
+                EXPECT_NE(client.local_port(), previous_port);
                 const auto stream = client.start_request("GET", "/worker");
                 EXPECT_EQ(stream, previous + 4);
                 const auto response = client.finish_response(stream);
