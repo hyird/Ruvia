@@ -1712,6 +1712,7 @@ auto sub = co_await c.dispatch({.method_ = "GET", .target_ = "/api/internal/prof
 
 - **请求状态**：绑定对象与返回句柄都须留在中间件协程帧内跨越 `co_await next_value()`；绑定临时对象编译期拒绝；同一类型一个槽，内层再次绑定遮蔽外层直到内层句柄销毁。与 `req().validated<T>()` 互不相通，手工绑定无法冒充校验结果。
 - **子请求**：`dispatch()` 在当前 worker 重入不可变路由表，鉴权、校验与中间件在新 context 中运行；只接受 origin-form 目标与缓冲请求/响应正文；输入在返回冷操作前复制；取消合并 `stop_token_` 与调用方 context 的 token；子请求处理器无总执行超时。
+- **子请求的 `406` 回退**：`dispatch()` 等待应用错误处理器完成；若它返回文件正文，抛 `std::logic_error`，不将文件当作缓冲正文交付。
 
 #### 7.1.3 `ruvia::connection_info`
 

@@ -714,8 +714,7 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
         .verify_target_origin_ = false,
     };
     http_response response;
-    // The child borrows these across suspension. Name them in the parent
-    // frame so MSVC can tail-transfer without co_await argument temporaries.
+    // Admission borrows the input and services across suspension.
     const detail::http_request_admission_input input{
         .request_ = request,
         .resolution_ = resolution,
@@ -724,7 +723,9 @@ task<dispatch_response> context::dispatch_task(std::string method, std::string t
     const auto services = runtime_services().for_subrequest(stop);
     auto admission = co_await detail::admit_and_dispatch_buffered_request(routes, input, policy, services, response);
     if (detail::http_response_needs_not_acceptable(admission.tail().coding_policy(), request, response) && !response.status().is_error()) {
-        response = co_await routes.respond_error(request, http_error_info(detail::http_not_acceptable_coding_error()), admission.services());
+        // Finish constructing the error arguments before suspension so MSVC LTCG can tail-transfer.
+        auto recovery = routes.respond_error(request, http_error_info(detail::http_not_acceptable_coding_error()), admission.services());
+        response = co_await std::move(recovery);
     }
     // The error handler answers the 406 with any response shape, so the file
     // check covers whichever response is final.
