@@ -1360,6 +1360,18 @@ db_owned_expression db_owned_expression::make_array_op(const db_owned_expression
 
 }  // namespace detail
 
+std::string escape_like_pattern(std::string_view input) {
+    std::string pattern;
+    pattern.reserve(input.size());
+    for (const char ch : input) {
+        if (ch == '\\' || ch == '%' || ch == '_') {
+            pattern.push_back('\\');
+        }
+        pattern.push_back(ch);
+    }
+    return pattern;
+}
+
 void db_query::storage_deleter_type::operator()(detail::db_query_storage* storage) const noexcept {
     delete storage;
 }

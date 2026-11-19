@@ -59,6 +59,24 @@ template <bool exec_statement>
 
 }  // namespace
 
+bool is_retryable_db_error(const db_error& error) noexcept {
+    if (error.code() != backend_error_code::command_failed) {
+        return false;
+    }
+    const auto state = error.sql_state();
+    switch (error.driver().value_or(db_driver::unspecified)) {
+        case db_driver::mariadb: {
+            const auto code = error.native_code();
+            return code == 1213 || code == 1205 || state == "40001";
+        }
+        case db_driver::postgresql:
+            return state == "40P01" || state == "40001";
+        case db_driver::unspecified:
+            return false;
+    }
+    return false;
+}
+
 db_executor::db_executor(detail::db_pool_ref_type client, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept :
     cache_(cache),
     client_(client),

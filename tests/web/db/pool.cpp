@@ -47,6 +47,97 @@ constexpr std::array database_drivers{
 };
 }  // namespace
 
+TEST(Ruvia, db_retry_classifies_only_server_transaction_conflicts) {
+    using namespace ruvia;
+    const auto command_failed = backend_error_code::command_failed;
+    EXPECT_TRUE(is_retryable_db_error(db_error(command_failed, db_driver::mariadb, "deadlock", 1213, "40001")));
+    EXPECT_TRUE(is_retryable_db_error(db_error(command_failed, db_driver::mariadb, "lock wait timeout", 1205, "HY000")));
+    EXPECT_TRUE(is_retryable_db_error(db_error(command_failed, db_driver::mariadb, "serialization failure", std::nullopt, "40001")));
+    EXPECT_TRUE(is_retryable_db_error(db_error(command_failed, db_driver::postgresql, "deadlock", std::nullopt, "40P01")));
+    EXPECT_TRUE(is_retryable_db_error(db_error(command_failed, db_driver::postgresql, "serialization failure", std::nullopt, "40001")));
+    EXPECT_FALSE(is_retryable_db_error(db_error(command_failed, db_driver::postgresql, "lock not available", std::nullopt, "55P03")));
+    EXPECT_FALSE(is_retryable_db_error(db_error(command_failed, db_driver::mariadb, "duplicate key", 1062, "23000")));
+    EXPECT_FALSE(is_retryable_db_error(db_error(backend_error_code::io_error, db_driver::mariadb, "socket error", 1213)));
+    EXPECT_FALSE(is_retryable_db_error(db_error(backend_error_code::timeout, db_driver::mariadb, "client timeout")));
+    EXPECT_FALSE(is_retryable_db_error(db_error(command_failed, std::nullopt, "unknown driver", 1213)));
+}
+
+TEST(Ruvia, db_retry_invokes_a_fresh_task_and_preserves_its_move_only_result) {
+    using namespace ruvia;
+    auto attachment = event_loop_attachment(test::new_test_io_context());
+    const auto loop = attachment.loop();
+    const auto worker = loop.worker();
+    int attempts = 0;
+    const auto exercise = [&]() -> task<void> {
+        auto pending = retry_deadlock(worker, {}, [result = std::make_unique<int>(42), &attempts]() mutable -> task<std::unique_ptr<int>> {
+            if (++attempts == 1) {
+                throw db_error(backend_error_code::command_failed, db_driver::mariadb, "lock wait timeout", 1205);
+            }
+            co_return std::move(result);
+        });
+        EXPECT_EQ(attempts, 0);
+        const auto value = co_await std::move(pending);
+        EXPECT_EQ(attempts, 2);
+        EXPECT_TRUE(value && *value == 42);
+    };
+    test::run_worker_tasks(attachment, exercise());
+}
+
+TEST(Ruvia, db_retry_preserves_the_last_error_and_does_not_repeat_permanent_failures) {
+    using namespace ruvia;
+    auto attachment = event_loop_attachment(test::new_test_io_context());
+    const auto loop = attachment.loop();
+    const auto worker = loop.worker();
+    const auto exercise = [&]() -> task<void> {
+        for (const bool retryable : {true, false}) {
+            int attempts = 0;
+            const auto fail = [&]() -> task<void> {
+                ++attempts;
+                const int code = retryable ? (attempts == 1 ? 1213 : 1205) : 1062;
+                throw db_error(backend_error_code::command_failed, db_driver::mariadb, "database command failed", code);
+            };
+            try {
+                co_await retry_deadlock(worker, {}, fail, 2);
+                ADD_FAILURE() << "database retry unexpectedly succeeded";
+            } catch (const db_error& error) {
+                EXPECT_EQ(error.native_code(), retryable ? 1205 : 1062);
+            }
+            EXPECT_EQ(attempts, retryable ? 2 : 1);
+        }
+    };
+    test::run_worker_tasks(attachment, exercise());
+}
+
+TEST(Ruvia, db_retry_cancels_pending_backoff_and_does_not_start_when_stopped) {
+    using namespace ruvia;
+    auto attachment = event_loop_attachment(test::new_test_io_context());
+    const auto loop = attachment.loop();
+    const auto worker = loop.worker();
+    stop_source stop;
+    const auto exercise = [&]() -> task<void> {
+        int attempts = 0;
+        const auto fail = [&]() -> task<void> {
+            if (++attempts == 1) {
+                const auto posted = worker.post([&stop] {
+                    stop.request_stop();
+                });
+                EXPECT_EQ(posted.status(), post_status::accepted);
+            }
+            throw db_error(backend_error_code::command_failed, db_driver::postgresql, "deadlock", std::nullopt, "40P01");
+        };
+        for (int call = 0; call < 2; ++call) {
+            try {
+                co_await retry_deadlock(worker, stop.token(), fail);
+                ADD_FAILURE() << "cancelled database retry unexpectedly succeeded";
+            } catch (const db_error& error) {
+                EXPECT_EQ(error.code(), backend_error_code::cancelled);
+            }
+            EXPECT_EQ(attempts, 1);
+        }
+    };
+    test::run_worker_tasks(attachment, exercise());
+}
+
 TEST(Ruvia, db_pool_rejects_zero_capacity_at_configuration) {
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     for (const auto driver : database_drivers) {

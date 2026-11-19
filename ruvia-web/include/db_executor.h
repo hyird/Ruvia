@@ -35,6 +35,7 @@
 #include "task.h"
 #include "timeout_duration.h"
 #include "worker_ref.h"
+#include "worker_timer.h"
 
 namespace ruvia {
 
@@ -235,6 +236,47 @@ private:
     std::string sql_state_;
     std::string constraint_name_;
 };
+
+// Server-side transaction conflicts only; connection errors and client timeouts are not retryable.
+[[nodiscard]] bool is_retryable_db_error(const db_error& error) noexcept;
+
+// On the given worker, invoke fn() once per attempt to create a fresh task.
+// Each invocation must own the whole transaction (including commit/rollback)
+// and must not perform side effects that cannot safely be repeated.
+template <typename fn_type, typename result_type = typename std::invoke_result_t<fn_type&>::value_type>
+    requires std::same_as<std::invoke_result_t<fn_type&>, task<result_type>>
+[[nodiscard]] task<result_type> retry_deadlock(worker_ref worker, stop_token stop, fn_type fn, int max_attempts = 4) {
+    if (max_attempts <= 0) {
+        throw std::invalid_argument("database retry max_attempts must be positive");
+    }
+    if (!worker.is_current()) {
+        throw std::logic_error("database retry requires its owning worker");
+    }
+
+    auto delay = std::chrono::milliseconds(15);
+    constexpr auto max_delay = std::chrono::milliseconds(15 * 1024);
+    for (int attempt = 1; !stop.stop_requested(); ++attempt) {
+        try {
+            if constexpr (std::is_void_v<result_type>) {
+                co_await std::invoke(fn);
+                co_return;
+            } else {
+                co_return co_await std::invoke(fn);
+            }
+        } catch (const db_error& error) {
+            if (attempt == max_attempts || !is_retryable_db_error(error)) {
+                throw;
+            }
+        }
+        if (co_await sleep_for(worker, delay, stop) == sleep_status::stop_requested) {
+            break;
+        }
+        if (delay < max_delay) {
+            delay *= 2;
+        }
+    }
+    throw db_error(backend_error_code::cancelled, std::nullopt, "database retry cancelled");
+}
 
 namespace detail {
 

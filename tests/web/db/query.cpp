@@ -1078,6 +1078,19 @@ TEST(Ruvia, db_query_unary_minus_and_bit_not_keep_negative_literals_out_of_comme
 
 RUVIA_DB_ENTITY(cq_device_type, "cq_device", db_column<"id", std::int64_t>, db_column<"name", std::string>, db_column<"tags", std::vector<std::string>>)
 
+TEST(Ruvia, db_query_escapes_literal_like_pattern_before_binding) {
+    const auto pattern = "%" + escape_like_pattern(R"(A%_\O'Reilly)") + "%";
+    for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
+        db_query query;
+        query.select(db_expr::column("name")).from("cq_device").where(cq_device_type::column<"name">().like(pattern));
+        const auto statement = query.compile(driver);
+        const auto params = statement.params();
+        ASSERT_EQ(params.size(), std::size_t{1});
+        EXPECT_EQ(params.front().text(), R"(%A\%\_\\O'Reilly%)");
+    }
+    EXPECT_TRUE(escape_like_pattern("").empty());
+}
+
 TEST(Ruvia, db_predicate_public_overloads_cover_comparisons_membership_nulls_and_aliases) {
     using tagged_type = cq_device_type;
     EXPECT_EQ(tagged_type::column<"id">().name(), std::string_view("id"));

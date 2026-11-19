@@ -5123,6 +5123,18 @@ ruvia::task<void> handler(ruvia::db_executor db, std::int64_t id) {
 | `std::optional<std::string_view> constraint_name() const& noexcept` | 违反的约束名；空时 `std::nullopt` |
 | `std::optional<std::string_view> constraint_name() const&& = delete` | 禁止从临时异常取出悬垂的约束名视图 |
 
+- **可重试错误**：`bool is_retryable_db_error(const db_error&) noexcept` 仅识别 `command_failed` 中已知的服务端事务冲突：MariaDB 原生码 `1213` / `1205` 或 SQLSTATE `40001`；PostgreSQL SQLSTATE `40P01` / `40001`。连接错误、客户端超时与唯一键冲突不重试。
+- **显式重试**：`retry_deadlock(worker, stop, fn, max_attempts = 4)` 在指定 worker 上运行冷任务，按值保存无参工厂 `fn`；每次调用工厂创建新的 `task<T>`，支持 `T = void`。总尝试次数必须为正，首次不等待，其余从 15 ms 起倍增退避，封顶 15.36 s。非重试错误或最后一次失败直接上抛；尝试前或退避时停止，抛 `db_error(cancelled)`。
+- **事务边界**：每次尝试都在 `fn` 内新建事务并覆盖到提交，不复用失败的事务，不执行 HTTP 等不能安全重放的副作用。令牌控制开始和退避；尝试内的 I/O 仍由调用方传递令牌。
+
+```cpp
+co_await ruvia::retry_deadlock(worker, stop, [db, stop]() -> ruvia::task<void> {
+    auto tx = co_await db.with_options({.stop_token_ = stop}).begin_transaction();
+    (void)co_await tx.execute("UPDATE counters SET value = value + 1 WHERE id = 1");
+    co_await tx.commit();
+});
+```
+
 #### 14.2.5 参数值 `db_value` 与 `db_mapped_value`
 
 **`template <typename t_type> concept db_mapped_value`**：独立于 `db_rows` 拥有文本的映射值类型——数值、`bool`、`std::string`、`ruvia::string`，以及它们的一维 `std::vector`；`std::optional` 包装（含可空数组元素）保持成立；`std::string_view`、引用与嵌套数组不满足。ORM 映射结果使用此约束。
@@ -5528,6 +5540,7 @@ auto report = ruvia::db_migrator::run(config, migrations);
 - **PostgreSQL 绑定类型**：绑定值在上下文能定型处（另一操作数、目标列、函数 / 运算符重载、布尔上下文、显式 `cast()`）不带类型；无法定型处（`json_build_object`、`concat`、`array_agg` 等多态参数，两个绑定操作数的算术，一元 `-` / `~`，`IS [NOT] NULL`，只含绑定值的 `GREATEST` 等）按 C++ 类别标注：有符号 `$n::int8`、无符号 `$n::numeric`、`double` `::float8`、`bool` `::bool`、文本 `::text`；仅接受 int4 的内置参数（`left()`、`round(x, n)`、`jsonb -> n`）渲染为 `$n::int4`。
 - **上限**：PostgreSQL 绑定模式每个参数节点只编号一次，单语句超过 65535 个参数时 `compile()` 抛 `std::length_error`；表达式与子查询嵌套上限 256 层，同一运算符的 `AND` / `OR` 链只算一层。
 - **NULL 比较**：`expr == nullptr` / `expr != nullptr` 绑定 `NULL` 值；判空请用 `is_null()` / `is_not_null()`。
+- **LIKE 字面量**：`std::string escape_like_pattern(std::string_view input)` 按默认反斜杠规则转义输入中的 `\`、`%`、`_`，不加 SQL 引号或通配符。子串搜索可用 `column.like("%" + escape_like_pattern(keyword) + "%")`，PostgreSQL 也可用 `.ilike(...)`。结果仍须作为参数绑定，不拼入 SQL 语句。
 - **RETURNING**：MariaDB 需 ≥ 10.5 才支持 `INSERT ... RETURNING` 与 `DELETE ... RETURNING`；`UPDATE ... RETURNING` 仅 PostgreSQL。
 - **Upsert**：`db_conflict_options` 字段按 PostgreSQL `INSERT ... ON CONFLICT` 语法命名；MariaDB 只支持 `any_unique_key_ = true`（`ON DUPLICATE KEY UPDATE`），其中 `db_expr::excluded(col)` 编译为 `VALUES(col)`。
 

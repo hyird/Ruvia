@@ -22,6 +22,10 @@
 
 namespace ruvia {
 
+// Escape literal text for binding to LIKE/ILIKE with the default backslash escape.
+// Does not add wildcards or SQL quotes.
+[[nodiscard]] std::string escape_like_pattern(std::string_view input);
+
 namespace detail {
 // Expression and nested-query depth accepted by import, compilation and
 // relation paths. Same-operator AND/OR chains do not nest.
