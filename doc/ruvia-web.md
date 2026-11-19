@@ -5695,8 +5695,8 @@ ORM 仓储的 `upsert` / `on_conflict` 也消费 `db_conflict_options`，空 Pos
 | `static db_expr now()` | `now()` |
 | `static db_expr clock_timestamp()` | `clock_timestamp()` |
 | `static db_expr interval(std::string_view spec)` | `value(spec).cast(db_data_type::interval)` |
-| `static db_expr call(std::string_view function, argument_list<db_expr> args = {})` | 函数调用 |
-| `static db_expr call(std::string_view function, std::span<const db_expr> args, std::span<const db_named_argument> named)` | 含具名参数的调用 |
+| `static db_expr call(std::string_view function, argument_list<db_expr> args = {})` | 普通函数调用；PostgreSQL 渲染时用双引号包裹函数标识符，无 schema 限定的 `COALESCE`、`NULLIF`、`GREATEST`、`LEAST` 不论大小写均抛出 `std::invalid_argument`，应改用下列专用工厂 |
+| `static db_expr call(std::string_view function, std::span<const db_expr> args, std::span<const db_named_argument> named)` | 支持具名参数的普通函数调用；同上 |
 | `static db_expr binary(const db_expr& lhs, db_binary_operator op, const db_expr& rhs)` | 任意二元运算 |
 | `static db_expr unary(db_unary_operator op, const db_expr& operand)` | 任意一元运算 |
 | `static db_expr list(argument_list<db_expr> elements)` | 括号表达式列表（`IN` / `NOT IN` 右操作数） |

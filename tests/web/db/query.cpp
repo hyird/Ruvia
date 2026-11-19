@@ -514,6 +514,22 @@ TEST(Ruvia, db_query_window_aggregate_filter_and_lateral_source) {
     EXPECT_TRUE(statement.sql().find("CROSS JOIN LATERAL \"jsonb_each\"(\"e\".\"data\") AS \"kv\"") != std::string_view::npos);
 }
 
+TEST(Ruvia, db_query_postgresql_call_rejects_unqualified_sql_syntax) {
+    const auto lhs = db_expr::column("left");
+    const auto rhs = db_expr::column("right");
+    for (std::string_view function : {"coalesce", "NuLlIf", "GREATEST", "least"}) {
+        SCOPED_TRACE(function);
+        db_query query;
+        query.select(db_expr::call(function, {lhs, rhs}));
+        EXPECT_THROW((void)query.compile(db_driver::postgresql), std::invalid_argument);
+    }
+
+    const std::array args{lhs, rhs};
+    EXPECT_THROW((void)db_query::render_expression(db_expr::call("NULLIF", args, {}), db_driver::postgresql), std::invalid_argument);
+    EXPECT_EQ(db_query::render_expression(db_expr::call("app.nullif", args), db_driver::postgresql), "\"app\".\"nullif\"(\"left\", \"right\")");
+    EXPECT_EQ(db_query::render_expression(db_expr::call("nullif", args), db_driver::mariadb), "nullif(`left`, `right`)");
+}
+
 TEST(Ruvia, db_query_expression_helpers_render_postgresql_and_reject_empty_inputs) {
     db_query query;
     const auto left = db_expr::column("left");

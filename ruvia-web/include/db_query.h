@@ -523,6 +523,8 @@ public:
     [[nodiscard]] static db_expr interval(std::string_view spec) {
         return value(spec).cast(db_data_type::interval);
     }
+    // PostgreSQL quotes function identifiers and rejects unqualified COALESCE, NULLIF, GREATEST and LEAST
+    // (case-insensitively) during SQL rendering. Use coalesce(), null_if(), greatest() and least() instead.
     [[nodiscard]] static inline db_expr call(std::string_view function, argument_list<db_expr> args = {});
     [[nodiscard]] static inline db_expr call(std::string_view function, std::span<const db_expr> args, std::span<const db_named_argument> named);
     [[nodiscard]] static db_expr binary(const db_expr& lhs, db_binary_operator op, const db_expr& rhs) {

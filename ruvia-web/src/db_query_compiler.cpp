@@ -13,6 +13,7 @@
 #include "db_query.h"
 #include "db_query_storage.h"
 #include "db_sql_dialect.h"
+#include "http_header.h"
 
 namespace ruvia::detail {
 namespace {
@@ -64,6 +65,24 @@ bool is_mariadb_bare_function_name(std::string_view name) noexcept {
     return std::ranges::all_of(name.substr(1), [&](char value) noexcept {
         return is_ascii_letter(value) || (value >= '0' && value <= '9') || value == '_' || value == '$';
     });
+}
+
+void reject_pg_syntax_function(std::string_view name) {
+    struct syntax_function final {
+        std::string_view name_;
+        const char* error_;
+    };
+    static constexpr std::array<syntax_function, 4> syntax_functions{{
+        {"coalesce", "PostgreSQL COALESCE is SQL syntax; use db_expr::coalesce()"},
+        {"nullif", "PostgreSQL NULLIF is SQL syntax; use db_expr::null_if()"},
+        {"greatest", "PostgreSQL GREATEST is SQL syntax; use db_expr::greatest()"},
+        {"least", "PostgreSQL LEAST is SQL syntax; use db_expr::least()"},
+    }};
+    for (const auto& function : syntax_functions) {
+        if (http_ascii_equals_ignore_case(name, function.name_)) {
+            throw std::invalid_argument(function.error_);
+        }
+    }
 }
 
 [[nodiscard]] bool same_db_value(const db_value& a, const db_value& b) noexcept {
@@ -952,6 +971,11 @@ private:
                     case db_node_kind::least:
                         output_.sql_ += "LEAST";
                         break;
+                    case db_node_kind::function:
+                        if (output_.pg()) {
+                            reject_pg_syntax_function(n.text_);
+                        }
+                        [[fallthrough]];
                     default:
                         output_.function_name(n.text_);
                         break;
