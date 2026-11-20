@@ -142,7 +142,7 @@ flowchart LR
 | `worker_wait.h` | 等待原语构件 | `worker_wait_slot`、`worker_single_wait_awaiter`、`worker_shutdown_registered`、`worker_wait_state`、`make_worker_wait_state` | [7.6](#api-worker-wait-h) |
 | `suspend_race.h` | 挂起竞争裁决 | 仅 `detail` | [7.7](#api-suspend-race-h) |
 | `waiter_list.h` | 侵入式等待队列 | 仅 `detail` | [7.8](#api-waiter-list-h) |
-| `blocking_pool.h` | 阻塞卸载 | `blocking_pool_options`、`blocking_pool_stats`、`blocking_pool`、`blocking_status`、`describe_blocking_status`、`blocking_operation_rejected`、`blocking_result`、`run_blocking` | [8.1](#api-blocking-pool-h) |
+| `blocking_pool.h` | 阻塞卸载 | `blocking_pool_options`、`blocking_pool_stats`、`blocking_pool`、`blocking_status`、`describe_blocking_status`、`blocking_operation_rejected`、`blocking_result`、`blocking_callable`、`run_blocking`、`run_blocking_joined` | [8.1](#api-blocking-pool-h) |
 | `byte_view.h` | 字节视图 | `as_bytes`、`as_chars` | [9.1](#api-byte-view-h) |
 
 ---
@@ -1432,13 +1432,17 @@ flowchart LR
 - **一致性**：`completed()`、`failed()` 与 `value()` 不会因结果替换或异常被移走而出现“成功但无值”；不要求负载移动为 `noexcept`。
 - **组合**：`with_*` 构造与 `run_blocking` 相同的结果，供组合式卸载复用。
 
-**`template <typename fn_type> [[nodiscard]] auto run_blocking(worker_ref worker_value, fn_type fn, operation_options options = {}) -> task<blocking_result<std::invoke_result_t<fn_type&>>>;`**
+**`template <typename fn_type> concept blocking_callable;`**
 
-- **约束**：`fn&` 无参可调用；结果为 `void` 或可移动构造（`static_assert`）。
+**`template <blocking_callable fn_type> [[nodiscard]] auto run_blocking(worker_ref worker_value, fn_type fn, operation_options options = {}) -> task<blocking_result<std::invoke_result_t<fn_type&>>>;`**
+
+**`template <blocking_callable fn_type> [[nodiscard]] auto run_blocking_joined(worker_ref worker_value, fn_type fn, operation_options options = {}) -> task<blocking_result<std::invoke_result_t<fn_type&>>>;`**
+
+- **约束**：拒绝左值引用类型与 `std::reference_wrapper`；`fn` 可移动构造、`fn&` 无参可调用；结果为 `void` 或可移动构造。
 - **启动线程**：返回的任务必须在 `worker_value` 上 `co_await`，那是恢复协程与触碰结果的唯一线程；否则在投递 `fn` 前抛 `std::logic_error`。
 - **预判**：依次判定，命中即返回且不投递 `fn`：无池 → `unavailable`；令牌已停止 → `cancelled`；截止期已过 → `timed_out`；Worker 不再接收 → `worker_stopping`。
 - **投递**：池先预留槽位，再把 `fn` 移入队列闭包。准入时队列已满或池已停止，不构造闭包，分别返回 `queue_full` 或 `pool_stopped`。预留后构造失败会释放槽位并传播异常；构造期间池停止则不发布闭包，返回 `pool_stopped`。
-- **上限只约束等待**：`timeout_` / `stop_token_` 只结束调用方的等待；阻塞调用无法中断，池线程一直占用到 `fn` 返回。相对上限自任务启动计时，绝对截止期可与调用方其他阶段共享。
+- **取消与超时边界**：池线程取走任务前若等待已因 `timeout_`、`stop_token_` 或 `worker_stopping` 结束，闭包直接跳过而不执行 `fn`。一旦池线程开始执行 `fn`，阻塞调用无法中断：`run_blocking` 立即结束调用方等待并丢弃迟到结果；`run_blocking_joined` 则继续等待 `fn` 执行完毕并交付实际结果（仅 `worker_value` 停机提前返回 `worker_stopping`），保证调用方清理路径不与池线程并发访问独占资源。相对上限自任务启动计时，绝对截止期可与调用方其他阶段共享。
 - **结果**：从不为拒绝抛出，状态说明发生了什么；`fn` 的异常保存在结果中；结果在接收 Worker 上移动失败时以 `from_error` 返回。用 `std::move(result).take_value()` 把拒绝转为异常并重抛 `fn` 自身的异常。
 - **池来源**：使用 `worker_ref::blocking_pool()`；事件循环的池选择见 [`event_loop_pool_options`](#api-event-loop-h)，底层运行时见 [`worker_runtime_options`](#api-worker-runtime-h)。
 

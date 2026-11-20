@@ -295,6 +295,10 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
             return 42;
         });
         EXPECT_EQ(std::move(result).take_value(), 42);
+        auto joined = co_await stream.run_blocking_joined([] {
+            return 84;
+        });
+        EXPECT_EQ(std::move(joined).take_value(), 84);
         const auto count = ++stream.worker_state<runtime_state>().requests_;
         const std::string runtime_count = std::to_string(count);
         const std::string worker_id = std::to_string(stream.worker().id());

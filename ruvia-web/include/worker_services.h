@@ -127,15 +127,14 @@ public:
         return *static_cast<std::remove_const_t<state_type>*>(worker_state_instance(detail::type_key<std::remove_const_t<state_type>>()));
     }
 
-    template <typename callable_type>
+    template <blocking_callable callable_type>
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options = {}) const {
-        if (!options.stop_token_.stoppable()) {
-            options.stop_token_ = *stop_token_;
-        }
-        if (!stop_token_->stoppable() || options.stop_token_ == *stop_token_) {
-            return ruvia::run_blocking(*worker_, std::move(callable), std::move(options));
-        }
-        return run_blocking_combined(*worker_, *stop_token_, std::move(callable), std::move(options));
+        return dispatch_blocking(std::move(callable), std::move(options), false);
+    }
+
+    template <blocking_callable callable_type>
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_joined(callable_type callable, operation_options options = {}) const {
+        return dispatch_blocking(std::move(callable), std::move(options), true);
     }
 
     [[nodiscard]] const ruvia::env& env() const noexcept;
@@ -165,10 +164,21 @@ private:
         io_metrics_(io_metrics),
         env_(env) {}
 
-    template <typename callable_type>
-    [[nodiscard]] static task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_combined(worker_ref worker_value, ::ruvia::stop_token worker_token, callable_type callable, operation_options options) {
+    template <blocking_callable callable_type>
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> dispatch_blocking(callable_type callable, operation_options options, bool join_started) const {
+        if (!options.stop_token_.stoppable()) {
+            options.stop_token_ = *stop_token_;
+        }
+        if (!stop_token_->stoppable() || options.stop_token_ == *stop_token_) {
+            return join_started ? ruvia::run_blocking_joined(*worker_, std::move(callable), std::move(options)) : ruvia::run_blocking(*worker_, std::move(callable), std::move(options));
+        }
+        return run_blocking_combined(*worker_, *stop_token_, std::move(callable), std::move(options), join_started);
+    }
+
+    template <blocking_callable callable_type>
+    [[nodiscard]] static task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_combined(worker_ref worker_value, ::ruvia::stop_token worker_token, callable_type callable, operation_options options, bool join_started) {
         const linked_operation_options linked(options, worker_token);
-        co_return co_await ruvia::run_blocking(std::move(worker_value), std::move(callable), linked.options());
+        co_return co_await (join_started ? ruvia::run_blocking_joined(std::move(worker_value), std::move(callable), linked.options()) : ruvia::run_blocking(std::move(worker_value), std::move(callable), linked.options()));
     }
 
     [[nodiscard]] void* worker_state_instance(const void* type_key) const;
@@ -214,12 +224,22 @@ public:
     // status() for load shedding or use std::move(result).take_value() to throw.
     // With application::blocking_pool(nullptr) the result reports
     // blocking_status::unavailable without submitting the callable.
-    template <typename callable_type>
+    template <blocking_callable callable_type>
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options = {}) const& {
         return services().run_blocking(std::move(callable), std::move(options));
     }
-    template <typename callable_type>
+    template <blocking_callable callable_type>
     task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type, operation_options = {}) const&& = delete;
+
+    // Cancels or times out only before a pool thread starts `callable`; once
+    // execution has started, waits for `callable` to finish unless this worker
+    // itself stops.
+    template <blocking_callable callable_type>
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_joined(callable_type callable, operation_options options = {}) const& {
+        return services().run_blocking_joined(std::move(callable), std::move(options));
+    }
+    template <blocking_callable callable_type>
+    task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_joined(callable_type, operation_options = {}) const&& = delete;
 
     // The application's env; an empty one when the host has none.
     [[nodiscard]] const ruvia::env& env() const& noexcept RUVIA_LIFETIMEBOUND {

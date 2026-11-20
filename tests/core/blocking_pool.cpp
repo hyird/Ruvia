@@ -8,6 +8,7 @@
 #include <concepts>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <future>
 #include <limits>
 #include <memory>
@@ -1175,4 +1176,137 @@ TEST(Ruvia, blocking_result_zero_copy_extraction_and_rvalue_borrow_guards) {
 
     auto void_outcome = ruvia::blocking_result<void>::from_value();
     std::move(void_outcome).take_value();
+}
+
+namespace {
+
+using stateless_fn = decltype([] {
+    return 1;
+});
+static_assert(ruvia::blocking_callable<stateless_fn>);
+static_assert(!ruvia::blocking_callable<stateless_fn&>);
+static_assert(!ruvia::blocking_callable<std::reference_wrapper<stateless_fn>>);
+static_assert(!ruvia::blocking_callable<const std::reference_wrapper<const stateless_fn>>);
+
+task<void> exercise_queued_skip(blocking_pool& pool, worker_ref worker_value, thread_gate& gate_value, std::atomic_bool& cancelled_ran, std::atomic_bool& timed_out_ran, bool& success) {
+    ruvia::stop_source source;
+    std::thread canceller([&pool, &source] {
+        while (pool.stats().queued_ == 0) {
+            std::this_thread::yield();
+        }
+        source.request_stop();
+    });
+    auto cancelled = co_await ruvia::run_blocking(worker_value, [&cancelled_ran] {
+        cancelled_ran.store(true, std::memory_order_release);
+        return 1;
+    }, {.stop_token_ = source.token()});
+    canceller.join();
+
+    auto timed_out = co_await ruvia::run_blocking(worker_value, [&timed_out_ran] {
+        timed_out_ran.store(true, std::memory_order_release);
+        return 2;
+    }, {.timeout_ = std::chrono::milliseconds(15)});
+
+    gate_value.release_.release();
+    success = cancelled.status() == blocking_status::cancelled && timed_out.status() == blocking_status::timed_out;
+}
+
+task<void> exercise_joined_while_queued(blocking_pool& pool, worker_ref worker_value, thread_gate& gate_value, std::atomic_bool& cancelled_ran, std::atomic_bool& timed_out_ran, bool& success) {
+    ruvia::stop_source source;
+    std::thread canceller([&pool, &source] {
+        while (pool.stats().queued_ == 0) {
+            std::this_thread::yield();
+        }
+        source.request_stop();
+    });
+    auto cancelled = co_await ruvia::run_blocking_joined(worker_value, [&cancelled_ran] {
+        cancelled_ran.store(true, std::memory_order_release);
+        return 3;
+    }, {.stop_token_ = source.token()});
+    canceller.join();
+
+    auto timed_out = co_await ruvia::run_blocking_joined(worker_value, [&timed_out_ran] {
+        timed_out_ran.store(true, std::memory_order_release);
+        return 4;
+    }, {.timeout_ = std::chrono::milliseconds(15)});
+
+    gate_value.release_.release();
+    success = cancelled.status() == blocking_status::cancelled && timed_out.status() == blocking_status::timed_out;
+}
+
+task<void> exercise_joined_once_started(worker_ref worker_value, thread_gate& gate_value, ruvia::stop_source& source_value, std::atomic_int& exclusive_state, std::atomic_bool& resumed, bool& success) {
+    auto result_value = co_await ruvia::run_blocking_joined(worker_value, [&] {
+        gate_value.started_.release();
+        gate_value.release_.acquire();
+        exclusive_state.store(99, std::memory_order_release);
+        return 99;
+    }, {.timeout_ = std::chrono::milliseconds(15), .stop_token_ = source_value.token()});
+    const int observed = exclusive_state.load(std::memory_order_acquire);
+    resumed.store(true, std::memory_order_release);
+    success = observed == 99 && result_value.completed() && std::move(result_value).take_value() == 99;
+}
+
+}  // namespace
+
+TEST(Ruvia, blocking_pool_queued_cancellation_and_timeout_skip_execution) {
+    bool success = false;
+    std::atomic_bool cancelled_ran{false};
+    std::atomic_bool timed_out_ran{false};
+    {
+        thread_gate gate;
+        blocking_pool pool(blocking_pool_options{.thread_count_ = 1, .queue_capacity_ = 4});
+        gate.occupy(pool);
+        asio::io_context io_context;
+        auto attachment = ruvia::event_loop_attachment(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
+        const auto loop = attachment.loop();
+        ruvia::test::run_worker_tasks(attachment, exercise_queued_skip(pool, loop.worker(), gate, cancelled_ran, timed_out_ran, success));
+        pool.join();
+    }
+    EXPECT_TRUE(success);
+    EXPECT_FALSE(cancelled_ran.load(std::memory_order_acquire));
+    EXPECT_FALSE(timed_out_ran.load(std::memory_order_acquire));
+}
+
+TEST(Ruvia, blocking_pool_joined_cancels_while_queued_and_waits_once_started) {
+    bool queued_success = false;
+    std::atomic_bool queued_cancelled_ran{false};
+    std::atomic_bool queued_timed_out_ran{false};
+    {
+        thread_gate gate;
+        blocking_pool pool(blocking_pool_options{.thread_count_ = 1, .queue_capacity_ = 4});
+        gate.occupy(pool);
+        asio::io_context io_context;
+        auto attachment = ruvia::event_loop_attachment(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
+        const auto loop = attachment.loop();
+        ruvia::test::run_worker_tasks(attachment, exercise_joined_while_queued(pool, loop.worker(), gate, queued_cancelled_ran, queued_timed_out_ran, queued_success));
+        pool.join();
+    }
+    EXPECT_TRUE(queued_success);
+    EXPECT_FALSE(queued_cancelled_ran.load(std::memory_order_acquire));
+    EXPECT_FALSE(queued_timed_out_ran.load(std::memory_order_acquire));
+
+    bool started_success = false;
+    std::atomic_int exclusive_state{0};
+    std::atomic_bool resumed{false};
+    bool stayed_suspended_after_cancel = false;
+    {
+        thread_gate gate;
+        ruvia::stop_source source;
+        blocking_pool pool(blocking_pool_options{.thread_count_ = 1, .queue_capacity_ = 4});
+        asio::io_context io_context;
+        auto attachment = ruvia::event_loop_attachment(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
+        const auto loop = attachment.loop();
+        std::thread driver([&] {
+            gate.started_.acquire();
+            source.request_stop();
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+            stayed_suspended_after_cancel = !resumed.load(std::memory_order_acquire);
+            gate.release_.release();
+        });
+        ruvia::test::run_worker_tasks(attachment, exercise_joined_once_started(loop.worker(), gate, source, exclusive_state, resumed, started_success));
+        driver.join();
+        pool.join();
+    }
+    EXPECT_TRUE(stayed_suspended_after_cancel);
+    EXPECT_TRUE(started_success);
 }

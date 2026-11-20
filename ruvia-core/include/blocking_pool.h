@@ -27,9 +27,11 @@
 // and none can. Submitting without waiting is fine; waiting is not.
 
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -220,6 +222,14 @@ public:
         (void)completion_.complete(std::move(payload));
     }
 
+    [[nodiscard]] bool try_start() noexcept {
+        if (!one_shot_access::try_start(completion_)) {
+            completion_ = {};
+            return false;
+        }
+        return true;
+    }
+
     void answer(blocking_payload<t_type>&& payload_value) {
         const auto completion = std::move(completion_);
         try {
@@ -390,39 +400,25 @@ template <typename t_type>
     return blocking_result<t_type>(std::move(payload_value));
 }
 
+template <typename t_type>
+inline constexpr bool is_reference_wrapper_v = false;
+template <typename u_type>
+inline constexpr bool is_reference_wrapper_v<std::reference_wrapper<u_type>> = true;
+
 }  // namespace detail
 
-// Runs `fn` on the blocking pool the worker's event loop borrows and resumes
-// the caller on `worker` with a typed result. Queue pressure, a worker without
-// a pool, shutdown, cancellation and timeout remain inspectable statuses; the
-// callable's own exception is retained in the result.
-//
-// The returned task must be awaited on `worker` -- that is the thread the
-// coroutine resumes on and the only thread the result is touched from;
-// awaiting it elsewhere throws std::logic_error before `fn` is posted. `fn`
-// is moved into the pool and runs on a foreign thread: it must own everything
-// it uses (see the file header).
-//
-// options.timeout_ bounds the caller, not the work: a blocking call cannot be
-// interrupted, so the pool thread stays occupied until `fn` returns. Use it to
-// keep one wedged dependency from pinning a request -- its connection, its
-// arena, its leases -- indefinitely. A relative timeout starts when the task
-// starts; an absolute one shares a deadline with the caller's other phases.
-// options.stop_token_ cancels the wait the same way.
-//
-// Never throws for a rejection; the status says what happened. A worker
-// without a pool, a stop token that is already stopped, or a deadline that has
-// passed rejects without posting `fn`. Use std::move(result).take_value()
-// to turn a rejection into an exception and to rethrow the callable's own
-// exception.
 template <typename fn_type>
-[[nodiscard]] auto run_blocking(worker_ref worker_value, fn_type fn, operation_options options = {}) -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
+concept blocking_callable = (!std::is_reference_v<fn_type>) && (!detail::is_reference_wrapper_v<std::remove_cv_t<fn_type>>) && std::move_constructible<fn_type> && std::invocable<fn_type&> && (std::is_void_v<std::invoke_result_t<fn_type&>> || std::move_constructible<std::invoke_result_t<fn_type&>>);
+
+namespace detail {
+
+template <blocking_callable fn_type>
+[[nodiscard]] auto run_blocking_impl(worker_ref worker_value, fn_type fn, operation_options options, bool join_started) -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
     using result_type = std::invoke_result_t<fn_type&>;
-    using payload = detail::blocking_payload<result_type>;
+    using payload = blocking_payload<result_type>;
     using outcome_type = blocking_result<result_type>;
     const operation_deadline deadline(options.timeout_);
     auto stop_token_value = std::move(options.stop_token_);
-    static_assert(std::is_void_v<result_type> || std::is_move_constructible_v<result_type>, "a blocking callable's result travels back to the worker by move");
 
     // Every outcome the wait would decide without the callable is decided
     // first, so a misplaced, cancelled, or expired call never occupies a pool
@@ -455,8 +451,11 @@ template <typename fn_type>
         co_return outcome_type::from_status(blocking_status::worker_stopping);
     }
     auto& [completion, receiver] = *channel;
-    const auto posted = detail::blocking_pool_access::post_factory(*pool, [&] {
-        return move_only_function<void()>([guard = detail::blocking_completion_guard<result_type>(std::move(completion)), call = std::move(fn)]() mutable {
+    const auto posted = blocking_pool_access::post_factory(*pool, [&] {
+        return move_only_function<void()>([guard = blocking_completion_guard<result_type>(std::move(completion)), call = std::move(fn)]() mutable {
+            if (!guard.try_start()) {
+                return;
+            }
             payload payload_value;
             try {
                 if constexpr (std::is_void_v<result_type>) {
@@ -476,21 +475,26 @@ template <typename fn_type>
     }
 
     try {
-        auto waited = co_await receiver.wait({.timeout_ = deadline.timeout(), .stop_token_ = std::move(stop_token_value)});
-        if (waited.has_value()) {
-            auto payload_value = std::move(waited).take_value();
+        std::optional<wait_result<payload>> waited(co_await receiver.wait({.timeout_ = deadline.timeout(), .stop_token_ = std::move(stop_token_value)}));
+        if (!waited->has_value() && join_started && (waited->status() == wait_status::timed_out || waited->status() == wait_status::cancelled)) {
+            if (!one_shot_access::try_close_before_start(receiver)) {
+                waited.emplace(co_await receiver.wait());
+            }
+        }
+        if (waited->has_value()) {
+            auto payload_value = std::move(*waited).take_value();
             if (payload_value.error_ != nullptr) {
                 co_return outcome_type::from_error(std::move(payload_value.error_));
             }
             if (payload_value.status_ != blocking_status::completed) {
                 co_return outcome_type::from_status(payload_value.status_);
             }
-            co_return detail::completed_blocking_result(std::move(payload_value));
+            co_return completed_blocking_result(std::move(payload_value));
         }
-        if (waited.status() == wait_status::timed_out) {
+        if (waited->status() == wait_status::timed_out) {
             co_return outcome_type::from_status(blocking_status::timed_out);
         }
-        if (waited.status() == wait_status::cancelled) {
+        if (waited->status() == wait_status::cancelled) {
             co_return outcome_type::from_status(blocking_status::cancelled);
         }
         // Closed cannot happen -- this coroutine owns the receiver and is the only
@@ -500,6 +504,46 @@ template <typename fn_type>
         // Payload delivery now moves the result on the receiving worker.
         co_return outcome_type::from_error(std::current_exception());
     }
+}
+
+}  // namespace detail
+
+// Runs `fn` on the blocking pool the worker's event loop borrows and resumes
+// the caller on `worker` with a typed result. Queue pressure, a worker without
+// a pool, shutdown, cancellation and timeout remain inspectable statuses; the
+// callable's own exception is retained in the result.
+//
+// The returned task must be awaited on `worker` -- that is the thread the
+// coroutine resumes on and the only thread the result is touched from;
+// awaiting it elsewhere throws std::logic_error before `fn` is posted. `fn`
+// is moved into the pool and runs on a foreign thread: it must own everything
+// it uses (see the file header).
+//
+// options.timeout_ bounds the caller, not a started callable: a blocking call
+// cannot be interrupted, so an already-started pool thread stays occupied until
+// `fn` returns. A queued callable whose wait ends before a pool thread picks it
+// up is skipped without running. A relative timeout starts when the task
+// starts; an absolute one shares a deadline with the caller's other phases.
+// options.stop_token_ cancels the wait the same way.
+//
+// Never throws for a rejection; the status says what happened. A worker
+// without a pool, a stop token that is already stopped, or a deadline that has
+// passed rejects without posting `fn`. Use std::move(result).take_value()
+// to turn a rejection into an exception and to rethrow the callable's own
+// exception.
+template <blocking_callable fn_type>
+[[nodiscard]] auto run_blocking(worker_ref worker_value, fn_type fn, operation_options options = {}) -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
+    return detail::run_blocking_impl(std::move(worker_value), std::move(fn), std::move(options), false);
+}
+
+// Like run_blocking(), except options.timeout_ and options.stop_token_ only
+// cancel or time out `fn` before a pool thread starts executing it. Once a
+// pool thread has claimed `fn`, the caller stays suspended until `fn` finishes
+// (unless `worker_value` itself stops), so exclusive files, buffers or leases
+// touched by `fn` are not accessed concurrently by the caller's cleanup path.
+template <blocking_callable fn_type>
+[[nodiscard]] auto run_blocking_joined(worker_ref worker_value, fn_type fn, operation_options options = {}) -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
+    return detail::run_blocking_impl(std::move(worker_value), std::move(fn), std::move(options), true);
 }
 
 }  // namespace ruvia

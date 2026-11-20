@@ -44,6 +44,7 @@ struct one_shot_receiver_closed final {};
 struct one_shot_worker_stopping final {};
 
 struct one_shot_ready final {};
+struct one_shot_access;
 
 template <typename t_type>
 struct one_shot_state final {
@@ -84,6 +85,7 @@ struct one_shot_state final {
     std::mutex mutex_;
     using lifecycle_type = std::variant<one_shot_pending, one_shot_completing, one_shot_ready, one_shot_consumed, one_shot_receiver_closed, one_shot_worker_stopping>;
     lifecycle_type lifecycle_;
+    bool execution_started_{false};
     // After publishing consumed/closed, the thread that claimed ready owns this
     // stable slot until its value has been moved or destroyed outside mutex_.
     std::optional<t_type> ready_value_;
@@ -188,6 +190,7 @@ private:
         return detail::delivery_access::accept<one_shot_complete_result<t_type>>();
     }
     std::shared_ptr<detail::one_shot_state<t_type>> state_;
+    friend struct detail::one_shot_access;
     template <typename u_type>
     friend auto make_one_shot(worker_ref);
 };
@@ -310,9 +313,50 @@ private:
     explicit one_shot_receiver(std::shared_ptr<detail::one_shot_state<t_type>> state_value) :
         state_(std::move(state_value)) {}
     std::shared_ptr<detail::one_shot_state<t_type>> state_;
+    friend struct detail::one_shot_access;
     template <typename u_type>
     friend auto make_one_shot(worker_ref);
 };
+
+namespace detail {
+
+struct one_shot_access final {
+    template <typename t_type>
+    [[nodiscard]] static bool try_start(const one_shot_completion<t_type>& completion) noexcept {
+        const auto& state = completion.state_;
+        if (state == nullptr) {
+            return false;
+        }
+        std::lock_guard lock(state->mutex_);
+        if (!std::holds_alternative<one_shot_pending>(state->lifecycle_)) {
+            return false;
+        }
+        if (!state->worker_.accepting()) {
+            state->lifecycle_.template emplace<one_shot_worker_stopping>();
+            state->wait_slot_.complete(wait_status::worker_stopping);
+            return false;
+        }
+        state->execution_started_ = true;
+        return true;
+    }
+
+    template <typename t_type>
+    [[nodiscard]] static bool try_close_before_start(one_shot_receiver<t_type>& receiver) noexcept {
+        const auto& state = receiver.state_;
+        if (state == nullptr) {
+            return true;
+        }
+        std::lock_guard lock(state->mutex_);
+        if (state->execution_started_ || !std::holds_alternative<one_shot_pending>(state->lifecycle_)) {
+            return false;
+        }
+        state->lifecycle_.template emplace<one_shot_receiver_closed>();
+        state->wait_slot_.complete(wait_status::closed);
+        return true;
+    }
+};
+
+}  // namespace detail
 
 template <typename t_type>
 // The value parameter accepts both lvalue and rvalue worker refs before
