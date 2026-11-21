@@ -1300,9 +1300,9 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
                 }
                 auto socket = std::move(accepted_socket).take_value();
                 ++accepted;
-                const auto head = co_await read_head(socket);
+                const std::string head = co_await read_head(socket);
                 ruvia::http1_server_request_parser parsed;
-                const bool head_ready = parsed.parse(head).holds<ruvia::decode_complete>();
+                const bool head_ready = parsed.parse(head).template holds<ruvia::decode_complete>();
                 if (accepted == 1) {
                     if (!head_ready || parsed.request().method() != "CONNECT" || parsed.request().target() != "target.test:443") {
                         throw std::runtime_error("expected CONNECT on the first connection");
