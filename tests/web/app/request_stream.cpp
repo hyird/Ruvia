@@ -441,6 +441,9 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
     }
     std::string body;
     while (auto chunk = co_await stream.request_body().read()) {
+        if (request.path() == "/upload-trailer") {
+            EXPECT_TRUE(stream.trailers().empty());
+        }
         body.append(reinterpret_cast<const char*>(chunk->data()), chunk->size());
     }
     EXPECT_EQ(stream.body_state().framing_, initial_body.framing_);

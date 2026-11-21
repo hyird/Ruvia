@@ -429,6 +429,7 @@ struct context_request_services final {
     std::reference_wrapper<const stop_token> stop_token_;
     context_request_body_source body_source_{};
     const http_request_trailers* trailers_{};
+    const bool* trailers_published_{};
     context_request_channels channels_{};
     context_response_output response_output_{};
     std::size_t dispatch_depth_{};
@@ -590,12 +591,18 @@ public:
     }
 
     [[nodiscard]] const http_request_trailers* request_trailers() const noexcept {
+        if (request_services_.trailers_published_ != nullptr && !*request_services_.trailers_published_) {
+            return nullptr;
+        }
         return request_services_.trailers_;
     }
 
     // Bound by whichever layer owns the request body, alongside its source.
-    void bind_request_trailers(const http_request_trailers& trailers) noexcept {
+    // When `published` is supplied, the terminal section stays hidden until
+    // the owner marks the body complete at EOF.
+    void bind_request_trailers(const http_request_trailers& trailers, const bool* published = nullptr) noexcept {
         request_services_.trailers_ = &trailers;
+        request_services_.trailers_published_ = published;
     }
     void bind_request_trailers(http_request_trailers&&) = delete;
 

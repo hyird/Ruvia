@@ -1188,12 +1188,22 @@ static_assert(!ruvia::blocking_callable<stateless_fn&>);
 static_assert(!ruvia::blocking_callable<std::reference_wrapper<stateless_fn>>);
 static_assert(!ruvia::blocking_callable<const std::reference_wrapper<const stateless_fn>>);
 
-using lvalue_result_fn = decltype([value = 0]() mutable -> int& {
-    return value;
-});
-using rvalue_result_fn = decltype([value = 0]() mutable -> int&& {
-    return std::move(value);
-});
+struct lvalue_result_fn final {
+    int value_ = 0;
+
+    int& operator()() noexcept {
+        return value_;
+    }
+};
+
+struct rvalue_result_fn final {
+    int value_ = 0;
+
+    int&& operator()() noexcept {
+        return std::move(value_);
+    }
+};
+
 static_assert(!ruvia::blocking_callable<lvalue_result_fn>);
 static_assert(!ruvia::blocking_callable<rvalue_result_fn>);
 

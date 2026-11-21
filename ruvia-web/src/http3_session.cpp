@@ -127,16 +127,12 @@ public:
     // 100-continue expectation: the first read sends it, as the HTTP/1 reader
     // does, so content the handler never reads is never solicited.
     http3_request_body_reader(http3_session& session, http3_stream& stream, multiplexed_stream_signal& signal, http_interim_response_output* continue_output) noexcept :
-        multiplexed_request_body_reader_base(signal, continue_output),
+        multiplexed_request_body_reader_base(stream, signal, continue_output),
         session_(session),
         stream_(stream) {}
 
 private:
     friend class multiplexed_request_body_reader_base<http3_request_body_reader>;
-
-    [[nodiscard]] const std::optional<http_request_body_failure>& body_failure() const noexcept {
-        return stream_.body_failure();
-    }
 
     [[nodiscard]] bool stream_aborted() const noexcept {
         return stream_.aborted();
@@ -150,10 +146,6 @@ private:
             session_.wake_writer();
         }
         return queue.pop();
-    }
-
-    [[nodiscard]] bool body_ended() const noexcept {
-        return stream_.request_ended();
     }
 
     http3_session& session_;
@@ -798,8 +790,13 @@ void http3_session::on_stream_end(std::int64_t stream_id) {
     stream->mark_request_ended();
     if (auto* signal = stream->signal()) {
         signal->wake();
-    } else if (!stream->aborted() && !admit_stream(stream_id)) {
-        reset_stream(stream_id, http3_error_code::internal_error);
+    } else if (!stream->aborted()) {
+        if (!stream->dispatch_pending() && stream->body_mode() == request_body_mode::buffered && !stream->body_failure().has_value()) {
+            stream->publish_trailers();
+        }
+        if (!admit_stream(stream_id)) {
+            reset_stream(stream_id, http3_error_code::internal_error);
+        }
     }
 }
 
@@ -1018,7 +1015,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
             .connection_advertisements_ = &advertisements,
             .priority_update_ = &stream->priority(),
         });
-        admission_services.bind_request_trailers(stream->trailers());
+        admission_services.bind_request_trailers(stream->trailers(), &stream->trailers_published());
         auto admission = admit_http_request(
             {
                 .request_ = request,

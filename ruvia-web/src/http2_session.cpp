@@ -743,27 +743,21 @@ public:
     // continue_output is non-null when the request carries a pending
     // 100-continue expectation: the first read sends it, as the HTTP/1 reader
     // does, so an unread content never prompts the client to send it.
-    http2_sans_io_request_body_reader(ruvia::http2_connection& connection, std::uint32_t stream_id, multiplexed_request_body_queue& body_queue, const std::optional<http_request_body_failure>& body_failure, multiplexed_stream_signal& signal, worker_signal& write_signal, http_interim_response_output* continue_output) noexcept :
-        multiplexed_request_body_reader_base(signal, continue_output),
+    http2_sans_io_request_body_reader(ruvia::http2_connection& connection, std::uint32_t stream_id, multiplexed_request_stream_state& state, multiplexed_stream_signal& signal, worker_signal& write_signal, http_interim_response_output* continue_output) noexcept :
+        multiplexed_request_body_reader_base(state, signal, continue_output),
         connection_(connection),
         stream_id_(stream_id),
-        body_queue_(body_queue),
-        body_failure_(body_failure),
         write_signal_(write_signal) {}
 
 private:
     friend class multiplexed_request_body_reader_base<http2_sans_io_request_body_reader>;
-
-    [[nodiscard]] const std::optional<http_request_body_failure>& body_failure() const noexcept {
-        return body_failure_;
-    }
 
     [[nodiscard]] bool stream_aborted() const noexcept {
         return connection_.stream_receive_status(stream_id_) == http2_stream_receive_status::closed;
     }
 
     [[nodiscard]] std::string_view pop_chunk() noexcept {
-        const auto chunk = body_queue_.pop();
+        const auto chunk = state_.body_queue().pop();
         // pop() returns the previous chunk's receive-window credit; the
         // resulting WINDOW_UPDATE must reach the socket even if this reader
         // now suspends while the peer is blocked on that window.
@@ -773,14 +767,8 @@ private:
         return chunk;
     }
 
-    [[nodiscard]] bool body_ended() const noexcept {
-        return body_queue_.ended();
-    }
-
     ruvia::http2_connection& connection_;
     std::uint32_t stream_id_;
-    multiplexed_request_body_queue& body_queue_;
-    const std::optional<http_request_body_failure>& body_failure_;
     worker_signal& write_signal_;
 };
 
@@ -1406,7 +1394,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
             .push_output_ = &push_output,
             .priority_update_ = &stream_runtime->priority(),
         });
-        admission_services.bind_request_trailers(stream_runtime->trailers());
+        admission_services.bind_request_trailers(stream_runtime->trailers(), &stream_runtime->trailers_published());
         auto admission = admit_http_request(
             {
                 .request_ = request,
@@ -1422,7 +1410,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         std::optional<body_reader_binding<http2_sans_io_request_body_reader>> body_reader_storage;
         if (streaming_body && !request_head->snapshot().connect_pending_ && !stream_runtime->body_failure().has_value()) {
             const bool continue_on_read = expectation_plan == http_server_expectation_plan::send_continue && resolved != nullptr;
-            body_reader_storage.emplace(connection_, stream_id, stream_runtime->body_queue(), stream_runtime->body_failure(), *stream_signal, write_signal_, continue_on_read ? &interim_output : nullptr);
+            body_reader_storage.emplace(connection_, stream_id, *stream_runtime, *stream_signal, write_signal_, continue_on_read ? &interim_output : nullptr);
         }
         auto dispatch_services = request_services;
         if (body_reader_storage) {
@@ -1745,8 +1733,13 @@ void http2_sans_io_session_engine::on_message_end(http2_message_end_event& messa
     }
     if (auto* signal = stream_runtime->signal()) {
         signal->wake();
-    } else if (!admit_stream(stream_id)) {
-        reset_event_stream(stream_id, http2_error_code::internal_error);
+    } else {
+        if (stream_runtime->body_mode() == request_body_mode::buffered && !stream_runtime->body_failure().has_value()) {
+            stream_runtime->publish_trailers();
+        }
+        if (!admit_stream(stream_id)) {
+            reset_event_stream(stream_id, http2_error_code::internal_error);
+        }
     }
 }
 

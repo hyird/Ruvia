@@ -497,6 +497,13 @@ public:
         return trailers_;
     }
     http_request_trailers& trailers() && = delete;
+    void publish_trailers() noexcept {
+        trailers_published_ = true;
+    }
+    [[nodiscard]] const bool& trailers_published() const& noexcept RUVIA_LIFETIMEBOUND {
+        return trailers_published_;
+    }
+    const bool& trailers_published() const&& = delete;
     [[nodiscard]] const std::optional<http_priority>& priority() const& noexcept RUVIA_LIFETIMEBOUND {
         return priority_;
     }
@@ -672,6 +679,7 @@ private:
     bool route_selected_{false};
     bool tunnel_{false};
     bool response_committed_{false};
+    bool trailers_published_{false};
 };
 
 // Streams of one multiplexed connection that may open or read a file body on
@@ -965,8 +973,9 @@ private:
 };
 
 // Shared streaming request-body reader loop for HTTP/2 and HTTP/3 streams.
-// Derived readers provide protocol-specific body failure, reset check, chunk
-// extraction (returning flow-control credit), and end-of-body check.
+// Derived readers provide the protocol-specific reset check and chunk
+// extraction (returning flow-control credit); end-of-body publishes the
+// terminal trailer section immediately before reporting EOF.
 template <typename derived_type>
 class multiplexed_request_body_reader_base {
 public:
@@ -993,7 +1002,8 @@ public:
             if (!chunk.empty()) {
                 co_return ::ruvia::as_bytes(chunk);
             }
-            if (derived().body_ended()) {
+            if (state_.body_queue().ended()) {
+                state_.publish_trailers();
                 co_return std::nullopt;
             }
             co_await signal_.wait();
@@ -1001,10 +1011,12 @@ public:
     }
 
 protected:
-    multiplexed_request_body_reader_base(multiplexed_stream_signal& signal, http_interim_response_output* continue_output) noexcept :
+    multiplexed_request_body_reader_base(multiplexed_request_stream_state& state, multiplexed_stream_signal& signal, http_interim_response_output* continue_output) noexcept :
+        state_(state),
         signal_(signal),
         continue_output_(continue_output) {}
 
+    multiplexed_request_stream_state& state_;
     multiplexed_stream_signal& signal_;
     http_interim_response_output* continue_output_;
     operation_interrupt_source interrupts_;
@@ -1020,7 +1032,7 @@ private:
         return static_cast<const derived_type&>(*this);
     }
     void throw_if_body_failed() const {
-        if (const auto& failure = derived().body_failure(); failure.has_value()) {
+        if (const auto& failure = state_.body_failure(); failure.has_value()) {
             if (*failure == http_request_body_failure::buffer_limit) {
                 throw inbound_buffer_limit_error{};
             }
