@@ -586,6 +586,8 @@ flowchart LR
 
 源码：[../ruvia-core/include/worker_runtime.h](../ruvia-core/include/worker_runtime.h)。底层单 Worker 线程、两阶段启动、停机与 join 生命周期；`event_loop_pool` 与 `ruvia::web` 应用都由它组合。
 
+- **Linux 线程栈**：`worker_runtime`（含未启动时新建的清理线程）和 [`blocking_pool`](#api-blocking-pool-h) 创建线程时显式请求 8 MiB 栈，不依赖应用的链接选项。不改变 [`event_loop_attachment`](#api-event-loop-h) 借用的宿主线程。
+
 **枚举**
 
 | 声明 | 成员 |
@@ -1368,8 +1370,8 @@ flowchart LR
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
 | `std::size_t queued_` | `0` | 等待空闲线程的任务数 |
-| `std::size_t running_` | `0` | 正在运行的任务数 |
-| `std::uint64_t completed_` | `0` | 运行完成的任务数（含可调用对象抛出） |
+| `std::size_t running_` | `0` | 已出队、尚未处理完的任务数 |
+| `std::uint64_t completed_` | `0` | 已出队且处理完的任务数（包括跳过的任务和抛出异常的调用） |
 | `std::uint64_t rejected_` | `0` | 因无空闲线程与队列槽位被拒的任务数；持续增长说明容量不足 |
 | `std::uint64_t discarded_` | `0` | 因池停止而未运行的任务数（`request_stop()` 丢弃或其后投递），与过载分开计数 |
 
@@ -1401,7 +1403,7 @@ flowchart LR
 | `pool_stopped` | 线程取到任务前池已停止，未运行 | `"blocking pool is stopped"` |
 | `worker_stopping` | 任务在途时 Worker 停止，无人接收结果；可调用对象可能已运行，结果在池线程丢弃 | `"worker is stopping"` |
 | `cancelled` | 调用方令牌先触发；可调用对象可能仍在运行，结果被丢弃 | `"blocking operation was cancelled"` |
-| `timed_out` | 调用方先停止等待；可调用对象继续运行，结果被丢弃；释放的是调用方而非池线程 | `"blocking operation timed out"` |
+| `timed_out` | 截止期已到；已开始的可调用对象可能仍在运行，迟到结果被丢弃 | `"blocking operation timed out"` |
 | `unavailable` | Worker 的事件循环没有阻塞池，未运行 | `"worker has no blocking pool"` |
 
 **`class blocking_operation_rejected final : public std::runtime_error`**：阻塞操作没有产生自身结果（被池拒绝或 Worker 离开）时由 `blocking_result::value()` / `take_value()` 抛出；可调用对象自身的异常原样重抛，不包装。
@@ -1438,11 +1440,12 @@ flowchart LR
 
 **`template <blocking_callable fn_type> [[nodiscard]] auto run_blocking_joined(worker_ref worker_value, fn_type fn, operation_options options = {}) -> task<blocking_result<std::invoke_result_t<fn_type&>>>;`**
 
-- **约束**：拒绝左值引用类型与 `std::reference_wrapper`；`fn` 可移动构造、`fn&` 无参可调用；结果为 `void` 或可移动构造。
+- **约束**：`fn` 可移动构造、`fn&` 无参可调用。`fn_type` 不能是引用或 `std::reference_wrapper`。返回类型须为 `void` 或可移动构造的非引用类型。
 - **启动线程**：返回的任务必须在 `worker_value` 上 `co_await`，那是恢复协程与触碰结果的唯一线程；否则在投递 `fn` 前抛 `std::logic_error`。
 - **预判**：依次判定，命中即返回且不投递 `fn`：无池 → `unavailable`；令牌已停止 → `cancelled`；截止期已过 → `timed_out`；Worker 不再接收 → `worker_stopping`。
 - **投递**：池先预留槽位，再把 `fn` 移入队列闭包。准入时队列已满或池已停止，不构造闭包，分别返回 `queue_full` 或 `pool_stopped`。预留后构造失败会释放槽位并传播异常；构造期间池停止则不发布闭包，返回 `pool_stopped`。
-- **取消与超时边界**：池线程取走任务前若等待已因 `timeout_`、`stop_token_` 或 `worker_stopping` 结束，闭包直接跳过而不执行 `fn`。一旦池线程开始执行 `fn`，阻塞调用无法中断：`run_blocking` 立即结束调用方等待并丢弃迟到结果；`run_blocking_joined` 则继续等待 `fn` 执行完毕并交付实际结果（仅 `worker_value` 停机提前返回 `worker_stopping`），保证调用方清理路径不与池线程并发访问独占资源。相对上限自任务启动计时，绝对截止期可与调用方其他阶段共享。
+- **认领前**：池线程使用与等待端相同的停止令牌和绝对截止期。已取消、已到期或 Worker 已停止接收时不执行 `fn`，无需等待调用方先恢复。相对期限从任务启动时计。
+- **认领后**：无法中断 `fn`。`run_blocking` 在取消或超时后停止等待、丢弃迟到结果；`run_blocking_joined` 仍等待实际结果。Worker 停机可提前返回 `worker_stopping`。
 - **结果**：从不为拒绝抛出，状态说明发生了什么；`fn` 的异常保存在结果中；结果在接收 Worker 上移动失败时以 `from_error` 返回。用 `std::move(result).take_value()` 把拒绝转为异常并重抛 `fn` 自身的异常。
 - **池来源**：使用 `worker_ref::blocking_pool()`；事件循环的池选择见 [`event_loop_pool_options`](#api-event-loop-h)，底层运行时见 [`worker_runtime_options`](#api-worker-runtime-h)。
 

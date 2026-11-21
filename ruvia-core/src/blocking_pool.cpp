@@ -19,6 +19,7 @@
 
 #include "failure_report.h"
 #include "move_only_function.h"
+#include "runtime_thread.h"
 
 namespace ruvia {
 
@@ -173,8 +174,8 @@ struct blocking_pool::impl_type final {
         threads_.reserve(thread_count_);
         try {
             for (std::size_t i = 0; i < thread_count_; ++i) {
-                threads_.emplace_back([self, i] {
-                    self->run(i);
+                threads_.emplace_back([owner = self, i]() noexcept {
+                    owner->run(i);
                 });
             }
         } catch (...) {
@@ -298,7 +299,7 @@ struct blocking_pool::impl_type final {
             throw std::logic_error("cannot join a blocking pool while posting to it");
         }
         request_stop();
-        std::vector<std::thread> joining_threads;
+        std::vector<detail::runtime_thread> joining_threads;
         {
             std::unique_lock lock(mutex_);
             condition_.wait(lock, [this] {
@@ -332,7 +333,7 @@ struct blocking_pool::impl_type final {
     // inside a callable cannot be interrupted and must not delay destruction:
     // it is detached and keeps this state alive through its own reference.
     void retire_threads() noexcept {
-        std::vector<std::thread> retiring_threads;
+        std::vector<detail::runtime_thread> retiring_threads;
         {
             std::lock_guard lock(mutex_);
             retiring_threads.swap(threads_);
@@ -379,7 +380,7 @@ struct blocking_pool::impl_type final {
     // exclusive while user callable moves/destruction run outside the lock.
     local_ring_queue<node_type*> queue_;
     std::vector<node_type> nodes_;
-    std::vector<std::thread> threads_;
+    std::vector<detail::runtime_thread> threads_;
     // Indexed like threads_; set while that thread holds a claimed callable.
     std::vector<unsigned char> busy_;
     // Same capacity as busy_, so the destructor's snapshot never allocates.

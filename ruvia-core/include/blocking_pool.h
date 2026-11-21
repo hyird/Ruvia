@@ -48,6 +48,7 @@
 #include "task.h"
 #include "wait_result.h"
 #include "worker_ref.h"
+#include "worker_wait.h"
 
 namespace ruvia {
 
@@ -194,17 +195,55 @@ struct blocking_payload final {
     std::exception_ptr error_;
 };
 
-// Guards the one-shot half a posted task owns. If the task is destroyed
-// without running -- a stopped pool discards its queue -- the guard still
-// answers the waiting coroutine instead of leaving it suspended forever.
-// Answering or moving releases the completion, which is the answered marker:
-// an empty completion rejects without effect. Holding nothing else keeps the
-// posted closure within move_only_function's inline storage.
+template <typename t_type>
+struct blocking_offload_state final : one_shot_state<blocking_payload<t_type>> {
+    blocking_offload_state(worker_ref worker_value, operation_deadline deadline, stop_token stop_token_value) :
+        one_shot_state<blocking_payload<t_type>>(std::move(worker_value)),
+        deadline_(deadline),
+        stop_token_(std::move(stop_token_value)) {}
+
+    [[nodiscard]] bool try_start() noexcept {
+        auto lock = this->lock_state();
+        if (!std::holds_alternative<one_shot_pending>(this->lifecycle_)) {
+            return false;
+        }
+        if (!this->worker_.accepting()) {
+            this->lifecycle_.template emplace<one_shot_worker_stopping>();
+            this->wait_slot_.complete(wait_status::worker_stopping);
+            return false;
+        }
+        // Check the same bounds as the wait, even if the worker has not
+        // dispatched the timer or resumed the caller yet.
+        if (stop_token_.stop_requested() || deadline_.expired()) {
+            return false;
+        }
+        started_ = true;
+        return true;
+    }
+
+    [[nodiscard]] bool started() noexcept {
+        auto lock = this->lock_state();
+        return started_;
+    }
+
+    [[nodiscard]] operation_options wait_options() const noexcept {
+        return {.timeout_ = deadline_.timeout(), .stop_token_ = stop_token_};
+    }
+
+private:
+    const operation_deadline deadline_;
+    const stop_token stop_token_;
+    bool started_{false};
+};
+
+// If the pool discards the queued task, answer the waiter. A rejected claim
+// leaves the wait to its own stop, timeout or worker shutdown. The closure
+// owns only one shared state in addition to the callable.
 template <typename t_type>
 class blocking_completion_guard final {
 public:
-    explicit blocking_completion_guard(one_shot_completion<blocking_payload<t_type>> completion) noexcept :
-        completion_(std::move(completion)) {}
+    explicit blocking_completion_guard(std::shared_ptr<blocking_offload_state<t_type>> state) noexcept :
+        state_(std::move(state)) {}
 
     blocking_completion_guard(const blocking_completion_guard&) = delete;
     blocking_completion_guard& operator=(const blocking_completion_guard&) = delete;
@@ -212,26 +251,24 @@ public:
     blocking_completion_guard& operator=(blocking_completion_guard&&) = delete;
 
     ~blocking_completion_guard() {
-        if (!completion_.valid()) {
+        if (state_ == nullptr) {
             return;
         }
         blocking_payload<t_type> payload;
         payload.status_ = blocking_status::pool_stopped;
-        // Nothing above this can receive a failure, and a rejected completion is
-        // the normal case (the receiver may be gone), so the result is dropped.
-        (void)completion_.complete(std::move(payload));
+        answer(std::move(payload));
     }
 
     [[nodiscard]] bool try_start() noexcept {
-        if (!one_shot_access::try_start(completion_)) {
-            completion_ = {};
+        if (!state_->try_start()) {
+            state_.reset();
             return false;
         }
         return true;
     }
 
     void answer(blocking_payload<t_type>&& payload_value) {
-        const auto completion = std::move(completion_);
+        const auto completion = one_shot_access::completion<blocking_payload<t_type>>(std::move(state_));
         try {
             (void)completion.complete(std::move(payload_value));
         } catch (...) {
@@ -245,7 +282,7 @@ public:
     }
 
 private:
-    one_shot_completion<blocking_payload<t_type>> completion_;
+    std::shared_ptr<blocking_offload_state<t_type>> state_;
 };
 
 }  // namespace detail
@@ -408,7 +445,7 @@ inline constexpr bool is_reference_wrapper_v<std::reference_wrapper<u_type>> = t
 }  // namespace detail
 
 template <typename fn_type>
-concept blocking_callable = (!std::is_reference_v<fn_type>) && (!detail::is_reference_wrapper_v<std::remove_cv_t<fn_type>>) && std::move_constructible<fn_type> && std::invocable<fn_type&> && (std::is_void_v<std::invoke_result_t<fn_type&>> || std::move_constructible<std::invoke_result_t<fn_type&>>);
+concept blocking_callable = (!std::is_reference_v<fn_type>) && (!detail::is_reference_wrapper_v<std::remove_cv_t<fn_type>>) && std::move_constructible<fn_type> && std::invocable<fn_type&> && (!std::is_reference_v<std::invoke_result_t<fn_type&>>) && (std::is_void_v<std::invoke_result_t<fn_type&>> || std::move_constructible<std::invoke_result_t<fn_type&>>);
 
 namespace detail {
 
@@ -444,15 +481,18 @@ template <blocking_callable fn_type>
     // shutdown race, not a failure of this call, so it becomes the status a
     // shutdown always produces -- an offload must never turn into an exception
     // the caller did not ask for.
-    std::optional<std::pair<one_shot_completion<payload>, one_shot_receiver<payload>>> channel;
+    std::shared_ptr<blocking_offload_state<result_type>> state;
     try {
-        channel.emplace(make_one_shot<payload>(std::move(worker_value)));
+        state = make_worker_wait_state<blocking_offload_state<result_type>>(std::move(worker_value), deadline, std::move(stop_token_value));
     } catch (const std::runtime_error&) {
         co_return outcome_type::from_status(blocking_status::worker_stopping);
     }
-    auto& [completion, receiver] = *channel;
+    // The receiver keeps the state alive after transferring the other owner to
+    // the pool. The two sides use the same absolute deadline and stop state.
+    auto& execution = *state;
+    auto receiver = one_shot_access::receiver<payload>(state);
     const auto posted = blocking_pool_access::post_factory(*pool, [&] {
-        return move_only_function<void()>([guard = blocking_completion_guard<result_type>(std::move(completion)), call = std::move(fn)]() mutable {
+        return move_only_function<void()>([guard = blocking_completion_guard<result_type>(std::move(state)), call = std::move(fn)]() mutable {
             if (!guard.try_start()) {
                 return;
             }
@@ -475,11 +515,9 @@ template <blocking_callable fn_type>
     }
 
     try {
-        std::optional<wait_result<payload>> waited(co_await receiver.wait({.timeout_ = deadline.timeout(), .stop_token_ = std::move(stop_token_value)}));
-        if (!waited->has_value() && join_started && (waited->status() == wait_status::timed_out || waited->status() == wait_status::cancelled)) {
-            if (!one_shot_access::try_close_before_start(receiver)) {
-                waited.emplace(co_await receiver.wait());
-            }
+        std::optional<wait_result<payload>> waited(co_await receiver.wait(execution.wait_options()));
+        if (join_started && (waited->status() == wait_status::timed_out || waited->status() == wait_status::cancelled) && execution.started()) {
+            waited.emplace(co_await receiver.wait());
         }
         if (waited->has_value()) {
             auto payload_value = std::move(*waited).take_value();

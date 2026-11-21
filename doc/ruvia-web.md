@@ -551,10 +551,10 @@ for (const auto& worker : ruvia::app().worker_refs()) {
 **定位要点**
 
 - **共享基类**：`context`、`request_stream`、`web_worker_context` 公有继承 CRTP 基类 `worker_services_access<host>`，各能力只定义一次；构造函数私有，仅宿主类型可派生。
-- **绑定**：执行器、客户端句柄与 `run_blocking` 绑定宿主的操作寿命与 `stop_token()`，因此 `http_client` / `db` / `redis` / `run_blocking` / `env` 只对左值宿主提供（右值重载 `= delete`）。在 [`router::dispatch()`](#api-router-h) 中解析 router 借入的状态与客户端。
+- **绑定**：执行器、客户端句柄与阻塞卸载绑定宿主的操作寿命与 `stop_token()`。`http_client`、`db`、`redis`、`run_blocking`、`run_blocking_joined` 与 `env` 只对左值宿主提供。在 [`router::dispatch()`](#api-router-h) 中解析 router 借入的状态与客户端。
 - **worker 状态**：`worker_state<T>()` 借用本 worker 的实例，绝不交给其他 worker；未注册类型抛 `std::logic_error`；只在左值宿主提供（右值重载 `= delete`）。注册见 [4.5](#api-worker-state-h)。
 
-**`run_blocking` / `run_blocking_joined` 契约**：可调用对象须满足 [`blocking_callable`](ruvia-core.md#api-blocking-pool-h)，在阻塞池执行并拥有其触及的一切；完成后在本 worker 恢复。`run_blocking` 的 `options.timeout_` 或取消会立即结束等待（尚未开始执行的排队任务直接跳过，已开始执行的外部可调用对象不 join）；`run_blocking_joined` 仅在池线程取走执行前响应 `timeout_` / `stop_token_` 取消，一旦开始执行则等待其结束后再恢复（仅本 worker 停机提前释放）。`options.stop_token_` 与宿主 `stop_token()` 合并。拒绝与可调用对象的异常保存在 [`blocking_result`](ruvia-core.md#api-blocking-pool-h) 中：检查 `status()` 做降载，或 `std::move(result).take_value()` 以抛出。`application::blocking_pool(nullptr)` 时结果为 `blocking_status::unavailable`，不提交可调用对象。
+**`run_blocking` / `run_blocking_joined`**：运行与取消语义见 [Core 阻塞卸载](ruvia-core.md#api-blocking-pool-h)，`options.stop_token_` 与宿主 `stop_token()` 合并。`application::blocking_pool(nullptr)` 时操作返回 `blocking_status::unavailable`，不提交可调用对象。
 
 ```cpp
 auto result = co_await c.run_blocking([path = std::string(path)] { return read_report(path); },
@@ -569,7 +569,7 @@ else if (!result.completed()) { /* 按状态处理未交付结果 */ }
 | --- | --- |
 | `template <typename state_type> state_type& worker_state() & RUVIA_LIFETIMEBOUND` | 本 worker 的已注册实例（同时提供 `const&`；`&&` 与 `const&&` 已删除） |
 | `template <blocking_callable callable_type> task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable, operation_options options = {}) const&` | 见上（`const&&` 已删除）；`operation_options` 见 [`"operation_options.h"`](ruvia-core.md#api-operation-options-h) |
-| `template <blocking_callable callable_type> task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_joined(callable_type callable, operation_options options = {}) const&` | 仅排队期可取消/超时，开始执行后等待完成（`const&&` 已删除） |
+| `template <blocking_callable callable_type> task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_joined(callable_type callable, operation_options options = {}) const&` | 见上（`const&&` 已删除） |
 | `const ruvia::env& env() const& noexcept RUVIA_LIFETIMEBOUND` | 应用 [`env`](#api-env-h)（`const&&` 已删除）；宿主无环境时为空 `env` |
 | `http_client_ref http_client() const&` | 默认别名出站客户端（[`"http_client.h"`](#api-http-client-h)） |
 | `http_client_ref http_client(std::string_view alias) const&` | 指定别名 |

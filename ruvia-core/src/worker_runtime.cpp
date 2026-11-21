@@ -22,6 +22,7 @@
 #include "event_loop_state.h"
 #include "failure_report.h"
 #include "move_only_function.h"
+#include "runtime_thread.h"
 #include "worker_ref.h"
 #include "worker_runtime_context.h"
 #if defined(_WIN32)
@@ -300,9 +301,7 @@ public:
             return false;
         }
         try {
-            thread_ = std::thread([this] {
-                run(true);
-            });
+            thread_ = detail::runtime_thread(run_on_thread<true>, this);
         } catch (...) {
             const auto failure = std::current_exception();
             lock.unlock();
@@ -485,6 +484,12 @@ public:
         lifecycle_.complete_stop();
     }
 
+    template <bool launch_startup>
+    static void* run_on_thread(void* state) noexcept {
+        static_cast<impl_type*>(state)->run(launch_startup);
+        return nullptr;
+    }
+
 #if defined(_WIN32)
     std::uintptr_t prepare_thread_join() {
         if (context_.worker().is_current()) {
@@ -499,9 +504,7 @@ public:
             return 0;
         }
         if (!thread_.joinable()) {
-            thread_ = std::thread([this] {
-                run(false);
-            });
+            thread_ = detail::runtime_thread(run_on_thread<false>, this);
         }
         HANDLE duplicate{};
         if (!::DuplicateHandle(::GetCurrentProcess(), thread_.native_handle(), ::GetCurrentProcess(), &duplicate, SYNCHRONIZE, FALSE, 0)) {
@@ -520,7 +523,7 @@ public:
             throw std::logic_error("cannot join a worker runtime from its owner");
         }
         request_stop();
-        std::thread joining_thread;
+        detail::runtime_thread joining_thread;
         bool drain_unstarted = false;
         {
             std::unique_lock lock(mutex_);
@@ -544,9 +547,7 @@ public:
         }
         if (drain_unstarted) {
             try {
-                joining_thread = std::thread([this] {
-                    run(false);
-                });
+                joining_thread = detail::runtime_thread(run_on_thread<false>, this);
             } catch (...) {
                 // Thread creation failure does not waive accepted work or
                 // owner-affine cleanup. Establish owner identity synchronously.
@@ -573,7 +574,7 @@ public:
     mutable std::mutex mutex_;
     std::condition_variable condition_;
     std::condition_variable phase_changed_;
-    std::thread thread_;
+    detail::runtime_thread thread_;
     first_failure failure_;
     phase_type ready_{phase_type::pending};
     phase_type serving_{phase_type::pending};

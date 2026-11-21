@@ -312,7 +312,7 @@ template <typename state_type, typename... arg_types>
     }
 [[nodiscard]] std::shared_ptr<state_type> make_worker_wait_state(arg_types&&... args) {
     auto state_value = std::make_shared<state_type>(std::forward<arg_types>(args)...);
-    if (!detail::worker_ref_access::register_shutdown(state_value->worker(), state_value, &state_type::shutdown_registration_)) {
+    if (!detail::worker_ref_access::register_shutdown<state_type>(state_value->worker(), state_value, &state_type::shutdown_registration_)) {
         throw std::runtime_error("cannot register state on a stopping worker");
     }
     return state_value;
