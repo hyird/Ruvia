@@ -479,10 +479,10 @@ void http_byte_range_slicer::write(std::uint64_t chunk_offset, std::string_view 
 
     // Multipart framing can overwrite the terminator or invalidate the source
     // before its next slice. The single-range append handles overlap directly.
-    std::string chunk_copy;
     if (multipart() && detail::http_text_aliases_string(chunk, output)) {
-        chunk_copy.assign(chunk);
-        chunk = chunk_copy;
+        const std::string chunk_copy(chunk);
+        write(chunk_offset, chunk_copy, output);
+        return;
     }
     const auto output_size = output.size();
     auto index = range_index_;

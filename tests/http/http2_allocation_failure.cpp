@@ -98,6 +98,14 @@ struct outbound_allocation_observation final {
     bool failed{};
     bool terminal{};
 };
+
+[[nodiscard]] bool has_msvc_debug_container_proxies() noexcept {
+#if defined(_MSC_VER) && defined(_ITERATOR_DEBUG_LEVEL) && _ITERATOR_DEBUG_LEVEL > 0
+    return true;
+#else
+    return false;
+#endif
+}
 }  // namespace
 
 void* operator new(std::size_t bytes) {
@@ -513,6 +521,9 @@ TEST(Ruvia, multipart_parser_releases_oversized_buffers_at_terminal_poll_and_res
 }
 
 TEST(Ruvia, multipart_parser_releases_large_unfolding_scratch_before_streaming_body) {
+    if (has_msvc_debug_container_proxies()) {
+        GTEST_SKIP() << "MSVC debug iterator proxies (_ITERATOR_DEBUG_LEVEL > 0) allocate inside noexcept container constructors";
+    }
     const auto boundary = ruvia::parse_multipart_boundary("multipart/form-data; boundary=b");
     const std::string ignored_value(16 * 1024, 'x');
     for (const std::string_view separator : {" ", "\r\n "}) {
@@ -537,6 +548,9 @@ TEST(Ruvia, multipart_parser_releases_large_unfolding_scratch_before_streaming_b
 }
 
 TEST(Ruvia, cookie_jar_releases_storage_when_a_large_value_is_replaced) {
+    if (has_msvc_debug_container_proxies()) {
+        GTEST_SKIP() << "MSVC debug iterator proxies (_ITERATOR_DEBUG_LEVEL > 0) allocate inside noexcept container constructors";
+    }
     ruvia::http_cookie_jar jar(ruvia::http_scheme::https, "example.test", {.max_cookie_bytes_ = 4096});
     const auto now = std::chrono::system_clock::time_point{};
     const auto large_cookie = "id=" + std::string(4000, 'x');
@@ -562,6 +576,9 @@ TEST(Ruvia, cookie_jar_releases_storage_when_a_large_value_is_replaced) {
 }
 
 TEST(Ruvia, chunked_decoder_retries_trailers_from_the_same_input_after_allocation_failure) {
+    if (has_msvc_debug_container_proxies()) {
+        GTEST_SKIP() << "MSVC debug iterator proxies (_ITERATOR_DEBUG_LEVEL > 0) allocate inside noexcept container constructors";
+    }
     constexpr std::string_view ending = "\r\n0;ext\r\nX-Trace: retained\r\n\r\n";
     ruvia::http1_chunked_body_decoder decoder;
     const auto body = decoder.decode("1\r\nx\r");
@@ -695,6 +712,9 @@ TEST(Ruvia, http1_body_decoder_releases_trailers_before_finishing) {
 }
 
 TEST(Ruvia, http1_body_decoder_preserves_unreported_chunk_progress_on_trailer_allocation_failure) {
+    if (has_msvc_debug_container_proxies()) {
+        GTEST_SKIP() << "MSVC debug iterator proxies (_ITERATOR_DEBUG_LEVEL > 0) allocate inside noexcept container constructors";
+    }
     for (const bool discard : {false, true}) {
         SCOPED_TRACE(discard);
         ruvia::http_content_codings codings;
@@ -804,6 +824,9 @@ TEST(Ruvia, http1_body_decoder_stays_failed_after_transfer_codec_allocation_erro
 }
 
 TEST(Ruvia, identity_content_encoder_enters_failed_state_when_copying_output_throws) {
+    if (has_msvc_debug_container_proxies()) {
+        GTEST_SKIP() << "MSVC debug iterator proxies (_ITERATOR_DEBUG_LEVEL > 0) allocate inside noexcept container constructors";
+    }
     const std::string input(4096, 'x');
     const ruvia::http_content_encode_options options{.max_encoded_bytes_ = input.size()};
     ruvia::http_content_encoder encoder(ruvia::http_content_coding::identity);
