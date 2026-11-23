@@ -317,11 +317,11 @@ private:
     };
 
     static ngtcp2_conn* native_connection(ngtcp2_crypto_conn_ref* reference) noexcept;
-    static int new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_stateless_reset_token* token, std::size_t size, void* user_data) noexcept;
-    static int remove_connection_id(ngtcp2_conn*, const ngtcp2_cid* cid, void* user_data) noexcept;
+    static bool new_connection_id(quic_cid& cid, http3_quic_stateless_reset_token& token, std::size_t size, void* user_data) noexcept;
+    static bool remove_connection_id(const quic_cid& cid, void* user_data) noexcept;
 
-    [[nodiscard]] static ngtcp2_tstamp now() noexcept;
-    [[nodiscard]] ngtcp2_path path(asio::ip::udp::endpoint& remote) noexcept;
+    [[nodiscard]] static quic_timestamp now() noexcept;
+    [[nodiscard]] http3_quic_path path(const asio::ip::udp::endpoint& remote) const noexcept;
     void register_connection_id(const ngtcp2_cid& cid);
     void unregister_connection_ids() noexcept;
 

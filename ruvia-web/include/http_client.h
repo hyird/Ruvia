@@ -14,8 +14,8 @@
 #include <vector>
 
 #include "borrowed_text.h"
-#include "callback_ref.h"
 #include "event_loop.h"
+#include "function_ref.h"
 #include "http2_push.h"
 #include "http_authority.h"
 #include "http_capsule.h"
@@ -277,18 +277,18 @@ public:
 
 private:
     // The one forwarding chain of both pipe_to() destinations.
-    [[nodiscard]] task<void> pipe_to_destination(context& output, response_stream_writer& writer, detail::operation_scope& destination, operation_options operation);
-    [[nodiscard]] detail::operation_scope& body_scope() &;
+    [[nodiscard]] task<void> pipe_to_destination(context& output, response_stream_writer& writer, ::ruvia::operation_scope& destination, operation_options operation);
+    [[nodiscard]] ::ruvia::operation_scope& body_scope() &;
     // Invokes parse synchronously on the read lane; it must not retain its input.
-    [[nodiscard]] static bool try_parse_ready_response_body(detail::http_client_response_state& state, std::size_t max_bytes, const operation_options& operation, detail::callback_ref<void(std::string_view)> parse);
-    [[nodiscard]] static task<void> parse_response_body(detail::http_client_response_state& state, std::size_t max_bytes, operation_options operation, detail::callback_ref<void(std::string_view)> parse);
+    [[nodiscard]] static bool try_parse_ready_response_body(detail::http_client_response_state& state, std::size_t max_bytes, const operation_options& operation, function_ref<void(std::string_view)> parse);
+    [[nodiscard]] static task<void> parse_response_body(detail::http_client_response_state& state, std::size_t max_bytes, operation_options operation, function_ref<void(std::string_view)> parse);
     template <typename value_type>
     static task<model_parse_result<value_type>> decode_json(detail::http_client_response_state& state, std::size_t max_bytes, operation_options operation) {
         std::optional<model_parse_result<value_type>> result;
-        const auto parse = [&result](std::string_view text) {
+        auto parse = [&result](std::string_view text) {
             result.emplace(parse_json<value_type>(text));
         };
-        const auto callback = detail::callback_access::bind<void(std::string_view)>(parse);
+        const function_ref<void(std::string_view)> callback(parse);
         if (!try_parse_ready_response_body(state, max_bytes, operation, callback)) {
             co_await parse_response_body(state, max_bytes, std::move(operation), callback);
         }
@@ -611,16 +611,16 @@ private:
     friend class detail::http_client_registry;
     friend class detail::http_client_state;
     friend class detail::worker_client_registry_view;
-    http_client_ref(detail::http_client_pool& pool, detail::operation_scope& scope) noexcept;
-    http_client_ref(detail::http_client_pool& pool, detail::operation_scope& scope, operation_options options) noexcept;
-    [[nodiscard]] http_client_ref bind_caller_scope(detail::operation_scope& scope, const stop_token& host_stop) && noexcept;
+    http_client_ref(detail::http_client_pool& pool, ::ruvia::operation_scope& scope) noexcept;
+    http_client_ref(detail::http_client_pool& pool, ::ruvia::operation_scope& scope, operation_options options) noexcept;
+    [[nodiscard]] http_client_ref bind_caller_scope(::ruvia::operation_scope& scope, const stop_token& host_stop) && noexcept;
     void expire_capability() noexcept;
 
     detail::http_client_pool* pool_{nullptr};
     std::shared_ptr<detail::http_client_pool> pool_owner_;
     operation_options options_;
     stop_token host_stop_token_;
-    detail::capability_registration<&http_client_ref::expire_capability> registration_;
+    ::ruvia::capability_registration<&http_client_ref::expire_capability> registration_;
     const detail::http_client_registry* registry_{};
 };
 

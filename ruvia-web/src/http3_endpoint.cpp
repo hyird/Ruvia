@@ -37,7 +37,7 @@
 #include <asio/ip/udp.hpp>
 #include <asio/socket_base.hpp>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "connection_lifecycle.h"
 #include "crypto.h"
 #include "failure_report.h"
@@ -475,7 +475,7 @@ void http3_endpoint::receive(std::span<const std::byte> bytes, const asio::ip::u
     if (decoded == NGTCP2_ERR_VERSION_NEGOTIATION) {
         if (bytes.size() >= min_initial_datagram_bytes && endpoint->admitting_) {
             if (const auto admission = services_.options_.connection_admission_) {
-                const connection_event event(services_.connection_ids_.next(), {to_ip_address(local.address()), local.port()}, {to_ip_address(remote.address()), remote.port()}, true);
+                const connection_event event(services_.connection_ids_.next(), {to_ip_address(local.address()), port_number(local.port())}, {to_ip_address(remote.address()), port_number(remote.port())}, true);
                 if (!admission(event)) {
                     services_.refused_.fetch_add(1, std::memory_order_relaxed);
                     return;
@@ -499,7 +499,7 @@ void http3_endpoint::accept(std::span<const std::byte> bytes, const asio::ip::ud
         return;
     }
     const auto connection_id = services_.connection_ids_.next();
-    connection_event event(connection_id, {to_ip_address(local.address()), local.port()}, {to_ip_address(remote.address()), remote.port()}, true);
+    connection_event event(connection_id, {to_ip_address(local.address()), port_number(local.port())}, {to_ip_address(remote.address()), port_number(remote.port())}, true);
     if (services_.options_.connection_admission_ && !services_.options_.connection_admission_(event)) {
         services_.refused_.fetch_add(1, std::memory_order_relaxed);
         return;
@@ -521,7 +521,7 @@ void http3_endpoint::accept(std::span<const std::byte> bytes, const asio::ip::ud
             }
         } else {
             const auto& server = services_.options_.server_;
-            const ngtcp2_duration token_lifetime = (std::max)(http3_quic_duration(server.header_completion_timeout_), ngtcp2_duration{NGTCP2_MILLISECONDS});
+            const ngtcp2_duration token_lifetime = (std::max)(http3_ngtcp2_duration(server.header_completion_timeout_), ngtcp2_duration{NGTCP2_MILLISECONDS});
             const auto timestamp = http3_quic_now();
             const int verified = ngtcp2_crypto_verify_retry_token2(&original_dcid, header.token, header.tokenlen, secret().data(), secret().size(), header.version, reinterpret_cast<const ngtcp2_sockaddr*>(remote.data()), static_cast<ngtcp2_socklen>(remote.size()), &header.dcid, token_lifetime, timestamp);
             if (verified != 0) {
@@ -581,11 +581,11 @@ void http3_endpoint::send_version_negotiation(const ngtcp2_version_cid& header, 
     // versions this server accepts.
     static constexpr std::array<std::uint32_t, 2> versions{NGTCP2_PROTO_VER_V1, NGTCP2_PROTO_VER_V2};
     std::array<std::uint8_t, 1 + 4 + 1 + 255 + 1 + 255 + sizeof(versions)> packet{};
-    unsigned char unused = 0;
-    if (!fill_random_bytes(std::span<unsigned char>(&unused, 1))) {
+    std::byte unused{};
+    if (!fill_random_bytes(std::span<std::byte>(&unused, 1))) {
         return;
     }
-    const auto written = ngtcp2_pkt_write_version_negotiation(packet.data(), packet.size(), unused, header.scid, header.scidlen, header.dcid, header.dcidlen, versions.data(), versions.size());
+    const auto written = ngtcp2_pkt_write_version_negotiation(packet.data(), packet.size(), static_cast<std::uint8_t>(unused), header.scid, header.scidlen, header.dcid, header.dcidlen, versions.data(), versions.size());
     if (written > 0) {
         (void)send(remote, std::as_bytes(std::span<const std::uint8_t>(packet.data(), static_cast<std::size_t>(written))), local, interface_index);
     }
@@ -654,7 +654,7 @@ void http3_endpoint::send_stateless_reset(std::span<const std::uint8_t> destinat
     ngtcp2_cid cid{};
     ngtcp2_cid_init(&cid, destination_cid.data(), destination_cid.size());
     http3_quic_stateless_reset_token token{};
-    std::array<unsigned char, http3_connection_id_length + 22 - NGTCP2_STATELESS_RESET_TOKENLEN> random_bytes{};
+    std::array<std::byte, http3_connection_id_length + 22 - NGTCP2_STATELESS_RESET_TOKENLEN> random_bytes{};
     if (!make_http3_stateless_reset_token(secret(), cid, token) || !fill_random_bytes(random_bytes)) {
         return;
     }
@@ -704,7 +704,7 @@ bool make_http3_connection_id(const http3_secret& secret, std::size_t worker_ind
         return false;
     }
     std::array<std::uint8_t, http3_connection_id_length> bytes{};
-    if (!fill_random_bytes(std::span<unsigned char>(bytes.data() + 4, bytes.size() - 4))) {
+    if (!fill_random_bytes(std::as_writable_bytes(std::span<std::uint8_t>(bytes.data() + 4, bytes.size() - 4)))) {
         return false;
     }
     const auto worker = static_cast<std::uint16_t>(worker_index);
@@ -752,7 +752,7 @@ std::size_t http3_initial_worker(const http3_secret& secret, std::span<const std
 }
 
 bool make_http3_stateless_reset_token(const http3_secret& secret, const ngtcp2_cid& cid, http3_quic_stateless_reset_token& token) noexcept {
-    return ngtcp2_crypto_generate_stateless_reset_token(token.data(), secret.data(), secret.size(), &cid) == 0;
+    return ngtcp2_crypto_generate_stateless_reset_token(reinterpret_cast<std::uint8_t*>(token.data()), secret.data(), secret.size(), &cid) == 0;
 }
 
 #if !defined(_WIN32)

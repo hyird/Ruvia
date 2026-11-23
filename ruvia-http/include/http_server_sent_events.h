@@ -28,6 +28,9 @@ struct sse_message final {
 
 // Build one complete UTF-8 event-stream block. Invalid event/id line syntax
 // or a field that is not well-formed UTF-8 throws std::invalid_argument.
+// append_sse_message() appends into reusable storage, preserving existing bytes
+// on failure and allowing message views to alias output.
+void append_sse_message(std::string& output, const sse_message& message);
 [[nodiscard]] std::string format_sse_message(const sse_message& message);
 
 struct sse_parser_options final {
@@ -45,7 +48,7 @@ enum class sse_parse_error : std::uint8_t {
 };
 
 // One dispatched event (WHATWG HTML, "Dispatch the event"). Its views borrow
-// the parser and remain valid until the parser's next parse(), finish(),
+// the parser and remain valid until the parser's next parse(), finish_input(),
 // reset(), move or destruction. Every view is well-formed UTF-8.
 class sse_event final {
 public:
@@ -88,7 +91,7 @@ using sse_parse_result = decode_step<decode_need_input, sse_event, sse_parse_fai
 // handles the event, data, id and retry fields; comments and other fields are
 // ignored. Each input byte is scanned once: an incomplete line keeps only its
 // field's routed value, never the raw line. The end of the stream discards an
-// incomplete line or event. finish() ends the stream (finished); a failure
+// incomplete line or event. finish_input() ends the stream (finished); a failure
 // leaves the parser failed. Only reset() leaves the finished or failed state;
 // it starts a new stream and keeps buffer capacity within a small bound.
 class sse_parser final {

@@ -122,9 +122,6 @@ target_link_libraries(ruvia-web
         ruvia::core
         ruvia::http
     PRIVATE
-        # Build-only core Asio glue; BUILD_INTERFACE keeps it
-        # out of the installed export of this static library.
-        "$<BUILD_INTERFACE:ruvia_core_internal>"
         # TLS (ALPN/SNI + the socket client/server drivers) and HMAC cookie
         # signing are Web-layer capabilities, so Web owns the direct OpenSSL
         # dependency while the sans-I/O HTTP target remains independent.
@@ -146,25 +143,23 @@ ruvia_install_component(ruvia-web web)
 
 set(ruvia_web_headers
     include/app.h
-    include/callback_ref.h
+    include/asio_ip_endpoint.h
     include/client_transport_config.h
     include/connection_transport.h
     include/context.h
     include/controller.h
     include/crypto.h
+    include/dns_resolver.h
     include/entity_storage.h
     include/env.h
-    include/fixed_string.h
     include/http_client.h
     include/http_client_types.h
     include/http_error.h
     include/http_server.h
     include/http_tunnel.h
-    include/json_codec.h
+    include/inbound_buffer.h
     include/middleware.h
-    include/model.h
-    include/model_value.h
-    include/outbound_bytes.h
+    include/model_binding.h
     include/rate_limiting.h
     include/request_stream.h
     include/router.h
@@ -180,7 +175,6 @@ set(ruvia_web_headers
     include/web_worker.h
     include/websocket.h
     include/worker_services.h
-    include/worker_state.h
 )
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     list(APPEND ruvia_web_headers

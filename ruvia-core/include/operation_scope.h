@@ -2,19 +2,28 @@
 
 #include <coroutine>
 #include <exception>
+#include <memory>
 #include <utility>
 
-#include "byte_view.h"
+#include "lifetimebound.h"
 #include "task.h"
 
 namespace ruvia {
 
 class worker_ref;
+class capability_link;
 
 namespace detail {
 
-class capability_link;
-class scoped_operation_registration;
+template <typename member_type>
+struct capability_owner;
+
+template <typename owner_type>
+struct capability_owner<void (owner_type::*)() noexcept> {
+    using type = owner_type;
+};
+
+}  // namespace detail
 
 // Worker-affine lifetime arena for the cold task frames and borrowed
 // capabilities of one owner (a request, a client, a session). Not a
@@ -96,7 +105,7 @@ public:
     task<t_type> attach(task<t_type>) && = delete;
 
 private:
-    friend class scoped_operation_registration;
+    friend class detail::scoped_operation_registration;
     friend class capability_link;
     struct drain_guard;
     void check_worker() const noexcept;
@@ -104,10 +113,10 @@ private:
     void expire_for_join() noexcept;
     void expire_capabilities() noexcept;
     void resume_joiner() noexcept;
-    void link(scoped_operation_registration& operation) noexcept;
-    void unlink(scoped_operation_registration& operation) noexcept;
+    void link(detail::scoped_operation_registration& operation) noexcept;
+    void unlink(detail::scoped_operation_registration& operation) noexcept;
 
-    scoped_operation_registration* head_{nullptr};
+    detail::scoped_operation_registration* head_{nullptr};
     capability_link* capability_head_{nullptr};
     const worker_ref* worker_{nullptr};
     std::coroutine_handle<> join_continuation_{};
@@ -150,14 +159,6 @@ private:
     bool active_{false};
 };
 
-template <typename member_type>
-struct capability_owner;
-
-template <typename owner_type>
-struct capability_owner<void (owner_type::*)() noexcept> {
-    using type = owner_type;
-};
-
 // Allocation-free link of one owner into an operation_scope: the scope's
 // expiry calls `(owner.*expire_member)()` once, on the scope's worker. An
 // owner must explicitly rebind itself when copying or moving; ordinary
@@ -166,7 +167,7 @@ struct capability_owner<void (owner_type::*)() noexcept> {
 template <auto expire_member>
 class capability_registration final {
 public:
-    using owner_type = typename capability_owner<decltype(expire_member)>::type;
+    using owner_type = typename detail::capability_owner<decltype(expire_member)>::type;
 
     capability_registration() noexcept = default;
     capability_registration(operation_scope& scope, owner_type& owner) noexcept :
@@ -202,7 +203,5 @@ private:
 
     capability_link link_;
 };
-
-}  // namespace detail
 
 }  // namespace ruvia

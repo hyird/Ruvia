@@ -402,7 +402,7 @@ void append_encoded_tag_term(std::string& output, std::string_view field, std::s
     output.push_back('@');
     output.append(field);
     output.append(":{x");
-    http_append_lower_hex(output, raw_value);
+    append_lower_hex(output, raw_value);
     output.push_back('}');
 }
 
@@ -688,7 +688,7 @@ void append_hex_tag_resp_bulk(std::string& output, std::string_view value) {
     append_decimal(output, static_cast<std::uint64_t>(encoded_size));
     output.append("\r\n", 2);
     output.push_back('x');
-    http_append_lower_hex(output, value);
+    append_lower_hex(output, value);
     output.append("\r\n", 2);
 }
 
@@ -696,7 +696,7 @@ void append_hex_tag_resp_bulk(std::string& output, std::string_view value) {
     std::string result;
     result.reserve(redis_entity_key_root.size() + prefix.size() * 2U + 1U);
     result.append(redis_entity_key_root);
-    http_append_lower_hex(result, prefix);
+    append_lower_hex(result, prefix);
     result.push_back(':');
     return result;
 }

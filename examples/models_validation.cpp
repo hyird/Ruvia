@@ -23,25 +23,25 @@ static bool has_ruvia_code_prefix(const ruvia::string& code) {
     return code.view().starts_with("CY-");
 }
 
-RUVIA_MODEL(profile_request, RUVIA_REQUIRED_FIELD_NAME("displayName", display_name, ruvia::string, RUVIA_MIN(2, "display name is too short"), RUVIA_MAX(64, "display name is too long")), RUVIA_REQUIRED_FIELD(email, ruvia::string, RUVIA_EMAIL("email format is invalid")), RUVIA_OPTIONAL_FIELD(age, ruvia::uint32, RUVIA_MIN(0, "age is too small"), RUVIA_MAX(130, "age is too large")));
+RUVIA_MODEL(profile_request, RUVIA_REQUIRED_FIELD_NAME("displayName", display_name, ruvia::string, RUVIA_MIN_CHARS(2, "display name is too short"), RUVIA_MAX_CHARS(64, "display name is too long")), RUVIA_REQUIRED_FIELD(email, ruvia::string, RUVIA_EMAIL("email format is invalid")), RUVIA_OPTIONAL_FIELD(age, std::uint32_t, RUVIA_MIN(0, "age is too small"), RUVIA_MAX(130, "age is too large")));
 
-RUVIA_MODEL(role_request, RUVIA_REQUIRED_FIELD(name, ruvia::string, RUVIA_ONE_OF("role is not allowed", "admin", "user", "editor")), RUVIA_OPTIONAL_FIELD(level, ruvia::uint32, RUVIA_MIN(1, "level is too small"), RUVIA_MAX(10, "level is too large")));
+RUVIA_MODEL(role_request, RUVIA_REQUIRED_FIELD(name, ruvia::string, RUVIA_ONE_OF("role is not allowed", "admin", "user", "editor")), RUVIA_OPTIONAL_FIELD(level, std::uint32_t, RUVIA_MIN(1, "level is too small"), RUVIA_MAX(10, "level is too large")));
 
-RUVIA_MODEL(register_request, RUVIA_OPTIONAL_FIELD_NAME("user_name", username, ruvia::string, RUVIA_DEFAULT("guest"), RUVIA_PATTERN("^[a-z][a-z0-9_]*$", "username format is invalid")), RUVIA_REQUIRED_FIELD(password, ruvia::string, RUVIA_MIN(8, "password is too short")), RUVIA_OPTIONAL_FIELD(code, ruvia::string, RUVIA_CUSTOM(has_ruvia_code_prefix, "code must use CY- prefix")), RUVIA_REQUIRED_FIELD(profile, profile_request), RUVIA_REQUIRED_FIELD(roles, ruvia::array<role_request>, RUVIA_MIN(1, "too few roles"), RUVIA_MAX(5, "too many roles")), RUVIA_OPTIONAL_FIELD(tags, ruvia::array<ruvia::string>), RUVIA_OPTIONAL_FIELD(newsletter, ruvia::bool_value));
+RUVIA_MODEL(register_request, RUVIA_OPTIONAL_FIELD_NAME("user_name", username, ruvia::string, RUVIA_DEFAULT("guest"), RUVIA_PATTERN("^[a-z][a-z0-9_]*$", "username format is invalid")), RUVIA_REQUIRED_FIELD(password, ruvia::string, RUVIA_MIN_BYTES(8, "password is too short")), RUVIA_OPTIONAL_FIELD(code, ruvia::string, RUVIA_CUSTOM(has_ruvia_code_prefix, "code must use CY- prefix")), RUVIA_REQUIRED_FIELD(profile, profile_request), RUVIA_REQUIRED_FIELD(roles, ruvia::array<role_request>, RUVIA_MIN(1, "too few roles"), RUVIA_MAX(5, "too many roles")), RUVIA_OPTIONAL_FIELD(tags, ruvia::array<ruvia::string>), RUVIA_OPTIONAL_FIELD(newsletter, bool));
 
-RUVIA_MODEL(register_response, RUVIA_OPTIONAL_FIELD(username, ruvia::string), RUVIA_OPTIONAL_FIELD_NAME("roleCount", role_count, ruvia::uint32), RUVIA_OPTIONAL_FIELD(tags, ruvia::array<ruvia::string>));
+RUVIA_MODEL(register_response, RUVIA_OPTIONAL_FIELD(username, ruvia::string), RUVIA_OPTIONAL_FIELD_NAME("roleCount", role_count, std::uint32_t), RUVIA_OPTIONAL_FIELD(tags, ruvia::array<ruvia::string>));
 
-RUVIA_MODEL(profile_changes, RUVIA_OPTIONAL_FIELD(enabled, ruvia::bool_value), RUVIA_OPTIONAL_FIELD(remark, ruvia::string, RUVIA_NULLABLE));
+RUVIA_MODEL(profile_changes, RUVIA_OPTIONAL_FIELD(enabled, bool), RUVIA_OPTIONAL_FIELD(remark, ruvia::string, RUVIA_NULLABLE));
 
-RUVIA_MODEL(model_config, RUVIA_OPTIONAL_FIELD(retries, ruvia::uint8, RUVIA_INITIAL(3)), RUVIA_OPTIONAL_FIELD_NAME("timeoutMs", timeout_ms, ruvia::uint16, RUVIA_INITIAL(250)), RUVIA_OPTIONAL_FIELD(payload, ruvia::bytes));
+RUVIA_MODEL(model_config, RUVIA_OPTIONAL_FIELD(retries, std::uint8_t, RUVIA_INITIAL(3)), RUVIA_OPTIONAL_FIELD_NAME("timeoutMs", timeout_ms, std::uint16_t, RUVIA_INITIAL(250)), RUVIA_OPTIONAL_FIELD(payload, ruvia::bytes));
 
-RUVIA_MODEL(contact_form, RUVIA_OPTIONAL_FIELD(name, ruvia::string, RUVIA_MIN(2, "name is too short")), RUVIA_OPTIONAL_FIELD(email, ruvia::string, RUVIA_EMAIL("email format is invalid")), RUVIA_OPTIONAL_FIELD(message, ruvia::string, RUVIA_MIN(10, "message is too short")));
+RUVIA_MODEL(contact_form, RUVIA_OPTIONAL_FIELD(name, ruvia::string, RUVIA_MIN_CHARS(2, "name is too short")), RUVIA_OPTIONAL_FIELD(email, ruvia::string, RUVIA_EMAIL("email format is invalid")), RUVIA_OPTIONAL_FIELD(message, ruvia::string, RUVIA_MIN_CHARS(10, "message is too short")));
 
-RUVIA_MODEL(search_query, RUVIA_REQUIRED_FIELD(q, ruvia::string, RUVIA_MIN(2, "query is too short")), RUVIA_OPTIONAL_FIELD(page, ruvia::uint32, RUVIA_MIN(1, "page is too small")));
+RUVIA_MODEL(search_query, RUVIA_REQUIRED_FIELD(q, ruvia::string, RUVIA_MIN_BYTES(2, "query is too short")), RUVIA_OPTIONAL_FIELD(page, std::uint32_t, RUVIA_MIN(1, "page is too small")));
 
-RUVIA_MODEL(category_params, RUVIA_REQUIRED_FIELD(id, ruvia::string, RUVIA_MIN(2, "category id is too short")));
+RUVIA_MODEL(category_params, RUVIA_REQUIRED_FIELD(id, ruvia::string, RUVIA_MIN_BYTES(2, "category id is too short")));
 
-RUVIA_MODEL(request_headers, RUVIA_REQUIRED_FIELD_NAME("x-request-id", request_id, ruvia::string, RUVIA_MIN(8, "request id is too short")));
+RUVIA_MODEL(request_headers, RUVIA_REQUIRED_FIELD_NAME("x-request-id", request_id, ruvia::string, RUVIA_MIN_BYTES(8, "request id is too short")));
 
 RUVIA_MODEL(preferences_cookie, RUVIA_REQUIRED_FIELD(theme, ruvia::string, RUVIA_ONE_OF("theme is not allowed", "light", "dark")));
 
@@ -68,8 +68,8 @@ private:
     ruvia::task<ruvia::http_response> config(ruvia::context& c) {
         // INITIAL applies to this construction, not to JSON request parsing.
         model_config value;
-        constexpr std::uint8_t bytes_value[] = {0, 1, 2, 255};
-        value.set<"payload">(std::span<const std::uint8_t>(bytes_value));
+        constexpr std::array<std::byte, 4> bytes_value{std::byte{0}, std::byte{1}, std::byte{2}, std::byte{255}};
+        value.set<"payload">(ruvia::byte_view(bytes_value));
         co_return c.json(value);  // payload is the base64 string "AAEC/w==".
     }
 
@@ -84,12 +84,9 @@ private:
         const auto& request = c.request().validated<register_request>();
 
         register_response response;
-        const auto& username = request.get<"username">();
-        if (username) {
-            response.set<"username">(username->view());
-        }
+        response.set<"username">(request.get<"username">().view());
         const auto& roles = request.get<"roles">();
-        response.set<"role_count">(ruvia::uint32{static_cast<std::uint32_t>(roles.size())});
+        response.set<"role_count">(static_cast<std::uint32_t>(roles.size()));
         response.ensure<"tags">().emplace_back(ruvia::string("created"));
         response.ensure<"tags">().emplace_back(ruvia::string("validated"));
         co_return c.json(response, {.status_ = ruvia::http_status::created});
@@ -135,7 +132,7 @@ private:
         body.append(request_query.has_value() && request_query->data() == query_value.data() && request_query->size() == query_value.size() ? "true" : "false");
         if (const auto page = query.get<"page">()) {
             body.append("\npage=");
-            ruvia::append_decimal(body, page->value_);
+            ruvia::append_decimal(body, *page);
         }
         body.push_back('\n');
         co_return c.text(std::move(body));

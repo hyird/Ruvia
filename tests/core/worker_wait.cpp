@@ -65,7 +65,7 @@ struct semaphore_state final {
         wait_slot_.complete(wait_status::worker_stopping);
     }
 
-    detail::worker_shutdown_registration shutdown_registration_;
+    worker_shutdown_registration shutdown_registration_;
     worker_ref worker_;
     std::mutex mutex_;
     std::size_t permits_;
@@ -74,7 +74,7 @@ struct semaphore_state final {
 };
 
 static_assert(worker_wait_state<semaphore_state, std::monostate>);
-static_assert(detail::worker_shutdown_observer<semaphore_state>);
+static_assert(worker_shutdown_observer<semaphore_state>);
 
 template <typename awaiter_type>
 concept borrows_wait_state = requires(awaiter_type&& awaiter) {
@@ -93,7 +93,7 @@ struct unregistered_state final {
     [[nodiscard]] std::unique_lock<std::mutex> lock_state();
     [[nodiscard]] worker_wait_slot<std::monostate, unregistered_state>& wait_slot() noexcept;
     void worker_stopping() noexcept;
-    detail::worker_shutdown_registration registration_;
+    worker_shutdown_registration registration_;
 };
 static_assert(!worker_wait_state<unregistered_state, std::monostate>);
 
@@ -242,7 +242,7 @@ struct counting_observer final {
         complete_after_stopping_ = stopping_ == 1;
     }
 
-    detail::worker_shutdown_registration registration_;
+    worker_shutdown_registration registration_;
     int stopping_{0};
     bool complete_after_stopping_{false};
 };
@@ -255,18 +255,18 @@ TEST(Ruvia, WorkerShutdownRegistrationRunsBothPhasesOnce) {
         auto attachment = event_loop_attachment(io_context, {.queue_capacity_ = 8});
         const auto loop_for_worker_value = attachment.loop();
         const auto worker_value = loop_for_worker_value.worker();
-        EXPECT_TRUE(detail::worker_ref_access::register_shutdown(worker_value, observer, &counting_observer::registration_));
-        EXPECT_THROW(static_cast<void>(detail::worker_ref_access::register_shutdown(worker_value, observer, &counting_observer::registration_)), std::logic_error);
-        EXPECT_TRUE(detail::worker_ref_access::register_shutdown(worker_value, dropped, &counting_observer::registration_));
+        EXPECT_TRUE(worker_value.register_shutdown(observer, &counting_observer::registration_));
+        EXPECT_THROW(static_cast<void>(worker_value.register_shutdown(observer, &counting_observer::registration_)), std::logic_error);
+        EXPECT_TRUE(worker_value.register_shutdown(dropped, &counting_observer::registration_));
         // Destroying the owner unlinks it before the worker stops.
         dropped.reset();
         attachment.request_stop();
         io_context.run();
-        EXPECT_FALSE(detail::worker_ref_access::register_shutdown(worker_value, std::make_shared<counting_observer>(), &counting_observer::registration_));
+        EXPECT_FALSE(worker_value.register_shutdown(std::make_shared<counting_observer>(), &counting_observer::registration_));
     }
     EXPECT_EQ(observer->stopping_, 1);
     EXPECT_TRUE(observer->complete_after_stopping_);
-    EXPECT_FALSE(detail::worker_ref_access::register_shutdown(worker_ref{}, observer, &counting_observer::registration_));
+    EXPECT_FALSE(worker_ref{}.register_shutdown(observer, &counting_observer::registration_));
 }
 
 TEST(Ruvia, WorkerCompletionLaneBypassesFullQueue) {

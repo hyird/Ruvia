@@ -285,7 +285,7 @@ public:
         }
         // A worker that already stops never notifies the loop; retire its
         // admission directly.
-        if (!detail::worker_ref_access::register_shutdown(context_.worker(), created, &detail::event_loop_state::shutdown_registration_)) {
+        if (!context_.worker().register_shutdown(created, &detail::event_loop_state::shutdown_registration_)) {
             created->stop();
         }
         return created;

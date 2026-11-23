@@ -65,6 +65,14 @@ std::optional<ip_address> ip_address::try_parse(std::string_view text) noexcept 
     return ip_address::ipv6(bytes, scope_id);
 }
 
+ip_address::ip_address(std::string_view text) {
+    const auto parsed = try_parse(text);
+    if (!parsed.has_value()) {
+        throw std::invalid_argument("invalid IP address literal");
+    }
+    *this = *parsed;
+}
+
 bool ip_address::is_loopback() const noexcept {
     if (family_ == ip_address_family::ipv4 || is_ipv4_mapped()) {
         return bytes_[family_ == ip_address_family::ipv4 ? 0 : 12] == 127;
@@ -205,6 +213,14 @@ std::optional<ip_cidr> ip_cidr::try_parse(std::string_view text) noexcept {
     result.prefix_bits_ = static_cast<std::uint8_t>(bits);
     result.family_ = parsed->family();
     return result;
+}
+
+ip_cidr::ip_cidr(std::string_view text) {
+    const auto parsed = try_parse(text);
+    if (!parsed.has_value()) {
+        throw std::invalid_argument("invalid IP CIDR block");
+    }
+    *this = *parsed;
 }
 
 ip_address ip_cidr::network() const noexcept {

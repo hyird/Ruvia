@@ -547,7 +547,7 @@ public:
     explicit client_handshake(std::span<const ruvia::http_header_view> headers = {}, std::span<const std::string_view> protocols = {}) :
         negotiation_({.subprotocols_ = protocols}) {
         ruvia::validate_websocket_client_handshake_headers(headers);
-        ruvia::http_base64_encode(key_.data(), nonce);
+        ruvia::base64_encode(key_, ruvia::as_bytes(nonce));
         for (const auto header : headers) {
             headers_.emplace_back(header.name(), header.value());
         }
@@ -850,7 +850,7 @@ TEST(Ruvia, websocket_client_negotiation_rejects_duplicate_unknown_or_unoffered_
 }
 TEST(Ruvia, websocket_h1_client_handshake_negotiates_deflate) {
     std::array<char, 24> encoded_key{};
-    ruvia::http_base64_encode(encoded_key.data(), nonce);
+    ruvia::base64_encode(encoded_key, ruvia::as_bytes(nonce));
     const ruvia::websocket_client_negotiation negotiation({.deflate_ = {.compression_ = {.enabled_ = true}}});
     std::array<char, 2048> buffer{};
     auto prepared = ruvia::prepare_http1_websocket_client_request(ruvia::http_origin_view::https({.host_ = "example.com"}), "/", encoded_key, negotiation, {}, buffer);
@@ -981,7 +981,7 @@ struct mask_source {
     static bool generate(void* context_value, websocket_mask_key_type& key) noexcept {
         auto& self = *static_cast<mask_source*>(context_value);
         ++self.calls_;
-        key = {static_cast<char>(self.calls_), '\x23', '\x45', '\x67'};
+        key = {static_cast<std::byte>(self.calls_), std::byte{0x23}, std::byte{0x45}, std::byte{0x67}};
         return !self.fail_;
     }
 };

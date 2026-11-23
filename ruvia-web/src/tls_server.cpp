@@ -31,7 +31,7 @@
 #include <openssl/params.h>
 #include <openssl/ssl.h>
 
-#include "asio_ip_address.h"
+#include "asio_bridge.h"
 #include "blocking_pool.h"
 #include "client_host_resolver.h"
 #include "crypto.h"
@@ -183,7 +183,7 @@ constexpr auto ticket_epoch_length = std::chrono::duration_cast<std::chrono::ste
 
 [[nodiscard]] std::optional<tls_session_ticket_key> generate_ticket_key() noexcept {
     tls_session_ticket_key key;
-    if (!fill_random_bytes(key.name_) || !fill_random_bytes(key.hmac_key_) || !fill_random_bytes(key.aes_key_)) {
+    if (!fill_random_bytes(std::as_writable_bytes(std::span(key.name_))) || !fill_random_bytes(std::as_writable_bytes(std::span(key.hmac_key_))) || !fill_random_bytes(std::as_writable_bytes(std::span(key.aes_key_)))) {
         return std::nullopt;
     }
     return key;
@@ -307,7 +307,7 @@ int tls_session_ticket_key_set::protect_ticket(SSL* ssl, unsigned char* key_name
         const auto& key = *keys->current_;
         std::ranges::copy(key.name_, key_name);
         const int iv_size = EVP_CIPHER_get_iv_length(keys->aes_256_cbc_);
-        if (iv_size <= 0 || iv_size > EVP_MAX_IV_LENGTH || !fill_random_bytes(std::span<unsigned char>(iv, static_cast<std::size_t>(iv_size))) || EVP_EncryptInit_ex2(cipher, keys->aes_256_cbc_, key.aes_key_.data(), iv, nullptr) != 1 || !set_ticket_mac_key(*mac, key)) {
+        if (iv_size <= 0 || iv_size > EVP_MAX_IV_LENGTH || !fill_random_bytes(std::as_writable_bytes(std::span<unsigned char>(iv, static_cast<std::size_t>(iv_size)))) || EVP_EncryptInit_ex2(cipher, keys->aes_256_cbc_, key.aes_key_.data(), iv, nullptr) != 1 || !set_ticket_mac_key(*mac, key)) {
             return -1;
         }
         return 1;
@@ -454,7 +454,7 @@ int bind_session_to_server_name(SSL* ssl, int* alert, void* argument) noexcept {
             for (std::size_t i = 0; i < name_size; ++i) {
                 name[i] = http_ascii_to_lower(extension[5 + i]);
             }
-            if (!compute_sha256(std::span<const unsigned char>(name.data(), name_size), context)) {
+            if (!compute_sha256(std::as_bytes(std::span<const unsigned char>(name.data(), name_size)), std::span<std::byte, sha256_digest_size>(reinterpret_cast<std::byte*>(context.data()), sha256_digest_size))) {
                 *alert = SSL_AD_INTERNAL_ERROR;
                 return SSL_CLIENT_HELLO_ERROR;
             }
@@ -572,7 +572,7 @@ bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
                 const auto supported_groups = decode_u16_list(client_hello_list(ssl, TLSEXT_TYPE_supported_groups, 2));
                 const auto alpn = decode_alpn_list(client_hello_list(ssl, TLSEXT_TYPE_application_layer_protocol_negotiation, 2));
                 const auto& endpoints = binding->fields_.endpoints_;
-                const tls_certificate_selection input{.connection_id_ = endpoints.connection_id(), .remote_address_ = endpoints.remote().address(), .remote_port_ = endpoints.remote().port(), .server_name_ = server_name, .local_address_ = local ? std::optional(to_ip_address(*local)) : std::nullopt, .local_port_ = endpoints.local().port(), .quic_ = binding->fields_.quic_, .legacy_version_ = static_cast<std::uint16_t>(SSL_client_hello_get0_legacy_version(ssl)), .cipher_suites_ = cipher_suites, .signature_algorithms_ = signature_algorithms, .supported_versions_ = supported_versions, .supported_groups_ = supported_groups, .alpn_ = alpn};
+                const tls_certificate_selection input{.connection_id_ = endpoints.connection_id(), .remote_address_ = endpoints.remote().address(), .remote_port_ = endpoints.remote().port().value(), .server_name_ = server_name, .local_address_ = local ? std::optional(to_ip_address(*local)) : std::nullopt, .local_port_ = endpoints.local().port().value(), .quic_ = binding->fields_.quic_, .legacy_version_ = static_cast<std::uint16_t>(SSL_client_hello_get0_legacy_version(ssl)), .cipher_suites_ = cipher_suites, .signature_algorithms_ = signature_algorithms, .supported_versions_ = supported_versions, .supported_groups_ = supported_groups, .alpn_ = alpn};
                 selected = (*identities.select_certificate_)(input);
             }
             if (selected) {
@@ -666,7 +666,7 @@ void configure_http3_server_tls_session(SSL& tls, const http3_quic_connection& c
     const auto encoded_size = values.size() * sizeof(std::uint64_t) + *parameter_bytes;
     std::memcpy(encoded.data() + values.size() * sizeof(std::uint64_t), parameters.data(), *parameter_bytes);
     const auto index = quic_resumption_context_index();
-    if (index < 0 || !compute_sha256(std::span<const unsigned char>(encoded.data(), encoded_size), resumption_context) || SSL_set_ex_data(&tls, index, &resumption_context) != 1 || SSL_set_quic_tls_early_data_enabled(&tls, early_data ? 1 : 0) != 1) {
+    if (index < 0 || !compute_sha256(std::as_bytes(std::span<const unsigned char>(encoded.data(), encoded_size)), std::span<std::byte, sha256_digest_size>(reinterpret_cast<std::byte*>(resumption_context.data()), sha256_digest_size)) || SSL_set_ex_data(&tls, index, &resumption_context) != 1 || SSL_set_quic_tls_early_data_enabled(&tls, early_data ? 1 : 0) != 1) {
         throw std::runtime_error("failed to bind QUIC TLS resumption settings");
     }
 }

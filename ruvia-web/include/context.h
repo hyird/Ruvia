@@ -33,6 +33,7 @@
 #include "ip_address.h"
 #include "middleware.h"
 #include "model.h"
+#include "model_binding.h"
 #include "outbound_bytes.h"
 #include "stop_token.h"
 #include "task.h"
@@ -420,6 +421,7 @@ public:
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
     // Absent / found / repeated, for fields that must not resolve one of
     // several occurrences (session ids, CSRF tokens).
+    [[nodiscard]] http_unique_field_lookup unique_query(std::string_view name) const;
     [[nodiscard]] http_unique_field_lookup unique_cookie(std::string_view name) const;
     [[nodiscard]] http_unique_field_lookup unique_header(std::string_view name) const;
     [[nodiscard]] std::optional<std::string_view> param(std::string_view name) const;
@@ -541,6 +543,9 @@ private:
 struct static_file_response_options final {
     borrowed_text relative_path_{};
     borrowed_text content_type_{};
+    // Overrides whether sidecar/precompressed representations (.br/.zst/.gz)
+    // are negotiated by Accept-Encoding. Defaults to server compression policy.
+    std::optional<bool> negotiate_precompressed_{};
 };
 
 // The file context::file() serves, read only by that call: UTF-8 text, or a
@@ -658,6 +663,8 @@ public:
     std::span<const http_header> trailers() const&& = delete;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     std::optional<std::string_view> trailer(std::string_view) const&& = delete;
+    [[nodiscard]] http_unique_field_lookup unique_trailer(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
+    http_unique_field_lookup unique_trailer(std::string_view) const&& = delete;
 
     // Parses request_body() as multipart while it arrives. Decodes no content
     // coding: a coded body is refused with 415 and an invalid
@@ -709,10 +716,14 @@ public:
     [[nodiscard]] http_response text(static_text body, response_options options = {}) const;
 
     template <typename t_type>
-        requires detail::is_model_json_value<t_type>
+        requires requires(const t_type& value) {
+            { to_json(value) } -> std::same_as<std::string>;
+        }
     [[nodiscard]] http_response json(const t_type& value, response_options options = {}) const {
         return json_serialized(to_json(value), options);
     }
+    [[nodiscard]] http_response json_raw(outbound_bytes body, response_options options = {}) const;
+    [[nodiscard]] http_response json_raw(static_text body, response_options options = {}) const;
 
     [[nodiscard]] http_response html(outbound_bytes body, response_options options = {}) const;
     [[nodiscard]] http_response html(static_text body, response_options options = {}) const;
@@ -974,7 +985,7 @@ private:
 
     // Declared last so it closes first, while every request-owned object and its
     // memory resource are still alive.
-    mutable detail::operation_scope operation_scope_;
+    mutable ::ruvia::operation_scope operation_scope_;
 };
 
 enum class readiness_state : std::uint8_t {
@@ -1055,14 +1066,14 @@ template <validation_target target, typename model_type>
     }
     const auto sync_body = try_buffered_request_body_text(context_value, operation);
     const auto request_body = sync_body ? *sync_body : co_await read_unscoped_request_body_text(context_value, std::move(operation));
-    co_return parse_and_validate_request_model<target, model_type>(request_body);
+    co_return parse_and_validate_request_model<target, model_type>(request_body, {}, model_string_storage::owned);
 }
 
 }  // namespace detail
 
 template <typename t_type>
 task<std::optional<t_type>> context_request::json_if(operation_options operation) const {
-    static_assert(detail::is_model<t_type>, "JSON body type must use RUVIA_MODEL");
+    static_assert(detail::is_model_json_value<t_type>, "JSON body type must be a RUVIA_MODEL, tagged_variant, array, json_value, or json_object");
     return context_->operation_scope_.attach(detail::parse_optional_request_model<validation_target::json, t_type>(*context_, std::move(operation)));
 }
 
@@ -1101,19 +1112,23 @@ template <validation_target target>
     }
 }
 
-template <validation_target target, typename body_type, bool reject_unknown_fields>
-task<void> model_validation_middleware<target, body_type, reject_unknown_fields>::invoke(context& c, next& next_value) {
+template <validation_target target, typename body_type, bool reject_unknown_fields, std::uint16_t validation_status>
+task<void> model_validation_middleware<target, body_type, reject_unknown_fields, validation_status>::invoke(context& c, next& next_value) {
+    const request_model_parse_options parse_options{
+        .reject_unknown_fields_ = reject_unknown_fields,
+        .validation_error_status_ = http_status_code(validation_status),
+    };
     if constexpr (target == validation_target::json || target == validation_target::form) {
         if (!request_has_body_media_type<target>(c.request().header("Content-Type"))) {
             throw_invalid_content_type<target>();
         }
         const auto sync_body = try_buffered_request_body_text(c, {});
         const auto request_body = sync_body ? *sync_body : co_await read_unscoped_request_body_text(c, {});
-        auto body = parse_and_validate_request_model<target, body_type>(request_body, {.reject_unknown_fields_ = reject_unknown_fields});
+        auto body = parse_and_validate_request_model<target, body_type>(request_body, parse_options, model_string_storage::borrowed);
         auto binding = bind_validated_model(c, body);
         co_await next_value();
     } else {
-        auto body = parse_and_validate_request_model<target, body_type>(validation_target_fields<target>(c).entries());
+        auto body = parse_and_validate_request_model<target, body_type>(validation_target_fields<target>(c).entries(), parse_options);
         auto binding = bind_validated_model(c, body);
         co_await next_value();
     }

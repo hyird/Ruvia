@@ -39,7 +39,7 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "blocking_pool.h"
 #include "content_decoding_fixture.h"
 #include "event_loop.h"

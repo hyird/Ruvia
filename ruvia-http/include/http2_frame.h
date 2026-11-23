@@ -6,6 +6,8 @@
 #include <span>
 #include <string_view>
 
+#include "byte_view.h"
+
 namespace ruvia {
 
 inline constexpr std::string_view http2_client_preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
@@ -57,34 +59,34 @@ struct http2_frame_header final {
 };
 
 // RFC 9113 section 4.1. The reserved stream-identifier bit is ignored.
-[[nodiscard]] inline constexpr std::optional<http2_frame_header> parse_http2_frame_header(std::span<const char> bytes_value) noexcept {
+[[nodiscard]] inline constexpr std::optional<http2_frame_header> parse_http2_frame_header(byte_view bytes_value) noexcept {
     if (bytes_value.size() < http2_frame_header_bytes) {
         return std::nullopt;
     }
     const auto byte = [bytes_value](std::size_t index) constexpr noexcept {
-        return static_cast<std::uint32_t>(static_cast<unsigned char>(bytes_value[index]));
+        return std::to_integer<std::uint32_t>(bytes_value[index]);
     };
     return http2_frame_header{
         .length_ = (byte(0) << 16) | (byte(1) << 8) | byte(2),
-        .type_ = static_cast<std::uint8_t>(bytes_value[3]),
-        .flags_ = static_cast<std::uint8_t>(bytes_value[4]),
+        .type_ = std::to_integer<std::uint8_t>(bytes_value[3]),
+        .flags_ = std::to_integer<std::uint8_t>(bytes_value[4]),
         .stream_id_ = ((byte(5) & 0x7fU) << 24) | (byte(6) << 16) | (byte(7) << 8) | byte(8),
     };
 }
 
-[[nodiscard]] inline constexpr bool encode_http2_frame_header(std::span<char> output, std::uint32_t length, http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id) noexcept {
+[[nodiscard]] inline constexpr bool encode_http2_frame_header(mutable_byte_view output, std::uint32_t length, http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id) noexcept {
     if (output.size() < http2_frame_header_bytes || length > http2_max_frame_size || stream_id > 0x7fffffffU) {
         return false;
     }
-    output[0] = static_cast<char>((length >> 16) & 0xff);
-    output[1] = static_cast<char>((length >> 8) & 0xff);
-    output[2] = static_cast<char>(length & 0xff);
-    output[3] = static_cast<char>(type);
-    output[4] = static_cast<char>(flags);
-    output[5] = static_cast<char>((stream_id >> 24) & 0x7f);
-    output[6] = static_cast<char>((stream_id >> 16) & 0xff);
-    output[7] = static_cast<char>((stream_id >> 8) & 0xff);
-    output[8] = static_cast<char>(stream_id & 0xff);
+    output[0] = static_cast<std::byte>((length >> 16) & 0xffU);
+    output[1] = static_cast<std::byte>((length >> 8) & 0xffU);
+    output[2] = static_cast<std::byte>(length & 0xffU);
+    output[3] = static_cast<std::byte>(type);
+    output[4] = static_cast<std::byte>(flags);
+    output[5] = static_cast<std::byte>((stream_id >> 24) & 0x7fU);
+    output[6] = static_cast<std::byte>((stream_id >> 16) & 0xffU);
+    output[7] = static_cast<std::byte>((stream_id >> 8) & 0xffU);
+    output[8] = static_cast<std::byte>(stream_id & 0xffU);
     return true;
 }
 
@@ -111,6 +113,10 @@ enum class http2_cleartext_preface_probe : std::uint8_t {
         return http2_cleartext_preface_probe::drop_connection;
     }
     return http2_cleartext_preface_probe::http1;
+}
+
+[[nodiscard]] inline http2_cleartext_preface_probe probe_http2_cleartext_preface(byte_view current) noexcept {
+    return probe_http2_cleartext_preface(as_chars(current));
 }
 
 }  // namespace ruvia

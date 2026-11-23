@@ -70,7 +70,7 @@ class http_response_headers;
 
 // Removes only SP and HTAB from the ends of an HTTP field value (OWS,
 // RFC 9110 section 5.6.3). The result borrows the caller's input.
-[[nodiscard]] constexpr std::string_view http_trim_ows(borrowed_text text) noexcept {
+[[nodiscard]] constexpr std::string_view http_trim_ows(borrowed_text text RUVIA_LIFETIMEBOUND) noexcept {
     auto value = text.view();
     while (!value.empty() && is_http_ows_char(value.front())) {
         value.remove_prefix(1);
@@ -262,13 +262,35 @@ inline void http_visit_semicolon_parameters_quoted_field(std::string_view value,
 
 // Removes a surrounding pair of DQUOTE bytes when present; does not unescape
 // quoted-pairs. The returned view borrows the input.
-[[nodiscard]] constexpr std::string_view http_trim_quoted_field_value(borrowed_text text) noexcept {
+[[nodiscard]] constexpr std::string_view http_trim_quoted_field_value(borrowed_text text RUVIA_LIFETIMEBOUND) noexcept {
     auto value = text.view();
     if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
         value.remove_prefix(1);
         value.remove_suffix(1);
     }
     return value;
+}
+
+// True when `predicate` accepts every ';'-separated parameter that follows a
+// field value's leading token. Quote-aware; each parameter is OWS-trimmed.
+template <typename predicate_type>
+[[nodiscard]] inline bool http_all_parameters(std::string_view value, predicate_type&& predicate) {
+    auto start = http_find_unquoted_delimiter(value, 0, ';');
+    if (start >= value.size()) {
+        return true;
+    }
+    ++start;
+    while (start <= value.size()) {
+        const auto end = start + http_find_unquoted_delimiter(value.substr(start), 0, ';');
+        if (!predicate(http_trim_ows(value.substr(start, end - start)))) {
+            return false;
+        }
+        if (end >= value.size()) {
+            return true;
+        }
+        start = end + 1;
+    }
+    return true;
 }
 
 // Allocation-free RFC 9110 section 5.6.4 quoted-string reader. The input starts
@@ -344,6 +366,13 @@ private:
     return !value.empty() && http_quoted_string_size(value) == value.size();
 }
 
+[[nodiscard]] inline bool is_http_token_or_quoted_string(std::string_view value) noexcept {
+    if (value.empty()) {
+        return false;
+    }
+    return value.front() == '"' ? is_http_quoted_string(value) : is_valid_http_header_name(value);
+}
+
 // Iterates a comma-delimited HTTP field-name list without allocating. Empty
 // members are ignored, including an entirely empty list. Each returned view
 // borrows the input. Drain next() until it returns nullopt, then check valid()
@@ -364,10 +393,6 @@ private:
     bool finished_{false};
     bool valid_{false};
 };
-
-}  // namespace ruvia
-
-namespace ruvia::detail {
 
 // RFC 9110 section 5.6.1 deliberately gives senders and recipients different
 // list obligations: senders cannot generate empty members, while recipients
@@ -416,9 +441,9 @@ template <typename visitor_type>
 // Members are not validated; a quoted-string member is never split.
 // The returned view borrows `value`.
 template <typename predicate_type>
-[[nodiscard]] inline std::string_view http_find_header_token(std::string_view value RUVIA_LIFETIMEBOUND, predicate_type&& predicate) noexcept {
+[[nodiscard]] inline std::string_view http_find_header_token(borrowed_text value RUVIA_LIFETIMEBOUND, predicate_type&& predicate) noexcept {
     std::string_view found;
-    http_visit_comma_separated_quoted_field_items(value, [&found, &predicate](std::string_view member) noexcept {
+    http_visit_comma_separated_quoted_field_items(value.view(), [&found, &predicate](std::string_view member) noexcept {
         if (!member.empty() && predicate(member)) {
             found = member;
             return false;
@@ -428,8 +453,88 @@ template <typename predicate_type>
     return found;
 }
 
-template <http_temporary_owning_char_string value_type, typename predicate_type>
-std::string_view http_find_header_token(value_type&&, predicate_type&&) = delete;
+struct http_upgrade_protocol final {
+    std::string_view name_;
+    std::string_view version_;
+};
+
+[[nodiscard]] inline bool http_parse_upgrade_protocol(borrowed_text value RUVIA_LIFETIMEBOUND, http_upgrade_protocol& output) noexcept {
+    const auto text = value.view();
+    const auto slash = text.find('/');
+    const auto name = slash == std::string_view::npos ? text : text.substr(0, slash);
+    const auto version = slash == std::string_view::npos ? std::string_view{} : text.substr(slash + 1);
+    if (!is_valid_http_header_name(name) || (slash != std::string_view::npos && (!is_valid_http_header_name(version) || (version.find('/') != std::string_view::npos)))) {
+        return false;
+    }
+    output = http_upgrade_protocol{.name_ = name, .version_ = version};
+    return true;
+}
+
+[[nodiscard]] inline bool http_upgrade_protocol_equals(const http_upgrade_protocol& left, const http_upgrade_protocol& right) noexcept {
+    // RFC 9110 section 7.8: protocol-name is case-insensitive, while an
+    // optional protocol-version remains an exact token.
+    return http_ascii_equals_ignore_case(left.name_, right.name_) && left.version_ == right.version_;
+}
+
+// Incremental Upgrade list parser. It owns repeated-field/list syntax, while
+// the visitor owns policy such as whether a selected protocol was offered.
+enum class http_upgrade_field_state : std::uint8_t {
+    absent,
+    present_without_protocol,
+    present_with_protocol,
+};
+
+class http_upgrade_protocols final {
+public:
+    [[nodiscard]] http_field_list_parse_status parse_field(std::string_view field_value, http_field_list_role role) noexcept {
+        return parse_field(field_value, role, [](const http_upgrade_protocol&) noexcept {
+            return true;
+        });
+    }
+
+    template <typename visitor_type>
+    [[nodiscard]] http_field_list_parse_status parse_field(std::string_view field_value, http_field_list_role role, visitor_type&& visitor) noexcept {
+        bool parsed_protocol = false;
+        const auto status = http_visit_list_members(field_value, role, [&parsed_protocol, &visitor](std::string_view member) noexcept {
+            http_upgrade_protocol protocol;
+            if (!http_parse_upgrade_protocol(member, protocol)) {
+                return http_field_list_parse_status::malformed;
+            }
+            if (!visitor(protocol)) {
+                return http_field_list_parse_status::rejected;
+            }
+            parsed_protocol = true;
+            return http_field_list_parse_status::ok;
+        });
+        if (status != http_field_list_parse_status::ok) {
+            return status;
+        }
+        if (parsed_protocol) {
+            state_ = http_upgrade_field_state::present_with_protocol;
+        } else if (state_ == http_upgrade_field_state::absent) {
+            state_ = http_upgrade_field_state::present_without_protocol;
+        }
+        return http_field_list_parse_status::ok;
+    }
+
+    [[nodiscard]] bool has_field() const noexcept {
+        return state_ != http_upgrade_field_state::absent;
+    }
+
+    [[nodiscard]] bool has_protocol() const noexcept {
+        return state_ == http_upgrade_field_state::present_with_protocol;
+    }
+
+private:
+    http_upgrade_field_state state_{http_upgrade_field_state::absent};
+};
+
+static_assert(std::is_trivially_copyable_v<http_upgrade_protocols>);
+static_assert(sizeof(http_upgrade_protocols) == 1);
+
+}  // namespace ruvia
+
+namespace ruvia::detail {
 
 // Accept-style negotiation fields skip empty list items without a role rule;
 // grammar-checked lists use http_visit_list_members.
@@ -743,7 +848,7 @@ public:
         }
         constexpr iterator operator++(int) noexcept {
             auto copy = *this;
-            ++index_;
+            ++*this;
             return copy;
         }
         [[nodiscard]] friend constexpr bool operator==(const iterator& left, const iterator& right) noexcept {

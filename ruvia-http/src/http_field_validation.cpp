@@ -201,7 +201,7 @@ bool is_valid_http_request_application_field(std::string_view name, std::string_
     // TE 是唯一按 HTTP 版本区分的请求字段语义，已由托管字段边界排除。
     // 每次只检查一个字段；重复检测由调用方持有的字段集合负责。
     detail::request_field_state state(detail::request_field_framing::http1);
-    return detail::validate_request_field(kind, value, detail::http_field_list_role::sender, state) == detail::request_field_status::ok;
+    return detail::validate_request_field(kind, value, http_field_list_role::sender, state) == detail::request_field_status::ok;
 }
 
 void http_request_expectations::update(std::string_view value) noexcept {

@@ -61,6 +61,20 @@ struct postgresql_params final {
         return count_ <= inline_capacity ? inline_types_.data() : heap_types_.data();
     }
 
+    [[nodiscard]] const int* lengths() const noexcept {
+        if (count_ == 0) {
+            return nullptr;
+        }
+        return count_ <= inline_capacity ? inline_lengths_.data() : heap_lengths_.data();
+    }
+
+    [[nodiscard]] const int* formats() const noexcept {
+        if (count_ == 0) {
+            return nullptr;
+        }
+        return count_ <= inline_capacity ? inline_formats_.data() : heap_formats_.data();
+    }
+
     [[nodiscard]] std::span<const unsigned int> type_span() const noexcept {
         return {types(), count_};
     }
@@ -69,10 +83,14 @@ struct postgresql_params final {
     std::array<char, inline_capacity * numeric_slot_size> inline_encoded_;
     std::array<const char*, inline_capacity> inline_values_;
     std::array<unsigned int, inline_capacity> inline_types_;
+    std::array<int, inline_capacity> inline_lengths_{};
+    std::array<int, inline_capacity> inline_formats_{};
     std::vector<std::array<char, numeric_slot_size>> heap_encoded_;
     std::vector<const char*> heap_values_;
     // libpq's Oid is unsigned int; 0 leaves the type to the server.
     std::vector<unsigned int> heap_types_;
+    std::vector<int> heap_lengths_;
+    std::vector<int> heap_formats_;
 };
 
 [[nodiscard]] std::uint64_t postgresql_affected_rows(const pg_result& result_value) noexcept;

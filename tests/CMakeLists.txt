@@ -40,7 +40,7 @@ endfunction()
 # options through the installed Web target.
 function(ruvia_add_web_test name timeout)
     ruvia_add_test(${name} ruvia::web TIMEOUT ${timeout} SOURCES ${ARGN})
-    target_link_libraries(${name} PRIVATE ruvia_core_internal ${RUVIA_WEB_DEPENDENCIES} ${RUVIA_HTTP_DEPENDENCIES})
+    target_link_libraries(${name} PRIVATE ${RUVIA_WEB_DEPENDENCIES} ${RUVIA_HTTP_DEPENDENCIES})
     target_compile_definitions(${name} PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
     if(WIN32)
         target_compile_definitions(${name} PRIVATE NOMINMAX)
@@ -62,7 +62,6 @@ if(RUVIA_BUILD_CORE)
     )
     ruvia_add_test(ruvia_core_unit_tests ruvia::core TIMEOUT 180 SOURCES
         ${_ruvia_core_unit_sources})
-    target_link_libraries(ruvia_core_unit_tests PRIVATE ruvia_core_internal)
     # 作用域任务的所有权转移必须在关闭可选拷贝消除时同样有效。仅对 Clang 启用：
     # GCC 16 在该选项下把协程返回对象按位拷贝到返回槽后再析构原对象，冷帧随之被提前销毁。
     set_property(SOURCE core/scoped_operation.cpp APPEND PROPERTY COMPILE_OPTIONS
@@ -86,11 +85,13 @@ if(RUVIA_BUILD_HTTP)
         http/content_coding.cpp
         http/cookie.cpp
         http/cors.cpp
+        http/framing_primitives.cpp
         http/header_adapter.cpp
         http/http1_parser.cpp
         http/http_cache.cpp
         http/io_buffer.cpp
         http/ip_address.cpp
+        http/model.cpp
         http/multipart.cpp
         http/port_number.cpp
         http/priority.cpp
@@ -264,6 +265,7 @@ if(RUVIA_BUILD_WEB)
         web/http/crypto.cpp
         web/http/model_json.cpp
         web/http/model_values.cpp
+        web/http/public_api_surface.cpp
         web/http/response_stream.cpp
         web/http/security_headers.cpp
         web/http/static_file_serving.cpp

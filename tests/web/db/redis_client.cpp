@@ -35,7 +35,7 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "backend_client_fixture.h"
 #include "context.h"
 #include "event_loop.h"

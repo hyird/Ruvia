@@ -31,12 +31,12 @@
 #include <asio/socket_base.hpp>
 #include <openssl/ssl.h>
 
-#include "callback_ref.h"
 #include "connection_lifecycle.h"
 #include "connection_scanner.h"
 #include "context_access.h"
 #include "crypto.h"
 #include "event_loop.h"
+#include "function_ref.h"
 #include "http3_endpoint.h"
 #include "http3_quic_connection.h"
 #include "http_client_pool.h"
@@ -48,6 +48,7 @@
 #include "http_request_body_failure.h"
 #include "http_response.h"
 #include "http_response_stream.h"
+#include "inbound_buffer_ops.h"
 #include "ip_address_conversion.h"
 #include "multiplexed_session.h"
 #include "request_stream.h"
@@ -91,13 +92,14 @@ constexpr std::uint64_t http3_max_concurrent_requests = 100;
 // backstops a peer that vanished. A peer advertising less still wins (RFC
 // 9000 §10.1: each endpoint uses the minimum of both values). Zero disables
 // the QUIC idle timeout, as an absent idle_timeout_ disables the HTTP one.
-[[nodiscard]] ngtcp2_duration http3_transport_idle_timeout(const server_config& server) noexcept {
+[[nodiscard]] std::chrono::nanoseconds http3_transport_idle_timeout(const server_config& server) noexcept {
     static_assert(http3_drain_round_trip_bound <= connection_close_grace);
     if (!server.idle_timeout_.has_value()) {
-        return 0;
+        return std::chrono::nanoseconds{0};
     }
-    const auto saturating_add = [](ngtcp2_duration left, ngtcp2_duration right) noexcept {
-        return left > UINT64_MAX - right ? UINT64_MAX : left + right;
+    const auto saturating_add = [](std::chrono::nanoseconds left, std::chrono::nanoseconds right) noexcept {
+        constexpr auto max_ns = (std::chrono::nanoseconds::max)();
+        return left > max_ns - right ? max_ns : left + right;
     };
     const auto scan_interval = http3_quic_duration(server.connection_scan_interval_);
     const auto slack = saturating_add(saturating_add(scan_interval, scan_interval), http3_quic_duration(timeout_duration(connection_close_grace)));
@@ -339,7 +341,7 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
     slot_(std::move(slot)),
     connection_lifecycle_(std::move(lifecycle)),
     connection_id_(connection_lifecycle_.connection_id()),
-    local_(to_asio_address(connection_lifecycle_.endpoints().local().address()), connection_lifecycle_.endpoints().local().port()),
+    local_(to_asio_address(connection_lifecycle_.endpoints().local().address()), connection_lifecycle_.endpoints().local().port().value()),
     tls_local_address_(local_.address()),
     remote_(remote),
     path_remote_(remote),
@@ -385,8 +387,6 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         throw std::runtime_error("failed to issue a QUIC connection ID");
     }
     const auto& server = services_.options_.server_;
-    auto crypto_callbacks = make_http3_quic_crypto_callbacks();
-    crypto_callbacks.recv_client_initial_ = ngtcp2_crypto_recv_client_initial_cb;
     const auto handshake_timeout = http3_quic_duration(server.header_completion_timeout_);
     const http3_connection_options http3_options{.max_concurrent_streams_ = static_cast<std::size_t>(http3_max_concurrent_requests), .max_stream_output_bytes_ = http3_stream_output_bytes, .enable_connect_protocol_ = true, .enable_h3_datagram_ = true, .frame_observer_ = services_.options_.http3_frame_ ? +[](void* target, const http3_frame_metadata& metadata) noexcept {
         const auto& self = *static_cast<http3_session*>(target);
@@ -396,13 +396,13 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         self.services_.options_.http3_field_(server_observation_access::http3_field(self.connection_id_, metadata));
     } : nullptr, .observer_context_ = this};
     connection_.emplace(http3_quic_connection::server({
-        .crypto_callbacks_ = crypto_callbacks,
+        .configure_crypto_callbacks_ = install_http3_quic_server_crypto_callbacks,
         .owner_callbacks_ = {.get_new_connection_id_ = new_connection_id, .remove_connection_id_ = remove_connection_id},
-        .source_connection_id_ = source,
-        .destination_connection_id_ = initial.scid,
-        .original_destination_connection_id_ = original_dcid,
-        .retry_source_connection_id_ = retry_scid,
-        .retry_token_ = retry_token,
+        .source_connection_id_ = to_quic_cid(source),
+        .destination_connection_id_ = to_quic_cid(initial.scid),
+        .original_destination_connection_id_ = to_quic_cid(original_dcid),
+        .retry_source_connection_id_ = retry_scid ? std::optional{to_quic_cid(*retry_scid)} : std::nullopt,
+        .retry_token_ = std::as_bytes(retry_token),
         .stateless_reset_token_ = reset_token,
         .initial_path_ = path(remote_),
         .version_ = initial.version,
@@ -456,14 +456,12 @@ http3_session::~http3_session() {
     }
 }
 
-ngtcp2_tstamp http3_session::now() noexcept {
+quic_timestamp http3_session::now() noexcept {
     return http3_quic_now();
 }
 
-ngtcp2_path http3_session::path(asio::ip::udp::endpoint& remote) noexcept {
-    auto result = http3_quic_path(path_local_, remote);
-    result.user_data = reinterpret_cast<void*>(static_cast<std::uintptr_t>(path_interface_index_));
-    return result;
+http3_quic_path http3_session::path(const asio::ip::udp::endpoint& remote) const noexcept {
+    return make_quic_path(path_local_, remote, path_interface_index_);
 }
 
 void http3_session::register_connection_id(const ngtcp2_cid& cid) {
@@ -482,43 +480,42 @@ void http3_session::unregister_connection_ids() noexcept {
     connection_ids_.clear();
 }
 
-int http3_session::new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_stateless_reset_token* token, std::size_t size, void* user_data) noexcept {
+bool http3_session::new_connection_id(quic_cid& cid, http3_quic_stateless_reset_token& token, std::size_t size, void* user_data) noexcept {
     auto& self = *static_cast<http3_session*>(user_data);
-    // ngtcp2 asks for IDs of the length the connection started with, which
-    // is always this server's worker-tagged length.
     if (size != http3_connection_id_length) {
-        return NGTCP2_ERR_CALLBACK_FAILURE;
+        return false;
     }
+    ngtcp2_cid raw_cid{};
     http3_quic_stateless_reset_token reset_token{};
     try {
-        // A fresh random ID colliding with a live one is retried, not reused.
         for (int attempt = 0; attempt < 4; ++attempt) {
-            if (!make_http3_connection_id(self.endpoint_.secret(), self.services_.placement_.worker_index_, *cid) || !make_http3_stateless_reset_token(self.endpoint_.secret(), *cid, reset_token)) {
-                return NGTCP2_ERR_CALLBACK_FAILURE;
+            if (!make_http3_connection_id(self.endpoint_.secret(), self.services_.placement_.worker_index_, raw_cid) || !make_http3_stateless_reset_token(self.endpoint_.secret(), raw_cid, reset_token)) {
+                return false;
             }
-            const auto key = http3_cid_key::from(*cid);
+            const auto key = http3_cid_key::from(raw_cid);
             self.connection_ids_.push_back(key);
             if (self.endpoint_.register_connection_id(key, self)) {
-                std::memcpy(token->data, reset_token.data(), reset_token.size());
-                return 0;
+                cid = to_quic_cid(raw_cid);
+                token = reset_token;
+                return true;
             }
             self.connection_ids_.pop_back();
         }
     } catch (...) {
-        return NGTCP2_ERR_CALLBACK_FAILURE;
+        return false;
     }
-    return NGTCP2_ERR_CALLBACK_FAILURE;
+    return false;
 }
 
-int http3_session::remove_connection_id(ngtcp2_conn*, const ngtcp2_cid* cid, void* user_data) noexcept {
+bool http3_session::remove_connection_id(const quic_cid& cid, void* user_data) noexcept {
     auto& self = *static_cast<http3_session*>(user_data);
-    const auto key = http3_cid_key::from(*cid);
+    const auto key = http3_cid_key::from(cid);
     const auto found = std::ranges::find(self.connection_ids_, key);
     if (found != self.connection_ids_.end()) {
         self.endpoint_.unregister_connection_id(key);
         self.connection_ids_.erase(found);
     }
-    return 0;
+    return true;
 }
 
 const worker_ref& http3_session::worker() const noexcept {
@@ -1007,7 +1004,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
             const auto* code = std::get_if<http3_error_code>(&error);
             reset_stream(stream_id, code != nullptr ? *code : http3_error_code::request_cancelled);
         };
-        request_stream_control stream_control{callback_access::bind<void(request_reset_code)>(reset_request)};
+        request_stream_control stream_control{function_ref<void(request_reset_code)>(reset_request)};
         admission_services.bind_stream_control(stream_control);
         admission_services.bind_early_data(head.early_data());
         admission_services.bind_request_channels({
@@ -1191,21 +1188,20 @@ task<void> http3_session::flush() {
         // Writing can close streams (an acknowledged final frame).
         drain_events();
         if (result.status_ == http3_quic_status::accepted && !datagram_.bytes_.empty()) {
-            // ngtcp2 names the path of every packet it writes.
-            const auto destination = http3_udp_endpoint(datagram_.path_.path.remote);
-            const auto source = http3_udp_endpoint(datagram_.path_.path.local);
-            const auto interface_index = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(datagram_.path_.path.user_data));
-            if (!destination || !source) {
+            if (datagram_.path_.remote_.port().value() == 0) {
                 throw std::logic_error("QUIC output has no valid remote path");
             }
+            const auto destination = to_asio_udp_endpoint(datagram_.path_.remote_);
+            const auto source = to_asio_udp_endpoint(datagram_.path_.local_);
+            const auto interface_index = static_cast<std::uint32_t>(datagram_.path_.user_data_);
 #if defined(_WIN32)
             // The acceptor sends it from the listener's socket; a datagram past its
             // bounded queue is lost, as UDP may lose any, and QUIC recovery resends.
-            if (!endpoint_.send(*destination, datagram_.bytes_, *source, interface_index)) {
+            if (!endpoint_.send(destination, datagram_.bytes_, source, interface_index)) {
                 connection_lifecycle_.note_write(datagram_.bytes_.size());
             }
 #else
-            auto error = endpoint_.send(*destination, datagram_.bytes_, *source, interface_index);
+            auto error = endpoint_.send(destination, datagram_.bytes_, source, interface_index);
             while (error == asio::error::would_block || error == asio::error::try_again) {
                 // Only a full socket send buffer stalls the writer; the scanner's
                 // write clock bounds it like a blocked TCP write.
@@ -1215,7 +1211,7 @@ task<void> http3_session::flush() {
                     error = wait_error;
                     break;
                 }
-                error = endpoint_.send(*destination, datagram_.bytes_, *source, interface_index);
+                error = endpoint_.send(destination, datagram_.bytes_, source, interface_index);
                 if (!error) {
                     scanner_entry_.note_write_progress();
                 }
@@ -1317,7 +1313,7 @@ void http3_session::enter_closing() noexcept {
     timer_.cancel();
     armed_expiry_ = UINT64_MAX;
     try {
-        const bool scheduled = timer_.schedule(services_.worker_, deadline_after(http3_quic_nanoseconds(connection_->close_period())), [this](worker_timer_status outcome) {
+        const bool scheduled = timer_.schedule(services_.worker_, deadline_after(connection_->close_period()), [this](worker_timer_status outcome) {
             timer_fired(outcome);
         });
         if (!scheduled) {
@@ -1341,11 +1337,11 @@ void http3_session::close_now() noexcept {
             http3_quic_datagram close_packet;
             const auto result = connection_->next_datagram(http3_max_datagram_bytes, now(), close_packet);
             if (result.status_ == http3_quic_status::accepted && !close_packet.bytes_.empty()) {
-                const auto destination = http3_udp_endpoint(close_packet.path_.path.remote);
-                const auto source = http3_udp_endpoint(close_packet.path_.path.local);
-                if (destination && source) {
-                    const auto interface_index = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(close_packet.path_.path.user_data));
-                    if (!endpoint_.send(*destination, close_packet.bytes_, *source, interface_index)) {
+                if (close_packet.path_.remote_.port().value() != 0) {
+                    const auto destination = to_asio_udp_endpoint(close_packet.path_.remote_);
+                    const auto source = to_asio_udp_endpoint(close_packet.path_.local_);
+                    const auto interface_index = static_cast<std::uint32_t>(close_packet.path_.user_data_);
+                    if (!endpoint_.send(destination, close_packet.bytes_, source, interface_index)) {
                         connection_lifecycle_.note_write(close_packet.bytes_.size());
                     }
                 }
@@ -1415,7 +1411,7 @@ void http3_session::arm_drain_timer() noexcept {
         return;
     }
     // HTTP/2 waits its fixed bound alone: TCP gives it no probe timeout to cap the wait with.
-    const auto round_trip = std::chrono::ceil<std::chrono::milliseconds>(http3_quic_nanoseconds(connection_->close_period()));
+    const auto round_trip = std::chrono::ceil<std::chrono::milliseconds>(connection_->close_period());
     const auto bound = (std::min)(http3_drain_round_trip_bound, (std::max)(round_trip, std::chrono::milliseconds(1)));
     drain_timer_.arm(services_.worker_, bound, [this]() noexcept {
         drain_timer_expired();

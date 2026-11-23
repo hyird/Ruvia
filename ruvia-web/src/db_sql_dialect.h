@@ -103,7 +103,7 @@ inline void append_db_string_literal(std::string& output, std::string_view value
         // It also avoids allowing connection SQL modes to change DDL values.
         output.reserve(output.size() + 26U + value.size() * 2U);
         output += "CONVERT(X'";
-        http_append_lower_hex(output, value);
+        append_lower_hex(output, value);
         output += "' USING utf8mb4)";
         return;
     }
@@ -160,6 +160,21 @@ inline void append_db_literal(std::string& output, const db_value& value, db_dri
         case db_value_type::bool_:
             output += value.bool_value() ? "TRUE" : "FALSE";
             return;
+        case db_value_type::bytes: {
+            const auto raw = value.bytes();
+            if (driver == db_driver::mariadb) {
+                output.reserve(output.size() + 3U + raw.size() * 2U);
+                output += "X'";
+                append_lower_hex(output, raw);
+                output.push_back('\'');
+            } else {
+                output.reserve(output.size() + 11U + raw.size() * 2U);
+                output += "'\\x";
+                append_lower_hex(output, raw);
+                output += "'::bytea";
+            }
+            return;
+        }
     }
     std::terminate();
 }
@@ -333,13 +348,15 @@ inline void append_db_type_name(std::string& output, db_data_type type, std::str
             }
             output += "JSON";
             break;
+        case db_data_type::bytea:
+            output += pg ? "BYTEA" : (maria_cast ? "BINARY" : "LONGBLOB");
+            break;
         case db_data_type::jsonb:
         case db_data_type::uuid:
         case db_data_type::timestamp_tz:
         case db_data_type::interval:
         case db_data_type::inet:
         case db_data_type::cidr:
-        case db_data_type::bytea:
             if (!pg) {
                 throw std::invalid_argument("selected database type requires PostgreSQL");
             }
@@ -361,9 +378,6 @@ inline void append_db_type_name(std::string& output, db_data_type type, std::str
                     break;
                 case db_data_type::cidr:
                     output += "CIDR";
-                    break;
-                case db_data_type::bytea:
-                    output += "BYTEA";
                     break;
                 default:
                     std::terminate();

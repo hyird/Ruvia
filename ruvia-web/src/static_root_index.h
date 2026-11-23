@@ -204,6 +204,7 @@ struct static_root_state final {
     static_root_config_storage config_;
     std::vector<static_root_entry> entries_;
     std::vector<std::string> directories_;
+    std::size_t servable_count_{0};
     std::uint64_t fingerprint_{0};
     bool has_sidecars_{false};
 #if defined(__unix__)
@@ -319,6 +320,10 @@ public:
 
     [[nodiscard]] static_response_validator_policy response_validators() const noexcept {
         return response_validators_;
+    }
+
+    [[nodiscard]] bool directly_servable() const noexcept {
+        return directly_servable_;
     }
 
     [[nodiscard]] bool has_memory_variants() const noexcept {
@@ -685,13 +690,13 @@ inline constexpr std::size_t static_file_etag_size = 2U + 2U * sizeof(std::uint6
     if (coding != http_content_coding::identity) {
         hash = fnv1a_accumulate(hash, http_content_coding_token(coding));
     }
-    std::array<unsigned char, sizeof(hash)> digest{};
+    std::array<std::byte, sizeof(hash)> digest{};
     for (std::size_t i = 0; i < digest.size(); ++i) {
-        digest[i] = static_cast<unsigned char>(hash >> ((digest.size() - 1 - i) * 8U));
+        digest[i] = static_cast<std::byte>(hash >> ((digest.size() - 1 - i) * 8U));
     }
     std::array<char, static_file_etag_size> output{};
     output.front() = '"';
-    http_encode_lower_hex(output.data() + 1, digest);
+    (void)encode_lower_hex(std::span<char>(output).subspan(1, 2U * digest.size()), digest);
     output.back() = '"';
     return output;
 }

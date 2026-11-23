@@ -785,6 +785,8 @@ db_expression db_owned_expression::import_into(db_query& target, std::string_vie
             return target.excluded(text_);
         case leaf_kind::string_value:
             return target.value(db_value(std::string_view(string_value_)));
+        case leaf_kind::bytes_value:
+            return target.value(db_value(as_bytes(string_value_)));
         case leaf_kind::signed_value:
             return target.value(db_value(scalar_.signed_value_));
         case leaf_kind::unsigned_value:
@@ -862,6 +864,8 @@ std::size_t db_owned_expression::append_to_tree(db_expr_tree& target) const {
         }
         case leaf_kind::string_value:
             return push_tree_value(target, db_value(std::string_view(string_value_)));
+        case leaf_kind::bytes_value:
+            return push_tree_value(target, db_value(as_bytes(string_value_)));
         case leaf_kind::signed_value:
             return push_tree_value(target, db_value(scalar_.signed_value_));
         case leaf_kind::unsigned_value:
@@ -988,6 +992,12 @@ db_owned_expression db_owned_expression::make_value(const db_value& value) {
         result.string_value_.assign(value.text());
         return result;
     }
+    if (value.type() == db_value_type::bytes) {
+        db_owned_expression result;
+        result.kind_ = leaf_kind::bytes_value;
+        result.string_value_.assign(as_chars(value.bytes()));
+        return result;
+    }
     return make_value(db_value(value));
 }
 
@@ -1016,6 +1026,10 @@ db_owned_expression db_owned_expression::make_value(db_value&& value) {
         case db_value_type::string:
             result.kind_ = leaf_kind::string_value;
             result.string_value_ = db_value_access::take_text(std::move(value));
+            return result;
+        case db_value_type::bytes:
+            result.kind_ = leaf_kind::bytes_value;
+            result.string_value_.assign(as_chars(value.bytes()));
             return result;
     }
     return result;

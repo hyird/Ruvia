@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <variant>
 
@@ -102,22 +103,26 @@ std::variant<std::size_t, http_priority_error> encode_http_priority(std::span<ch
     std::copy_n(bytes_value.begin(), count, output.begin());
     return count;
 }
-std::variant<http_priority_update, http_priority_error> decode_http2_priority_update(std::span<const char> payload_value) noexcept {
+std::string format_http_priority(http_priority_fields fields_value) {
+    std::array<char, 12> buffer{};
+    const auto count = std::get<std::size_t>(encode_http_priority(buffer, fields_value));
+    return count == 0 ? std::string{} : std::string(buffer.data(), count);
+}
+std::variant<http_priority_update, http_priority_error> decode_http2_priority_update(byte_view payload_value) noexcept {
     if (payload_value.size() < 4) {
         return http_priority_error::invalid_frame;
     }
-    const auto* id_bytes = reinterpret_cast<const unsigned char*>(payload_value.data());
-    const auto id = ((static_cast<std::uint32_t>(id_bytes[0]) & 0x7fU) << 24) | (static_cast<std::uint32_t>(id_bytes[1]) << 16) | (static_cast<std::uint32_t>(id_bytes[2]) << 8) | static_cast<std::uint32_t>(id_bytes[3]);
+    const auto id = ((std::to_integer<std::uint32_t>(payload_value[0]) & 0x7fU) << 24) | (std::to_integer<std::uint32_t>(payload_value[1]) << 16) | (std::to_integer<std::uint32_t>(payload_value[2]) << 8) | std::to_integer<std::uint32_t>(payload_value[3]);
     if (!id) {
         return http_priority_error::invalid_value;
     }
-    auto fields_value = parse_http_priority({payload_value.data() + 4, payload_value.size() - 4});
+    auto fields_value = parse_http_priority(as_chars(payload_value.subspan(4)));
     if ((fields_value.index() != 0)) {
         return std::get<1>(fields_value);
     }
     return http_priority_update{id, (id & 1U) == 0, std::get<0>(fields_value)};
 }
-std::variant<std::size_t, http_priority_error> encode_http2_priority_update(std::span<char> output, std::uint32_t id, http_priority_fields fields_value) noexcept {
+std::variant<std::size_t, http_priority_error> encode_http2_priority_update(mutable_byte_view output, std::uint32_t id, http_priority_fields fields_value) noexcept {
     if (!id || id > 0x7fffffffU) {
         return http_priority_error::invalid_value;
     }
@@ -126,14 +131,17 @@ std::variant<std::size_t, http_priority_error> encode_http2_priority_update(std:
     if ((length.index() != 0)) {
         return std::get<1>(length);
     }
-    if (output.size() < 13 + std::get<0>(length)) {
+    const auto field_bytes = std::get<0>(length);
+    if (output.size() < 13 + field_bytes) {
         return http_priority_error::output_too_small;
     }
-    (void)encode_http2_frame_header(output.first(http2_frame_header_bytes), static_cast<std::uint32_t>(4 + std::get<0>(length)), http2_frame_type::priority_update, 0, 0);
+    (void)encode_http2_frame_header(output.first(http2_frame_header_bytes), static_cast<std::uint32_t>(4 + field_bytes), http2_frame_type::priority_update, 0, 0);
     for (std::size_t index = 0; index < 4; ++index) {
-        output[http2_frame_header_bytes + index] = static_cast<char>((id >> (24 - 8 * index)) & 0xffU);
+        output[http2_frame_header_bytes + index] = static_cast<std::byte>((id >> (24 - 8 * index)) & 0xffU);
     }
-    std::copy_n(value.begin(), std::get<0>(length), output.begin() + 13);
-    return 13 + std::get<0>(length);
+    for (std::size_t index = 0; index < field_bytes; ++index) {
+        output[13 + index] = static_cast<std::byte>(static_cast<unsigned char>(value[index]));
+    }
+    return 13 + field_bytes;
 }
 }  // namespace ruvia

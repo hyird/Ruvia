@@ -19,13 +19,13 @@
 #include <asio/buffer.hpp>
 #include <asio/write.hpp>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "borrowed_text.h"
-#include "callback_ref.h"
 #include "connection_lifecycle.h"
 #include "connection_scanner.h"
 #include "context.h"
 #include "context_access.h"
+#include "function_ref.h"
 #include "http1_server_response.h"
 #include "http_connect_udp.h"
 #include "http_header.h"
@@ -506,7 +506,7 @@ template <typename operation_type, typename factory_type>
 [[nodiscard]] task<std::optional<http_response>> run_http_upgrade_route(const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, factory_type make_operation) {
     std::optional<typename operation_type::session_type> session;
     auto operation = make_operation(session);
-    const auto terminal = callback_access::bind<task<void>(context&)>(operation);
+    const route_stream_handler terminal(operation);
     std::optional<http_response> buffered;
     std::exception_ptr failure;
     try {
@@ -673,11 +673,11 @@ struct tunnel_upgrade_session_operation final {
             auto accept = [this, &context_value](http_status_code, http_tunnel_route_config config) {
                 return accept_request_stream_tunnel(context_value, config);
             };
-            const auto accept_ref = callback_access::bind<task<std::reference_wrapper<http_tunnel>>(http_status_code, http_tunnel_route_config)>(accept);
+            const request_stream_tunnel_accept accept_ref(accept);
             auto accept_websocket = [this, &context_value](const websocket_route_endpoint& endpoint) {
                 return accept_request_stream_websocket(context_value, endpoint);
             };
-            const auto websocket_accept_ref = callback_access::bind<task<websocket_accept_result>(const websocket_route_endpoint&)>(accept_websocket);
+            const request_stream_websocket_accept websocket_accept_ref(accept_websocket);
             std::exception_ptr failure;
             try {
                 co_await serve_request_stream_tunnel(context_value, accept_ref, &websocket_accept_ref);

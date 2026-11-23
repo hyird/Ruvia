@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <concepts>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
@@ -8,16 +9,15 @@
 #include <optional>
 #include <utility>
 
+#include "operation_options.h"
+#include "pool_lease.h"
 #include "stop_token.h"
+#include "wait_result.h"
+#include "worker_cancellation.h"
 #include "worker_ref.h"
-#include "worker_wait.h"
+#include "worker_timer.h"
 
-namespace ruvia::detail {
-
-// The connection-slot bookkeeping every pooled client shares: lease scheduling,
-// stop-token cancellation addressed by operation id, and one deadline timer per
-// slot. Only the error type and what an expiry or cancellation does to the
-// driver's connection differ, so those are the policy.
+namespace ruvia {
 
 enum class pool_slot_abort_reason : std::uint8_t {
     none,
@@ -25,18 +25,31 @@ enum class pool_slot_abort_reason : std::uint8_t {
     closing,
 };
 
-// policy_type supplies:
-//   using owner_type = ...;          // the driver pool that owns the connections
-//   using deadline_kind_type = ...;  // scoped enum naming what a deadline guards
-//   [[noreturn]] static void throw_acquire_failure(const owner_type&, wait_status);
-//   [[noreturn]] static void throw_aborted(const owner_type&, pool_slot_abort_reason);
-//   static void expire_slot(owner_type&, std::size_t slot, deadline_kind_type) noexcept;
-//   static void cancel_slot(owner_type&, std::size_t slot) noexcept;
+template <typename policy_type>
+concept slot_pool_policy = requires(
+    typename policy_type::owner_type& owner,
+    const typename policy_type::owner_type& const_owner,
+    std::size_t slot,
+    wait_status status,
+    pool_slot_abort_reason reason,
+    typename policy_type::deadline_kind_type kind) {
+    typename policy_type::owner_type;
+    typename policy_type::deadline_kind_type;
+    policy_type::throw_acquire_failure(const_owner, status);
+    policy_type::throw_aborted(const_owner, reason);
+    { policy_type::expire_slot(owner, slot, kind) } noexcept;
+    { policy_type::cancel_slot(owner, slot) } noexcept;
+};
+
+// The connection-slot bookkeeping every pooled client shares: lease scheduling,
+// stop-token cancellation addressed by operation id, and one deadline timer per
+// slot. Only the error type and what an expiry or cancellation does to the
+// driver's connection differ, so those are supplied by `policy_type`.
 //
 // The pool is worker-affine and address-stable: slot state lives in one array
 // sized at construction, and pending timers and cancellation registrations
 // borrow it by address.
-template <typename policy_type>
+template <slot_pool_policy policy_type>
 class slot_pool final {
 public:
     using owner_type = typename policy_type::owner_type;
@@ -169,10 +182,7 @@ public:
     // Binds the operation's stop token to one slot for the duration of the
     // operation. A stop delivered on (or posted to) the worker reaches
     // cancel_operation_by_id(), which marks the slot cancelled and lets the
-    // policy abort the driver connection. A cancellation belongs to the
-    // operation it ended; closing is permanent, so an operation still holding
-    // a lease after close() (an open stream or transaction) observes it, even
-    // when its stop arrives later.
+    // policy abort the driver connection.
     class cancellation_guard final {
     public:
         cancellation_guard(slot_pool& pool, std::size_t slot, const stop_token& stop_token_value) :
@@ -190,7 +200,6 @@ public:
             registration_.reset();
         }
 
-        // The operation's id; cancel_operation_by_id() with it acts as a stop.
         [[nodiscard]] std::uint64_t id() const noexcept {
             return registration_.id();
         }
@@ -199,9 +208,6 @@ public:
         worker_cancellation_registration<cancellation_target_type> registration_;
     };
 
-    // worker_cancellation_target hook; runs on the worker. A closing slot
-    // keeps reporting closing: its owner aborts every connection right after
-    // close(), so a later stop has nothing left to cancel.
     void cancel_operation_by_id(std::uint64_t cancellation_id) noexcept {
         if (cancellation_id == 0) {
             return;
@@ -289,8 +295,6 @@ private:
         worker_timer_registration deadline_timer_;
     };
 
-    // Fixed-size, never relocated: timer registrations are neither movable
-    // nor copyable, and pending timers address their slot by index.
     class slot_array final {
     public:
         explicit slot_array(std::size_t slot_count) :
@@ -327,4 +331,4 @@ private:
     std::shared_ptr<cancellation_target_type> cancellation_target_;
 };
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

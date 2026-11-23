@@ -1208,7 +1208,7 @@ task<void> http_client_connection::stream_http2_upload(const http_client_request
     }, [&stream]() noexcept {
         return stream.failed() || stream.retryable_;
     }, [&]() noexcept {
-        return request.is_tunnel() || connection.release_request_content(stream.stream_id_) != http2_request_content_release_status::closed;
+        return request.is_tunnel() || connection.release_request_content(stream.stream_id_) != http_request_content_release_status::closed;
     }, [&](std::string_view chunk) {
         return send_http2_request_data(stream, chunk, http2_end_stream::keep_open, &upload);
     }, [&]() -> task<bool> {

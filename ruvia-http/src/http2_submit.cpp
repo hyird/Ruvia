@@ -283,12 +283,12 @@ http_data_submit_result http2_engine::submit_data(std::uint32_t stream_id, std::
     return {consumed, complete ? http_data_submit_status::complete : http_data_submit_status::backpressured};
 }
 
-http2_request_content_release_status http2_engine::release_request_content(std::uint32_t stream_id) noexcept {
+http_request_content_release_status http2_engine::release_request_content(std::uint32_t stream_id) noexcept {
     auto* stream = find_outbound_stream(stream_id);
     if (stream == nullptr) {
-        return http2_request_content_release_status::closed;
+        return http_request_content_release_status::closed;
     }
-    return stream->release_request_continue() ? http2_request_content_release_status::released : http2_request_content_release_status::not_pending;
+    return stream->release_request_continue() ? http_request_content_release_status::released : http_request_content_release_status::not_pending;
 }
 
 http_submit_status http2_engine::submit_connect_response_head(std::uint32_t stream_id, const http_response& response) {
@@ -481,7 +481,7 @@ http_submit_status http2_engine::submit_origin_advertisement(std::span<const std
         .size_ = std::get<0>(payload_size),
         .write_ =
             [](const http2_extension_payload& value, std::span<char> output) noexcept {
-        write_http_origin_payload(output, value.origins_);
+        (void)encode_http_origin_payload(as_writable_bytes(output), value.origins_);
     },
         .origins_ = origins,
     };
@@ -507,7 +507,7 @@ http_submit_status http2_engine::submit_alternative_service_advertisement(std::u
         .size_ = std::get<0>(payload_size),
         .write_ =
             [](const http2_extension_payload& value, std::span<char> output) noexcept {
-        http2_write_alternative_service_payload(output, value.origin_, value.field_value_);
+        detail::http2_write_alternative_service_payload(as_writable_bytes(output), value.origin_, value.field_value_);
     },
         .origin_ = origin,
         .field_value_ = field_value,
@@ -517,7 +517,7 @@ http_submit_status http2_engine::submit_alternative_service_advertisement(std::u
 
 template <typename prepare_type>
 std::variant<std::uint32_t, http_submit_status> http2_engine::submit_local_request_head(http2_end_stream end_stream, const prepare_type& prepare) {
-    if (active_local_request_streams_ >= http2_local_settings::max_concurrent_streams) {
+    if (active_local_request_streams_ >= local_settings_.max_concurrent_streams_) {
         return http_submit_status::local_stream_capacity_reached;
     }
     // nghttp2 assigns this identifier to the next request HEADERS.

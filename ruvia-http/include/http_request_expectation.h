@@ -35,6 +35,14 @@ enum class http_server_expectation_plan : std::uint8_t {
     reject_unsupported,
 };
 
+// Client-side manual release of an `Expect: 100-continue` gate once the
+// caller's 100-continue wait timer expires (RFC 9110 §10.1.1).
+enum class http_request_content_release_status : std::uint8_t {
+    released,
+    not_pending,
+    closed,
+};
+
 [[nodiscard]] inline http_protocol_error make_http_unsupported_expectation_error() noexcept {
     return http_protocol_error(http_status::expectation_failed, static_text{"unsupported_expectation"}, "unsupported Expect header");
 }

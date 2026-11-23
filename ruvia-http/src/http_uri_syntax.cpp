@@ -50,7 +50,7 @@ inline constexpr std::array<bool, 256> reg_name_char_table = [] {
     group = 0;
     std::size_t digits = 0;
     while (offset < literal.size() && digits < 4) {
-        const auto nibble = http_decode_hex_nibble(literal[offset]);
+        const auto nibble = decode_hex_nibble(literal[offset]);
         if (nibble < 0) {
             break;
         }
@@ -248,7 +248,7 @@ std::optional<std::array<std::uint16_t, 8>> parse_ipv6_address(std::string_view 
 
     std::size_t cursor_value = 1;
     const auto version_begin = cursor_value;
-    while (cursor_value < literal.size() && http_decode_hex_nibble(literal[cursor_value]) >= 0) {
+    while (cursor_value < literal.size() && decode_hex_nibble(literal[cursor_value]) >= 0) {
         ++cursor_value;
     }
     if (cursor_value == version_begin || cursor_value >= literal.size() || literal[cursor_value] != '.') {

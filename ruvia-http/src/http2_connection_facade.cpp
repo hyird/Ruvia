@@ -236,6 +236,9 @@ http2_connection::http2_connection(http_connection_role role, const http2_connec
     if (options.max_non_progress_frames_ == 0) {
         throw std::invalid_argument("HTTP/2 non-progress frame budget must be positive");
     }
+    if (options.max_concurrent_streams_ == 0 || options.max_concurrent_streams_ > 65536 || options.initial_window_size_ > 0x7fffffffU || options.max_frame_size_ < http2_default_max_frame_size || options.max_frame_size_ > http2_max_frame_size || options.max_header_list_size_ == 0) {
+        throw std::invalid_argument("invalid HTTP/2 local SETTINGS options");
+    }
     impl_.reset(new detail::http2_connection_owner_endpoint(role, options));
     impl_->connection_.begin_connection();
 }
@@ -338,7 +341,7 @@ http_data_submit_result http2_connection::submit_data(std::uint32_t stream_id, s
     connection.retry_deferred_stream_leases();
     return result_value;
 }
-http2_request_content_release_status http2_connection::release_request_content(std::uint32_t stream_id) noexcept {
+http_request_content_release_status http2_connection::release_request_content(std::uint32_t stream_id) noexcept {
     return impl_->connection_.release_request_content(stream_id);
 }
 http_submit_status http2_connection::submit_connect_response_head(std::uint32_t stream_id, const http_response& response) {

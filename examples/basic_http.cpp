@@ -41,7 +41,7 @@ public:
     }
 };
 
-RUVIA_MODEL(user_response, RUVIA_OPTIONAL_FIELD(id, ruvia::string), RUVIA_OPTIONAL_FIELD(name, ruvia::string), RUVIA_OPTIONAL_FIELD(active, ruvia::bool_value));
+RUVIA_MODEL(user_response, RUVIA_OPTIONAL_FIELD(id, ruvia::string), RUVIA_OPTIONAL_FIELD(name, ruvia::string), RUVIA_OPTIONAL_FIELD(active, bool));
 
 ruvia::task<ruvia::http_response> example_error_handler(ruvia::context& c, ruvia::http_error_info error) {
     co_return c.error(error);
@@ -89,7 +89,7 @@ private:
 
     ruvia::task<ruvia::http_response> user(ruvia::context& c) {
         user_response response;
-        response.set<"id">(c.request().param("id").value_or("unknown")).set<"name">("example-user").set<"active">(ruvia::bool_value{true});
+        response.set<"id">(c.request().param("id").value_or("unknown")).set<"name">("example-user").set<"active">(true);
         co_return c.json(response);
     }
 

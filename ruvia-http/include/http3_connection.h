@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "byte_view.h"
 #include "http3_request_head.h"
 #include "http_client_response_head.h"
 #include "http_connection_advertisement.h"
@@ -23,10 +24,12 @@
 #include "http_multiplexed_stream.h"
 #include "http_priority.h"
 #include "http_request.h"
+#include "http_request_expectation.h"
 #include "http_request_head_view.h"
 #include "http_response.h"
 #include "http_response_body.h"
 #include "http_response_stream.h"
+#include "outbound_bytes.h"
 #include "websocket_client_handshake.h"
 #include "websocket_handshake.h"
 
@@ -232,8 +235,9 @@ private:
 };
 
 // An HTTP/3 Datagram (RFC 9297 §2.1) for a request stream whose head this
-// codec decoded; payload() follows the Quarter Stream ID and borrows the
-// event.
+// codec decoded; payload() follows the Quarter Stream ID. With
+// own_data_events_ disabled, payload borrows the read_datagram() input;
+// otherwise it owns its bytes.
 class http3_datagram_event final {
 public:
     http3_datagram_event(http3_datagram_event&&) noexcept = default;
@@ -241,21 +245,44 @@ public:
     [[nodiscard]] std::int64_t stream_id() const noexcept {
         return stream_id_;
     }
+    [[nodiscard]] byte_view payload_bytes() const& noexcept RUVIA_LIFETIMEBOUND {
+        if (const auto* borrowed = std::get_if<byte_view>(&payload_)) {
+            return *borrowed;
+        }
+        return byte_view(std::get<std::vector<std::byte>>(payload_));
+    }
+    byte_view payload_bytes() const&& = delete;
     [[nodiscard]] std::string_view payload() const& noexcept RUVIA_LIFETIMEBOUND {
-        return payload_;
+        return as_chars(payload_bytes());
     }
     std::string_view payload() const&& = delete;
-    [[nodiscard]] std::string take_payload() && noexcept {
-        return std::move(payload_);
+    [[nodiscard]] std::vector<std::byte> take_payload_bytes() && {
+        if (auto* owned = std::get_if<std::vector<std::byte>>(&payload_)) {
+            auto result = std::move(*owned);
+            payload_ = byte_view{};
+            return result;
+        }
+        const auto borrowed = std::get<byte_view>(payload_);
+        payload_ = byte_view{};
+        return std::vector<std::byte>(borrowed.begin(), borrowed.end());
+    }
+    [[nodiscard]] std::string take_payload() && {
+        const auto view = payload();
+        std::string result(view);
+        payload_ = byte_view{};
+        return result;
     }
 
 private:
     friend class http3_connection;
-    http3_datagram_event(std::int64_t stream_id, std::string payload) noexcept :
+    http3_datagram_event(std::int64_t stream_id, byte_view borrowed) noexcept :
         stream_id_(stream_id),
-        payload_(std::move(payload)) {}
+        payload_(borrowed) {}
+    http3_datagram_event(std::int64_t stream_id, std::vector<std::byte> owned) noexcept :
+        stream_id_(stream_id),
+        payload_(std::move(owned)) {}
     std::int64_t stream_id_;
-    std::string payload_;
+    std::variant<byte_view, std::vector<std::byte>> payload_;
 };
 
 // One codec event. Exactly one accessor returns non-null.
@@ -557,8 +584,22 @@ public:
     [[nodiscard]] http_data_submit_result submit_data(std::int64_t stream_id, std::string_view bytes);
     template <std::same_as<std::string> string_type>
     [[nodiscard]] http_data_submit_result submit_data(std::int64_t stream_id, string_type&& bytes) {
+        return submit_data_owned(stream_id, outbound_bytes(std::move(bytes)));
+    }
+    template <std::same_as<std::vector<std::byte>> bytes_vector_type>
+    [[nodiscard]] http_data_submit_result submit_data(std::int64_t stream_id, bytes_vector_type&& bytes) {
+        return submit_data_owned(stream_id, outbound_bytes(std::move(bytes)));
+    }
+    template <std::same_as<outbound_bytes> owned_bytes_type>
+    [[nodiscard]] http_data_submit_result submit_data(std::int64_t stream_id, owned_bytes_type&& bytes) {
         return submit_data_owned(stream_id, std::move(bytes));
     }
+    template <typename bytes_type>
+        requires(!std::convertible_to<bytes_type&&, std::string_view> && !std::same_as<std::remove_cvref_t<bytes_type>, std::vector<std::byte>> && !std::same_as<std::remove_cvref_t<bytes_type>, outbound_bytes> && std::convertible_to<bytes_type&&, byte_view>)
+    [[nodiscard]] http_data_submit_result submit_data(std::int64_t stream_id, bytes_type&& bytes) {
+        return submit_data(stream_id, as_chars(byte_view(std::forward<bytes_type>(bytes))));
+    }
+    [[nodiscard]] http_request_content_release_status release_request_content(std::int64_t stream_id) noexcept;
     // DATA payload submit_data() accepted on the stream that the peer has
     // not acknowledged yet (acknowledge_output()); it stays charged to
     // max_stream_output_bytes_ until then, whether or not QUIC already sent it.
@@ -663,8 +704,8 @@ public:
 
 private:
     friend class http3_quic_connection;
-    [[nodiscard]] http_data_submit_result submit_data_owned(std::int64_t stream_id, std::string&& bytes);
-    [[nodiscard]] http_data_submit_result submit_data_impl(std::int64_t stream_id, std::string_view bytes, std::string* owned_bytes);
+    [[nodiscard]] http_data_submit_result submit_data_owned(std::int64_t stream_id, outbound_bytes&& bytes);
+    [[nodiscard]] http_data_submit_result submit_data_impl(std::int64_t stream_id, byte_view bytes, outbound_bytes* owned_bytes);
     void begin_packet_input() noexcept;
     void end_packet_input() noexcept;
     void mark_early_data(std::int64_t stream_id);

@@ -1191,7 +1191,7 @@ constexpr std::array compressing_codings{http_content_coding::gzip, http_content
 
 TEST(Ruvia, pooled_encoder_encode_matches_one_shot_bytes) {
     constexpr std::array sizes{std::size_t{0}, std::size_t{1}, std::size_t{1000}, std::size_t{8192}, std::size_t{70'000}, std::size_t{300'000}};
-    ruvia::http_worker_codecs codecs;
+    ruvia::http_content_codecs codecs;
     for (const auto coding : compressing_codings) {
         unsigned seed = 0;
         // Twice through, so every size also follows a larger representation.
@@ -1666,12 +1666,12 @@ TEST(Ruvia, no_encoding_means_decode_borrows_the_input) {
 }
 
 TEST(Ruvia, hex_nibbles_decode_and_encode_ascii_digits) {
-    EXPECT_EQ(ruvia::http_decode_hex_nibble('0'), 0);
-    EXPECT_EQ(ruvia::http_decode_hex_nibble('a'), 10);
-    EXPECT_EQ(ruvia::http_decode_hex_nibble('F'), 15);
-    EXPECT_EQ(ruvia::http_decode_hex_nibble('g'), -1);
-    EXPECT_EQ(ruvia::http_lower_hex_digit(15), 'f');
-    EXPECT_EQ(ruvia::http_upper_hex_digit(15), 'F');
+    EXPECT_EQ(ruvia::decode_hex_nibble('0'), 0);
+    EXPECT_EQ(ruvia::decode_hex_nibble('a'), 10);
+    EXPECT_EQ(ruvia::decode_hex_nibble('F'), 15);
+    EXPECT_EQ(ruvia::decode_hex_nibble('g'), -1);
+    EXPECT_EQ(ruvia::lower_hex_digit(15), 'f');
+    EXPECT_EQ(ruvia::upper_hex_digit(15), 'F');
 }
 
 TEST(Ruvia, hex_encode_accepts_output_overlapping_input) {
@@ -1682,15 +1682,15 @@ TEST(Ruvia, hex_encode_accepts_output_overlapping_input) {
     for (std::size_t size = 0; size <= text.size(); ++size) {
         const auto input = text.substr(0, size);
         std::string expected(2 * size, '\0');
-        ruvia::http_encode_lower_hex(expected.data(), input);
+        ruvia::encode_lower_hex(std::span<char>(expected), ruvia::as_bytes(input));
         // Every output start from wholly before to wholly after the input,
         // including in place and starts inside it.
         for (auto output_start = input_start - expected.size(); output_start <= input_start + size; ++output_start) {
             std::array<char, 48> buffer{};
             input.copy(buffer.data() + input_start, size);
-            const auto* const end = ruvia::http_encode_lower_hex(buffer.data() + output_start, std::string_view(buffer.data() + input_start, size));
-            EXPECT_EQ(end, buffer.data() + output_start + expected.size());
-            EXPECT_EQ(std::string(buffer.data() + output_start, expected.size()), expected);
+            const auto encoded = ruvia::encode_lower_hex(std::span<char>(buffer).subspan(output_start), ruvia::as_bytes(std::string_view(buffer.data() + input_start, size)));
+            EXPECT_EQ(encoded.data() + encoded.size(), buffer.data() + output_start + expected.size());
+            EXPECT_EQ(encoded, expected);
         }
     }
 }
@@ -1698,7 +1698,7 @@ TEST(Ruvia, hex_encode_accepts_output_overlapping_input) {
 TEST(Ruvia, hex_append_accepts_input_aliasing_the_output) {
     std::string whole("\x01\xab");
     whole.shrink_to_fit();
-    ruvia::http_append_lower_hex(whole, std::string_view(whole));
+    ruvia::append_lower_hex(whole, ruvia::as_bytes(std::string_view(whole)));
     EXPECT_EQ(std::string_view(whole),
         std::string_view("\x01\xab"
                          "01ab"));
@@ -1707,46 +1707,46 @@ TEST(Ruvia, hex_append_accepts_input_aliasing_the_output) {
     std::string part(std::string(64, 'z') + "\xff");
     part.shrink_to_fit();
     const std::span<const unsigned char> tail(reinterpret_cast<const unsigned char*>(part.data()) + 63, 2);
-    ruvia::http_append_lower_hex(part, tail);
+    ruvia::append_lower_hex(part, ruvia::as_bytes(tail));
     EXPECT_EQ(std::string_view(part).substr(65), std::string_view("7aff"));
 
     // The terminating NUL is readable input: it ends where the digits begin.
     std::string terminated("A");
     terminated.shrink_to_fit();
-    ruvia::http_append_lower_hex(terminated, std::string_view(terminated.data(), terminated.size() + 1));
+    ruvia::append_lower_hex(terminated, ruvia::as_bytes(std::string_view(terminated.data(), terminated.size() + 1)));
     EXPECT_EQ(std::string_view(terminated), std::string_view("A4100"));
 
     // A full string reallocates while the NUL-only input borrows the old buffer.
     std::string nul_only("A");
     nul_only.resize(nul_only.capacity(), 'B');
     const auto filled = nul_only.size();
-    ruvia::http_append_lower_hex(nul_only, std::string_view(nul_only.data() + filled, 1));
+    ruvia::append_lower_hex(nul_only, ruvia::as_bytes(std::string_view(nul_only.data() + filled, 1)));
     EXPECT_EQ(nul_only.size(), filled + 2);
     EXPECT_EQ(std::string_view(nul_only).substr(filled - 1), std::string_view("B00"));
 }
 
 TEST(Ruvia, bulk_hex_decode_checks_lengths_characters_and_overlap) {
     std::array<std::uint8_t, 4> bytes{};
-    EXPECT_EQ(ruvia::http_decode_hex("00aBfF19", bytes), std::optional<std::size_t>{4});
+    EXPECT_EQ(ruvia::decode_hex("00aBfF19", ruvia::as_mutable_bytes(std::span(bytes))), std::optional<std::size_t>{4});
     EXPECT_EQ(bytes, (std::array<std::uint8_t, 4>{0, 0xAB, 0xFF, 0x19}));
-    EXPECT_EQ(ruvia::http_decode_hex("", {}), std::optional<std::size_t>{0});
+    EXPECT_EQ(ruvia::decode_hex("", {}), std::optional<std::size_t>{0});
     for (const std::string_view invalid : {"0", "000", "0g", "g0", " 0", "00\n0"}) {
-        EXPECT_FALSE(ruvia::http_decode_hex(invalid, bytes).has_value());
+        EXPECT_FALSE(ruvia::decode_hex(invalid, ruvia::as_mutable_bytes(std::span(bytes))).has_value());
     }
     bytes.fill(0xAA);
-    EXPECT_FALSE(ruvia::http_decode_hex("0000000000", bytes).has_value());
+    EXPECT_FALSE(ruvia::decode_hex("0000000000", ruvia::as_mutable_bytes(std::span(bytes))).has_value());
     EXPECT_EQ(bytes[0], 0xAA);
     std::array<std::uint8_t, 12> aliased{'4', '1', '4', '2', '4', '3'};
     const std::string_view input(reinterpret_cast<const char*>(aliased.data()), 6);
-    EXPECT_FALSE(ruvia::http_decode_hex(input, std::span(aliased).subspan(1)).has_value());
+    EXPECT_FALSE(ruvia::decode_hex(input, ruvia::as_mutable_bytes(std::span(aliased).subspan(1))).has_value());
     EXPECT_EQ(aliased[1], '1');
-    EXPECT_EQ(ruvia::http_decode_hex(input, aliased), std::optional<std::size_t>{3});
+    EXPECT_EQ(ruvia::decode_hex(input, ruvia::as_mutable_bytes(std::span(aliased))), std::optional<std::size_t>{3});
     EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(aliased.data()), 3), "ABC");
-    EXPECT_TRUE(ruvia::http_is_lower_hex("0123456789abcdef", 16));
-    EXPECT_TRUE(ruvia::http_is_lower_hex("", 0));
-    EXPECT_FALSE(ruvia::http_is_lower_hex("ab", 4));
-    EXPECT_FALSE(ruvia::http_is_lower_hex("AB", 2));
-    EXPECT_FALSE(ruvia::http_is_lower_hex(std::string_view("a\0", 2), 2));
+    EXPECT_TRUE(ruvia::is_lower_hex("0123456789abcdef", 16));
+    EXPECT_TRUE(ruvia::is_lower_hex("", 0));
+    EXPECT_FALSE(ruvia::is_lower_hex("ab", 4));
+    EXPECT_FALSE(ruvia::is_lower_hex("AB", 2));
+    EXPECT_FALSE(ruvia::is_lower_hex(std::string_view("a\0", 2), 2));
 }
 
 TEST(Ruvia, upper_hex_encoding_and_append_support_aliasing) {
@@ -1754,17 +1754,17 @@ TEST(Ruvia, upper_hex_encoding_and_append_support_aliasing) {
     for (std::size_t offset = 0; offset <= 15; ++offset) {
         std::array<char, 24> storage{};
         input.copy(storage.data() + 6, input.size());
-        const auto* const end = ruvia::http_encode_upper_hex(storage.data() + offset, std::string_view(storage.data() + 6, input.size()));
-        EXPECT_EQ(end, storage.data() + offset + 6);
-        EXPECT_EQ(std::string_view(storage.data() + offset, 6), "01ABFF");
+        const auto encoded = ruvia::encode_upper_hex(std::span<char>(storage).subspan(offset), ruvia::as_bytes(std::string_view(storage.data() + 6, input.size())));
+        EXPECT_EQ(encoded.data() + encoded.size(), storage.data() + offset + 6);
+        EXPECT_EQ(encoded, "01ABFF");
     }
     std::string output(64, 'x');
     output.back() = '\xFF';
     output.shrink_to_fit();
-    ruvia::http_append_upper_hex(output, std::string_view(output).substr(63));
+    ruvia::append_upper_hex(output, ruvia::as_bytes(std::string_view(output).substr(63)));
     EXPECT_EQ(std::string_view(output).substr(64), "FF");
     std::string terminated("A");
-    ruvia::http_append_upper_hex(terminated, std::string_view(terminated.data(), terminated.size() + 1));
+    ruvia::append_upper_hex(terminated, ruvia::as_bytes(std::string_view(terminated.data(), terminated.size() + 1)));
     EXPECT_EQ(terminated, "A4100");
 }
 
@@ -1789,9 +1789,9 @@ TEST(Ruvia, utf8_prefix_keeps_only_complete_valid_code_points) {
 
 namespace {
 
-std::string encode(std::string_view input, ruvia::http_base64_padding padding = ruvia::http_base64_padding::required) {
-    std::string output(ruvia::http_base64_encoded_size(input.size(), padding), '\0');
-    ruvia::http_base64_encode(output.data(), std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(input.data()), input.size()), ruvia::http_base64_charset::standard, padding);
+std::string encode(std::string_view input, ruvia::base64_padding padding = ruvia::base64_padding::required) {
+    std::string output(ruvia::base64_encoded_size(input.size(), padding), '\0');
+    ruvia::base64_encode(std::span<char>(output), ruvia::as_bytes(input), ruvia::base64_charset::standard, padding);
     return output;
 }
 
@@ -1809,7 +1809,7 @@ TEST(Ruvia, http_base64_encodes_with_standard_alphabet_and_padding) {
 TEST(Ruvia, http_base64_encode_accepts_output_overlapping_input) {
     constexpr std::string_view text = "abcdefghij";
     constexpr std::size_t input_start = 16;
-    for (const auto padding : {ruvia::http_base64_padding::required, ruvia::http_base64_padding::forbidden}) {
+    for (const auto padding : {ruvia::base64_padding::required, ruvia::base64_padding::forbidden}) {
         for (std::size_t size = 0; size <= text.size(); ++size) {
             const auto input = text.substr(0, size);
             const auto expected = encode(input, padding);
@@ -1818,7 +1818,7 @@ TEST(Ruvia, http_base64_encode_accepts_output_overlapping_input) {
             for (auto output_start = input_start - expected.size(); output_start <= input_start + size; ++output_start) {
                 std::array<char, 48> buffer{};
                 input.copy(buffer.data() + input_start, size);
-                ruvia::http_base64_encode(buffer.data() + output_start, std::span(reinterpret_cast<const std::uint8_t*>(buffer.data()) + input_start, size), ruvia::http_base64_charset::standard, padding);
+                ruvia::base64_encode(std::span<char>(buffer).subspan(output_start), ruvia::as_bytes(std::string_view(buffer.data() + input_start, size)), ruvia::base64_charset::standard, padding);
                 EXPECT_EQ(std::string(buffer.data() + output_start, expected.size()), expected);
             }
         }
@@ -1830,15 +1830,15 @@ TEST(Ruvia, http_base64_encoded_size_preserves_padding_at_numeric_boundaries) {
     constexpr auto maximum_groups = maximum / 4;
     constexpr auto maximum_input = maximum_groups * 3;
     constexpr auto maximum_output = maximum_groups * 4;
-    constexpr auto small_output = ruvia::http_base64_encoded_size(4);
+    constexpr auto small_output = ruvia::base64_encoded_size(4);
     EXPECT_EQ(small_output, std::size_t{8});
     for (const auto input_size : {maximum_input - 2, maximum_input - 1, maximum_input}) {
-        EXPECT_EQ(ruvia::http_base64_encoded_size(input_size), maximum_output);
+        EXPECT_EQ(ruvia::base64_encoded_size(input_size), maximum_output);
     }
     for (const auto input_size : {maximum_input + 1, maximum - 1, maximum}) {
         bool rejected = false;
         try {
-            (void)ruvia::http_base64_encoded_size(input_size);
+            (void)ruvia::base64_encoded_size(input_size);
         } catch (const std::length_error&) {
             rejected = true;
         }
@@ -1849,12 +1849,12 @@ TEST(Ruvia, http_base64_encoded_size_preserves_padding_at_numeric_boundaries) {
 TEST(Ruvia, http_base64_unpadded_size_uses_actual_tail_at_numeric_boundary) {
     constexpr auto maximum = (std::numeric_limits<std::size_t>::max)();
     constexpr auto groups = maximum / 4;
-    constexpr auto forbidden = ruvia::http_base64_padding::forbidden;
-    EXPECT_EQ(ruvia::http_base64_encoded_size(3 * groups + 1, forbidden), maximum - 1);
-    EXPECT_EQ(ruvia::http_base64_encoded_size(3 * groups + 2, forbidden), maximum);
+    constexpr auto forbidden = ruvia::base64_padding::forbidden;
+    EXPECT_EQ(ruvia::base64_encoded_size(3 * groups + 1, forbidden), maximum - 1);
+    EXPECT_EQ(ruvia::base64_encoded_size(3 * groups + 2, forbidden), maximum);
     bool rejected = false;
     try {
-        (void)ruvia::http_base64_encoded_size(3 * groups + 3, forbidden);
+        (void)ruvia::base64_encoded_size(3 * groups + 3, forbidden);
     } catch (const std::length_error&) {
         rejected = true;
     }
@@ -1862,70 +1862,71 @@ TEST(Ruvia, http_base64_unpadded_size_uses_actual_tail_at_numeric_boundary) {
 }
 
 TEST(Ruvia, http_base64_decodes_single_characters_per_alphabet) {
-    for (std::size_t i = 0; i < ruvia::http_base64_alphabet.size(); ++i) {
-        EXPECT_EQ(ruvia::http_base64_decode_char(ruvia::http_base64_alphabet[i]), static_cast<int>(i));
-        EXPECT_EQ(ruvia::http_base64_url_decode_char(ruvia::http_base64_url_alphabet[i]), static_cast<int>(i));
+    for (std::size_t i = 0; i < ruvia::base64_alphabet.size(); ++i) {
+        EXPECT_EQ(ruvia::base64_decode_char(ruvia::base64_alphabet[i]), static_cast<int>(i));
+        EXPECT_EQ(ruvia::base64_url_decode_char(ruvia::base64_url_alphabet[i]), static_cast<int>(i));
     }
-    EXPECT_EQ(ruvia::http_base64_decode_char('='), -1);
-    EXPECT_EQ(ruvia::http_base64_decode_char('-'), -1);
-    EXPECT_EQ(ruvia::http_base64_url_decode_char('+'), -1);
-    EXPECT_EQ(ruvia::http_base64_url_decode_char('/'), -1);
-    EXPECT_EQ(ruvia::http_base64_url_decode_char('='), -1);
+    EXPECT_EQ(ruvia::base64_decode_char('='), -1);
+    EXPECT_EQ(ruvia::base64_decode_char('-'), -1);
+    EXPECT_EQ(ruvia::base64_url_decode_char('+'), -1);
+    EXPECT_EQ(ruvia::base64_url_decode_char('/'), -1);
+    EXPECT_EQ(ruvia::base64_url_decode_char('='), -1);
 }
 
 TEST(Ruvia, http_base64_decode_rejects_output_overwriting_unread_input) {
-    constexpr auto standard = ruvia::http_base64_charset::standard;
-    constexpr auto required = ruvia::http_base64_padding::required;
+    constexpr auto standard = ruvia::base64_charset::standard;
+    constexpr auto required = ruvia::base64_padding::required;
     const auto decoded_text = [](const std::uint8_t* bytes, std::size_t size) {
         return std::string(reinterpret_cast<const char*>(bytes), size);
     };
 
     std::uint8_t shifted[16] = {'Q', 'U', 'J', 'D', 'R', 'E', 'V', 'G'};
     const std::string_view shifted_input(reinterpret_cast<const char*>(shifted), 8);
-    EXPECT_TRUE(!ruvia::http_base64_decode(shifted_input, std::span(shifted + 4, 6), standard, required));
+    EXPECT_TRUE(!ruvia::base64_decode(shifted_input, ruvia::as_mutable_bytes(std::span(shifted + 4, 6)), standard, required));
     EXPECT_EQ(decoded_text(shifted, 8), std::string("QUJDREVG"));
 
     std::uint8_t in_place[8] = {'Q', 'U', 'J', 'D', 'R', 'E', 'V', 'G'};
     const std::string_view in_place_input(reinterpret_cast<const char*>(in_place), 8);
-    const auto in_place_size = ruvia::http_base64_decode(in_place_input, std::span(in_place), standard, required);
+    const auto in_place_size = ruvia::base64_decode(in_place_input, ruvia::as_mutable_bytes(std::span(in_place)), standard, required);
     EXPECT_TRUE(in_place_size && *in_place_size == 6);
     EXPECT_EQ(decoded_text(in_place, 6), std::string("ABCDEF"));
 
     std::uint8_t after[16] = {'Q', 'U', 'J', 'D', 'R', 'E', 'V', 'G'};
     const std::string_view after_input(reinterpret_cast<const char*>(after), 8);
-    const auto after_size = ruvia::http_base64_decode(after_input, std::span(after + 8, 8), standard, required);
+    const auto after_size = ruvia::base64_decode(after_input, ruvia::as_mutable_bytes(std::span(after + 8, 8)), standard, required);
     EXPECT_TRUE(after_size && *after_size == 6);
     EXPECT_EQ(decoded_text(after + 8, 6), std::string("ABCDEF"));
 }
 
 TEST(Ruvia, http_base64_accepts_both_alphabets_and_optional_complete_padding) {
-    constexpr auto both = ruvia::http_base64_charset::both;
-    constexpr auto optional = ruvia::http_base64_padding::optional;
+    constexpr auto both = ruvia::base64_charset::both;
+    constexpr auto optional = ruvia::base64_padding::optional;
     std::array<std::uint8_t, 8> output{};
+    const auto output_bytes = ruvia::as_mutable_bytes(std::span(output));
     for (const std::string_view text : {"+/8=", "-_8=", "+_8=", "-/8=", "+/8", "-_8", "+_8", "-/8"}) {
-        EXPECT_EQ(ruvia::http_base64_decode(text, output, both, optional), std::optional<std::size_t>{2});
+        EXPECT_EQ(ruvia::base64_decode(text, output_bytes, both, optional), std::optional<std::size_t>{2});
         EXPECT_EQ(output[0], 0xFB);
         EXPECT_EQ(output[1], 0xFF);
     }
     for (const std::string_view text : {"", "Zg", "Zg==", "Zm8", "Zm8=", "Zm9v"}) {
-        EXPECT_TRUE(ruvia::http_base64_decode(text, output, both, optional).has_value());
+        EXPECT_TRUE(ruvia::base64_decode(text, output_bytes, both, optional).has_value());
     }
     for (const std::string_view text : {"Z", "Zg=", "Zg===", "Zg==x", "=Zg=", "Zm=8", "Zh", "Zh==", "Zm9", "Zm9=", "Zg\n", "Zg== ", "====", "A==="}) {
-        EXPECT_FALSE(ruvia::http_base64_decode(text, output, both, optional).has_value());
+        EXPECT_FALSE(ruvia::base64_decode(text, output_bytes, both, optional).has_value());
     }
-    EXPECT_FALSE(ruvia::http_base64_decode("Zg", {}, both, optional).has_value());
-    EXPECT_FALSE(ruvia::http_base64_decode("-_8=", output, ruvia::http_base64_charset::standard, optional).has_value());
-    EXPECT_FALSE(ruvia::http_base64_decode("+/8=", output, ruvia::http_base64_charset::url_safe, optional).has_value());
-    EXPECT_FALSE(ruvia::http_base64_decode("Zg", output, both, ruvia::http_base64_padding::required).has_value());
-    EXPECT_FALSE(ruvia::http_base64_decode("Zg==", output, both, ruvia::http_base64_padding::forbidden).has_value());
+    EXPECT_FALSE(ruvia::base64_decode("Zg", {}, both, optional).has_value());
+    EXPECT_FALSE(ruvia::base64_decode("-_8=", output_bytes, ruvia::base64_charset::standard, optional).has_value());
+    EXPECT_FALSE(ruvia::base64_decode("+/8=", output_bytes, ruvia::base64_charset::url_safe, optional).has_value());
+    EXPECT_FALSE(ruvia::base64_decode("Zg", output_bytes, both, ruvia::base64_padding::required).has_value());
+    EXPECT_FALSE(ruvia::base64_decode("Zg==", output_bytes, both, ruvia::base64_padding::forbidden).has_value());
 }
 
 TEST(Ruvia, http_base64_encoding_rejects_decode_only_options_before_writing) {
     std::array<char, 4> output{'k', 'e', 'e', 'p'};
-    const std::array<std::uint8_t, 1> input{'f'};
-    EXPECT_THROW(ruvia::http_base64_encode(output.data(), input, ruvia::http_base64_charset::both), std::invalid_argument);
-    EXPECT_THROW(ruvia::http_base64_encode(output.data(), input, ruvia::http_base64_charset::standard, ruvia::http_base64_padding::optional), std::invalid_argument);
-    EXPECT_THROW((void)ruvia::http_base64_encoded_size(0, ruvia::http_base64_padding::optional), std::invalid_argument);
+    const std::array<std::byte, 1> input{std::byte{'f'}};
+    EXPECT_THROW(ruvia::base64_encode(output, input, ruvia::base64_charset::both), std::invalid_argument);
+    EXPECT_THROW(ruvia::base64_encode(output, input, ruvia::base64_charset::standard, ruvia::base64_padding::optional), std::invalid_argument);
+    EXPECT_THROW((void)ruvia::base64_encoded_size(0, ruvia::base64_padding::optional), std::invalid_argument);
     EXPECT_EQ(std::string_view(output.data(), output.size()), "keep");
 }
 
@@ -2000,7 +2001,7 @@ TEST(RuviaHttpPublicApi, media_type_compressibility_allowlist) {
 }
 
 TEST(RuviaHttpPublicApi, worker_codecs_reuse_reset_encoders) {
-    ruvia::http_worker_codecs codecs;
+    ruvia::http_content_codecs codecs;
     {
         auto lease = codecs.acquire_encoder(ruvia::http_content_coding::gzip);
         std::string out;

@@ -49,6 +49,9 @@ private:
 
 inline void validate_db_config(const db_config& config) {
     validate_client_tls_config(config.tls_);
+    if (!config.tls_.ca_pem_.empty() || (config.tls_.identity_.has_value() && (!config.tls_.identity_->certificate_chain_pem_.empty() || !config.tls_.identity_->private_key_pem_.empty()))) {
+        throw std::invalid_argument("database client TLS credentials must be PEM files, not in-memory PEM");
+    }
     // Both drivers are configured with key files only; refuse a password they
     // would silently ignore.
     if (config.tls_.identity_.has_value() && !config.tls_.identity_->private_key_password_.empty()) {

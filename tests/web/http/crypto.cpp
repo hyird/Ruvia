@@ -12,15 +12,15 @@
 
 TEST(Ruvia, crypto_sha256_matches_known_vectors_and_streams_beyond_inline_storage) {
     const ruvia::sha256_digest expected{
-        0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
-        0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
-        0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c,
-        0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad
+        std::byte{0xba}, std::byte{0x78}, std::byte{0x16}, std::byte{0xbf}, std::byte{0x8f}, std::byte{0x01}, std::byte{0xcf}, std::byte{0xea},
+        std::byte{0x41}, std::byte{0x41}, std::byte{0x40}, std::byte{0xde}, std::byte{0x5d}, std::byte{0xae}, std::byte{0x22}, std::byte{0x23},
+        std::byte{0xb0}, std::byte{0x03}, std::byte{0x61}, std::byte{0xa3}, std::byte{0x96}, std::byte{0x17}, std::byte{0x7a}, std::byte{0x9c},
+        std::byte{0xb4}, std::byte{0x10}, std::byte{0xff}, std::byte{0x61}, std::byte{0xf2}, std::byte{0x00}, std::byte{0x15}, std::byte{0xad}
     };
     EXPECT_EQ(ruvia::sha256_of("abc"), expected);
     ruvia::sha256 small;
     small.update("a");
-    small.update({});
+    small.update(ruvia::byte_view{});
     small.update("bc");
     EXPECT_EQ(small.finish(), expected);
 
@@ -30,19 +30,19 @@ TEST(Ruvia, crypto_sha256_matches_known_vectors_and_streams_beyond_inline_storag
     streamed.update(std::string_view(source).substr(511, 2));
     streamed.update(std::string_view(source).substr(513));
     ruvia::sha256_digest one_shot;
-    ASSERT_TRUE(ruvia::compute_sha256(std::span<const unsigned char>(reinterpret_cast<const unsigned char*>(source.data()), source.size()), one_shot));
+    ASSERT_TRUE(ruvia::compute_sha256(ruvia::as_bytes(source), one_shot));
     EXPECT_EQ(streamed.finish(), one_shot);
 }
 
 TEST(Ruvia, crypto_hmac_matches_rfc4231_and_rejects_short_output) {
     const std::string key(20, '\x0b');
-    const std::array<std::uint8_t, 32> expected{
-        0xb0, 0x34, 0x4c, 0x61, 0xd8, 0xdb, 0x38, 0x53,
-        0x5c, 0xa8, 0xaf, 0xce, 0xaf, 0x0b, 0xf1, 0x2b,
-        0x88, 0x1d, 0xc2, 0x00, 0xc9, 0x83, 0x3d, 0xa7,
-        0x26, 0xe9, 0x37, 0x6c, 0x2e, 0x32, 0xcf, 0xf7
+    const std::array<std::byte, 32> expected{
+        std::byte{0xb0}, std::byte{0x34}, std::byte{0x4c}, std::byte{0x61}, std::byte{0xd8}, std::byte{0xdb}, std::byte{0x38}, std::byte{0x53},
+        std::byte{0x5c}, std::byte{0xa8}, std::byte{0xaf}, std::byte{0xce}, std::byte{0xaf}, std::byte{0x0b}, std::byte{0xf1}, std::byte{0x2b},
+        std::byte{0x88}, std::byte{0x1d}, std::byte{0xc2}, std::byte{0x00}, std::byte{0xc9}, std::byte{0x83}, std::byte{0x3d}, std::byte{0xa7},
+        std::byte{0x26}, std::byte{0xe9}, std::byte{0x37}, std::byte{0x6c}, std::byte{0x2e}, std::byte{0x32}, std::byte{0xcf}, std::byte{0xf7}
     };
-    std::array<std::uint8_t, ruvia::hmac_max_digest_size> output{};
+    std::array<std::byte, ruvia::hmac_max_digest_size> output{};
     ASSERT_TRUE(ruvia::compute_hmac(ruvia::hmac_digest::sha256, key, "Hi There", output));
     EXPECT_TRUE(std::equal(expected.begin(), expected.end(), output.begin()));
     EXPECT_FALSE(ruvia::compute_hmac(ruvia::hmac_digest::sha256, key, "Hi There", std::span(output).first(31)));
@@ -51,12 +51,12 @@ TEST(Ruvia, crypto_hmac_matches_rfc4231_and_rejects_short_output) {
 
 TEST(Ruvia, crypto_comparison_and_random_bytes_accept_binary_and_empty_input) {
     const std::string_view binary("a\0b", 3);
-    EXPECT_TRUE(ruvia::constant_time_bytes_equal({}, {}));
+    EXPECT_TRUE(ruvia::constant_time_bytes_equal(ruvia::byte_view{}, ruvia::byte_view{}));
     EXPECT_TRUE(ruvia::constant_time_bytes_equal(binary, binary));
     EXPECT_FALSE(ruvia::constant_time_bytes_equal(binary, std::string_view("a\0c", 3)));
     EXPECT_FALSE(ruvia::constant_time_bytes_equal(binary, "a"));
-    EXPECT_TRUE(ruvia::fill_random_bytes({}));
-    std::array<unsigned char, 32> random;
+    EXPECT_TRUE(ruvia::fill_random_bytes(ruvia::mutable_byte_view{}));
+    std::array<std::byte, 32> random{};
     EXPECT_TRUE(ruvia::fill_random_bytes(random));
 }
 

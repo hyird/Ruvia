@@ -47,7 +47,7 @@ using detail::parse_ipv4_address;
     }
     if (value.size() >= 2 && value.front() == '0' && (value[1] == 'x' || value[1] == 'X')) {
         return std::ranges::all_of(value.substr(2), [](char digit) noexcept {
-            return http_decode_hex_nibble(digit) >= 0;
+            return decode_hex_nibble(digit) >= 0;
         });
     }
     if (value.size() >= 2 && value.front() == '0') {
@@ -141,7 +141,7 @@ using detail::parse_ipv4_address;
         if (size == output.size()) {
             return false;
         }
-        output[size++] = http_lower_hex_digit(static_cast<int>(nibble));
+        output[size++] = lower_hex_digit(static_cast<int>(nibble));
         emitted = true;
     }
     return true;
@@ -456,7 +456,7 @@ bool http_authorities_equal(borrowed_text left, borrowed_text right, std::option
 
 http_origin_view::http_origin_view(http_scheme scheme, http_origin_options options) :
     host_(options.host_.view()),
-    port_(options.port_.has_value() ? options.port_->value() : detail::http_scheme_default_port(scheme)),
+    port_(options.port_.has_value() ? *options.port_ : port_number(detail::http_scheme_default_port(scheme))),
     scheme_(scheme) {
     if (host_.empty()) {
         throw std::invalid_argument("HTTP origin host must not be empty");
@@ -474,7 +474,7 @@ std::string format_http_origin_authority(const http_origin_view& origin) {
     authority.append(host);
     if (include_port) {
         authority.push_back(':');
-        append_decimal(authority, origin.port());
+        append_decimal(authority, origin.port().value());
     }
     return authority;
 }

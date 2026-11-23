@@ -30,13 +30,13 @@
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/verify_mode.hpp>
 
-#include "asio_ip_address.h"
+#include "asio_bridge.h"
 #include "blocking_pool.h"
-#include "callback_ref.h"
 #include "connection_lifecycle.h"
 #include "controller.h"
 #include "crypto.h"
 #include "event_loop.h"
+#include "function_ref.h"
 #include "http_header.h"
 #include "inbound_buffer.h"
 #include "response_coding_policy.h"

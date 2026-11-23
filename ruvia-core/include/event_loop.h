@@ -18,9 +18,8 @@
 
 #include <asio/io_context.hpp>
 
-#include "asio_bridge.h"
 #include "blocking_pool.h"
-#include "byte_view.h"
+#include "lifetimebound.h"
 #include "move_only_function.h"
 #include "operation_options.h"
 #include "task.h"
@@ -535,7 +534,6 @@ public:
     // loop (stopping) returns the unconsumed cold task without allocating.
     // Allocation for an admitted task may throw.
     template <typename t_type>
-        requires detail::asio_task_result<t_type>
     [[nodiscard]] event_loop_submit_result<t_type> submit(task<t_type> task_value) const {
         using result_type = event_loop_submit_result<t_type>;
         detail::root_task_retirement retirement_lease(state_);

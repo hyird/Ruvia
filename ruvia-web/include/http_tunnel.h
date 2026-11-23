@@ -21,10 +21,10 @@
 #include "task.h"
 #include "worker_ref.h"
 namespace ruvia {
+class inbound_buffer_account;
 namespace detail {
 class http_capsule_stream_state;
 class capsule_state_pin;
-class inbound_buffer_account;
 class http_client_response_state;
 class http_client_tunnel_state;
 template <typename stream_type>
@@ -304,7 +304,7 @@ private:
     read_datagram_type read_datagram_{};
     write_datagram_type write_datagram_{};
     // Server role: the connection account charged for collected capsule payloads.
-    detail::inbound_buffer_account* inbound_{};
+    inbound_buffer_account* inbound_{};
     // Client role: the response state that capsule results pin.
     detail::http_client_response_state* client_{};
     negotiation negotiated_;

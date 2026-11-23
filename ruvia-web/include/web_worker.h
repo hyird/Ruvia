@@ -63,7 +63,7 @@ private:
     const ruvia::env* env_;
     // Each posted callback gets an independent operation lifetime. Declared
     // last so cold frames are destroyed before the callback context disappears.
-    mutable detail::operation_scope operation_scope_;
+    mutable ::ruvia::operation_scope operation_scope_;
 };
 
 using web_worker_post_result = post_result<task<void>(web_worker_context&)>;

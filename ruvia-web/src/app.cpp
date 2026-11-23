@@ -18,10 +18,10 @@
 #include <openssl/ssl.h>
 
 #include "app_state.h"
-#include "callback_ref.h"
 #include "connection_lifecycle.h"
 #include "controller.h"
 #include "document_root_publisher.h"
+#include "function_ref.h"
 #include "http_client_pool.h"
 #include "http_server.h"
 #include "middleware.h"
@@ -221,7 +221,7 @@ application& application::document_root(std::nullptr_t) & {
 }
 
 // Every dispatch_configuration member funnels through this guard.
-void application::edit_configuration(detail::callback_ref<void(detail::app_configuration&)> edit) {
+void application::edit_configuration(function_ref<void(detail::app_configuration&)> edit) {
     auto& state_value = *state_;
     std::lock_guard lock(state_value.mutex_);
     detail::ensure_app_not_running(state_value.lifecycle_.active(), "cannot change dispatch configuration while app is running");

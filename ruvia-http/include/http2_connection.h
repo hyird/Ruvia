@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "byte_view.h"
 #include "http2_frame.h"
 #include "http2_push.h"
 #include "http_client_response_head.h"
@@ -156,12 +157,6 @@ struct http2_output_batch_result final {
 };
 using http2_data_output_observer_type = void (*)(void*, std::uint32_t, std::size_t) noexcept;
 
-enum class http2_request_content_release_status : std::uint8_t {
-    released,
-    not_pending,
-    closed,
-};
-
 // A complete received frame, before its final payload fragment is processed.
 // observation_sequence_ starts at zero after the preface and counts frame
 // headers exposed by nghttp2, in wire order (including ACK, unknown extensions,
@@ -276,6 +271,14 @@ public:
     // Head fields borrow this lease; body borrows its caller-owned storage.
     [[nodiscard]] http_request build_request(borrowed_text body = {}) const& RUVIA_LIFETIMEBOUND;
     http_request build_request(borrowed_text body = {}) const&& = delete;
+    template <typename bytes_type>
+        requires(!std::convertible_to<bytes_type&&, borrowed_text> && std::convertible_to<bytes_type&&, borrowed_bytes>)
+    [[nodiscard]] http_request build_request(bytes_type&& body RUVIA_LIFETIMEBOUND) const& RUVIA_LIFETIMEBOUND {
+        return build_request(borrowed_text(as_chars(borrowed_bytes(std::forward<bytes_type>(body)).view())));
+    }
+    template <typename bytes_type>
+        requires(!std::convertible_to<bytes_type&&, borrowed_text> && std::convertible_to<bytes_type&&, borrowed_bytes>)
+    http_request build_request(bytes_type&&) const&& = delete;
     [[nodiscard]] http_server_expectation_plan expectation_plan(http_unsupported_expectation_policy policy) const noexcept {
         return expectations_.server_plan(content_, policy);
     }
@@ -485,6 +488,13 @@ struct http2_connection_options final {
     // GOAWAY(ENHANCE_YOUR_CALM). Count-based like nghttp2's glitch burst, as the
     // core has no clock. Zero throws std::invalid_argument from server()/client().
     std::uint32_t max_non_progress_frames_{1000};
+    // Local HTTP/2 SETTINGS advertised in the connection preface (RFC 9113 §6.5.2).
+    std::uint32_t header_table_size_{4096};
+    std::uint32_t max_concurrent_streams_{128};
+    std::uint32_t initial_window_size_{1024 * 1024};
+    std::uint32_t max_frame_size_{http2_default_max_frame_size};
+    std::uint32_t max_header_list_size_{static_cast<std::uint32_t>(max_http_header_bytes)};
+    bool enable_connect_protocol_{true};
 };
 
 // Stable HTTP/2 sans-I/O driver backed by one nghttp2 session per connection.
@@ -575,6 +585,14 @@ public:
     [[nodiscard]] std::uint64_t received_stream_progress() const noexcept;
     [[nodiscard]] http2_feed_status feed(borrowed_text input) &;
     http2_feed_status feed(borrowed_text) && = delete;
+    template <typename bytes_type>
+        requires(!std::convertible_to<bytes_type&&, borrowed_text> && std::convertible_to<bytes_type&&, borrowed_bytes>)
+    [[nodiscard]] http2_feed_status feed(bytes_type&& input) & {
+        return feed(borrowed_text(as_chars(borrowed_bytes(std::forward<bytes_type>(input)).view())));
+    }
+    template <typename bytes_type>
+        requires(!std::convertible_to<bytes_type&&, borrowed_text> && std::convertible_to<bytes_type&&, borrowed_bytes>)
+    http2_feed_status feed(bytes_type&&) && = delete;
     // Transfers the event and its lease or credit; DATA views still borrow feed() input.
     [[nodiscard]] std::optional<http2_event> next_event() &;
     std::optional<http2_event> next_event() && = delete;
@@ -628,6 +646,11 @@ public:
     // it returns {0, backpressured} without changing anything, and the caller
     // retries once send_window_state() reports available window.
     [[nodiscard]] http_data_submit_result submit_data(std::uint32_t stream_id, std::string_view bytes, http2_end_stream end_stream, std::size_t max_payload_bytes);
+    template <typename bytes_type>
+        requires(!std::convertible_to<bytes_type&&, std::string_view> && std::convertible_to<bytes_type&&, byte_view>)
+    [[nodiscard]] http_data_submit_result submit_data(std::uint32_t stream_id, bytes_type&& bytes, http2_end_stream end_stream, std::size_t max_payload_bytes) {
+        return submit_data(stream_id, as_chars(byte_view(std::forward<bytes_type>(bytes))), end_stream, max_payload_bytes);
+    }
     // Finish only after all source bytes were consumed. Trailer fields are encoded
     // before returning. Without trailers the END_STREAM rides an empty DATA frame
     // and returns backpressured, changing nothing, under the same window rule as
@@ -637,7 +660,7 @@ public:
     // changes nothing; a stream whose request content is not open throws
     // std::logic_error.
     [[nodiscard]] http_finish_status finish_request(std::uint32_t stream_id, std::span<const http_header_view> trailers = {});
-    [[nodiscard]] http2_request_content_release_status release_request_content(std::uint32_t stream_id) noexcept;
+    [[nodiscard]] http_request_content_release_status release_request_content(std::uint32_t stream_id) noexcept;
     // Server push (RFC 9113 section 8.4): `request` is a regular GET or HEAD
     // head with an authority and no content.
     // Returns stream_limit without sending PUSH_PROMISE when the open pushed streams

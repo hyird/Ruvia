@@ -80,6 +80,8 @@ public:
     // ports, surrounding space and embedded NUL yield std::nullopt.
     [[nodiscard]] static std::optional<ip_address> try_parse(std::string_view text) noexcept;
 
+    explicit ip_address(std::string_view text);
+
     [[nodiscard]] constexpr ip_address_family family() const noexcept {
         return family_;
     }
@@ -158,13 +160,13 @@ public:
     constexpr ip_endpoint() noexcept = default;
     constexpr ip_endpoint(ip_address address, port_number port) noexcept :
         address_(address),
-        port_(port.value()) {}
+        port_(port) {}
 
     [[nodiscard]] constexpr ip_address address() const noexcept {
         return address_;
     }
 
-    [[nodiscard]] constexpr std::uint16_t port() const noexcept {
+    [[nodiscard]] constexpr port_number port() const noexcept {
         return port_;
     }
 
@@ -172,7 +174,7 @@ public:
 
 private:
     ip_address address_{};
-    std::uint16_t port_{0};
+    port_number port_{};
 };
 
 static_assert(std::is_trivially_copyable_v<ip_address>);
@@ -187,6 +189,8 @@ public:
     constexpr ip_cidr() noexcept = default;
 
     [[nodiscard]] static std::optional<ip_cidr> try_parse(std::string_view text) noexcept;
+
+    explicit ip_cidr(std::string_view text);
 
     [[nodiscard]] ip_address network() const noexcept;
     [[nodiscard]] constexpr std::uint8_t prefix_bits() const noexcept {

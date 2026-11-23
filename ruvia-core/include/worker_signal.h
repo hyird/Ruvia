@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "byte_view.h"
+#include "lifetimebound.h"
 #include "worker_ref.h"
 
 namespace ruvia {

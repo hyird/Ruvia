@@ -14,6 +14,7 @@
 #include "borrowed_text.h"
 #include "http_header.h"
 #include "http_response.h"
+#include "ip_address.h"
 
 namespace ruvia {
 
@@ -124,7 +125,7 @@ private:
     struct suffix_rule final {
         std::string scheme_;
         std::string host_suffix_;
-        std::optional<std::uint16_t> port_{};
+        std::optional<port_number> port_{};
         bool subdomain_only_{false};
     };
 

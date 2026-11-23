@@ -11,60 +11,13 @@
 #include "borrowed_text.h"
 #include "http_response.h"
 #include "http_status.h"
+#include "model.h"
 #include "move_only_function.h"
 #include "task.h"
 
 namespace ruvia {
 
 class context;
-
-inline constexpr std::size_t max_validation_text_bytes = 1024;
-
-namespace detail {
-class json_parse_budget;
-}  // namespace detail
-
-struct validation_issue_options final {
-    borrowed_text field_{};
-    borrowed_text code_{};
-    borrowed_text message_{};
-};
-
-class validation_issue final {
-public:
-    validation_issue(const validation_issue&) = default;
-    validation_issue(validation_issue&&) noexcept = default;
-    validation_issue& operator=(const validation_issue& other);
-    validation_issue& operator=(validation_issue&& other) noexcept;
-
-    [[nodiscard]] std::string_view field() const& noexcept RUVIA_LIFETIMEBOUND {
-        return field_;
-    }
-    [[nodiscard]] std::string_view field() const&& = delete;
-
-    [[nodiscard]] std::string_view code() const& noexcept RUVIA_LIFETIMEBOUND {
-        return code_;
-    }
-    [[nodiscard]] std::string_view code() const&& = delete;
-
-    [[nodiscard]] std::string_view message() const& noexcept RUVIA_LIFETIMEBOUND {
-        return message_;
-    }
-    [[nodiscard]] std::string_view message() const&& = delete;
-
-private:
-    friend class validator;
-    friend class detail::json_parse_budget;
-
-    void swap(validation_issue& other) noexcept;
-
-    explicit validation_issue(validation_issue_options options);
-
-    std::string field_;
-    std::string code_;
-    std::string message_;
-};
-using borrowed_validation_issues = borrowed_span<validation_issue>;
 
 struct http_error_info_options final {
     http_status_code status_{http_status::internal_server_error};

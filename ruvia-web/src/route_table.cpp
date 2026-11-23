@@ -14,12 +14,12 @@
 #include <vector>
 
 #include "blocking_pool.h"
-#include "callback_ref.h"
 #include "context.h"
 #include "context_access.h"
 #include "controller.h"
 #include "failure_report.h"
 #include "fnv1a.h"
+#include "function_ref.h"
 #include "http_connect_udp.h"
 #include "http_content_coding.h"
 #include "http_error.h"
@@ -86,7 +86,7 @@ void detail::route_table::build_middleware_instances() {
     }
 
     for (const auto instance : plan.middleware_frame_instances_) {
-        middleware_frames_.push_back(callback_access::make<task<void>(context&, next&)>(middleware_instances_[instance], plan.middleware_instances_[instance].invoke()));
+        middleware_frames_.push_back(route_middleware::from_raw(middleware_instances_[instance], plan.middleware_instances_[instance].invoke()));
     }
 }
 
@@ -251,11 +251,11 @@ std::string detail::route_table::url_for(std::string_view pattern, std::span<con
 }
 
 detail::route_handler detail::resolved_route::handler() const noexcept {
-    return callback_access::make<task<http_response>(context&)>(handler_target_, route_->endpoint().buffered()->invoke());
+    return route_handler::from_raw(handler_target_, route_->endpoint().buffered()->invoke());
 }
 
 detail::route_stream_handler detail::resolved_route::stream_handler() const noexcept {
-    return callback_access::make<task<void>(context&)>(handler_target_, route_->endpoint().stream_invoke());
+    return route_stream_handler::from_raw(handler_target_, route_->endpoint().stream_invoke());
 }
 
 detail::route_resolution detail::route_table::resolved(const route_entry& route) const noexcept {
@@ -739,7 +739,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
                 auto terminal = [&fallback_response](context&) -> task<http_response> {
                     co_return std::move(fallback_response);
                 };
-                response = co_await run_unmatched_chain(context_value, callback_access::bind<task<http_response>(context&)>(terminal));
+                response = co_await run_unmatched_chain(context_value, route_handler(terminal));
                 co_return;
             }
             std::optional<http_response> unmatched_response;
@@ -793,7 +793,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
                 auto terminal = [&unmatched_response](context&) -> task<http_response> {
                     co_return std::move(*unmatched_response);
                 };
-                response = co_await run_unmatched_chain(context_value, callback_access::bind<task<http_response>(context&)>(terminal));
+                response = co_await run_unmatched_chain(context_value, route_handler(terminal));
                 co_return;
             }
 
@@ -958,7 +958,7 @@ task<http_response> detail::route_table::respond_error(const http_request& reque
     // is answered the way dispatch answers it, without re-entering the chain.
     std::exception_ptr exception;
     try {
-        auto response = co_await run_unmatched_chain(context_value, callback_access::bind<task<http_response>(context&)>(terminal));
+        auto response = co_await run_unmatched_chain(context_value, route_handler(terminal));
         co_return response;
     } catch (...) {
         exception = std::current_exception();
@@ -1010,7 +1010,7 @@ task<http_response> detail::route_table::respond_not_found(const http_request& r
     };
     std::exception_ptr exception;
     try {
-        co_return co_await run_unmatched_chain(context_value, callback_access::bind<task<http_response>(context&)>(terminal));
+        co_return co_await run_unmatched_chain(context_value, route_handler(terminal));
     } catch (...) {
         exception = std::current_exception();
     }
@@ -1139,7 +1139,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_bound_stream(co
             };
 #endif
             auto chain = route_chain(route);
-            chain.terminal_ = callback_access::bind<task<void>(context&)>(terminal);
+            chain.terminal_ = route_stream_handler(terminal);
             co_await run_chain(chain, context_value);
             if (!detail::context_access::has_response(context_value)) {
                 if (auto context_exception = context_value.exception()) {

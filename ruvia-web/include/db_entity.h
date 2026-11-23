@@ -184,9 +184,24 @@ struct db_entity_type_traits<bool> {
     static constexpr db_data_type data_type = db_data_type::boolean;
 };
 template <>
+struct db_entity_type_traits<std::int8_t> {
+    using value_type = std::int8_t;
+    static constexpr db_data_type data_type = db_data_type::small_int;
+};
+template <>
+struct db_entity_type_traits<std::uint8_t> {
+    using value_type = std::uint8_t;
+    static constexpr db_data_type data_type = db_data_type::small_int;
+};
+template <>
 struct db_entity_type_traits<std::int16_t> {
     using value_type = std::int16_t;
     static constexpr db_data_type data_type = db_data_type::small_int;
+};
+template <>
+struct db_entity_type_traits<std::uint16_t> {
+    using value_type = std::uint16_t;
+    static constexpr db_data_type data_type = db_data_type::integer;
 };
 template <>
 struct db_entity_type_traits<std::int32_t> {
@@ -194,9 +209,19 @@ struct db_entity_type_traits<std::int32_t> {
     static constexpr db_data_type data_type = db_data_type::integer;
 };
 template <>
+struct db_entity_type_traits<std::uint32_t> {
+    using value_type = std::uint32_t;
+    static constexpr db_data_type data_type = db_data_type::big_int;
+};
+template <>
 struct db_entity_type_traits<std::int64_t> {
     using value_type = std::int64_t;
     static constexpr db_data_type data_type = db_data_type::big_int;
+};
+template <>
+struct db_entity_type_traits<std::uint64_t> {
+    using value_type = std::uint64_t;
+    static constexpr db_data_type data_type = db_data_type::numeric;
 };
 template <>
 struct db_entity_type_traits<float> {
@@ -216,6 +241,47 @@ struct db_entity_type_traits<std::string> {
 template <>
 struct db_entity_type_traits<string> {
     using value_type = string;
+    static constexpr db_data_type data_type = db_data_type::text;
+};
+template <>
+struct db_entity_type_traits<bytes> {
+    using value_type = bytes;
+    static constexpr db_data_type data_type = db_data_type::bytea;
+};
+template <>
+struct db_entity_type_traits<uuid> {
+    using value_type = uuid;
+    static constexpr db_data_type data_type = db_data_type::uuid;
+};
+template <>
+struct db_entity_type_traits<decimal> {
+    using value_type = decimal;
+    static constexpr db_data_type data_type = db_data_type::numeric;
+};
+template <>
+struct db_entity_type_traits<civil_date> {
+    using value_type = civil_date;
+    static constexpr db_data_type data_type = db_data_type::date;
+};
+template <>
+struct db_entity_type_traits<utc_seconds> {
+    using value_type = utc_seconds;
+    static constexpr db_data_type data_type = db_data_type::timestamp_tz;
+};
+template <>
+struct db_entity_type_traits<utc_milliseconds> {
+    using value_type = utc_milliseconds;
+    static constexpr db_data_type data_type = db_data_type::timestamp_tz;
+};
+template <>
+struct db_entity_type_traits<utc_microseconds> {
+    using value_type = utc_microseconds;
+    static constexpr db_data_type data_type = db_data_type::timestamp_tz;
+};
+template <typename enum_type>
+    requires is_ruvia_enum<enum_type>
+struct db_entity_type_traits<enum_type> {
+    using value_type = enum_type;
     static constexpr db_data_type data_type = db_data_type::text;
 };
 template <typename t_type>
@@ -285,7 +351,21 @@ struct db_relation_slot final {
     db_relation_slot(db_relation_slot&& other) noexcept :
         state_(std::exchange(other.state_, state_type::unset)),
         value_(std::move(other.value_)) {}
-    db_relation_slot& operator=(db_relation_slot&&) = delete;
+    db_relation_slot& operator=(db_relation_slot&& other) noexcept {
+        if (this != &other) {
+            state_ = std::exchange(other.state_, state_type::unset);
+            value_ = std::move(other.value_);
+        }
+        return *this;
+    }
+    [[nodiscard]] db_relation_slot clone() const {
+        db_relation_slot copy;
+        if (state_ == state_type::value && value_ != nullptr) {
+            copy.value_ = std::make_unique<stored_type>(value_->clone());
+        }
+        copy.state_ = state_;
+        return copy;
+    }
     state_type state_{state_type::unset};
     pointer value_;
     void reset() noexcept {
@@ -422,6 +502,15 @@ public:
     db_entity_storage(const db_entity_storage&) = delete;
     db_entity_storage& operator=(const db_entity_storage&) = delete;
     db_entity_storage(db_entity_storage&&) noexcept = default;
+    db_entity_storage& operator=(db_entity_storage&&) noexcept = default;
+    [[nodiscard]] db_entity_storage clone() const {
+        db_entity_storage copy;
+        copy.columns_ = columns_.clone();
+        [&]<std::size_t... i>(std::index_sequence<i...>) {
+            ((std::get<i>(copy.relation_slots_) = std::get<i>(relation_slots_).clone()), ...);
+        }(std::make_index_sequence<std::tuple_size_v<relations_tuple_type>>{});
+        return copy;
+    }
     template <fixed_string name>
     [[nodiscard]] const auto& get() const& RUVIA_LIFETIMEBOUND {
         if constexpr (is_relation<name>()) {
@@ -449,6 +538,40 @@ public:
         } else {
             return std::move(columns_).template take<name>();
         }
+    }
+    template <fixed_string name>
+    auto& emplace_relation() & RUVIA_LIFETIMEBOUND
+        requires(is_relation<name>() && !std::tuple_element_t<relation_index<name>(), relations_type>::is_collection)
+    {
+        auto& slot = relation_slot<name>();
+        using stored_type = typename std::remove_reference_t<decltype(slot)>::stored_type;
+        slot.value_ = std::make_unique<stored_type>();
+        slot.state_ = decltype(slot.state_)::value;
+        return *slot.value_;
+    }
+    template <fixed_string name>
+    auto& emplace_relation() && = delete;
+    template <fixed_string name>
+    auto& ensure_relation_collection() & RUVIA_LIFETIMEBOUND
+        requires(is_relation<name>() && std::tuple_element_t<relation_index<name>(), relations_type>::is_collection)
+    {
+        auto& slot = relation_slot<name>();
+        if (slot.state_ != decltype(slot.state_)::value) {
+            using stored_type = typename std::remove_reference_t<decltype(slot)>::stored_type;
+            slot.value_ = std::make_unique<stored_type>();
+            slot.state_ = decltype(slot.state_)::value;
+        }
+        return *slot.value_;
+    }
+    template <fixed_string name>
+    auto& ensure_relation_collection() && = delete;
+    template <fixed_string name>
+    void set_relation_null() noexcept
+        requires(is_relation<name>() && !std::tuple_element_t<relation_index<name>(), relations_type>::is_collection)
+    {
+        auto& slot = relation_slot<name>();
+        slot.reset();
+        slot.state_ = decltype(slot.state_)::null;
     }
     template <fixed_string name, typename v_type>
     void set(v_type&& value) {
@@ -625,6 +748,73 @@ public:
     }
     [[nodiscard]] db_order_term desc(db_nulls_order nulls = db_nulls_order::default_) const {
         return to_expr().desc(nulls);
+    }
+
+    [[nodiscard]] db_predicate operator==(const db_expr& rhs) const {
+        return to_expr() == rhs;
+    }
+    [[nodiscard]] db_predicate operator!=(const db_expr& rhs) const {
+        return to_expr() != rhs;
+    }
+    [[nodiscard]] db_predicate operator<(const db_expr& rhs) const {
+        return to_expr() < rhs;
+    }
+    [[nodiscard]] db_predicate operator<=(const db_expr& rhs) const {
+        return to_expr() <= rhs;
+    }
+    [[nodiscard]] db_predicate operator>(const db_expr& rhs) const {
+        return to_expr() > rhs;
+    }
+    [[nodiscard]] db_predicate operator>=(const db_expr& rhs) const {
+        return to_expr() >= rhs;
+    }
+    template <typename other_e_type, fixed_string other_field>
+    [[nodiscard]] db_predicate operator==(const db_field_reference<other_e_type, other_field>& rhs) const {
+        return to_expr() == rhs.to_expr();
+    }
+    template <typename other_e_type, fixed_string other_field>
+    [[nodiscard]] db_predicate operator!=(const db_field_reference<other_e_type, other_field>& rhs) const {
+        return to_expr() != rhs.to_expr();
+    }
+    template <typename other_e_type, fixed_string other_field>
+    [[nodiscard]] db_predicate operator<(const db_field_reference<other_e_type, other_field>& rhs) const {
+        return to_expr() < rhs.to_expr();
+    }
+    template <typename other_e_type, fixed_string other_field>
+    [[nodiscard]] db_predicate operator<=(const db_field_reference<other_e_type, other_field>& rhs) const {
+        return to_expr() <= rhs.to_expr();
+    }
+    template <typename other_e_type, fixed_string other_field>
+    [[nodiscard]] db_predicate operator>(const db_field_reference<other_e_type, other_field>& rhs) const {
+        return to_expr() > rhs.to_expr();
+    }
+    template <typename other_e_type, fixed_string other_field>
+    [[nodiscard]] db_predicate operator>=(const db_field_reference<other_e_type, other_field>& rhs) const {
+        return to_expr() >= rhs.to_expr();
+    }
+    template <detail::db_parameter v_type>
+    [[nodiscard]] db_predicate operator==(v_type&& rhs) const {
+        return to_expr() == std::forward<v_type>(rhs);
+    }
+    template <detail::db_parameter v_type>
+    [[nodiscard]] db_predicate operator!=(v_type&& rhs) const {
+        return to_expr() != std::forward<v_type>(rhs);
+    }
+    template <detail::db_parameter v_type>
+    [[nodiscard]] db_predicate operator<(v_type&& rhs) const {
+        return to_expr() < std::forward<v_type>(rhs);
+    }
+    template <detail::db_parameter v_type>
+    [[nodiscard]] db_predicate operator<=(v_type&& rhs) const {
+        return to_expr() <= std::forward<v_type>(rhs);
+    }
+    template <detail::db_parameter v_type>
+    [[nodiscard]] db_predicate operator>(v_type&& rhs) const {
+        return to_expr() > std::forward<v_type>(rhs);
+    }
+    template <detail::db_parameter v_type>
+    [[nodiscard]] db_predicate operator>=(v_type&& rhs) const {
+        return to_expr() >= std::forward<v_type>(rhs);
     }
 
     template <detail::db_parameter v_type>
@@ -927,6 +1117,31 @@ private:
         static constexpr ::ruvia::db_field_reference<name, field_name> column(::ruvia::borrowed_text alias = {}) noexcept { \
             return ::ruvia::db_field_reference<name, field_name>(alias);                                                    \
         }                                                                                                                   \
+        template <::ruvia::fixed_string relation_name>                                                                      \
+        auto& emplace_relation() & RUVIA_LIFETIMEBOUND                                                                      \
+            requires requires { entity_.template emplace_relation<relation_name>(); }                                       \
+        {                                                                                                                   \
+            return entity_.template emplace_relation<relation_name>();                                                      \
+        }                                                                                                                   \
+        template <::ruvia::fixed_string relation_name>                                                                      \
+        auto& emplace_relation() && = delete;                                                                               \
+        template <::ruvia::fixed_string relation_name>                                                                      \
+        auto& ensure_relation_collection() & RUVIA_LIFETIMEBOUND                                                            \
+            requires requires { entity_.template ensure_relation_collection<relation_name>(); }                             \
+        {                                                                                                                   \
+            return entity_.template ensure_relation_collection<relation_name>();                                            \
+        }                                                                                                                   \
+        template <::ruvia::fixed_string relation_name>                                                                      \
+        auto& ensure_relation_collection() && = delete;                                                                     \
+        template <::ruvia::fixed_string relation_name>                                                                      \
+        name& set_relation_null() & noexcept RUVIA_LIFETIMEBOUND                                                            \
+            requires requires { entity_.template set_relation_null<relation_name>(); }                                      \
+        {                                                                                                                   \
+            entity_.template set_relation_null<relation_name>();                                                            \
+            return *this;                                                                                                   \
+        }                                                                                                                   \
+        template <::ruvia::fixed_string relation_name>                                                                      \
+        name& set_relation_null() && = delete;                                                                              \
         RUVIA_DETAIL_ENTITY_VALUE_API(entity_)                                                                              \
     };
 namespace detail {

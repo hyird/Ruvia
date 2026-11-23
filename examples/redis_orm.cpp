@@ -34,9 +34,9 @@ const ruvia::redis_search_mapping& cached_user_mapping() {
     return mapping;
 }
 
-RUVIA_MODEL(create_cached_user, RUVIA_REQUIRED_FIELD(id, ruvia::string, RUVIA_MIN(1, "id is required"), RUVIA_MAX(64, "id is too long")), RUVIA_REQUIRED_FIELD(name, ruvia::string, RUVIA_MIN(1, "name is required"), RUVIA_MAX(120, "name is too long")), RUVIA_REQUIRED_FIELD(age, ruvia::uint32, RUVIA_MAX(130, "age is too large")));
+RUVIA_MODEL(create_cached_user, RUVIA_REQUIRED_FIELD(id, ruvia::string, RUVIA_MIN_BYTES(1, "id is required"), RUVIA_MAX_BYTES(64, "id is too long")), RUVIA_REQUIRED_FIELD(name, ruvia::string, RUVIA_MIN_BYTES(1, "name is required"), RUVIA_MAX_BYTES(120, "name is too long")), RUVIA_REQUIRED_FIELD(age, std::uint32_t, RUVIA_MAX(130, "age is too large")));
 
-RUVIA_MODEL(cached_user_response, RUVIA_REQUIRED_FIELD(id, ruvia::string), RUVIA_REQUIRED_FIELD(name, ruvia::string), RUVIA_REQUIRED_FIELD(age, ruvia::uint32));
+RUVIA_MODEL(cached_user_response, RUVIA_REQUIRED_FIELD(id, ruvia::string), RUVIA_REQUIRED_FIELD(name, ruvia::string), RUVIA_REQUIRED_FIELD(age, std::uint32_t));
 
 RUVIA_MODEL(cached_users_response, RUVIA_REQUIRED_FIELD(users, ruvia::array<cached_user_response>));
 
@@ -53,14 +53,14 @@ private:
     static void fill(cached_user_response& response, const cached_user& user_value) {
         response.set<"id">(user_value.get<"id">().view());
         response.set<"name">(user_value.get<"name">().view());
-        response.set<"age">(ruvia::uint32{user_value.get<"age">()});
+        response.set<"age">(user_value.get<"age">());
     }
     ruvia::task<ruvia::http_response> create(ruvia::context& c) {
         const auto& request = c.request().validated<create_cached_user>();
         cached_user user_value;
         user_value.set<"id">(request.get<"id">().view());
         user_value.set<"name">(request.get<"name">().view());
-        user_value.set<"age">(static_cast<std::uint32_t>(request.get<"age">()));
+        user_value.set<"age">(request.get<"age">());
         auto users = c.redis().repository<cached_user>(cached_user_mapping());
         const auto result_value = co_await users.insert(user_value, {.ttl_ = std::chrono::hours(1)});
         if (result_value.affected_entities() == 0) {

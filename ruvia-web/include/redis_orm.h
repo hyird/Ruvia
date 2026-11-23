@@ -91,7 +91,7 @@ consteval redis_column_kind redis_number_kind() {
 template <typename t_type>
 consteval redis_column_kind redis_column_value_kind() {
     using value_type = std::remove_cvref_t<t_type>;
-    if constexpr (std::is_same_v<value_type, string> || std::is_same_v<value_type, std::string>) {
+    if constexpr (std::is_same_v<value_type, string> || std::is_same_v<value_type, std::string> || std::is_same_v<value_type, bytes> || std::is_same_v<value_type, uuid> || std::is_same_v<value_type, decimal> || is_civil_date<value_type> || is_chrono_timestamp<value_type> || is_ruvia_enum<value_type>) {
         return redis_column_kind::text;
     } else if constexpr (std::is_same_v<value_type, bool>) {
         return redis_column_kind::bool_;
@@ -106,7 +106,13 @@ template <typename t_type>
 inline constexpr bool is_redis_entity_scalar = redis_column_value_kind<t_type>() != redis_column_kind::unsupported;
 
 template <typename t_type>
-inline constexpr bool is_redis_entity_primary_key_scalar = redis_column_value_kind<t_type>() == redis_column_kind::text || redis_column_value_kind<t_type>() == redis_column_kind::signed_value || redis_column_value_kind<t_type>() == redis_column_kind::unsigned_value;
+inline constexpr bool is_redis_entity_primary_key_scalar =
+    std::is_same_v<std::remove_cvref_t<t_type>, string> ||
+    std::is_same_v<std::remove_cvref_t<t_type>, std::string> ||
+    std::is_same_v<std::remove_cvref_t<t_type>, uuid> ||
+    is_ruvia_enum<t_type> ||
+    redis_column_value_kind<t_type>() == redis_column_kind::signed_value ||
+    redis_column_value_kind<t_type>() == redis_column_kind::unsigned_value;
 
 [[noreturn]] inline void throw_invalid_redis_scalar(std::string_view message) {
     throw redis_error(backend_error_code::protocol_error, message);
@@ -136,8 +142,33 @@ template <typename t_type>
     using scalar_type = std::remove_cvref_t<t_type>;
     if constexpr (std::is_same_v<scalar_type, string>) {
         return value.view();
-    } else if constexpr (std::is_same_v<scalar_type, std::string> || std::is_same_v<scalar_type, std::string> || std::is_same_v<scalar_type, std::string_view>) {
+    } else if constexpr (std::is_same_v<scalar_type, std::string> || std::is_same_v<scalar_type, std::string_view>) {
         return value;
+    } else if constexpr (std::is_same_v<scalar_type, bytes>) {
+        return as_chars(value.view());
+    } else if constexpr (is_ruvia_enum<scalar_type>) {
+        return to_enum_string(value);
+    } else if constexpr (std::is_same_v<scalar_type, uuid>) {
+        return value.format_to(std::span<char, uuid::text_size>(scratch.data(), uuid::text_size));
+    } else if constexpr (std::is_same_v<scalar_type, decimal>) {
+        std::string rendered = value.to_string();
+        if (rendered.size() > scratch.size()) {
+            throw_invalid_redis_scalar("decimal Redis scalar exceeds scratch size");
+        }
+        rendered.copy(scratch.data(), rendered.size());
+        return {scratch.data(), rendered.size()};
+    } else if constexpr (is_civil_date<scalar_type>) {
+        std::string rendered;
+        rendered.reserve(16);
+        append_civil_date(rendered, value);
+        rendered.copy(scratch.data(), rendered.size());
+        return {scratch.data(), rendered.size()};
+    } else if constexpr (is_chrono_timestamp<scalar_type>) {
+        std::string rendered;
+        rendered.reserve(32);
+        append_rfc3339(rendered, value);
+        rendered.copy(scratch.data(), rendered.size());
+        return {scratch.data(), rendered.size()};
     } else if constexpr (std::is_same_v<scalar_type, bool>) {
         return value ? std::string_view("1") : std::string_view("0");
     } else if constexpr (is_redis_entity_native_number<scalar_type>) {
@@ -156,6 +187,8 @@ template <typename t_type>
         return result_value;
     } else if constexpr (std::is_same_v<scalar_type, std::string>) {
         return std::string(value.data(), value.size());
+    } else if constexpr (std::is_same_v<scalar_type, bytes>) {
+        return bytes(as_bytes(value));
     } else if constexpr (std::is_same_v<scalar_type, bool>) {
         if (value == "0") {
             return false;
@@ -164,7 +197,7 @@ template <typename t_type>
             return true;
         }
         throw conversion_error(conversion_error::code_type::invalid_format, "malformed Redis boolean scalar");
-    } else if constexpr (is_redis_entity_native_number<scalar_type>) {
+    } else if constexpr (is_redis_entity_native_number<scalar_type> || std::is_same_v<scalar_type, uuid> || std::is_same_v<scalar_type, decimal> || is_civil_date<scalar_type> || is_chrono_timestamp<scalar_type> || is_ruvia_enum<scalar_type>) {
         return convert_text<scalar_type>(value);
     } else {
         static_assert(always_false<scalar_type>, "unsupported Redis scalar type");
@@ -282,6 +315,32 @@ public:
     }
     explicit redis_literal(const string& value) :
         redis_literal(value.view()) {}
+    explicit redis_literal(const bytes& value) :
+        redis_literal(as_chars(value.view())) {}
+    explicit redis_literal(byte_view value) :
+        redis_literal(as_chars(value)) {}
+    explicit redis_literal(const uuid& value) :
+        storage_(std::in_place_type<std::string>, value.to_string()) {}
+    explicit redis_literal(const decimal& value) :
+        storage_(std::in_place_type<std::string>, value.to_string()) {}
+    explicit redis_literal(civil_date value) {
+        std::string rendered;
+        rendered.reserve(10);
+        append_civil_date(rendered, value);
+        storage_.emplace<std::string>(std::move(rendered));
+    }
+    template <typename timestamp_type>
+        requires is_chrono_timestamp<timestamp_type>
+    explicit redis_literal(timestamp_type value) {
+        std::string rendered;
+        rendered.reserve(30);
+        append_rfc3339(rendered, value);
+        storage_.emplace<std::string>(std::move(rendered));
+    }
+    template <typename enum_type>
+        requires is_ruvia_enum<enum_type>
+    explicit redis_literal(enum_type value) :
+        redis_literal(to_enum_string(value)) {}
     redis_literal(redis_literal&&) noexcept = default;
     redis_literal& operator=(redis_literal&&) = delete;
     redis_literal(const redis_literal&) = default;
@@ -1016,23 +1075,34 @@ using redis_primary_key_value_t = std::remove_cvref_t<typename redis_primary_key
 
 template <typename id_type, typename pk_value_type>
 concept redis_primary_key_id =
-    (redis_column_value_kind<pk_value_type>() == redis_column_kind::text && std::convertible_to<const id_type&, std::string_view> && !std::same_as<std::remove_cvref_t<id_type>, std::nullptr_t>) || (is_redis_entity_native_integer<pk_value_type> && is_model_integer<std::remove_cvref_t<id_type>>);
+    (redis_column_value_kind<pk_value_type>() == redis_column_kind::text &&
+        ((std::convertible_to<const id_type&, std::string_view> && !std::same_as<std::remove_cvref_t<id_type>, std::nullptr_t>) ||
+            std::same_as<std::remove_cvref_t<id_type>, pk_value_type>)) ||
+    (is_redis_entity_native_integer<pk_value_type> && is_model_integer<std::remove_cvref_t<id_type>>);
 
 template <typename pk_value_type, typename id_type>
     requires redis_primary_key_id<id_type, pk_value_type>
 [[nodiscard]] std::string_view encode_redis_primary_key_id(const id_type& id, std::span<char, redis_scalar_scratch_size> scratch) {
     if constexpr (redis_column_value_kind<pk_value_type>() == redis_column_kind::text) {
-        (void)scratch;
-        if constexpr (std::is_pointer_v<std::remove_cvref_t<id_type>>) {
-            if (id == nullptr) {
-                throw std::invalid_argument("Redis entity ID must not be null");
+        if constexpr (std::same_as<std::remove_cvref_t<id_type>, pk_value_type> && !std::convertible_to<const id_type&, std::string_view>) {
+            const auto view = encode_redis_scalar(id, scratch);
+            if (view.empty()) {
+                throw std::invalid_argument("Redis entity ID must not be empty");
             }
+            return view;
+        } else {
+            (void)scratch;
+            if constexpr (std::is_pointer_v<std::remove_cvref_t<id_type>>) {
+                if (id == nullptr) {
+                    throw std::invalid_argument("Redis entity ID must not be null");
+                }
+            }
+            const std::string_view view(id);
+            if (view.empty()) {
+                throw std::invalid_argument("Redis entity ID must not be empty");
+            }
+            return view;
         }
-        const std::string_view view(id);
-        if (view.empty()) {
-            throw std::invalid_argument("Redis entity ID must not be empty");
-        }
-        return view;
     } else {
         if (!std::in_range<pk_value_type>(id)) {
             throw std::invalid_argument("Redis primary key is out of range");
@@ -1266,7 +1336,7 @@ private:
 
     redis_executor executor_;
     const redis_search_mapping* mapping_;
-    detail::capability_registration<&redis_repository::expire_capability> registration_;
+    ::ruvia::capability_registration<&redis_repository::expire_capability> registration_;
 };
 
 template <typename entity_type>

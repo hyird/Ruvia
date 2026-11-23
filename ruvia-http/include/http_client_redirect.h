@@ -92,7 +92,7 @@ public:
         return std::exchange(host_, {});
     }
 
-    [[nodiscard]] std::uint16_t port() const noexcept {
+    [[nodiscard]] port_number port() const noexcept {
         return port_;
     }
 
@@ -108,7 +108,7 @@ public:
 private:
     friend std::variant<http_client_resolved_redirect, http_client_redirect_resolution_error> resolve_http_client_redirect_target(const http_origin_view&, http_client_redirect_target_options);
 
-    http_client_resolved_redirect(http_scheme scheme, std::string host, std::uint16_t port, std::string target, bool cross_origin) noexcept :
+    http_client_resolved_redirect(http_scheme scheme, std::string host, port_number port, std::string target, bool cross_origin) noexcept :
         scheme_(scheme),
         host_(std::move(host)),
         port_(port),
@@ -117,7 +117,7 @@ private:
 
     http_scheme scheme_;
     std::string host_;
-    std::uint16_t port_;
+    port_number port_;
     std::string target_;
     bool cross_origin_;
 };

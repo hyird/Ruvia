@@ -57,11 +57,10 @@ public:
     // in request trailers (RFC 9110 section 6.5.1) reports forbidden_field.
     [[nodiscard]] std::optional<http_request_trailer_error> append(std::string_view name, std::string_view value);
     [[nodiscard]] std::optional<http_request_trailer_error> append(std::span<const http_header_view> fields);
-    template <detail::http_temporary_owning_range<http_header_view> fields_type>
-    std::optional<http_request_trailer_error> append(fields_type&&) = delete;
+    [[nodiscard]] std::optional<http_request_trailer_error> append(std::initializer_list<http_header_view> fields) {
+        return append(std::span<const http_header_view>(fields.begin(), fields.size()));
+    }
     [[nodiscard]] std::optional<http_request_trailer_error> append(std::span<const http_header> fields);
-    template <detail::http_temporary_owning_range<http_header> fields_type>
-    std::optional<http_request_trailer_error> append(fields_type&&) = delete;
     // Appends a received trailer section all-or-nothing, as decoded by any
     // protocol version (http1_chunked_body_decoder, HTTP/2 or HTTP/3 message
     // end events). Every field must be a valid regular field with a lowercase
@@ -107,6 +106,18 @@ enum class http_request_target_form : std::uint8_t {
     http2,
     http3,
 };
+
+// Borrowed decomposition of one RFC 9112 §3.2 request-target token (origin,
+// absolute, authority or asterisk form). Views point into the parsed target.
+struct http_request_target_view final {
+    std::string_view scheme_{};
+    std::string_view authority_{};
+    std::string_view path_{};
+    std::string_view query_{};
+    http_request_target_form form_{http_request_target_form::origin};
+};
+
+[[nodiscard]] std::optional<http_request_target_view> parse_http_request_target(http_known_method method, borrowed_text target RUVIA_LIFETIMEBOUND) noexcept;
 
 namespace detail {
 
@@ -388,7 +399,19 @@ private:
 // http_field_section_budget rule (max_http_header_bytes, max_http_header_fields)
 // throws the 431 header_too_large error. Body framing fields are intentionally
 // not interpreted because this API represents an already-parsed request.
-[[nodiscard]] http_request make_http_request(borrowed_text method, borrowed_text target, std::span<const http_header_view> headers, borrowed_span<std::byte> body = {});
+struct http_request_options final {
+    borrowed_text method_{};
+    borrowed_text target_{};
+    http_protocol_version protocol_version_{http_protocol_version::http11};
+    borrowed_text scheme_{};
+    borrowed_text authority_{};
+    borrowed_text protocol_{};
+    borrowed_http_headers headers_{};
+    borrowed_bytes body_{};
+};
+
+[[nodiscard]] http_request make_http_request(borrowed_text method, borrowed_text target, argument_list<http_header_view> headers = {}, borrowed_span<std::byte> body = {});
+[[nodiscard]] http_request make_http_request(const http_request_options& options);
 
 // RFC 9110 CONNECT authority-form requires a nonempty host and explicit port.
 [[nodiscard]] bool is_valid_http_connect_authority(std::string_view authority) noexcept;

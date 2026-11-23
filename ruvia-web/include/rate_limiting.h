@@ -103,7 +103,10 @@ struct rate_limit_decision final {
     friend constexpr bool operator==(const rate_limit_decision&, const rate_limit_decision&) noexcept = default;
 };
 
+class context_response_editor;
+
 void apply_rate_limit_headers(http_response& response, const rate_limit_decision& decision);
+void apply_rate_limit_headers(context_response_editor& response, const rate_limit_decision& decision);
 
 // Single-worker SipHash-1-3 sliding-window rate limiter table. Preallocates a
 // power-of-two slot array at construction and performs zero allocations or

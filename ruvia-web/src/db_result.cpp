@@ -23,14 +23,53 @@ db_value::db_value(const char* value) :
 db_value::db_value(std::string_view value) :
     storage_(std::in_place_type<borrowed_text>, value) {}
 
+db_value::db_value(byte_view value) :
+    storage_(std::in_place_type<borrowed_bytes>, value) {}
+
+db_value::db_value(const ruvia::bytes& value) :
+    storage_(std::in_place_type<borrowed_bytes>, value.view()) {}
+
 db_value::db_value(std::in_place_type_t<std::string>, std::string value) :
     storage_(std::in_place_type<std::string>, std::move(value)) {}
+
+db_value::db_value(std::in_place_type_t<ruvia::bytes>, ruvia::bytes value) :
+    storage_(std::in_place_type<ruvia::bytes>, std::move(value)) {}
+
+db_value::db_value(const uuid& value) :
+    storage_(std::in_place_type<std::string>, value.to_string()) {}
+
+db_value::db_value(const decimal& value) :
+    storage_(std::in_place_type<std::string>) {
+    value.append_to(std::get<std::string>(storage_));
+}
+
+db_value::db_value(civil_date value) :
+    storage_(std::in_place_type<std::string>) {
+    detail::append_civil_date(std::get<std::string>(storage_), value);
+}
+
+db_value::db_value(utc_seconds value) :
+    storage_(std::in_place_type<std::string>) {
+    detail::append_rfc3339(std::get<std::string>(storage_), value);
+}
+
+db_value::db_value(utc_milliseconds value) :
+    storage_(std::in_place_type<std::string>) {
+    detail::append_rfc3339(std::get<std::string>(storage_), value);
+}
+
+db_value::db_value(utc_microseconds value) :
+    storage_(std::in_place_type<std::string>) {
+    detail::append_rfc3339(std::get<std::string>(storage_), value);
+}
 
 db_value::db_value(const db_value& other) :
     storage_(std::visit([](const auto& value) -> storage_type {
         using value_type = std::remove_cvref_t<decltype(value)>;
         if constexpr (std::is_same_v<value_type, std::string>) {
             return storage_type(std::in_place_type<value_type>, value, value.get_allocator());
+        } else if constexpr (std::is_same_v<value_type, ruvia::bytes>) {
+            return storage_type(std::in_place_type<value_type>, value.clone());
         } else {
             return storage_type(std::in_place_type<value_type>, value);
         }
@@ -46,6 +85,8 @@ db_value_type db_value::type() const noexcept {
             return db_value_type::null;
         } else if constexpr (std::is_same_v<value_type, borrowed_text> || std::is_same_v<value_type, std::string>) {
             return db_value_type::string;
+        } else if constexpr (std::is_same_v<value_type, borrowed_bytes> || std::is_same_v<value_type, ruvia::bytes>) {
+            return db_value_type::bytes;
         } else if constexpr (std::is_same_v<value_type, std::int64_t>) {
             return db_value_type::signed_value;
         } else if constexpr (std::is_same_v<value_type, std::uint64_t>) {
@@ -63,6 +104,13 @@ std::string_view db_value::text() const& {
         return borrowed->view();
     }
     return std::get<std::string>(storage_);
+}
+
+byte_view db_value::bytes() const& {
+    if (const auto* borrowed = std::get_if<borrowed_bytes>(&storage_)) {
+        return borrowed->view();
+    }
+    return std::get<ruvia::bytes>(storage_).view();
 }
 
 std::int64_t db_value::signed_value() const {
@@ -88,6 +136,9 @@ db_field::db_field(std::nullptr_t) noexcept {}
 db_field::db_field(std::string_view value) :
     storage_(std::in_place_type<std::string>, value) {}
 
+db_field::db_field(std::string&& value) noexcept :
+    storage_(std::in_place_type<std::string>, std::move(value)) {}
+
 db_field::db_field(borrowed_tag_type, std::string_view value) noexcept :
     storage_(std::in_place_type<borrowed_text>, value) {}
 
@@ -109,6 +160,13 @@ std::optional<std::string_view> db_field::value() const& noexcept {
     }
     if (const auto* borrowed = std::get_if<borrowed_text>(&storage_)) {
         return borrowed->view();
+    }
+    return std::nullopt;
+}
+
+std::optional<byte_view> db_field::bytes() const& noexcept {
+    if (const auto raw = value()) {
+        return as_bytes(*raw);
     }
     return std::nullopt;
 }

@@ -269,6 +269,7 @@ public:
         column,
         excluded,
         string_value,
+        bytes_value,
         signed_value,
         unsigned_value,
         double_,

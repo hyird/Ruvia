@@ -23,7 +23,7 @@
 #include <asio/ip/udp.hpp>
 #include <openssl/ssl.h>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "borrowed_text.h"
 #include "byte_view.h"
 #include "client_happy_eyeballs.h"
@@ -67,26 +67,20 @@ void initialize_client_quic_crypto() {
         throw http_client_error(make_error_code(http_client_errc::tls_failed), "failed to initialize the QUIC TLS backend");
     }
 }
-ngtcp2_cid random_cid() {
-    ngtcp2_cid cid{};
-    cid.datalen = 18;
-    if (!fill_random_bytes(std::span<unsigned char>(cid.data, cid.datalen))) {
+quic_cid random_cid() {
+    std::array<std::byte, 18> raw{};
+    if (!fill_random_bytes(raw)) {
         throw http_client_error(make_error_code(http_client_errc::tls_failed), "QUIC connection ID generation failed");
     }
-    return cid;
+    return quic_cid(raw);
 }
-int new_cid(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_stateless_reset_token* token, std::size_t size, void*) noexcept {
-    if (size == 0 || size > NGTCP2_MAX_CIDLEN || !fill_random_bytes(std::span<unsigned char>(cid->data, size)) || !fill_random_bytes(std::span<unsigned char>(token->data, NGTCP2_STATELESS_RESET_TOKENLEN))) {
-        return NGTCP2_ERR_CALLBACK_FAILURE;
+bool new_cid(quic_cid& cid, http3_quic_stateless_reset_token& token, std::size_t size, void*) noexcept {
+    std::array<std::byte, quic_max_cid_bytes> raw{};
+    if (size == 0 || size > raw.size() || !fill_random_bytes(std::span<std::byte>(raw.data(), size)) || !fill_random_bytes(token)) {
+        return false;
     }
-    cid->datalen = size;
-    return 0;
-}
-http3_quic_crypto_callbacks client_crypto_callbacks() noexcept {
-    auto result = make_http3_quic_crypto_callbacks();
-    result.client_initial_ = ngtcp2_crypto_client_initial_cb;
-    result.recv_retry_ = ngtcp2_crypto_recv_retry_cb;
-    return result;
+    cid = quic_cid(byte_view(raw.data(), size));
+    return true;
 }
 void require_accepted(http_submit_status status) {
     if (status != http_submit_status::accepted) {
@@ -300,8 +294,8 @@ public:
         }
         return 0;
     }
-    ngtcp2_path path(asio::ip::udp::endpoint& local, asio::ip::udp::endpoint& remote) noexcept {
-        return http3_quic_path(local, remote);
+    http3_quic_path path(const asio::ip::udp::endpoint& local, const asio::ip::udp::endpoint& remote) const noexcept {
+        return make_quic_path(local, remote);
     }
     void capture_connection_info(http_client_response_state& response, bool reused) const {
         if (response.connection_info_.id_ != connection_id_) {
@@ -815,9 +809,10 @@ public:
         try {
             const auto close_result = quic_->next_datagram(pool_.config().http3_.max_datagram_bytes_, http3_quic_now(), packet_);
             if (close_result.status_ == http3_quic_status::accepted && !packet_.bytes_.empty()) {
-                if (const auto remote = http3_udp_endpoint(packet_.path_.path.remote)) {
+                if (packet_.path_.remote_.port().value() != 0) {
+                    const auto remote = to_asio_udp_endpoint(packet_.path_.remote_);
                     std::error_code error;
-                    (void)socket_->send_to(asio::buffer(packet_.bytes_), *remote, 0, error);
+                    (void)socket_->send_to(asio::buffer(packet_.bytes_), remote, 0, error);
                     if (error) {
                         (void)socket_->send(asio::buffer(packet_.bytes_), 0, error);
                     }
@@ -891,12 +886,12 @@ public:
                     if (result.status_ == http3_quic_status::would_block) {
                         break;
                     }
-                    const auto remote = http3_udp_endpoint(packet_.path_.path.remote);
-                    if (!remote) {
+                    if (packet_.path_.remote_.port().value() == 0) {
                         throw http_client_error(make_error_code(http_client_errc::protocol_error), "invalid QUIC output path");
                     }
+                    const auto remote = to_asio_udp_endpoint(packet_.path_.remote_);
                     auto* output = socket_.get();
-                    if (packet_.path_.path.local.addrlen == old_local_.size() && std::memcmp(packet_.path_.path.local.addr, old_local_.data(), old_local_.size()) == 0) {
+                    if (old_local_.port() != 0 && to_asio_udp_endpoint(packet_.path_.local_) == old_local_) {
                         if (!old_socket_ || !old_socket_->is_open()) {
                             packet_pending_ = false;
                             continue;
@@ -905,7 +900,7 @@ public:
                     }
                     sending_socket_ = output;
                     const auto sent = co_await async_asio<std::size_t>([&](auto handler) {
-                        output->async_send_to(asio::buffer(packet_.bytes_), *remote, std::move(handler));
+                        output->async_send_to(asio::buffer(packet_.bytes_), remote, std::move(handler));
                     });
                     sending_socket_ = nullptr;
                     packet_pending_ = false;
@@ -1080,31 +1075,31 @@ public:
         crypto_.reset(crypto);
         const auto& config = pool_.config();
         http3_quic_owner_callbacks owner_callbacks{.get_new_connection_id_ = new_cid};
-        owner_callbacks.handshake_completed_ = [](ngtcp2_conn*, void* target) noexcept {
+        owner_callbacks.handshake_completed_ = [](void* target) noexcept {
             auto& owner = *static_cast<session*>(target);
             owner.tls_duration_ = std::chrono::steady_clock::now() - owner.tls_started_at_;
             if (tls_selected_alpn(*owner.tls_) != "h3") {
-                return NGTCP2_ERR_CALLBACK_FAILURE;
+                return false;
             }
             if (owner.early_started_ && SSL_get_early_data_status(owner.tls_.get()) != SSL_EARLY_DATA_ACCEPTED) {
                 try {
-                    return owner.quic_->reject_early_data() == http3_quic_status::accepted ? 0 : NGTCP2_ERR_CALLBACK_FAILURE;
+                    return owner.quic_->reject_early_data() == http3_quic_status::accepted;
                 } catch (...) {
                     owner.failure_ = std::current_exception();
-                    return NGTCP2_ERR_CALLBACK_FAILURE;
+                    return false;
                 }
             }
-            return 0;
+            return true;
         };
         handshake_confirmed_ = false;
-        owner_callbacks.handshake_confirmed_ = [](ngtcp2_conn*, void* target) noexcept {
+        owner_callbacks.handshake_confirmed_ = [](void* target) noexcept {
             auto& owner = *static_cast<session*>(target);
             owner.handshake_confirmed_ = true;
             owner.changed_.notify();
-            return 0;
+            return true;
         };
         const auto receive_window = (std::max)(std::uint64_t{64 * 1024}, (std::min)(std::uint64_t{16 * 1024 * 1024}, static_cast<std::uint64_t>(config.max_response_bytes_)));
-        const http3_quic_connection_options options{.crypto_callbacks_ = client_crypto_callbacks(), .owner_callbacks_ = owner_callbacks, .source_connection_id_ = random_cid(), .destination_connection_id_ = random_cid(), .initial_path_ = path(local_, remote_), .initial_timestamp_ = http3_quic_now(), .handshake_timeout_ = bound.remaining() ? http3_quic_duration(timeout_duration(*bound.remaining())) : UINT64_MAX, .idle_timeout_ = 0, .initial_max_data_ = receive_window, .initial_max_stream_data_ = 64 * 1024, .max_udp_payload_size_ = config.http3_.max_datagram_bytes_, .callback_context_ = this, .http3_ = {.max_concurrent_streams_ = config.http3_.max_concurrent_streams_, .max_stream_output_bytes_ = config.http3_.max_stream_output_bytes_, .enable_h3_datagram_ = true}};
+        const http3_quic_connection_options options{.configure_crypto_callbacks_ = install_http3_quic_client_crypto_callbacks, .owner_callbacks_ = owner_callbacks, .source_connection_id_ = random_cid(), .destination_connection_id_ = random_cid(), .initial_path_ = path(local_, remote_), .initial_timestamp_ = http3_quic_now(), .handshake_timeout_ = bound.remaining() ? http3_quic_duration(timeout_duration(*bound.remaining())) : (std::chrono::nanoseconds::max)(), .idle_timeout_ = std::chrono::nanoseconds{0}, .initial_max_data_ = receive_window, .initial_max_stream_data_ = 64 * 1024, .max_udp_payload_size_ = config.http3_.max_datagram_bytes_, .callback_context_ = this, .http3_ = {.max_concurrent_streams_ = config.http3_.max_concurrent_streams_, .max_stream_output_bytes_ = config.http3_.max_stream_output_bytes_, .enable_h3_datagram_ = true}};
         quic_.emplace(http3_quic_connection::client(options));
         quic_->set_tls_session(crypto_.get());
         if (allow_early && config.http3_.enable_early_data_ && ticket != nullptr && ticket->session_ && ticket->params_size_ && ticket->settings_valid_ && SSL_SESSION_get_max_early_data(ticket->session_.get()) != 0) {
@@ -2085,8 +2080,7 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
     try {
         for (;;) {
             check();
-            const auto active = self.quic_->current_path().local_;
-            if (active.size() == self.local_.size() && std::memcmp(active.data(), self.local_.data(), self.local_.size()) == 0) {
+            if (to_asio_udp_endpoint(self.quic_->current_path().local_) == self.local_) {
                 break;
             }
             co_await self.changed_.wait();

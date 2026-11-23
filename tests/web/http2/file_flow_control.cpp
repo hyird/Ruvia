@@ -19,7 +19,7 @@
 
 #include <asio.hpp>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "context.h"
 #include "controller.h"
 #include "event_loop.h"
@@ -171,7 +171,7 @@ ruvia::task<received_frame> read_frame(asio::ip::tcp::socket& socket) {
     if (head.code()) {
         throw std::system_error(head.code());
     }
-    const auto header = ruvia::parse_http2_frame_header(header_bytes);
+    const auto header = ruvia::parse_http2_frame_header(std::as_bytes(std::span(header_bytes)));
     if (!header) {
         throw std::logic_error("invalid HTTP/2 flow-control response frame");
     }
@@ -946,7 +946,7 @@ private:
             for (;;) {
                 std::array<char, ruvia::http2_frame_header_bytes> bytes;
                 co_await asio::async_read(socket_, asio::buffer(bytes), asio::use_awaitable);
-                const auto header = ruvia::parse_http2_frame_header(bytes);
+                const auto header = ruvia::parse_http2_frame_header(std::as_bytes(std::span(bytes)));
                 if (!header) {
                     throw std::runtime_error("invalid client HTTP/2 frame");
                 }
@@ -993,7 +993,7 @@ private:
         for (;;) {
             std::array<char, ruvia::http2_frame_header_bytes> bytes;
             co_await asio::async_read(socket_, asio::buffer(bytes), asio::use_awaitable);
-            const auto header = ruvia::parse_http2_frame_header(bytes);
+            const auto header = ruvia::parse_http2_frame_header(std::as_bytes(std::span(bytes)));
             if (!header) {
                 throw std::runtime_error("invalid client HTTP/2 frame");
             }
@@ -1173,7 +1173,7 @@ private:
         for (;;) {
             std::array<char, ruvia::http2_frame_header_bytes> bytes;
             co_await asio::async_read(socket_, asio::buffer(bytes), asio::use_awaitable);
-            const auto header = ruvia::parse_http2_frame_header(bytes);
+            const auto header = ruvia::parse_http2_frame_header(std::as_bytes(std::span(bytes)));
             if (!header) {
                 throw std::runtime_error("invalid HTTP/2 frame");
             }
@@ -1204,7 +1204,7 @@ private:
         for (;;) {
             std::array<char, ruvia::http2_frame_header_bytes> bytes;
             co_await asio::async_read(socket_, asio::buffer(bytes), asio::use_awaitable);
-            const auto header = ruvia::parse_http2_frame_header(bytes);
+            const auto header = ruvia::parse_http2_frame_header(std::as_bytes(std::span(bytes)));
             if (!header) {
                 throw std::runtime_error("invalid HTTP/2 frame");
             }

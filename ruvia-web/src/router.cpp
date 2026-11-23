@@ -18,17 +18,18 @@
 
 #include "blocking_pool.h"
 #include "borrowed_text.h"
-#include "callback_ref.h"
 #include "connection_lifecycle.h"
 #include "context_access.h"
 #include "controller.h"
 #include "event_loop.h"
+#include "function_ref.h"
 #include "http1_server_response.h"
 #include "http_client.h"
 #include "http_header.h"
 #include "http_request.h"
 #include "http_request_body_failure.h"
 #include "inbound_buffer.h"
+#include "inbound_buffer_ops.h"
 #include "middleware.h"
 #include "rate_limit.h"
 #include "request_stream.h"
@@ -229,8 +230,15 @@ public:
         phase_ = phase::freezing;
         try {
             detail::router builder;
+            controller_store controllers(controller_registrars_);
+            if (!controller_registrars_.empty()) {
+                builder.declare_controllers(controller_registrars_, controllers);
+            }
             std::vector<void*> targets;
-            targets.reserve(registrations_.size());
+            targets.reserve(controller_registrars_.size() + registrations_.size());
+            for (std::size_t slot = 0; slot < controller_registrars_.size(); ++slot) {
+                targets.push_back(controllers.instance(slot));
+            }
             for (const auto& route : registrations_) {
                 const auto method = classify_http_method(route.method_);
                 const auto token = method == http_known_method::unknown ? std::string_view(route.method_) : std::string_view{};
@@ -240,16 +248,17 @@ public:
                     ? request_body_mode::stream
                     : request_body_mode::buffered;
                 std::visit([&](const auto& handler) {
-                    const auto view = callback_access::ref(handler);
+                    using view_type = std::conditional_t<std::same_as<std::remove_cvref_t<decltype(handler)>, router_handler>, route_handler, route_stream_handler>;
+                    const view_type view(handler);
                     auto endpoint = [&] {
                         if constexpr (std::same_as<std::remove_cvref_t<decltype(handler)>, router_handler>) {
-                            return route_endpoint::buffered(callback_access::invoke(view), body_mode);
+                            return route_endpoint::buffered(view.raw_invoke(), body_mode);
                         } else {
-                            return make_endpoint(route, callback_access::invoke(view), body_mode);
+                            return make_endpoint(route, view.raw_invoke(), body_mode);
                         }
                     }();
                     builder.register_owned_endpoint(targets.size(), method, token, route.path_, std::move(endpoint), {}, route.modifiers_);
-                    targets.push_back(callback_access::target(view));
+                    targets.push_back(view.raw_target());
                 }, route.handler_);
             }
             configuration_.apply(builder);
@@ -267,6 +276,7 @@ public:
                     throw;
                 }
             }
+            controllers_ = std::move(controllers);
             plan_ = std::move(plan);
             table_ = std::move(table);
             limiter_ = std::move(limiter);
@@ -378,6 +388,7 @@ public:
 
     worker_ref worker_;
     app_configuration configuration_;
+    std::vector<controller_registrar> controller_registrars_{};
     std::vector<registration> registrations_{};
     borrowed_clients clients_;
 
@@ -429,7 +440,7 @@ private:
         };
         std::exception_ptr failure;
         try {
-            auto response = co_await table.dispatch_bound_stream(resolved, context_value, callback_access::bind<task<void>(context&)>(terminal));
+            auto response = co_await table.dispatch_bound_stream(resolved, context_value, route_stream_handler(terminal));
             if (response) {
                 context_access::set_response(context_value, std::move(*response));
             }
@@ -447,6 +458,7 @@ private:
     }
 
     phase phase_{phase::editable};
+    controller_store controllers_;
     compiled_route_plan_ptr_type plan_;
     std::unique_ptr<route_table> table_;
     std::unique_ptr<rate_limiter> limiter_;
@@ -460,6 +472,12 @@ namespace ruvia {
 ::ruvia::router::router(worker_ref worker) :
     state_(std::make_shared<detail::router_state>(std::move(worker))) {}
 ::ruvia::router::~router() = default;
+
+::ruvia::router& ::ruvia::router::add_controllers(std::span<const detail::controller_registrar> registrars) {
+    state_->require_editable();
+    state_->controller_registrars_.insert(state_->controller_registrars_.end(), registrars.begin(), registrars.end());
+    return *this;
+}
 
 ::ruvia::router& ::ruvia::router::add_buffered(std::string_view method, std::string_view path, router_handler handler, std::span<const detail::controller_middleware_descriptor> modifiers) {
     state_->require_editable();
@@ -507,7 +525,7 @@ namespace ruvia {
     return *this;
 }
 
-void ::ruvia::router::edit_configuration(detail::callback_ref<void(detail::app_configuration&)> edit) {
+void ::ruvia::router::edit_configuration(function_ref<void(detail::app_configuration&)> edit) {
     state_->require_editable();
     edit(state_->configuration_);
 }

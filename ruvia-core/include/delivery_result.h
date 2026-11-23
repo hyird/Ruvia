@@ -10,7 +10,7 @@
 #include <utility>
 #include <variant>
 
-#include "byte_view.h"
+#include "lifetimebound.h"
 #include "move_only_function.h"
 
 namespace ruvia::detail {

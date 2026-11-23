@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <concepts>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -12,12 +13,19 @@
 
 namespace ruvia {
 
+template <typename owner_type>
+concept worker_cancellation_owner = requires(owner_type& owner, std::uint64_t operation_id) {
+    { owner.cancel_operation_by_id(operation_id) } noexcept;
+};
+
 // Owns only a detachable owner pointer and a stable worker_ref; queued work
 // retains the target so that releasing it never depends on the owner's lifetime.
+// `owner_type` may still be incomplete when a member holds a shared_ptr to its
+// own target; `make_worker_cancellation_target` checks `worker_cancellation_owner`.
 template <typename owner_type>
 class worker_cancellation_target;
 
-template <typename owner_type>
+template <worker_cancellation_owner owner_type>
 [[nodiscard]] inline std::shared_ptr<worker_cancellation_target<owner_type>> make_worker_cancellation_target(owner_type& owner_value, const worker_ref& worker_value);
 
 template <typename owner_type>
@@ -53,6 +61,7 @@ public:
         return target;
     }
     void dispatch(std::uint64_t operation_id) noexcept {
+        static_assert(worker_cancellation_owner<owner_type>);
         if (auto* owner = owner_.load(std::memory_order_acquire)) {
             owner->cancel_operation_by_id(operation_id);
         }
@@ -65,7 +74,8 @@ public:
     }
 
 private:
-    friend std::shared_ptr<worker_cancellation_target<owner_type>> make_worker_cancellation_target<owner_type>(owner_type&, const worker_ref&);
+    template <worker_cancellation_owner target_owner_type>
+    friend std::shared_ptr<worker_cancellation_target<target_owner_type>> make_worker_cancellation_target(target_owner_type&, const worker_ref&);
 
     // Construction is restricted to make_worker_cancellation_target via constructor_token.
     std::atomic<owner_type*> owner_;
@@ -73,7 +83,7 @@ private:
     std::uint64_t next_operation_id_{0};
 };
 
-template <typename owner_type>
+template <worker_cancellation_owner owner_type>
 [[nodiscard]] inline std::shared_ptr<worker_cancellation_target<owner_type>> make_worker_cancellation_target(owner_type& owner_value, const worker_ref& worker_value) {
     using target_type = worker_cancellation_target<owner_type>;
     return std::make_shared<target_type>(typename target_type::constructor_token{}, owner_value, worker_value);

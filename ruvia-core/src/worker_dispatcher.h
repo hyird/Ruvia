@@ -164,7 +164,7 @@ public:
     }
 
 private:
-    friend class worker_shutdown_registration;
+    friend class ::ruvia::worker_shutdown_registration;
     static constexpr std::size_t no_node = static_cast<std::size_t>(-1);
     struct waiter_node_type final {
         explicit waiter_node_type(move_only_function<void()> callback_value) noexcept :

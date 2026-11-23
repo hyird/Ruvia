@@ -37,6 +37,7 @@
 #include "http_response_stream.h"
 #include "http_server.h"
 #include "inbound_buffer.h"
+#include "inbound_buffer_ops.h"
 #include "io_operation.h"
 #include "middleware.h"
 #include "response_coding_policy.h"

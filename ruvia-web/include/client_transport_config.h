@@ -33,10 +33,14 @@ struct client_tls_config final {
     // Shared by HTTP, raw TCP, Redis and database clients. QUIC additionally
     // requires TLS 1.3, never lowering this one.
     tls_version minimum_version_{tls_version::tls_1_2};
-    // The CA bundle that authenticates the server; nullopt selects the system
-    // or driver trust store.
+    // The CA bundle that authenticates the server; when both ca_file_ and
+    // ca_pem_ are empty, the system or driver trust store is used. Setting both
+    // ca_file_ and ca_pem_ throws std::invalid_argument. Native database drivers
+    // accept ca_file_ only and reject non-empty ca_pem_.
     std::optional<std::filesystem::path> ca_file_{};
-    // The certificate this client presents for mutual TLS.
+    std::string ca_pem_{};
+    // The certificate this client presents for mutual TLS (PEM files or, for
+    // OpenSSL-backed HTTP/TCP/Redis clients, in-memory PEM).
     std::optional<tls_identity_config> identity_{};
     // SNI and verified peer name, an IP literal or ASCII DNS name; nullopt
     // uses the configured host. An IP literal matches IP subjectAltNames.

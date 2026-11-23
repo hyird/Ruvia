@@ -264,7 +264,7 @@ struct request_head_write_plan final {
     // Reuse each decimal token in measurement and emission. CONNECT uses the
     // same port token for both its authority target and generated Host field.
     std::array<char, max_decimal_size> port_buffer;
-    const auto port_value = connect || origin.port() != (origin.scheme() == http_scheme::https ? std::uint16_t{443} : std::uint16_t{80}) ? format_decimal(port_buffer, origin.port()) : std::string_view{};
+    const auto port_value = connect || origin.port() != (origin.scheme() == http_scheme::https ? std::uint16_t{443} : std::uint16_t{80}) ? format_decimal(port_buffer, origin.port().value()) : std::string_view{};
     const auto authority_bytes = origin.host().size() + (port_value.empty() ? 0 : 1 + port_value.size());
     std::array<char, max_decimal_size> content_length_buffer;
     const auto content_length_value = explicit_content && !chunked ? format_decimal(content_length_buffer, *length) : std::string_view{};
@@ -474,7 +474,7 @@ bool analyze_http1_client_request_field(http_header_view header, detail::http_fi
         default:
             break;
     }
-    switch (detail::validate_request_field(kind, value, detail::http_field_list_role::sender, facts.fields_, source)) {
+    switch (detail::validate_request_field(kind, value, http_field_list_role::sender, facts.fields_, source)) {
         case detail::request_field_status::ok:
             break;
         case detail::request_field_status::invalid:
@@ -485,13 +485,13 @@ bool analyze_http1_client_request_field(http_header_view header, detail::http_fi
             return false;
     }
     if (kind == detail::http_field_kind::connection) {
-        if (facts.connection_options_.parse_field(value, detail::http_connection_field_role::sender) != detail::http_field_list_parse_status::ok) {
+        if (facts.connection_options_.parse_field(value, detail::http_connection_field_role::sender) != http_field_list_parse_status::ok) {
             error = http1_client_request_prepare_error::invalid_connection;
             return false;
         }
     } else if (kind == detail::http_field_kind::upgrade) {
-        const auto role = source == http_request_field_source::forwarded ? detail::http_field_list_role::recipient : detail::http_field_list_role::sender;
-        if (facts.upgrade_protocols_.parse_field(value, role) != detail::http_field_list_parse_status::ok) {
+        const auto role = source == http_request_field_source::forwarded ? http_field_list_role::recipient : http_field_list_role::sender;
+        if (facts.upgrade_protocols_.parse_field(value, role) != http_field_list_parse_status::ok) {
             error = http1_client_request_prepare_error::invalid_upgrade;
             return false;
         }

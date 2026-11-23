@@ -36,6 +36,7 @@
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
 
+#include "asio_ip_endpoint.h"
 #include "http3_quic_connection.h"
 
 namespace ruvia::test {
@@ -93,7 +94,7 @@ inline void http3_test_fill_random(std::uint8_t* destination, std::size_t size, 
     }
 }
 
-inline int http3_test_new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_stateless_reset_token* token, std::size_t size, void*) {
+inline int http3_test_raw_new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_stateless_reset_token* token, std::size_t size, void*) noexcept {
     if (RAND_bytes(cid->data, static_cast<int>(size)) != 1 || RAND_bytes(token->data, NGTCP2_STATELESS_RESET_TOKENLEN) != 1) {
         return NGTCP2_ERR_CALLBACK_FAILURE;
     }
@@ -101,7 +102,16 @@ inline int http3_test_new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_st
     return 0;
 }
 
-[[nodiscard]] inline ngtcp2_cid http3_test_random_connection_id(std::size_t size) {
+inline bool http3_test_new_connection_id(quic_cid& cid, http3_quic_stateless_reset_token& token, std::size_t size, void*) noexcept {
+    std::array<std::byte, quic_max_cid_bytes> raw{};
+    if (size > raw.size() || RAND_bytes(reinterpret_cast<std::uint8_t*>(raw.data()), static_cast<int>(size)) != 1 || RAND_bytes(reinterpret_cast<std::uint8_t*>(token.data()), static_cast<int>(token.size())) != 1) {
+        return false;
+    }
+    cid = quic_cid(byte_view(raw.data(), size));
+    return true;
+}
+
+[[nodiscard]] inline ngtcp2_cid http3_test_raw_random_connection_id(std::size_t size) {
     ngtcp2_cid cid{};
     if (size > NGTCP2_MAX_CIDLEN || RAND_bytes(cid.data, static_cast<int>(size)) != 1) {
         throw std::runtime_error("cannot generate a QUIC connection ID");
@@ -110,30 +120,46 @@ inline int http3_test_new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_st
     return cid;
 }
 
-// The ngtcp2_crypto_ossl QUIC-TLS adapter callbacks for `role`.
-[[nodiscard]] inline http3_quic_crypto_callbacks http3_test_crypto_callbacks(http_connection_role role) noexcept {
-    const bool client = role == http_connection_role::client;
-    return {
-        .client_initial_ = client ? ngtcp2_crypto_client_initial_cb : nullptr,
-        .recv_client_initial_ = client ? nullptr : ngtcp2_crypto_recv_client_initial_cb,
-        .recv_crypto_data_ = ngtcp2_crypto_recv_crypto_data_cb,
-        .encrypt_ = ngtcp2_crypto_encrypt_cb,
-        .decrypt_ = ngtcp2_crypto_decrypt_cb,
-        .hp_mask_ = ngtcp2_crypto_hp_mask_cb,
-        .recv_retry_ = client ? ngtcp2_crypto_recv_retry_cb : nullptr,
-        .update_key_ = ngtcp2_crypto_update_key_cb,
-        .delete_crypto_aead_ctx_ = ngtcp2_crypto_delete_crypto_aead_ctx_cb,
-        .delete_crypto_cipher_ctx_ = ngtcp2_crypto_delete_crypto_cipher_ctx_cb,
-        .get_path_challenge_data_ = ngtcp2_crypto_get_path_challenge_data2_cb,
-        .version_negotiation_ = ngtcp2_crypto_version_negotiation_cb,
-        .rand_ = http3_test_fill_random,
-    };
+[[nodiscard]] inline quic_cid http3_test_random_connection_id(std::size_t size) {
+    std::array<std::byte, quic_max_cid_bytes> raw{};
+    if (size > raw.size() || RAND_bytes(reinterpret_cast<std::uint8_t*>(raw.data()), static_cast<int>(size)) != 1) {
+        throw std::runtime_error("cannot generate a QUIC connection ID");
+    }
+    return quic_cid(byte_view(raw.data(), size));
 }
 
-// Byte-wise equality of a socket address with one side of a QUIC path.
-[[nodiscard]] inline bool http3_test_same_address(std::span<const std::byte> address, const ngtcp2_addr& expected) noexcept {
-    const auto bytes = std::as_bytes(std::span(reinterpret_cast<const char*>(expected.addr), expected.addrlen));
-    return std::ranges::equal(address, bytes);
+inline void http3_test_configure_client_crypto_callbacks(ngtcp2_callbacks& callbacks) noexcept {
+    callbacks.client_initial = ngtcp2_crypto_client_initial_cb;
+    callbacks.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
+    callbacks.encrypt = ngtcp2_crypto_encrypt_cb;
+    callbacks.decrypt = ngtcp2_crypto_decrypt_cb;
+    callbacks.hp_mask = ngtcp2_crypto_hp_mask_cb;
+    callbacks.recv_retry = ngtcp2_crypto_recv_retry_cb;
+    callbacks.update_key = ngtcp2_crypto_update_key_cb;
+    callbacks.delete_crypto_aead_ctx = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
+    callbacks.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
+    callbacks.get_path_challenge_data2 = ngtcp2_crypto_get_path_challenge_data2_cb;
+    callbacks.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
+    callbacks.rand = http3_test_fill_random;
+}
+
+inline void http3_test_configure_server_crypto_callbacks(ngtcp2_callbacks& callbacks) noexcept {
+    callbacks.recv_client_initial = ngtcp2_crypto_recv_client_initial_cb;
+    callbacks.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
+    callbacks.encrypt = ngtcp2_crypto_encrypt_cb;
+    callbacks.decrypt = ngtcp2_crypto_decrypt_cb;
+    callbacks.hp_mask = ngtcp2_crypto_hp_mask_cb;
+    callbacks.update_key = ngtcp2_crypto_update_key_cb;
+    callbacks.delete_crypto_aead_ctx = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
+    callbacks.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
+    callbacks.get_path_challenge_data2 = ngtcp2_crypto_get_path_challenge_data2_cb;
+    callbacks.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
+    callbacks.rand = http3_test_fill_random;
+}
+
+// The ngtcp2_crypto_ossl QUIC-TLS adapter callbacks for `role`.
+[[nodiscard]] inline http3_quic_configure_crypto_callbacks_type http3_test_configure_crypto_callbacks(http_connection_role role) noexcept {
+    return role == http_connection_role::client ? http3_test_configure_client_crypto_callbacks : http3_test_configure_server_crypto_callbacks;
 }
 
 // The client TLS side of one QUIC connection: TLS 1.3 only, ALPN "h3" only,
@@ -297,7 +323,7 @@ public:
         local_ = socket_.local_endpoint();
         quic_local_ = local_;
         connection_.emplace(http3_quic_connection::client({
-            .crypto_callbacks_ = http3_test_crypto_callbacks(http_connection_role::client),
+            .configure_crypto_callbacks_ = http3_test_configure_crypto_callbacks(http_connection_role::client),
             .owner_callbacks_ = {.get_new_connection_id_ = http3_test_new_connection_id, .handshake_completed_ = handshake_complete, .handshake_confirmed_ = handshake_confirmed},
             .source_connection_id_ = http3_test_random_connection_id(16),
             // RFC 9000 §7.2: at least 8 unpredictable bytes.
@@ -556,7 +582,7 @@ public:
         }
         wait_or_throw([&] {
             const auto current = connection_->current_path();
-            return http3_test_same_address(current.local_, candidate.local) && http3_test_same_address(current.remote_, candidate.remote);
+            return current.local_ == candidate.local_ && current.remote_ == candidate.remote_;
         }, "HTTP/3 client migration validation did not complete");
         local_ = migration_local_;
         quic_local_ = migration_local_;
@@ -712,22 +738,22 @@ private:
     static constexpr std::size_t max_stream_output_bytes = 256 * 1024;
     static constexpr std::size_t max_udp_payload_bytes = 1350;
 
-    static int handshake_confirmed(ngtcp2_conn*, void* user_data) noexcept {
+    static bool handshake_confirmed(void* user_data) noexcept {
         static_cast<http3_test_client*>(user_data)->handshake_confirmed_ = true;
-        return 0;
+        return true;
     }
 
-    static int handshake_complete(ngtcp2_conn*, void* user_data) noexcept {
+    static bool handshake_complete(void* user_data) noexcept {
         auto& self = *static_cast<http3_test_client*>(user_data);
         self.early_rejected_ = self.early_attempted_ && self.tls_.early_data_status() != SSL_EARLY_DATA_ACCEPTED;
         self.early_rejection_pending_ = self.early_rejected_;
         if (!self.early_rejected_) {
-            return 0;
+            return true;
         }
         try {
-            return self.connection_->reject_early_data() == http3_quic_status::accepted ? 0 : NGTCP2_ERR_CALLBACK_FAILURE;
+            return self.connection_->reject_early_data() == http3_quic_status::accepted;
         } catch (...) {
-            return NGTCP2_ERR_CALLBACK_FAILURE;
+            return false;
         }
     }
 
@@ -757,15 +783,14 @@ private:
         return static_cast<ngtcp2_tstamp>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
     }
 
-    [[nodiscard]] ngtcp2_path path(asio::ip::udp::endpoint& local) noexcept {
+    [[nodiscard]] http3_quic_path path(const asio::ip::udp::endpoint& local) const noexcept {
         return {
-            .local = {reinterpret_cast<ngtcp2_sockaddr*>(local.data()), static_cast<ngtcp2_socklen>(local.size())},
-            .remote = {reinterpret_cast<ngtcp2_sockaddr*>(server_.data()), static_cast<ngtcp2_socklen>(server_.size())},
-            .user_data = nullptr,
+            .local_ = to_ip_endpoint(local),
+            .remote_ = to_ip_endpoint(server_),
         };
     }
 
-    [[nodiscard]] ngtcp2_path path() noexcept {
+    [[nodiscard]] http3_quic_path path() const noexcept {
         return path(quic_local_);
     }
 
@@ -943,7 +968,7 @@ private:
             auto* output_socket = &socket_;
             if (migration_socket_) {
                 const auto candidate = path(migration_local_);
-                if (ngtcp2_path_eq(&output_.path_.path, &candidate) != 0) {
+                if (output_.path_.local_ == candidate.local_ && output_.path_.remote_ == candidate.remote_) {
                     output_socket = &*migration_socket_;
                 }
             }
@@ -1098,7 +1123,7 @@ public:
         callbacks.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
         callbacks.get_path_challenge_data2 = ngtcp2_crypto_get_path_challenge_data2_cb;
         callbacks.rand = http3_test_fill_random;
-        callbacks.get_new_connection_id2 = http3_test_new_connection_id;
+        callbacks.get_new_connection_id2 = http3_test_raw_new_connection_id;
         callbacks.handshake_completed = [](ngtcp2_conn*, void* user_data) noexcept {
             static_cast<http3_raw_request_client*>(user_data)->handshake_completed_ = true;
             return 0;
@@ -1119,8 +1144,8 @@ public:
         parameters.initial_max_stream_data_uni = 1024 * 1024;
         parameters.initial_max_streams_uni = 16;
         parameters.max_idle_timeout = 30 * NGTCP2_SECONDS;
-        const auto source = http3_test_random_connection_id(16);
-        const auto destination = http3_test_random_connection_id(18);
+        const auto source = http3_test_raw_random_connection_id(16);
+        const auto destination = http3_test_raw_random_connection_id(18);
         const auto initial_path = path();
         if (ngtcp2_conn_client_new(&connection_, &destination, &source, &initial_path, NGTCP2_PROTO_VER_V1, &callbacks, &settings, &parameters, nullptr, this) != 0) {
             throw std::runtime_error("HTTP/3 raw client cannot create its QUIC connection");

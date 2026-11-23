@@ -83,7 +83,7 @@ constexpr std::size_t digest_text_bytes = 2 * sha256_digest_size;
 
 [[nodiscard]] std::string make_id_key(std::string_view prefix, db_cache_shape shape, const sha256_digest& hash) {
     std::array<char, digest_text_bytes> hex{};
-    http_encode_lower_hex(hex.data(), hash);
+    (void)encode_lower_hex(hex, hash);
     return make_id_key_from_hex(prefix, shape, std::string_view(hex.data(), hex.size()));
 }
 
@@ -95,6 +95,11 @@ void release_cache_storage(void* storage) noexcept {
 // SQL and parameters can be large, so their byte encoding streams into the
 // digest instead of being copied into a temporary string first.
 void digest_text(sha256& digest, std::string_view value) {
+    digest.update_u64_le(value.size());
+    digest.update(value);
+}
+
+void digest_bytes(sha256& digest, byte_view value) {
     digest.update_u64_le(value.size());
     digest.update(value);
 }
@@ -242,14 +247,14 @@ std::string db_cache_prefix(std::string_view name_space, std::string_view alias,
     std::string result_value;
     result_value.reserve(cache_prefix.size() + digest_text_bytes + 1);
     result_value.append(cache_prefix);
-    http_append_lower_hex(result_value, identity.finish());
+    append_lower_hex(result_value, identity.finish());
     result_value.push_back(':');
     return result_value;
 }
 void append_db_cache_id_keys(std::vector<std::string>& keys, std::string_view prefix, std::string_view id) {
     const auto hash = sha256_of(id);
     std::array<char, digest_text_bytes> hex{};
-    http_encode_lower_hex(hex.data(), hash);
+    (void)encode_lower_hex(hex, hash);
     const std::string_view hex_view(hex.data(), hex.size());
     for (const auto shape : db_cache_shapes) {
         keys.push_back(make_id_key_from_hex(prefix, shape, hex_view));
@@ -288,10 +293,13 @@ std::string db_cache_key(std::string_view prefix, std::string_view id, db_cache_
             case db_value_type::bool_:
                 input.update_u64_le(value.bool_value());
                 break;
+            case db_value_type::bytes:
+                digest_bytes(input, value.bytes());
+                break;
         }
     }
     result_value.append("sql:");
-    http_append_lower_hex(result_value, input.finish());
+    append_lower_hex(result_value, input.finish());
     return result_value;
 }
 
@@ -652,7 +660,7 @@ task<void> db_query_cache_state::clear(request_io_metrics* io_metrics, operation
 }  // namespace ruvia::detail
 
 namespace ruvia {
-db_query_result_cache::db_query_result_cache(detail::db_query_cache_state& state_value, detail::operation_scope& scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) noexcept :
+db_query_result_cache::db_query_result_cache(detail::db_query_cache_state& state_value, ::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) noexcept :
     state_(&state_value),
     io_metrics_(io_metrics),
     options_(std::move(options)),

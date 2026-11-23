@@ -291,7 +291,7 @@ http_server_listener_definition validate_run_listener(const http_server_listener
     // worker can tell which one owns a connection ID.
     if (validated.http3_.has_value()) {
         auto secret = std::make_shared<std::array<std::uint8_t, 32>>();
-        if (!fill_random_bytes(std::span<unsigned char>(secret->data(), secret->size()))) {
+        if (!fill_random_bytes(std::as_writable_bytes(std::span(*secret)))) {
             throw std::runtime_error("failed to generate the HTTP/3 connection ID secret");
         }
         validated.http3_->secret_ = std::move(secret);

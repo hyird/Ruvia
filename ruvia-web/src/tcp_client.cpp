@@ -15,6 +15,7 @@
 
 #include <asio/ssl/context.hpp>
 
+#include "asio_ip_endpoint.h"
 #include "byte_view.h"
 #include "client_host_resolver.h"
 #include "client_lifecycle.h"
@@ -169,6 +170,7 @@ private:
     std::uint64_t write_id_{};
     bool read_active_{};
     bool write_active_{};
+    bool send_ended_{};
     bool eof_{};
 };
 
@@ -190,6 +192,14 @@ public:
         lifecycle_.require_ready();
         return backend_.alpn();
     }
+    [[nodiscard]] ip_endpoint local_endpoint() {
+        lifecycle_.require_ready();
+        return to_ip_endpoint(backend_.transport_.local_endpoint());
+    }
+    [[nodiscard]] ip_endpoint peer_endpoint() {
+        lifecycle_.require_ready();
+        return to_ip_endpoint(backend_.transport_.peer_endpoint());
+    }
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options options) {
         lifecycle_.require_ready();
         return lifecycle_.operation_scope().attach(read_owned(shared_from_this(), std::move(options)));
@@ -197,6 +207,10 @@ public:
     [[nodiscard]] task<void> write(std::string bytes, operation_options options) {
         lifecycle_.require_ready();
         return lifecycle_.operation_scope().attach(write_owned(shared_from_this(), std::move(bytes), std::move(options)));
+    }
+    [[nodiscard]] task<void> finish(operation_options options) {
+        lifecycle_.require_ready();
+        return lifecycle_.operation_scope().attach(finish_owned(shared_from_this(), std::move(options)));
     }
     void request_close() noexcept {
         lifecycle_.request_close();
@@ -250,6 +264,9 @@ private:
         state->lifecycle_.require_ready();
         auto& backend = state->backend_;
         auto lease = claim_operation_lane(backend.write_active_, "TCP client write already in progress");
+        if (backend.send_ended_) {
+            throw std::logic_error("TCP client send direction has ended");
+        }
         try {
             operation_deadline timeout(override_operation_options({.timeout_ = backend.write_timeout_}, options).timeout_);
             worker_cancellation_registration cancellation(backend.cancellation_, backend.write_id_);
@@ -258,6 +275,27 @@ private:
             if (!result.ok()) {
                 throw_transport_error(result);
             }
+        } catch (const std::system_error&) {
+            state->request_close();
+            throw;
+        }
+    }
+    [[nodiscard]] static task<void> finish_owned(std::shared_ptr<tcp_client_state> state, operation_options options) {
+        state->lifecycle_.require_ready();
+        auto& backend = state->backend_;
+        auto lease = claim_operation_lane(backend.write_active_, "TCP client write already in progress");
+        if (backend.send_ended_) {
+            co_return;
+        }
+        try {
+            operation_deadline timeout(override_operation_options({.timeout_ = backend.write_timeout_}, options).timeout_);
+            worker_cancellation_registration cancellation(backend.cancellation_, backend.write_id_);
+            cancellation.arm(options.stop_token_);
+            const auto result = co_await backend.transport_.shutdown_send(timeout);
+            if (!result.ok()) {
+                throw_transport_error(result);
+            }
+            backend.send_ended_ = true;
         } catch (const std::system_error&) {
             state->request_close();
             throw;
@@ -290,6 +328,15 @@ task<void> tcp_client::connect(operation_options operation) & {
 std::string_view tcp_client::alpn() const& {
     return state_->alpn();
 }
+
+ip_endpoint tcp_client::local_endpoint() const& {
+    return state_->local_endpoint();
+}
+
+ip_endpoint tcp_client::peer_endpoint() const& {
+    return state_->peer_endpoint();
+}
+
 task<std::optional<std::span<const std::byte>>> tcp_client::read(operation_options operation) & {
     return state_->read(std::move(operation));
 }
@@ -304,6 +351,30 @@ task<std::optional<std::string_view>> tcp_client::read_text(operation_options op
 
 task<void> tcp_client::write(outbound_bytes bytes, operation_options operation) & {
     return state_->write(std::move(bytes).take_string(), std::move(operation));
+}
+
+task<void> tcp_client::write(std::span<const byte_view> chunks, operation_options operation) & {
+    std::size_t total = 0;
+    for (const auto chunk : chunks) {
+        if (std::numeric_limits<std::size_t>::max() - total < chunk.size()) {
+            throw std::length_error("TCP client write chunks exceed size_t range");
+        }
+        total += chunk.size();
+    }
+    std::string owned;
+    owned.resize(total);
+    std::size_t offset = 0;
+    for (const auto chunk : chunks) {
+        if (!chunk.empty()) {
+            std::memcpy(owned.data() + offset, chunk.data(), chunk.size());
+            offset += chunk.size();
+        }
+    }
+    return state_->write(std::move(owned), std::move(operation));
+}
+
+task<void> tcp_client::finish(operation_options operation) & {
+    return state_->finish(std::move(operation));
 }
 
 void tcp_client::request_stop() & noexcept {

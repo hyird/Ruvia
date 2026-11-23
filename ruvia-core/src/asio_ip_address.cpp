@@ -1,5 +1,3 @@
-#include "asio_ip_address.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +8,8 @@
 #include <system_error>
 
 #include <asio/ip/address.hpp>
+
+#include "asio_bridge.h"
 
 namespace ruvia {
 

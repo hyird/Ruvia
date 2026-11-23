@@ -22,7 +22,7 @@
 #include <asio.hpp>
 
 #include "app.h"
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "context.h"
 #include "controller.h"
 #include "event_loop.h"
@@ -295,7 +295,7 @@ TEST(Ruvia, http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_req
                     }
                     bool sent_fin = false;
                     for (std::size_t offset = 0; offset + ruvia::http2_frame_header_bytes <= received_wire.size();) {
-                        const auto header_value = ruvia::parse_http2_frame_header(std::span<const char>(received_wire.data() + offset, received_wire.size() - offset));
+                        const auto header_value = ruvia::parse_http2_frame_header(ruvia::as_bytes(std::string_view(received_wire.data() + offset, received_wire.size() - offset)));
                         if (!header_value || header_value->length_ > received_wire.size() - offset - ruvia::http2_frame_header_bytes) {
                             break;
                         }
@@ -964,7 +964,7 @@ TEST(Ruvia, http2_capsule_route_closed_stream_rejects_truncated_capsule_without_
     const auto server_frames = [&] {
         std::vector<std::tuple<std::uint8_t, std::uint8_t, std::string>> frames{};
         for (std::size_t off = 0; off + ruvia::http2_frame_header_bytes <= raw_from_server.size();) {
-            const auto hdr = ruvia::parse_http2_frame_header(std::span<const char>(raw_from_server.data() + off, ruvia::http2_frame_header_bytes));
+            const auto hdr = ruvia::parse_http2_frame_header(ruvia::as_bytes(std::string_view(raw_from_server.data() + off, ruvia::http2_frame_header_bytes)));
             if (!hdr || off + ruvia::http2_frame_header_bytes + hdr->length_ > raw_from_server.size()) {
                 break;
             }
@@ -1061,9 +1061,9 @@ TEST(Ruvia, http2_web_idle_priority_update_and_buffered_push_stream_limit_cancel
 
     std::string wire(ruvia::http2_client_preface);
     ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\x00\x02\x00\x00\x00\x01\x00\x03\x00\x00\x00\x01", 12));
-    std::array<char, 32> prio_buf{};
+    std::array<std::byte, 32> prio_buf{};
     const auto prio_sz = std::get<0>(ruvia::encode_http2_priority_update(prio_buf, 1, {.urgency_ = 1, .incremental_ = false}));
-    wire.append(prio_buf.data(), prio_sz);
+    wire.append(ruvia::as_chars(std::span<const std::byte>(prio_buf)).data(), prio_sz);
     std::string get1;
     ruvia::hpack_encoder::encode_header(get1, ":method", "GET");
     ruvia::hpack_encoder::encode_header(get1, ":scheme", "http");

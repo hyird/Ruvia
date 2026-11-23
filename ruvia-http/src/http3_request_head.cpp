@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -22,22 +23,35 @@
 
 namespace ruvia {
 
-http3_request_head::http3_request_head(std::int64_t stream_id, std::vector<http_header> fields, bool stream_ended, bool early_data) :
+http3_request_head::http3_request_head(std::int64_t stream_id, std::string storage, std::vector<field_slice> fields, bool stream_ended, bool early_data) :
+    storage_(std::move(storage)),
     fields_(std::move(fields)),
     stream_id_(stream_id),
     stream_ended_(stream_ended),
     early_data_(early_data) {}
 
-std::optional<http3_request_head> http3_request_head::try_parse(std::int64_t stream_id, std::vector<http_header> fields, bool stream_ended, bool early_data) {
-    http3_request_head head(stream_id, std::move(fields), stream_ended, early_data);
+std::optional<http3_request_head> http3_request_head::try_parse(std::int64_t stream_id, std::string storage, std::vector<field_slice> fields, bool stream_ended, bool early_data) {
+    http3_request_head head(stream_id, std::move(storage), std::move(fields), stream_ended, early_data);
     if (!head.validate()) {
         return std::nullopt;
     }
     return head;
 }
 
+std::string_view http3_request_head::field_name(std::uint32_t index) const noexcept {
+    if (index == absent) {
+        return {};
+    }
+    const auto& slice = fields_[index];
+    return std::string_view(storage_).substr(slice.name_offset_, slice.name_size_);
+}
+
 std::string_view http3_request_head::field_value(std::uint32_t index) const noexcept {
-    return index == absent ? std::string_view{} : fields_[index].value();
+    if (index == absent) {
+        return {};
+    }
+    const auto& slice = fields_[index];
+    return std::string_view(storage_).substr(slice.value_offset_, slice.value_size_);
 }
 
 std::string_view http3_request_head::method() const& noexcept {
@@ -81,8 +95,8 @@ bool http3_request_head::validate() {
     };
 
     for (std::uint32_t index = 0; index < fields_.size(); ++index) {
-        const auto name = fields_[index].name();
-        const auto value = fields_[index].value();
+        const auto name = field_name(index);
+        const auto value = field_value(index);
         if (!name.empty() && name.front() == ':') {
             // RFC 9114 §4.3: pseudo-header fields precede every regular field.
             if (regular_seen) {
@@ -110,7 +124,7 @@ bool http3_request_head::validate() {
             return false;
         }
         const auto kind = detail::classify_http_field(name);
-        if (detail::validate_request_field(kind, value, detail::http_field_list_role::recipient, request_fields) != detail::request_field_status::ok) {
+        if (detail::validate_request_field(kind, value, http_field_list_role::recipient, request_fields) != detail::request_field_status::ok) {
             return false;
         }
         switch (kind) {
@@ -147,7 +161,6 @@ bool http3_request_head::validate() {
             default:
                 break;
         }
-        // The remaining suffix bounds every kept index without a second pass.
         if (regular_.empty()) {
             regular_.reserve(fields_.size() - index);
         }
@@ -188,7 +201,6 @@ bool http3_request_head::validate() {
     }
     if (content_length_seen) {
         declared_content_length_ = content_length.value();
-        // A HEADERS frame that ended the stream or a CONNECT request carries no content.
         if ((stream_ended_ || connect_method) && declared_content_length_ != std::uint64_t{0}) {
             return false;
         }
@@ -224,7 +236,7 @@ http_request http3_request_head::build_request(borrowed_text body) const& {
     };
     return detail::materialize_binary_http_request(spec, [this](std::size_t index) noexcept {
         const auto& field = regular_[index];
-        return std::pair{http_header_view{fields_[field.index_].name(), fields_[field.index_].value()}, field.kind_};
+        return std::pair{http_header_view{field_name(field.index_), field_value(field.index_)}, field.kind_};
     });
 }
 

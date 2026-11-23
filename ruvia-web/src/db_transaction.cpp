@@ -89,7 +89,7 @@ bool db_transaction::active() const noexcept {
     return state_ != nullptr && state_->active();
 }
 
-void db_transaction::bind_operation_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link, stop_token request_stop) noexcept {
+void db_transaction::bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link, stop_token request_stop) noexcept {
     request_link_ = std::move(request_link);
     io_metrics_ = io_metrics;
     request_stop_ = std::move(request_stop);
@@ -135,64 +135,104 @@ task<detail::db_query_result<with_count>> db_transaction::query_plan_prepared(de
     auto linked = admit_db_operation(operation, std::move(options), request_stop);
     auto& lease_value = operation.lease();
     bool backend_failed = false;
+    bool lease_kept = false;
     backend.backend_failed_ = &backend_failed;
+    backend.keep_on_command_failure_ = !lease_value.savepoints_.empty();
+    backend.lease_kept_ = &lease_kept;
     try {
         auto result_value = co_await detail::execute_db_query_plan<with_count>(std::move(plan), backend, linked.options());
         operation.finish_active();
         co_return result_value;
     } catch (...) {
-        // SQL failures have already retired the lease in the backend. Deadline
-        // failures must retire it here while it is still owned by this operation.
-        if (!backend_failed) {
+        // SQL failures retire the lease in the backend unless a savepoint kept it open.
+        // Deadline failures outside the backend must retire it here while owned.
+        if (backend_failed && lease_kept) {
+            operation.finish_active();
+        } else if (!backend_failed) {
             lease_value.abort();
         }
         throw;
     }
 }
 
+namespace {
+
+void apply_savepoint_transition(std::vector<std::string>& savepoints, std::string_view name, auto sp_op) {
+    using op_type = decltype(sp_op);
+    if (sp_op == op_type::create) {
+        savepoints.emplace_back(name);
+        return;
+    }
+    for (std::size_t i = savepoints.size(); i > 0; --i) {
+        if (savepoints[i - 1] == name) {
+            const auto erase_from = sp_op == op_type::rollback_to ? i : i - 1;
+            savepoints.erase(savepoints.begin() + static_cast<std::ptrdiff_t>(erase_from), savepoints.end());
+            return;
+        }
+    }
+}
+
+}  // namespace
+
 template <typename result_type, bool exec_statement>
-task<result_type> db_transaction::run_statement(std::string sql, std::vector<db_value> params, operation_options options) {
+task<result_type> db_transaction::run_statement(std::string sql, std::vector<db_value> params, operation_options options, savepoint_op sp_op, std::string savepoint_name) {
     operation_guard_type operation(*state_);
-    return registration_.attach(statement_task<result_type, exec_statement>(std::move(sql), std::move(params), io_metrics_, std::move(operation), std::move(options), request_stop_));
+    return registration_.attach(statement_task<result_type, exec_statement>(std::move(sql), std::move(params), io_metrics_, std::move(operation), std::move(options), request_stop_, sp_op, std::move(savepoint_name)));
 }
 
 template <typename result_type, bool exec_statement>
-task<result_type> db_transaction::statement_task(std::string sql, std::vector<db_value> params, detail::request_io_metrics* io_metrics, operation_guard_type pending, operation_options options, stop_token request_stop) {
+task<result_type> db_transaction::statement_task(std::string sql, std::vector<db_value> params, detail::request_io_metrics* io_metrics, operation_guard_type pending, operation_options options, stop_token request_stop, savepoint_op sp_op, std::string savepoint_name) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto linked = admit_db_operation(operation, std::move(options), request_stop);
     auto& lease_value = operation.lease();
-    if constexpr (exec_statement) {
-        auto result_value = co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
-            return client.execute_on_transaction_slot(lease_value.slot_, std::move(sql), std::move(params), linked.options());
-        });
-        operation.finish_active();
-        if constexpr (!std::is_void_v<result_type>) {
-            co_return result_value;
-        }
-    } else {
-        auto rows = co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
-            return client.query_on_transaction_slot(lease_value.slot_, std::move(sql), std::move(params), linked.options());
-        });
-        if constexpr (std::is_same_v<result_type, bool>) {
-            try {
-                if (rows.size() != 1) {
-                    throw std::runtime_error("database boolean scalar query did not return one row");
-                }
-                const bool result = rows.front()[std::size_t{0}].template as<bool>().value();
-                operation.finish_active();
-                co_return result;
-            } catch (...) {
-                lease_value.abort();
-                throw;
+    const bool keep_on_failure = !lease_value.savepoints_.empty();
+    bool lease_kept = false;
+    try {
+        if constexpr (exec_statement) {
+            auto result_value = co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
+                return client.execute_on_transaction_slot(lease_value.slot_, std::move(sql), std::move(params), linked.options(), keep_on_failure, &lease_kept);
+            });
+            if (sp_op != savepoint_op::none) {
+                apply_savepoint_transition(lease_value.savepoints_, savepoint_name, sp_op);
             }
-        } else {
             operation.finish_active();
             if constexpr (!std::is_void_v<result_type>) {
-                co_return rows;
+                co_return result_value;
+            } else {
+                co_return;
+            }
+        } else {
+            auto rows = co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
+                return client.query_on_transaction_slot(lease_value.slot_, std::move(sql), std::move(params), linked.options(), keep_on_failure, &lease_kept);
+            });
+            if constexpr (std::is_same_v<result_type, bool>) {
+                try {
+                    if (rows.size() != 1) {
+                        throw std::runtime_error("database boolean scalar query did not return one row");
+                    }
+                    const bool result = rows.front()[std::size_t{0}].template as<bool>().value();
+                    operation.finish_active();
+                    co_return result;
+                } catch (...) {
+                    lease_value.abort();
+                    throw;
+                }
+            } else {
+                operation.finish_active();
+                if constexpr (!std::is_void_v<result_type>) {
+                    co_return rows;
+                } else {
+                    co_return;
+                }
             }
         }
+    } catch (...) {
+        if (lease_kept) {
+            operation.finish_active();
+        }
+        throw;
     }
 }
 
@@ -228,18 +268,18 @@ task<void> db_transaction::rollback(operation_options options) & {
 }
 
 task<void> db_transaction::savepoint(std::string_view name, operation_options options) & {
-    return run_identifier_command("SAVEPOINT ", name, std::move(options));
+    return run_identifier_command("SAVEPOINT ", name, std::move(options), savepoint_op::create);
 }
 
 task<void> db_transaction::rollback_to_savepoint(std::string_view name, operation_options options) & {
-    return run_identifier_command("ROLLBACK TO SAVEPOINT ", name, std::move(options));
+    return run_identifier_command("ROLLBACK TO SAVEPOINT ", name, std::move(options), savepoint_op::rollback_to);
 }
 
 task<void> db_transaction::release_savepoint(std::string_view name, operation_options options) & {
-    return run_identifier_command("RELEASE SAVEPOINT ", name, std::move(options));
+    return run_identifier_command("RELEASE SAVEPOINT ", name, std::move(options), savepoint_op::release);
 }
 
-task<void> db_transaction::run_identifier_command(std::string_view prefix, std::string_view name, operation_options options) {
+task<void> db_transaction::run_identifier_command(std::string_view prefix, std::string_view name, operation_options options, savepoint_op sp_op) {
     registration_.require_active();
     const auto& lease_value = state_->preparation_payload();
     const auto driver = detail::db_pool_driver(lease_value.client_);
@@ -248,7 +288,8 @@ task<void> db_transaction::run_identifier_command(std::string_view prefix, std::
     sql.reserve(prefix.size() + name.size() + 2);
     sql.append(prefix);
     detail::append_db_identifier(sql, name, driver);
-    return run_statement<void, true>(std::move(sql), std::vector<db_value>{}, std::move(options));
+    auto sp_name = sp_op == savepoint_op::none ? std::string{} : std::string(name);
+    return run_statement<void, true>(std::move(sql), std::vector<db_value>{}, std::move(options), sp_op, std::move(sp_name));
 }
 
 void db_transaction::require_postgresql_transaction(std::string_view feature) const {
@@ -392,7 +433,7 @@ std::span<const std::string> db_stream_result::column_names() const& {
     return state_ != nullptr ? std::span<const std::string>(state_->column_names_) : std::span<const std::string>{};
 }
 
-void db_stream_result::bind_operation_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept {
+void db_stream_result::bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept {
     request_link_ = std::move(request_link);
     io_metrics_ = io_metrics;
     registration_.bind(scope, *this);

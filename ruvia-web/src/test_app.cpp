@@ -11,7 +11,6 @@
 #include <utility>
 
 #include "blocking_pool.h"
-#include "callback_ref.h"
 #include "context_access.h"
 #include "controller.h"
 #include "env.h"
@@ -59,6 +58,7 @@ struct test_app::impl_type final {
     worker_ref worker_{event_loop_.worker()};
     stop_source stop_source_;
     stop_token stop_token_{stop_source_.token()};
+    detail::borrowed_clients clients_;
     std::optional<detail::worker_capabilities> capabilities_;
     lifecycle_type lifecycle_{lifecycle_type::configuring};
     std::exception_ptr startup_failure_{};
@@ -151,7 +151,10 @@ struct test_app::impl_type final {
         const auto& routes_value = *routes_;
         const auto resolution = routes_value.resolve(parsed_value);
         // A test request has no transport connection, hence connection id zero.
-        const auto services = capabilities_->make_context_services(stop_token_).with_plain_transport(0, request.remote_address_, request.remote_port_);
+        auto services = capabilities_->make_context_services(stop_token_).with_plain_transport(0, request.remote_address_, request.remote_port_);
+        if (!clients_.empty()) {
+            services.bind_router_capabilities(&clients_, nullptr);
+        }
 
         // A malformed request is rejected before admission, with no coding
         // promise, exactly as a server answers a malformed head.
@@ -230,7 +233,37 @@ test_app& test_app::trusted_proxies(std::nullptr_t) & {
     return *this;
 }
 
-void test_app::edit_configuration(detail::callback_ref<void(detail::app_configuration&)> edit) {
+event_loop test_app::loop() const& noexcept {
+    return impl_->event_loop_;
+}
+
+const worker_ref& test_app::worker() const& noexcept {
+    return impl_->worker_;
+}
+
+#ifdef RUVIA_ENABLE_REDIS
+test_app& test_app::bind_redis(std::string_view alias, const redis_client& client) & {
+    impl_->require_configurable();
+    impl_->clients_.bind_redis(impl_->worker_, alias, client);
+    return *this;
+}
+#endif
+
+#ifdef RUVIA_ENABLE_DATABASE
+test_app& test_app::bind_db(std::string_view alias, const db_client& client) & {
+    impl_->require_configurable();
+    impl_->clients_.bind_db(impl_->worker_, alias, client);
+    return *this;
+}
+#endif
+
+test_app& test_app::bind_http_client(std::string_view alias, const http_client& client) & {
+    impl_->require_configurable();
+    impl_->clients_.bind_http_client(impl_->worker_, alias, client);
+    return *this;
+}
+
+void test_app::edit_configuration(function_ref<void(detail::app_configuration&)> edit) {
     impl_->require_configurable();
     edit(impl_->configuration_);
 }

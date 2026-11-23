@@ -603,7 +603,7 @@ struct runtime_phase_stop_observer final {
 
     ruvia::worker_runtime& runtime_;
     bool notified_{false};
-    ruvia::detail::worker_shutdown_registration shutdown_registration_;
+    ruvia::worker_shutdown_registration shutdown_registration_;
 };
 
 TEST(RuviaDeathTest, worker_runtime_aborts_pending_phases_before_stop_notifications) {
@@ -636,7 +636,7 @@ struct group_join_observer final {
         failure_ = group_.join();
     }
 
-    ruvia::detail::worker_shutdown_registration shutdown_registration_;
+    ruvia::worker_shutdown_registration shutdown_registration_;
     ruvia::worker_group& group_;
     ruvia::worker_ref worker_;
     std::exception_ptr failure_;

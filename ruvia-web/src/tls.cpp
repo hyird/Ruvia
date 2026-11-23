@@ -25,6 +25,8 @@
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
+#include <openssl/x509_vfy.h>
+#include <openssl/x509err.h>
 #include <openssl/x509v3.h>
 
 #include "client_host_resolver.h"
@@ -686,6 +688,54 @@ tls_trust_store tls_trust_store::load_file(const char* file) {
     }
     if (X509_STORE_load_file(store.get(), file) != 1) {
         throw_tls_credential_error("load_verify_file");
+    }
+    return tls_trust_store(store.release());
+}
+
+tls_trust_store tls_trust_store::load_pem(std::string_view pem) {
+    struct x509_info_stack_deleter final {
+        void operator()(STACK_OF(X509_INFO) * infos) const noexcept {
+            sk_X509_INFO_pop_free(infos, X509_INFO_free);
+        }
+    };
+    const auto input = open_pem_text(pem);
+    ::ERR_clear_error();
+    std::unique_ptr<X509_STORE, x509_store_deleter> store(X509_STORE_new());
+    if (store == nullptr) {
+        throw_tls_credential_error("X509_STORE_new");
+    }
+    const std::unique_ptr<STACK_OF(X509_INFO), x509_info_stack_deleter> infos(
+        PEM_X509_INFO_read_bio(input.get(), nullptr, nullptr, const_cast<char*>("")));
+    if (infos == nullptr) {
+        throw_tls_credential_error("load_verify_pem");
+    }
+    std::size_t added = 0;
+    for (int i = 0; i < sk_X509_INFO_num(infos.get()); ++i) {
+        const auto* info = sk_X509_INFO_value(infos.get(), i);
+        if (info->x509 != nullptr) {
+            if (X509_STORE_add_cert(store.get(), info->x509) != 1) {
+                const auto err = ::ERR_peek_last_error();
+                if (ERR_GET_LIB(err) != ERR_LIB_X509 || ERR_GET_REASON(err) != X509_R_CERT_ALREADY_IN_HASH_TABLE) {
+                    throw_tls_credential_error("load_verify_pem");
+                }
+                ::ERR_clear_error();
+            }
+            ++added;
+        }
+        if (info->crl != nullptr) {
+            if (X509_STORE_add_crl(store.get(), info->crl) != 1) {
+                const auto err = ::ERR_peek_last_error();
+                if (ERR_GET_LIB(err) != ERR_LIB_X509 || ERR_GET_REASON(err) != X509_R_CERT_ALREADY_IN_HASH_TABLE) {
+                    throw_tls_credential_error("load_verify_pem");
+                }
+                ::ERR_clear_error();
+            }
+            ++added;
+        }
+    }
+    if (added == 0) {
+        ERR_raise(ERR_LIB_X509, X509_R_NO_CERTIFICATE_OR_CRL_FOUND);
+        throw_tls_credential_error("load_verify_pem");
     }
     return tls_trust_store(store.release());
 }

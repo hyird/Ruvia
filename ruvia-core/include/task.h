@@ -19,9 +19,9 @@ class task;
 template <typename t_type>
 class task_awaiter;
 class task_scope;
+class operation_scope;
 
 namespace detail {
-class operation_scope;
 template <typename t_type>
 class root_task_state;
 
@@ -50,7 +50,7 @@ public:
     void retire_frame() noexcept;
 
 private:
-    friend class operation_scope;
+    friend class ::ruvia::operation_scope;
     enum class phase : std::uint8_t {
         unscoped,
         cold,
@@ -345,7 +345,7 @@ private:
         requires detail::asio_task_result<u_type>
     friend auto async_start(task<u_type>, completion_token_type&&);
     friend class task_scope;
-    friend class detail::operation_scope;
+    friend class operation_scope;
 
     explicit task(coroutine_type coroutine) noexcept :
         coroutine_(coroutine) {}
@@ -395,7 +395,7 @@ private:
         retire_cold_frame(std::addressof(coroutine_));
     }
 
-    void bind_scope(detail::operation_scope& scope) noexcept {
+    void bind_scope(operation_scope& scope) noexcept {
         registration_.bind(scope, std::addressof(coroutine_), &task::retire_cold_frame);
     }
 

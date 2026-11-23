@@ -333,7 +333,7 @@ public:
         loop_(std::move(loop)) {}
 
     void install_shutdown_registration() {
-        if (!detail::worker_ref_access::register_shutdown(worker_, shared_from_this(), &event_loop_stop_listener::shutdown_registration_)) {
+        if (!worker_.register_shutdown(shared_from_this(), &event_loop_stop_listener::shutdown_registration_)) {
             throw std::runtime_error("cannot register a stop callback on a stopping event loop");
         }
     }
@@ -409,7 +409,7 @@ private:
     }
 
     // First member: unlinks from the worker registry after every other member is gone.
-    detail::worker_shutdown_registration shutdown_registration_;
+    worker_shutdown_registration shutdown_registration_;
     worker_ref worker_;
     asio::io_context::executor_type executor_;
     std::mutex mutex_;
@@ -476,7 +476,7 @@ void event_loop_state::shutdown_external_context() noexcept {
     runtime_.wait_for_reservations();
 }
 void event_loop_state::install_shutdown_registration() {
-    if (!worker_ref_access::register_shutdown(runtime_.worker(), shared_from_this(), &event_loop_state::shutdown_registration_)) {
+    if (!runtime_.worker().register_shutdown(shared_from_this(), &event_loop_state::shutdown_registration_)) {
         throw std::runtime_error("cannot register an event loop on a stopping worker");
     }
 }

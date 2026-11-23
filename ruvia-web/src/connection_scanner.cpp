@@ -10,7 +10,7 @@
 
 #include <asio/ip/tcp.hpp>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "connection_lifecycle.h"
 #include "task.h"
 #include "timeout_duration.h"

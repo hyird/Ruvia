@@ -130,7 +130,7 @@ private:
     bool read_active_{false};
     bool write_active_{false};
     bool send_ended_{false};
-    detail::operation_scope operations_;
+    ::ruvia::operation_scope operations_;
 };
 
 // Host-owned handler of every listener_dispatch::connection listener.

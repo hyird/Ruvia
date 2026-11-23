@@ -149,7 +149,7 @@ void normalize_http_client_absolute_path(std::string_view path, std::size_t extr
 // equivalence.
 struct http_client_redirect_authority final {
     std::string_view host_;
-    std::uint16_t port_;
+    port_number port_;
     bool same_origin_;
 };
 

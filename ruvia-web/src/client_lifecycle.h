@@ -89,7 +89,7 @@ public:
         }
     }
 
-    [[nodiscard]] detail::operation_scope& operation_scope() noexcept {
+    [[nodiscard]] ::ruvia::operation_scope& operation_scope() noexcept {
         return operations_;
     }
 
@@ -275,7 +275,7 @@ private:
     std::atomic<client_phase> phase_;
     bool connecting_{};
     // Last: invalidate cold operations before backend and allocator retirement.
-    detail::operation_scope operations_;
+    ::ruvia::operation_scope operations_;
 };
 
 }  // namespace ruvia::detail

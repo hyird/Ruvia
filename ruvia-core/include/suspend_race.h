@@ -6,10 +6,7 @@
 #include <utility>
 #include <variant>
 
-namespace ruvia::detail {
-
-struct suspend_race_pending final {};
-struct suspend_race_consumed final {};
+namespace ruvia {
 
 // A completion can race the suspension of the awaiter's coroutine in two
 // orders: complete-then-suspend and suspend-then-complete. A caller that
@@ -34,11 +31,11 @@ public:
     // the continuation when still pending, or reports that the operation
     // already completed synchronously (its result is consumed by take_value()).
     [[nodiscard]] bool suspend(std::coroutine_handle<> continuation) noexcept {
-        if (std::holds_alternative<suspend_race_pending>(state_)) {
-            state_.template emplace<suspend_race_suspended_type>(continuation);
+        if (std::holds_alternative<pending_type>(state_)) {
+            state_.template emplace<suspended_type>(continuation);
             return true;
         }
-        if (std::holds_alternative<suspend_race_ready_before_suspend_type>(state_)) {
+        if (std::holds_alternative<ready_before_suspend_type>(state_)) {
             return false;
         }
         std::terminate();
@@ -47,21 +44,21 @@ public:
     // Returns true only when the suspended coroutine now needs an explicit
     // wake. A completion racing before await_suspend is consumed there instead.
     [[nodiscard]] bool complete(t_type&& value) {
-        if (std::holds_alternative<suspend_race_pending>(state_)) {
+        if (std::holds_alternative<pending_type>(state_)) {
             try {
-                state_.template emplace<suspend_race_ready_before_suspend_type>(std::move(value));
+                state_.template emplace<ready_before_suspend_type>(std::move(value));
             } catch (...) {
-                state_.template emplace<suspend_race_pending>();
+                state_.template emplace<pending_type>();
                 throw;
             }
             return false;
         }
-        if (auto* suspended = std::get_if<suspend_race_suspended_type>(&state_)) {
+        if (auto* suspended = std::get_if<suspended_type>(&state_)) {
             const auto continuation = suspended->continuation();
             try {
-                state_.template emplace<suspend_race_ready_after_suspend_type>(std::move(value), continuation);
+                state_.template emplace<ready_after_suspend_type>(std::move(value), continuation);
             } catch (...) {
-                state_.template emplace<suspend_race_suspended_type>(continuation);
+                state_.template emplace<suspended_type>(continuation);
                 throw;
             }
             return true;
@@ -70,7 +67,7 @@ public:
     }
 
     [[nodiscard]] std::coroutine_handle<> continuation() const noexcept {
-        const auto* ready = std::get_if<suspend_race_ready_after_suspend_type>(&state_);
+        const auto* ready = std::get_if<ready_after_suspend_type>(&state_);
         if (ready == nullptr) {
             std::terminate();
         }
@@ -81,14 +78,14 @@ public:
         struct mark_consumed final {
             state_type& state_;
             ~mark_consumed() {
-                state_.template emplace<suspend_race_consumed>();
+                state_.template emplace<consumed_type>();
             }
         };
-        if (auto* ready = std::get_if<suspend_race_ready_before_suspend_type>(&state_)) {
+        if (auto* ready = std::get_if<ready_before_suspend_type>(&state_)) {
             const mark_consumed consumed{state_};
             return std::move(*ready).take_value();
         }
-        if (auto* ready = std::get_if<suspend_race_ready_after_suspend_type>(&state_)) {
+        if (auto* ready = std::get_if<ready_after_suspend_type>(&state_)) {
             const mark_consumed consumed{state_};
             return std::move(*ready).take_value();
         }
@@ -97,9 +94,12 @@ public:
     t_type take_value() && = delete;
 
 private:
-    class suspend_race_suspended_type final {
+    struct pending_type final {};
+    struct consumed_type final {};
+
+    class suspended_type final {
     public:
-        explicit suspend_race_suspended_type(std::coroutine_handle<> continuation) noexcept :
+        explicit suspended_type(std::coroutine_handle<> continuation) noexcept :
             continuation_(continuation) {}
 
         [[nodiscard]] std::coroutine_handle<> continuation() const noexcept {
@@ -110,9 +110,9 @@ private:
         std::coroutine_handle<> continuation_;
     };
 
-    class suspend_race_ready_before_suspend_type final {
+    class ready_before_suspend_type final {
     public:
-        explicit suspend_race_ready_before_suspend_type(t_type&& value) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
+        explicit ready_before_suspend_type(t_type&& value) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
             value_(std::move(value)) {}
 
         [[nodiscard]] t_type take_value() && noexcept(std::is_nothrow_move_constructible_v<t_type>) {
@@ -123,9 +123,9 @@ private:
         t_type value_;
     };
 
-    class suspend_race_ready_after_suspend_type final {
+    class ready_after_suspend_type final {
     public:
-        suspend_race_ready_after_suspend_type(t_type&& value, std::coroutine_handle<> continuation) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
+        ready_after_suspend_type(t_type&& value, std::coroutine_handle<> continuation) noexcept(std::is_nothrow_move_constructible_v<t_type>) :
             value_(std::move(value)),
             continuation_(continuation) {}
 
@@ -142,9 +142,9 @@ private:
         std::coroutine_handle<> continuation_;
     };
 
-    using state_type = std::variant<suspend_race_pending, suspend_race_suspended_type, suspend_race_ready_before_suspend_type, suspend_race_ready_after_suspend_type, suspend_race_consumed>;
+    using state_type = std::variant<pending_type, suspended_type, ready_before_suspend_type, ready_after_suspend_type, consumed_type>;
 
     state_type state_;
 };
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

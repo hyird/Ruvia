@@ -13,11 +13,12 @@
 #include <variant>
 
 #include "borrowed_text.h"
-#include "callback_ref.h"
+#include "function_ref.h"
 #include "http_header.h"
 #include "http_multipart.h"
 #include "http_server_sent_events.h"
 #include "middleware.h"
+#include "operation_interrupt.h"
 #include "outbound_bytes.h"
 #include "stop_token.h"
 #include "task.h"
@@ -38,7 +39,6 @@ struct stream_body final {
 };
 namespace detail {
 struct streaming_access;
-class operation_interrupt_source;
 }  // namespace detail
 
 class body_reader final {
@@ -47,10 +47,10 @@ private:
     friend class http_client_request_body_writer;
     friend class multipart_reader;
 
-    using read_type = detail::callback_ref<task<std::optional<std::span<const std::byte>>>(operation_options)>;
+    using read_type = function_ref<task<std::optional<std::span<const std::byte>>>(operation_options)>;
 
     body_reader(void* target, read_type::invoke_type read) noexcept :
-        read_(detail::callback_access::make<task<std::optional<std::span<const std::byte>>>(operation_options)>(target, read)) {}
+        read_(read_type::from_raw(target, read)) {}
 
 public:
     body_reader(const body_reader&) = delete;
@@ -91,7 +91,7 @@ private:
     read_type read_;
     bool read_active_{false};
     const worker_ref* worker_{nullptr};
-    detail::operation_scope operation_scope_;
+    ::ruvia::operation_scope operation_scope_;
 };
 
 // 提交成功后只有这两种正常结果：可生产正文，或整个响应已完成。
@@ -164,7 +164,7 @@ private:
     using aborted_type = bool (*)(void*) noexcept;
 
     // `interrupts` is the sink's; it routes stop requests to output operations.
-    response_stream_writer(void* target, detail::operation_interrupt_source& interrupts, commit_type commit, write_type write, end_type end, sleep_type sleep, bind_context_type bind_context, release_context_type release_context, committed_type committed, aborted_type aborted) noexcept :
+    response_stream_writer(void* target, operation_interrupt_source& interrupts, commit_type commit, write_type write, end_type end, sleep_type sleep, bind_context_type bind_context, release_context_type release_context, committed_type committed, aborted_type aborted) noexcept :
         target_(target),
         interrupts_(&interrupts),
         commit_(commit),
@@ -204,7 +204,7 @@ private:
     void require_output() const;
 
     void* target_;
-    detail::operation_interrupt_source* interrupts_;
+    operation_interrupt_source* interrupts_;
     commit_type commit_;
     write_type write_;
     end_type end_;
@@ -217,7 +217,7 @@ private:
     const worker_ref* worker_{nullptr};
     context* context_{nullptr};
     bool output_active_{false};
-    detail::operation_scope operation_scope_;
+    ::ruvia::operation_scope operation_scope_;
 
     friend class sse_writer;
 };
@@ -260,7 +260,7 @@ private:
     void expire_capability() noexcept;
 
     response_stream_writer* writer_;
-    detail::capability_registration<&sse_writer::expire_capability> registration_;
+    ::ruvia::capability_registration<&sse_writer::expire_capability> registration_;
 };
 
 class multipart_reader final {
@@ -330,8 +330,8 @@ private:
     body_reader* body_reader_;
     state_type state_;
     bool read_active_{false};
-    detail::operation_scope operation_scope_;
-    detail::capability_registration<&multipart_reader::expire_capability> registration_;
+    ::ruvia::operation_scope operation_scope_;
+    ::ruvia::capability_registration<&multipart_reader::expire_capability> registration_;
 
     [[nodiscard]] task<std::optional<multipart_stream_part>> read_task(operation_options operation);
 };

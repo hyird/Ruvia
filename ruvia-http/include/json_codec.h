@@ -26,10 +26,6 @@
 
 namespace ruvia::detail {
 
-// Converts a decimal whose grammar the caller has already validated (optional
-// '-', digits with an optional non-empty fraction, optional exponent; no '+',
-// whitespace or non-finite spellings). An all-zero significand is a signed
-// zero whatever its exponent; otherwise overflow or underflow is an error.
 template <std::floating_point t_type>
     requires std::same_as<t_type, std::remove_cv_t<t_type>>
 [[nodiscard]] std::optional<t_type> convert_decimal_number(std::string_view validated, bool nonzero_significand) noexcept {
@@ -45,12 +41,9 @@ template <std::floating_point t_type>
     return value;
 }
 
-// Overflow or underflow of a finite decimal is an error.
 template <std::floating_point t_type = double>
     requires std::same_as<t_type, std::remove_cv_t<t_type>>
 [[nodiscard]] std::optional<t_type> parse_decimal_number(std::string_view text) noexcept {
-    // Keep the accepted grammar narrower than from_chars: no leading '+',
-    // whitespace, empty fraction, NaN payloads, or other non-finite spellings.
     const bool negative = text.starts_with('-');
     std::size_t index = negative ? 1 : 0;
     bool saw_non_zero = false;
@@ -179,21 +172,14 @@ inline void skip_json_whitespace(std::string_view& input) noexcept {
     return std::string_view::npos;
 }
 
-// O(1) reservation hint for append_json_string, avoiding a pre-scan pass over
-// the string before escaping.
 [[nodiscard]] constexpr std::size_t json_string_size_hint(std::string_view value) noexcept {
     return value.size() + 2;
 }
 
-// Whether RFC 8259 §7 forbids this ASCII byte unescaped inside a string.
 [[nodiscard]] constexpr bool json_byte_needs_escape(unsigned char byte) noexcept {
     return byte < 0x20 || byte == '"' || byte == '\\';
 }
 
-// Appends the escape of one byte for which json_byte_needs_escape holds: the
-// two-character form where RFC 8259 §7 defines one, otherwise lowercase \u00xx
-// (as ECMAScript JSON.stringify). The single owner of JSON escape spelling for
-// both runtime strings and compile-time model keys.
 template <typename output_type>
 constexpr void append_json_escape(output_type& output, unsigned char byte) {
     switch (byte) {
@@ -220,20 +206,14 @@ constexpr void append_json_escape(output_type& output, unsigned char byte) {
             break;
         default:
             output.append(std::string_view("\\u00"));
-            output.push_back(http_lower_hex_digit(byte >> 4));
-            output.push_back(http_lower_hex_digit(byte));
+            output.push_back(lower_hex_digit(byte >> 4));
+            output.push_back(lower_hex_digit(byte));
             break;
     }
 }
 
-// Escapes and appends a JSON string. RFC 8259 §8.1 requires interchanged JSON
-// to be UTF-8, so the output is well-formed UTF-8 whatever the input bytes are:
-// well-formed multibyte sequences are copied verbatim, and each maximal subpart
-// of an ill-formed sequence (a stray continuation byte, a truncated or overlong
-// sequence, a surrogate, a value above U+10FFFF, or text in another encoding
-// such as a Windows ANSI code page) becomes one U+FFFD REPLACEMENT CHARACTER
-// (Unicode 3.9 "U+FFFD substitution of maximal subparts"). ASCII runs are still
-// scanned 16 bytes at a time.
+// Escapes and appends a JSON string (RFC 8259 §7-8), substituting U+FFFD for
+// each maximal ill-formed UTF-8 subpart (Unicode 3.9 D93b).
 template <typename string_t_type>
 inline void append_json_string(string_t_type& output, std::string_view value) {
     constexpr std::string_view replacement_character = "\xEF\xBF\xBD";
@@ -267,10 +247,6 @@ inline void append_json_string(string_t_type& output, std::string_view value) {
     output.push_back('"');
 }
 
-// Appends `,"<name>":` with `name` JSON-escaped, for object member keys known
-// at compile time. Returns false when `name` is not well-formed UTF-8: the
-// runtime writer would substitute U+FFFD, so the parser, which compares decoded
-// keys with the declared name, could never read such a member back.
 template <typename output_type>
 [[nodiscard]] constexpr bool append_json_member_key(output_type& output, std::string_view name) {
     output.push_back(',');
@@ -298,14 +274,13 @@ template <typename output_type>
     return true;
 }
 
-// Read exactly four hex digits as a UTF-16 code unit.
 [[nodiscard]] inline bool read_json_hex4(std::string_view input, std::uint32_t& value) noexcept {
     if (input.size() < 4) {
         return false;
     }
     value = 0;
     for (std::size_t i = 0; i < 4; ++i) {
-        const auto hex = http_decode_hex_nibble(input[i]);
+        const auto hex = decode_hex_nibble(input[i]);
         if (hex < 0) {
             return false;
         }
@@ -341,8 +316,10 @@ void append_json_utf8(output_t_type& output, std::uint32_t code_point) {
     }
 }
 
-enum class json_string_encoding : std::uint8_t { literal,
-    escaped };
+enum class json_string_encoding : std::uint8_t {
+    literal,
+    escaped,
+};
 
 class json_string_token final {
 public:
@@ -365,15 +342,6 @@ private:
     json_string_encoding encoding_;
 };
 
-// Scans one JSON string and commits the input cursor only after the closing
-// quote and all encoded bytes have been validated. The token owns both pieces
-// of scan state, so callers cannot observe a raw view without its encoding.
-//
-// A literal string is read through raw() and never touches `decoded`. When
-// `decoded` is non-null and the string contains an escape, the same pass
-// replaces its contents with the decoded text, starting at the first escape,
-// so escaped input is neither rescanned nor copied before it is known to need
-// decoding. After a failed scan `decoded` holds unspecified contents.
 template <typename escaped_budget_type>
 [[nodiscard]] inline std::optional<json_string_token> parse_json_string(std::string_view& input, std::string* decoded, escaped_budget_type&& consume_escaped_bytes) {
     auto remaining = input;
@@ -384,7 +352,6 @@ template <typename escaped_budget_type>
     remaining.remove_prefix(1);
 
     auto encoding = json_string_encoding::literal;
-    // Raw bytes before this offset are already represented in *decoded.
     std::size_t decoded_until = 0;
     for (std::size_t i = 0; i < remaining.size();) {
         i = find_json_string_token_byte(remaining, i);
@@ -491,7 +458,6 @@ template <typename escaped_budget_type>
     });
 }
 
-// The text of a string scanned by parse_json_string(input, &decoded).
 [[nodiscard]] inline std::string_view json_string_text(const json_string_token& token, const std::string& decoded RUVIA_LIFETIMEBOUND) noexcept {
     return token.encoding() == json_string_encoding::literal ? token.raw() : std::string_view(decoded);
 }
@@ -499,9 +465,7 @@ std::string_view json_string_text(const json_string_token&, std::string&&) = del
 std::string_view json_string_text(const json_string_token&, const std::string&&) = delete;
 
 struct json_number_token final {
-    // Bytes of the RFC 8259 number at the start of the input; 0 when none.
     std::size_t length_{0};
-    // Whether an integer or fraction digit is nonzero.
     bool nonzero_significand_{false};
 };
 
@@ -575,8 +539,6 @@ template <typename number_t_type>
 
     const auto number = input.substr(0, token.length_);
     if constexpr (std::is_floating_point_v<number_t_type>) {
-        // The scan already enforced the RFC 8259 grammar, which excludes the
-        // non-finite spellings; only range errors remain.
         const auto parsed_value = detail::convert_decimal_number<number_t_type>(number, token.nonzero_significand_);
         if (!parsed_value || !std::isfinite(*parsed_value)) {
             return false;
@@ -600,17 +562,8 @@ template <typename number_t_type>
 #undef RUVIA_JSON_SCAN_NEON
 #endif
 
-// The single owner of the JSON array and object grammars, structural value
-// skipping, and object field traversal. Skipping, typed model parsing and
-// dynamic token traversal all walk containers through these functions.
-
 namespace ruvia {
 
-// Consumes one array directly from input and lets the visitor consume each
-// element from the same cursor, positioned at the element's first byte. The
-// visitor returns false to reject the array. input advances past ']' only when
-// the whole array is accepted; nested values visited by the caller belong at
-// depth + 1.
 template <typename visitor_type>
 [[nodiscard]] bool consume_json_array_elements(std::string_view& input, std::size_t depth, visitor_type&& visitor) {
     if (depth > max_json_depth) {
@@ -647,12 +600,6 @@ template <typename visitor_type>
     }
 }
 
-// Consumes one object directly from input. For each member the visitor
-// receives the scanned key token and consumes the value from the same cursor
-// (positioned after ':'); it returns false to reject the object. When
-// `decoded_key` is non-null, escaped keys are decoded into it by the key scan
-// itself (see parse_json_string). input advances past '}' only when the whole
-// object is accepted; nested values visited by the caller belong at depth + 1.
 template <typename visitor_type, typename key_budget_type>
 [[nodiscard]] bool consume_json_object_members(std::string_view& input, std::size_t depth, std::string* decoded_key, visitor_type&& visitor, key_budget_type&& consume_key_bytes) {
     if (depth > max_json_depth) {
@@ -732,8 +679,6 @@ template <typename element_budget_type>
         case '"':
             return parse_json_string(input).has_value();
         case '{':
-            // skip_json_object/skip_json_array already add depth+1 for their child values; passing
-            // depth+1 here too would double-count and enforce half the documented max_json_depth.
             return skip_json_object(input, depth, consume_element);
         case '[':
             return skip_json_array(input, depth, consume_element);
@@ -755,16 +700,12 @@ template <typename element_budget_type>
     return skip_json_value(input, depth, consume_element);
 }
 
-enum class json_object_visit_result : unsigned char { complete,
+enum class json_object_visit_result : unsigned char {
+    complete,
     stopped,
-    invalid };
+    invalid,
+};
 
-// Consumes one object directly from input and lets the visitor consume each
-// value from the same cursor, under the member's decoded key. RUVIA_MODEL uses
-// this On-Demand-style traversal so a known value is parsed into its typed
-// field without first scanning it to discover a raw slice and then parsing
-// that slice again. consume_key_allocation is charged with the raw size of
-// every escaped key before the visitor sees it.
 template <typename visitor_type, typename key_allocation_type>
 [[nodiscard]] bool consume_json_object_fields(std::string_view& input, std::size_t depth, visitor_type&& visitor, key_allocation_type&& consume_key_allocation) {
     auto& visitor_ref = visitor;
@@ -789,9 +730,6 @@ template <typename visitor_type>
     });
 }
 
-// Visits every field of one complete JSON object body as a raw value slice
-// (which may carry leading whitespace). Values are skipped at depth 1, so the
-// whole body honours max_json_depth. The visitor returns false to stop.
 template <typename visitor_type>
     requires std::predicate<visitor_type&, std::string_view, std::string_view>
 [[nodiscard]] json_object_visit_result visit_json_object_fields(std::string_view body, visitor_type&& visitor) {

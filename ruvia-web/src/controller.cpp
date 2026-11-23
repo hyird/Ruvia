@@ -14,7 +14,7 @@
 
 #include "app.h"
 #include "borrowed_text.h"
-#include "callback_ref.h"
+#include "function_ref.h"
 #include "http_error.h"
 #include "http_request.h"
 #include "http_tunnel.h"
@@ -133,13 +133,13 @@ detail::controller_route_builder::~controller_route_builder() = default;
 void detail::controller_route_builder::register_route(http_known_method method, std::string_view method_token, std::string_view path, route_handler handler, std::span<const controller_middleware_descriptor> middlewares) const {
     const auto body_mode = declared_request_body_mode(middlewares_, middlewares);
     const scoped_controller_path joined(prefix_, path);
-    router_.register_endpoint(method, method_token, joined.view_, route_endpoint::buffered(callback_access::invoke(handler), body_mode), callback_access::target(handler), middlewares_, middlewares);
+    router_.register_endpoint(method, method_token, joined.view_, route_endpoint::buffered(handler.raw_invoke(), body_mode), handler.raw_target(), middlewares_, middlewares);
 }
 
 void detail::controller_route_builder::register_route(http_known_method method, std::string_view method_token, std::string_view path, route_stream_handler handler, std::span<const controller_middleware_descriptor> middlewares) const {
     const auto body_mode = declared_request_body_mode(middlewares_, middlewares);
     const scoped_controller_path joined(prefix_, path);
-    router_.register_endpoint(method, method_token, joined.view_, route_endpoint::response_stream(callback_access::invoke(handler), body_mode), callback_access::target(handler), middlewares_, middlewares);
+    router_.register_endpoint(method, method_token, joined.view_, route_endpoint::response_stream(handler.raw_invoke(), body_mode), handler.raw_target(), middlewares_, middlewares);
 }
 
 void detail::controller_route_builder::register_tunnel_route(std::string_view protocol, std::string_view target, route_stream_handler handler, std::span<const controller_middleware_descriptor> middlewares, http_tunnel_route_config config) const {
@@ -148,12 +148,12 @@ void detail::controller_route_builder::register_tunnel_route(std::string_view pr
         joined.emplace(prefix_, target);
     }
     const auto path = protocol.empty() ? target : joined->view_;
-    router_.register_endpoint(http_known_method::connect, {}, path, route_endpoint::tunnel(callback_access::invoke(handler), protocol, config), callback_access::target(handler), middlewares_, middlewares);
+    router_.register_endpoint(http_known_method::connect, {}, path, route_endpoint::tunnel(handler.raw_invoke(), protocol, config), handler.raw_target(), middlewares_, middlewares);
 }
 
 void detail::controller_route_builder::register_websocket_route(http_known_method method, std::string_view path, route_stream_handler handler, std::span<const controller_middleware_descriptor> middlewares, websocket_route_config websocket_config) const {
     const scoped_controller_path joined(prefix_, path);
-    router_.register_endpoint(method, {}, joined.view_, route_endpoint::websocket(callback_access::invoke(handler), websocket_config), callback_access::target(handler), middlewares_, middlewares);
+    router_.register_endpoint(method, {}, joined.view_, route_endpoint::websocket(handler.raw_invoke(), websocket_config), handler.raw_target(), middlewares_, middlewares);
 }
 detail::controller_route_builder detail::controller_route_builder::create_scope(std::string_view prefix, std::span<const controller_middleware_descriptor> middlewares) const {
     auto merged = merge_middleware_descriptors(middlewares_, middlewares);
@@ -335,8 +335,8 @@ void app_configuration::rate_limit(std::nullptr_t) noexcept {
 }
 
 void app_configuration::apply(router& routes_value) const {
-    routes_value.set_error_handler(callback_access::ref(error_handler_));
-    routes_value.set_not_found_handler(callback_access::ref(not_found_handler_));
+    routes_value.set_error_handler(error_handler_ ? http_error_handler_ref(*error_handler_) : http_error_handler_ref{});
+    routes_value.set_not_found_handler(not_found_handler_ ? http_not_found_handler_ref(*not_found_handler_) : http_not_found_handler_ref{});
     routes_value.set_prefix_error_handlers(prefix_error_handlers_);
     routes_value.set_prefix_not_found_handlers(prefix_not_found_handlers_);
     if (!middlewares_.empty()) {
@@ -357,7 +357,7 @@ template <typename host_type>
 template <typename change_type>
 host_type& dispatch_configuration<host_type>::edit(change_type&& change) {
     auto& host = static_cast<host_type&>(*this);
-    host.edit_configuration(detail::callback_access::bind<void(detail::app_configuration&)>(change));
+    host.edit_configuration(function_ref<void(detail::app_configuration&)>(change));
     return host;
 }
 

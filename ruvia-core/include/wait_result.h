@@ -7,7 +7,7 @@
 #include <utility>
 #include <variant>
 
-#include "byte_view.h"
+#include "lifetimebound.h"
 
 namespace ruvia::detail {
 template <typename t_type>

@@ -28,7 +28,7 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "content_decoding_fixture.h"
 #include "event_loop.h"
 #include "http1_server_response.h"

@@ -37,10 +37,10 @@
 #include <openssl/types.h>
 
 #include "borrowed_text.h"
-#include "callback_ref.h"
 #include "connection_lifecycle.h"
 #include "context.h"
 #include "event_loop.h"
+#include "function_ref.h"
 #include "http_cache.h"
 #include "http_client_ip.h"
 #include "http_client_types.h"
@@ -55,6 +55,7 @@
 #include "http_response.h"
 #include "http_tunnel.h"
 #include "inbound_buffer.h"
+#include "inbound_buffer_ops.h"
 #include "io_operation.h"
 #include "middleware.h"
 #include "rate_limit.h"
@@ -286,13 +287,12 @@ namespace ruvia::detail {
 
 class rate_limiter;
 class http_interim_response_output;
-class inbound_buffer_account;
 class route_table;
 class tls_served_certificate;
 class worker_state_registry;
 
-using http_error_handler_ref = callback_ref<task<http_response>(context&, http_error_info)>;
-using http_not_found_handler_ref = callback_ref<task<http_response>(context&)>;
+using http_error_handler_ref = function_ref<task<http_response>(context&, http_error_info)>;
+using http_not_found_handler_ref = function_ref<task<http_response>(context&)>;
 
 struct streaming_access final {
     [[nodiscard]] static body_reader make_body_reader(void* target, body_reader::read_type::invoke_type read) noexcept {
@@ -317,7 +317,7 @@ struct streaming_access final {
 
     // The preparation callback borrows its caller until this commit completes.
     // It runs inside the writer's output lane, before native head submission.
-    [[nodiscard]] static task<stream_commit_result> commit_prepared(response_stream_writer& writer, callback_ref<void()> prepare, operation_options operation);
+    [[nodiscard]] static task<stream_commit_result> commit_prepared(response_stream_writer& writer, function_ref<void()> prepare, operation_options operation);
 
     // The internal consumer pins immutable bytes until the awaited write finishes.
     // Public write() still takes an owning snapshot before returning its cold task.
@@ -413,7 +413,7 @@ struct context_connection_services final {
 using request_reset_code = std::variant<std::monostate, http2_error_code, http3_error_code>;
 
 struct request_stream_control final {
-    callback_ref<void(request_reset_code)> reset_;
+    function_ref<void(request_reset_code)> reset_;
     bool reset_requested_{false};
 };
 
@@ -1123,7 +1123,7 @@ private:
 };
 
 template <typename reader_type>
-[[nodiscard]] task<std::optional<std::span<const std::byte>>> body_reader_read_thunk(void* target, operation_options operation) {
+[[nodiscard]] task<std::optional<std::span<const std::byte>>> body_reader_read_thunk(void* target, operation_options&& operation) {
     return static_cast<reader_type*>(target)->read(std::move(operation));
 }
 

@@ -71,7 +71,7 @@ std::optional<websocket_compression> parse_response_extension(std::string_view t
     if (selected.empty()) {
         return false;
     }
-    return !detail::http_find_header_token(offered_list, [selected](std::string_view token) noexcept {
+    return !http_find_header_token(offered_list, [selected](std::string_view token) noexcept {
         return token == selected;
     }).empty();
 }

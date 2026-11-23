@@ -149,9 +149,9 @@ void record_failure(const ruvia::connection_failure_record& record) noexcept {
     connection_view view;
     view.id_ = connection.connection_id();
     view.local_address_ = connection.local().address().to_string();
-    view.local_port_ = connection.local().port();
+    view.local_port_ = connection.local().port().value();
     view.remote_address_ = connection.remote().address().to_string();
-    view.remote_port_ = connection.remote().port();
+    view.remote_port_ = connection.remote().port().value();
     if (const auto* tls = connection.tls()) {
         view.tls_ = true;
         view.alpn_ = tls->alpn();

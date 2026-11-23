@@ -22,7 +22,7 @@
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "byte_view.h"
 #include "connection_scanner.h"
 #include "context.h"
@@ -30,6 +30,7 @@
 #include "event_loop.h"
 #include "http_tunnel.h"
 #include "inbound_buffer.h"
+#include "inbound_buffer_ops.h"
 #include "io_operation.h"
 #include "middleware.h"
 #include "operation_scope.h"
@@ -524,7 +525,7 @@ private:
     std::int64_t idle_timeout_ms_{0};
     asio::cancellation_signal read_cancellation_;
     operation_interrupt_source interrupts_;
-    detail::operation_scope operations_;
+    ::ruvia::operation_scope operations_;
     http_tunnel facade_;
     // Declared last so destruction unregisters before the state it reads.
     connection_scanner::periodic_check_registration idle_check_;

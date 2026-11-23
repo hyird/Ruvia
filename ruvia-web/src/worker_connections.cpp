@@ -37,7 +37,7 @@
 #include <asio/ssl.hpp>
 #include <openssl/ssl.h>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "blocking_pool.h"
 #include "connection_lifecycle.h"
 #include "connection_scanner.h"
@@ -914,7 +914,7 @@ void worker_connections::admit_socket(std::size_t listener_index, tcp_socket_typ
         socket_peer = to_ip_address(remote->address());
     }
     if (effective_remote) {
-        remote.emplace(to_asio_address(effective_remote->address()), effective_remote->port());
+        remote.emplace(to_asio_address(effective_remote->address()), effective_remote->port().value());
     }
     try {
         configure_accepted_socket(socket);
@@ -924,7 +924,7 @@ void worker_connections::admit_socket(std::size_t listener_index, tcp_socket_typ
             return;
         }
         const auto connection_id = connection_ids_.next();
-        connection_event event(connection_id, {to_ip_address(local.address()), local.port()}, {to_ip_address(remote->address()), remote->port()}, false);
+        connection_event event(connection_id, {to_ip_address(local.address()), port_number(local.port())}, {to_ip_address(remote->address()), port_number(remote->port())}, false);
         if (options_.connection_admission_ && !options_.connection_admission_(event)) {
             refused_.fetch_add(1, std::memory_order_relaxed);
             return;

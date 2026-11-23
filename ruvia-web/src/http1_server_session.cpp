@@ -23,7 +23,7 @@
 #include <openssl/ssl.h>
 #include <openssl/ssl3.h>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "borrowed_text.h"
 #include "byte_view.h"
 #include "connection_lifecycle.h"
@@ -48,6 +48,7 @@
 #include "http_response_stream.h"
 #include "http_tunnel_session.h"
 #include "inbound_buffer.h"
+#include "inbound_buffer_ops.h"
 #include "io_operation.h"
 #include "ip_address.h"
 #include "middleware.h"

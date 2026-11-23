@@ -1,11 +1,5 @@
 #pragma once
 
-#if defined(RUVIA_ENABLE_HTTP3)
-#include <ngtcp2/ngtcp2.h>
-#include <ngtcp2/ngtcp2_crypto.h>
-#include <ngtcp2/ngtcp2_crypto_ossl.h>
-#endif
-
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -45,8 +39,8 @@
 
 #include "blocking_pool.h"
 #include "borrowed_text.h"
-#include "callback_ref.h"
 #include "event_loop.h"
+#include "function_ref.h"
 #include "move_only_function.h"
 #include "task.h"
 #include "task_scope.h"
@@ -755,7 +749,7 @@ private:
 };
 
 struct middleware_chain final {
-    using terminal_type = callback_ref<task<void>(context&)>;
+    using terminal_type = route_stream_handler;
     using failure_type = task<void> (*)(const route_table&, context&, std::exception_ptr);
 
     const route_table* table_{nullptr};
@@ -952,6 +946,9 @@ namespace ruvia::detail {
 // lifecycle guards remain outside the component; validation, callback
 // ownership, registration storage and router binding have one implementation.
 // Bound callback views borrow this immovable owner until its routers have retired.
+template <typename callback_type>
+using callback_registration = std::unique_ptr<callback_type>;
+
 class app_configuration final {
 public:
     app_configuration();

@@ -28,7 +28,7 @@ namespace {
 
 void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id, std::string_view payload_value) {
     std::array<char, ruvia::http2_frame_header_bytes> header_value{};
-    if (!ruvia::encode_http2_frame_header(header_value, static_cast<std::uint32_t>(payload_value.size()), type, flags, stream_id)) {
+    if (!ruvia::encode_http2_frame_header(ruvia::as_mutable_bytes(std::span(header_value)), static_cast<std::uint32_t>(payload_value.size()), type, flags, stream_id)) {
         throw std::logic_error("invalid test HTTP/2 frame");
     }
     wire.append(header_value.data(), header_value.size());
@@ -1199,7 +1199,7 @@ TEST(Ruvia, http2_public_completed_response_keeps_unconsumed_request_suffix_retr
     EXPECT_EQ(retried.consumed_bytes_, std::size_t{1});
     EXPECT_EQ(client.pending_data_output_bytes(id), std::size_t{1});
     const auto final_output = ruvia::test::drain_output(client);
-    const auto frame = ruvia::parse_http2_frame_header(final_output);
+    const auto frame = ruvia::parse_http2_frame_header(ruvia::as_bytes(final_output));
     EXPECT_TRUE(frame && frame->length_ == 1 && frame->stream_id_ == id && (frame->flags_ & 1U) != 0);
     EXPECT_EQ(final_output.size(), ruvia::http2_frame_header_bytes + 1);
 }
@@ -1248,7 +1248,7 @@ TEST(Ruvia, http2_public_data_consumption_is_bounded_and_does_not_retain_input_s
             unsigned terminal_frames = 0;
             std::string_view remaining(output);
             while (!remaining.empty()) {
-                const auto frame = ruvia::parse_http2_frame_header(remaining);
+                const auto frame = ruvia::parse_http2_frame_header(ruvia::as_bytes(remaining));
                 EXPECT_TRUE(frame && frame->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data));
                 if (!frame || remaining.size() < ruvia::http2_frame_header_bytes + frame->length_) {
                     break;
@@ -1301,7 +1301,7 @@ TEST(Ruvia, http2_public_multi_frame_data_is_owned_before_submit_returns) {
     received.reserve(body_size);
     std::string_view remaining(output);
     while (!remaining.empty()) {
-        const auto frame = ruvia::parse_http2_frame_header(remaining);
+        const auto frame = ruvia::parse_http2_frame_header(ruvia::as_bytes(remaining));
         EXPECT_TRUE(frame && frame->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data) && frame->stream_id_ == id);
         if (!frame || remaining.size() < ruvia::http2_frame_header_bytes + frame->length_) {
             break;
@@ -1366,7 +1366,7 @@ TEST(Ruvia, http2_public_empty_end_stream_waits_for_both_send_windows) {
         }
         end_stream(true);
         const auto output = ruvia::test::drain_output(client);
-        const auto frame = ruvia::parse_http2_frame_header(output);
+        const auto frame = ruvia::parse_http2_frame_header(ruvia::as_bytes(output));
         EXPECT_TRUE(frame && frame->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data) && frame->length_ == 0 && frame->stream_id_ == id && (frame->flags_ & 1U) != 0);
         EXPECT_EQ(output.size(), ruvia::http2_frame_header_bytes);
         EXPECT_TRUE(ruvia::test::throws_on([&] {
@@ -1412,7 +1412,7 @@ TEST(Ruvia, http2_public_data_validates_terminal_length_before_partial_consumpti
         output.append(ruvia::test::drain_output(client));
         std::string_view remaining(output);
         for (const auto payload : {std::string_view("ab"), std::string_view("c"), std::string_view("d")}) {
-            const auto frame = ruvia::parse_http2_frame_header(remaining);
+            const auto frame = ruvia::parse_http2_frame_header(ruvia::as_bytes(remaining));
             EXPECT_TRUE(frame && frame->length_ == payload.size() && ((frame->flags_ & 1U) != 0) == (payload == "d"));
             if (!frame || remaining.size() < ruvia::http2_frame_header_bytes + frame->length_) {
                 break;
@@ -1455,7 +1455,7 @@ TEST(Ruvia, http2_public_response_data_counts_only_consumed_bytes_toward_content
         EXPECT_EQ(first.consumed_bytes_, std::size_t{2});
         EXPECT_EQ(server.pending_data_output_bytes(1), std::size_t{2});
         const auto prefix = ruvia::test::drain_output(server);
-        const auto prefix_frame = ruvia::parse_http2_frame_header(prefix);
+        const auto prefix_frame = ruvia::parse_http2_frame_header(ruvia::as_bytes(prefix));
         EXPECT_TRUE(prefix_frame && prefix_frame->length_ == 2 && (prefix_frame->flags_ & 1U) == 0);
         EXPECT_TRUE(std::string_view(prefix).substr(ruvia::http2_frame_header_bytes) == "ab");
         const auto trailers = ruvia::validate_http_response_trailers(std::span<const ruvia::http_header_view>{});
@@ -1466,7 +1466,7 @@ TEST(Ruvia, http2_public_response_data_counts_only_consumed_bytes_toward_content
         EXPECT_EQ(final.consumed_bytes_, std::size_t{2});
         EXPECT_EQ(server.pending_data_output_bytes(1), std::size_t{2});
         const auto suffix = ruvia::test::drain_output(server);
-        const auto suffix_frame = ruvia::parse_http2_frame_header(suffix);
+        const auto suffix_frame = ruvia::parse_http2_frame_header(ruvia::as_bytes(suffix));
         EXPECT_TRUE(suffix_frame && suffix_frame->length_ == 2 && (suffix_frame->flags_ & 1U) != 0);
         EXPECT_TRUE(std::string_view(suffix).substr(ruvia::http2_frame_header_bytes) == "cd");
         EXPECT_TRUE(server.release(std::move(*head)) == ruvia::http2_server_request_release_status::released);
@@ -1509,7 +1509,7 @@ TEST(Ruvia, http2_public_expectation_gate_does_not_consume_or_retain_data) {
         EXPECT_TRUE(retried.status_ == ruvia::http_data_submit_status::complete);
         EXPECT_EQ(retried.consumed_bytes_, std::size_t{4});
         const auto output = ruvia::test::drain_output(client);
-        const auto frame = ruvia::parse_http2_frame_header(output);
+        const auto frame = ruvia::parse_http2_frame_header(ruvia::as_bytes(output));
         EXPECT_TRUE(frame && frame->length_ == 4 && (frame->flags_ & 1U) != 0);
         EXPECT_TRUE(std::string_view(output).substr(ruvia::http2_frame_header_bytes) == "next");
     }
@@ -1585,7 +1585,7 @@ TEST(Ruvia, http2_public_window_clamped_data_preserves_stream_order_and_windows)
             const auto output = ruvia::test::drain_output(client);
             std::string_view remaining(output);
             while (!remaining.empty()) {
-                const auto frame = ruvia::parse_http2_frame_header(std::span(remaining.data(), remaining.size()));
+                const auto frame = ruvia::parse_http2_frame_header(ruvia::as_bytes(remaining));
                 EXPECT_TRUE(frame && remaining.size() >= ruvia::http2_frame_header_bytes + frame->length_);
                 if (!frame || remaining.size() < ruvia::http2_frame_header_bytes + frame->length_) {
                     break;
@@ -1672,7 +1672,7 @@ TEST(Ruvia, http2_output_observer_can_submit_new_data_without_losing_it) {
     EXPECT_TRUE(client.wants_write());
     std::string second;
     ruvia::test::drain_output(client, second);
-    const auto frame = ruvia::parse_http2_frame_header(std::span<const char>(second.data(), second.size()));
+    const auto frame = ruvia::parse_http2_frame_header(ruvia::as_bytes(second));
     EXPECT_TRUE(frame && frame->stream_id_ == id && frame->length_ == 6);
     if (frame) {
         EXPECT_TRUE(std::string_view(second).substr(ruvia::http2_frame_header_bytes) == "second");
@@ -1731,7 +1731,7 @@ TEST(Ruvia, http2_output_observer_can_recursively_drain_and_append_frames) {
     std::string payload;
     std::size_t offset = 0;
     while (offset < remaining.size()) {
-        const auto frame = ruvia::parse_http2_frame_header(std::span<const char>(remaining.data() + offset, remaining.size() - offset));
+        const auto frame = ruvia::parse_http2_frame_header(ruvia::as_bytes(std::string_view(remaining).substr(offset)));
         if (!frame || frame->stream_id_ != id || frame->length_ != 1 || remaining.size() - offset < ruvia::http2_frame_header_bytes + frame->length_) {
             break;
         }
@@ -1769,7 +1769,7 @@ TEST(Ruvia, http2_public_full_output_batch_transfers_storage_and_accounts_data) 
         }
         EXPECT_TRUE(batch.status_ == ruvia::http2_output_batch_status::drained);
         EXPECT_EQ(batch.bytes_, body.size() + ruvia::http2_frame_header_bytes);
-        const auto frame = ruvia::parse_http2_frame_header(std::span<const char>(output.data(), output.size()));
+        const auto frame = ruvia::parse_http2_frame_header(ruvia::as_bytes(output));
         EXPECT_TRUE(frame && frame->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data) && frame->stream_id_ == id && frame->length_ == body.size() && frame->flags_ == 0);
         if (frame) {
             EXPECT_TRUE(std::string_view(output).substr(ruvia::http2_frame_header_bytes) == body);
@@ -1784,7 +1784,7 @@ TEST(Ruvia, http2_public_full_output_batch_transfers_storage_and_accounts_data) 
         batch = client.drain_output_batch(0, output, &data_output_observations::observe, &observed);
         EXPECT_TRUE(batch.status_ == ruvia::http2_output_batch_status::drained);
         EXPECT_EQ(batch.bytes_, ruvia::http2_frame_header_bytes);
-        const auto empty_end = ruvia::parse_http2_frame_header(std::span<const char>(output.data(), output.size()));
+        const auto empty_end = ruvia::parse_http2_frame_header(ruvia::as_bytes(output));
         EXPECT_TRUE(empty_end && empty_end->stream_id_ == id && empty_end->length_ == 0 && empty_end->flags_ == 1);
         EXPECT_EQ(observed.count_, std::size_t{2});
         EXPECT_TRUE(observed.entries_[1].stream_id_ == id && observed.entries_[1].payload_bytes_ == 0);
@@ -1802,7 +1802,7 @@ TEST(Ruvia, http2_public_full_output_batch_transfers_storage_and_accounts_data) 
         EXPECT_EQ(batch.bytes_, ruvia::http2_frame_header_bytes + 4);
         EXPECT_EQ(output.size(), 2 * ruvia::http2_frame_header_bytes + 4);
         if (output.size() >= ruvia::http2_frame_header_bytes) {
-            const auto tail = ruvia::parse_http2_frame_header(std::span<const char>(output.data(), output.size()).subspan(ruvia::http2_frame_header_bytes));
+            const auto tail = ruvia::parse_http2_frame_header(ruvia::as_bytes(std::string_view(output).substr(ruvia::http2_frame_header_bytes)));
             EXPECT_TRUE(tail && tail->stream_id_ == next_id && tail->length_ == 4 && tail->flags_ == 1);
             if (tail) {
                 EXPECT_TRUE(std::string_view(output).substr(2 * ruvia::http2_frame_header_bytes) == "tail");
@@ -1863,7 +1863,7 @@ TEST(Ruvia, http2_public_output_tail_preserves_storage_transfer_and_data_observa
         std::string_view pending(tail);
         std::size_t data_index = 0;
         while (!pending.empty()) {
-            const auto frame = ruvia::parse_http2_frame_header(std::span<const char>(pending.data(), pending.size()));
+            const auto frame = ruvia::parse_http2_frame_header(ruvia::as_bytes(pending));
             EXPECT_TRUE(frame && frame->length_ <= pending.size() - ruvia::http2_frame_header_bytes);
             if (!frame || frame->length_ > pending.size() - ruvia::http2_frame_header_bytes) {
                 break;
@@ -1907,7 +1907,7 @@ TEST(Ruvia, http2_public_output_batch_copy_failure_preserves_frame_boundaries) {
     EXPECT_EQ(batch.bytes_, first_bytes);
     EXPECT_TRUE(std::string_view(copied).starts_with("prefix"));
     if (copied.size() >= 6) {
-        const auto first = ruvia::parse_http2_frame_header(std::span<const char>(copied.data(), copied.size()).subspan(6));
+        const auto first = ruvia::parse_http2_frame_header(ruvia::as_bytes(std::string_view(copied).substr(6)));
         EXPECT_TRUE(first && first->stream_id_ == ids[0] && first->length_ == bodies[0].size());
         if (first) {
             EXPECT_TRUE(std::string_view(copied).substr(6 + ruvia::http2_frame_header_bytes) == bodies[0]);
@@ -1929,7 +1929,7 @@ TEST(Ruvia, http2_public_output_batch_copy_failure_preserves_frame_boundaries) {
     batch = client.drain_output_batch(1, suffix, &data_output_observations::observe, &observed);
     EXPECT_TRUE(batch.status_ == ruvia::http2_output_batch_status::drained);
     EXPECT_EQ(batch.bytes_, ruvia::http2_frame_header_bytes + bodies[2].size());
-    const auto last = ruvia::parse_http2_frame_header(std::span<const char>(suffix.data(), suffix.size()));
+    const auto last = ruvia::parse_http2_frame_header(ruvia::as_bytes(suffix));
     EXPECT_TRUE(last && last->stream_id_ == ids[2] && last->length_ == bodies[2].size());
     if (last) {
         EXPECT_TRUE(std::string_view(suffix).substr(ruvia::http2_frame_header_bytes) == bodies[2]);
@@ -2206,7 +2206,7 @@ TEST(Ruvia, http2_public_rejected_connect_with_invalid_terminal_length_resets_wi
     // (no spurious 9-byte DATA(END_STREAM) frame may be emitted before RST_STREAM).
     EXPECT_EQ(out.size(), ruvia::http2_frame_header_bytes + ruvia::http2_frame_header_bytes + 4);
     if (out.size() >= ruvia::http2_frame_header_bytes * 2 + 4) {
-        const auto rst = ruvia::parse_http2_frame_header(std::span(out.data() + ruvia::http2_frame_header_bytes, ruvia::http2_frame_header_bytes));
+        const auto rst = ruvia::parse_http2_frame_header(ruvia::as_bytes(std::string_view(out).substr(ruvia::http2_frame_header_bytes, ruvia::http2_frame_header_bytes)));
         EXPECT_TRUE(rst.has_value());
         if (rst) {
             EXPECT_EQ(rst->type_, static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream));

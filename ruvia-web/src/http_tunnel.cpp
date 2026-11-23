@@ -111,10 +111,11 @@ public:
             auto& state = *static_cast<http_capsule_stream_state*>(raw);
             state.type_ = event.type_;
             if (!event.payload_.empty()) {
-                state.payload_.append(event.payload_.data(), event.payload_.size());
+                const auto chars = as_chars(event.payload_);
+                state.payload_.append(chars.data(), chars.size());
             }
         };
-        const auto bytes_value = std::span<const char>(input_).subspan(offset_);
+        const auto bytes_value = as_bytes(input_.substr(offset_));
         const auto result_value = decoder_.feed_one(bytes_value, fin, collect, this, retention);
         offset_ += result_value.consumed_bytes();
         if (result_value.holds<http_capsule_decode_failure>()) {
@@ -209,8 +210,8 @@ public:
     bool read_active_{};
     bool output_active_{};
     std::size_t references_{1};
-    detail::operation_scope read_scope_;
-    detail::operation_scope output_scope_;
+    ::ruvia::operation_scope read_scope_;
+    ::ruvia::operation_scope output_scope_;
 };
 class capsule_state_pin final {
 public:
@@ -426,12 +427,12 @@ task<void> http_capsule_stream::write(std::uint64_t type, outbound_bytes payload
     if (state_->send_ended_) {
         throw std::logic_error("capsule sending direction is closed");
     }
-    std::array<char, 16> header;
+    std::array<std::byte, 16> header{};
     const auto encoded = encode_http_capsule_header(header, type, payload_value.size());
     if ((encoded.index() != 0) || payload_value.size() > state_->config_.max_capsule_bytes_) {
         throw std::length_error("invalid capsule type or payload length");
     }
-    return write_frame(std::string_view(header.data(), std::get<0>(encoded)), std::move(payload_value), false, std::move(operation));
+    return write_frame(as_chars(byte_view(header.data(), std::get<0>(encoded))), std::move(payload_value), false, std::move(operation));
 }
 task<void> http_capsule_stream::write_frame(std::string_view prefix, outbound_bytes payload_value, bool datagram, operation_options operation) {
     const auto write = +[](detail::capsule_write_input input) -> task<void> {
@@ -447,12 +448,12 @@ task<void> http_capsule_stream::write_frame(std::string_view prefix, outbound_by
                 if (co_await state_value.send_datagram(input.bytes_, steps)) {
                     co_return;
                 }
-                std::array<char, 16> header;
+                std::array<std::byte, 16> header{};
                 const auto encoded = encode_http_capsule_header(header, http_datagram_capsule_type, input.bytes_.size());
                 if (encoded.index() != 0) {
                     throw std::length_error("HTTP Datagram exceeds capsule bound");
                 }
-                input.bytes_.insert(0, header.data(), std::get<0>(encoded));
+                input.bytes_.insert(0, as_chars(byte_view(header.data(), std::get<0>(encoded))));
             }
             const auto limit = state_value.write_limit(input.bytes_.size());
             if (input.bytes_.size() <= limit) {
@@ -539,7 +540,7 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::caps
             if (native) {
                 state_value.offset_ = state_value.input_.size();
             }
-            auto bytes_value = std::span<const char>(owned);
+            const auto bytes_value = as_bytes(std::string_view(owned));
             http_datagram_session datagrams;
             // Only CONNECT-UDP mode can report an error here.
             const auto decoded = datagrams.receive_datagram(mode, bytes_value);
@@ -587,15 +588,15 @@ task<void> http_datagram_stream::write(outbound_bytes payload_value, operation_o
     if (context_bytes > state_value.config_.max_capsule_bytes_ || payload_value.size() > state_value.config_.max_capsule_bytes_ - context_bytes) {
         throw std::length_error("HTTP Datagram exceeds capsule bound");
     }
-    const auto payload_view = payload_value.view();
+    const auto payload_view = as_bytes(payload_value.view());
     http_datagram_session session_value;
-    const auto plan = session_value.prepare_datagram(mode_, std::span(payload_view.data(), payload_view.size()));
+    const auto plan = session_value.prepare_datagram(mode_, payload_view);
     if (plan.index() != 0) {
         throw std::length_error("HTTP Datagram payload exceeds its bound");
     }
     if (state_value.has_native_transport()) {
         return stream_.write_frame(udp ? std::string_view("\0", 1) : std::string_view{}, std::move(payload_value), true, std::move(operation));
     }
-    return stream_.write_frame(std::get<0>(plan).prefix(), std::move(payload_value), false, std::move(operation));
+    return stream_.write_frame(as_chars(std::get<0>(plan).prefix()), std::move(payload_value), false, std::move(operation));
 }
 }  // namespace ruvia

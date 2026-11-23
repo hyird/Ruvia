@@ -155,7 +155,7 @@ int http2_engine::begin_request_headers(const nghttp2_frame& frame) {
         if (end_stream) {
             (void)stream->record_remote_head_end_stream();
         }
-        header_block_.emplace(header_block_kind::request, *stream);
+        header_block_.emplace(header_block_kind::request, *stream, local_settings_.max_header_list_size_);
         return 0;
     }
 
@@ -170,7 +170,7 @@ int http2_engine::begin_request_headers(const nghttp2_frame& frame) {
         reset_stream_for_peer_error(stream_id, http2_error_code::protocol_error);
         return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
     }
-    header_block_.emplace(header_block_kind::request_trailers, *stream);
+    header_block_.emplace(header_block_kind::request_trailers, *stream, local_settings_.max_header_list_size_);
     return 0;
 }
 
@@ -187,14 +187,14 @@ int http2_engine::begin_response_headers(const nghttp2_frame& frame) {
         if (end_stream) {
             (void)stream->record_remote_head_end_stream();
         }
-        header_block_.emplace(header_block_kind::response, *stream);
+        header_block_.emplace(header_block_kind::response, *stream, local_settings_.max_header_list_size_);
         return 0;
     }
     if (stream->tunnel().open() != nullptr || stream->remote_receive().content_open() == nullptr || !end_stream) {
         reset_stream_for_peer_error(stream_id, http2_error_code::protocol_error);
         return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
     }
-    header_block_.emplace(header_block_kind::response_trailers, *stream);
+    header_block_.emplace(header_block_kind::response_trailers, *stream, local_settings_.max_header_list_size_);
     return 0;
 }
 
@@ -215,7 +215,7 @@ int http2_engine::begin_push_promise(const nghttp2_frame& frame) {
     push_associated_stream_id_ = associated_id;
     // PUSH_PROMISE carries a complete request without content.
     (void)push_scratch_->record_remote_head_end_stream();
-    auto& block = header_block_.emplace(header_block_kind::push_promise, *push_scratch_);
+    auto& block = header_block_.emplace(header_block_kind::push_promise, *push_scratch_, local_settings_.max_header_list_size_);
     block.reject_connected_tunnel_ = parent != nullptr && parent->tunnel().open() != nullptr;
     return 0;
 }

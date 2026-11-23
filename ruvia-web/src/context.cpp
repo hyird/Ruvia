@@ -236,6 +236,16 @@ http_response request_exchange<host_type>::json_serialized(std::string&& body, c
 }
 
 template <typename host_type>
+http_response request_exchange<host_type>::json_raw(outbound_bytes body, response_options options) const {
+    return make_owned_json_response(std::move(body).take_string(), options);
+}
+
+template <typename host_type>
+http_response request_exchange<host_type>::json_raw(static_text body, response_options options) const {
+    return detail::context_access::make_static_json_response(body, options);
+}
+
+template <typename host_type>
 http_response request_exchange<host_type>::html(outbound_bytes body, response_options options) const {
     auto response = detail::make_response(options);
     set_default_content_type(response, http_content_type::text_html_utf8);
@@ -355,9 +365,9 @@ void write_cookie(http_response& response, const set_cookie_options& options) {
     }
     const auto prefix = options.attributes_.prefix_ ? std::string_view(ruvia::http_cookie_prefix_text(*options.attributes_.prefix_)) : std::string_view{};
     const detail::inline_text_concat<128> wire_name({prefix, name});
-    char signature[detail::cookie_signature_size];
-    detail::write_cookie_signature(signature, secret, wire_name.view(), value);
-    const detail::inline_text_concat<256> signed_value({value, ".", std::string_view(signature, sizeof(signature))});
+    std::array<char, cookie_signature_size> signature;
+    write_cookie_signature(signature, secret, wire_name.view(), value);
+    const detail::inline_text_concat<256> signed_value({value, ".", std::string_view(signature.data(), signature.size())});
     const set_cookie_plan plan(name, signed_value.view(), options.attributes_);
     response.set_cookie(plan);
 }
@@ -1291,6 +1301,20 @@ std::optional<std::string_view> request_exchange<host_type>::trailer(std::string
     return trailers != nullptr ? trailers->field(name) : std::nullopt;
 }
 
+template <typename host_type>
+http_unique_field_lookup request_exchange<host_type>::unique_trailer(std::string_view name) const& noexcept {
+    http_unique_field_lookup result;
+    for (const auto& field : trailers()) {
+        if (http_ascii_equals_ignore_case(field.name(), name)) {
+            result.add_occurrence(field.value());
+            if (result.status_ == unique_lookup_status::repeated) {
+                break;
+            }
+        }
+    }
+    return result;
+}
+
 const request_name_value_list& context_request::header_fields() const {
     auto& cache = context_->request_storage().headers_;
     if (!cache) {
@@ -1324,6 +1348,15 @@ std::span<const std::string_view> context_request::queries(std::string_view name
     auto& storage = context_->request_storage();
     ensure_request_query(context_->request_, storage);
     return storage.query_->values().values(name);
+}
+
+http_unique_field_lookup context_request::unique_query(std::string_view name) const {
+    if (context_->request_.query_string().empty()) {
+        return {};
+    }
+    auto& storage = context_->request_storage();
+    ensure_request_query(context_->request_, storage);
+    return storage.query_->fields().unique(name);
 }
 
 std::optional<std::string_view> context_request::cookie(std::string_view name) const {
@@ -1526,21 +1559,10 @@ std::optional<std::string_view> context_request::signed_cookie(signed_cookie_loo
     // A repeated name is ambiguous about which value was signed, so it fails
     // verification instead of resolving one occurrence.
     const auto stored = unique_cookie(name);
-    if (stored.status_ != unique_lookup_status::found || stored.value_.size() <= detail::cookie_signature_size) {
+    if (stored.status_ != unique_lookup_status::found) {
         return std::nullopt;
     }
-    const auto value_size = stored.value_.size() - detail::cookie_signature_size - 1;
-    if (stored.value_[value_size] != '.') {
-        return std::nullopt;
-    }
-    const auto value = stored.value_.substr(0, value_size);
-    const auto signature = stored.value_.substr(value_size + 1);
-    char expected[detail::cookie_signature_size];
-    detail::write_cookie_signature(expected, secret, name, value);
-    if (!constant_time_bytes_equal(signature, std::string_view(expected, sizeof(expected)))) {
-        return std::nullopt;
-    }
-    return value;
+    return verify_signed_cookie_value(secret, name, stored.value_);
 }
 
 task<std::vector<multipart_part>> context_request::multipart(operation_options operation) const {

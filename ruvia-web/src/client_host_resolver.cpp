@@ -13,7 +13,6 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "asio_ip_address.h"
 #include "blocking_pool.h"
 #include "decimal_text.h"
 #include "operation_options.h"
@@ -21,41 +20,31 @@
 #include "task.h"
 #include "worker_ref.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
-struct client_host_resolver::query final {
+struct dns_resolver::query final {
     std::string host_;
     std::uint16_t port_;
 
-    [[nodiscard]] client_resolve_result operator()() const {
+    [[nodiscard]] dns_resolve_result operator()() const {
         asio::io_context io;
         asio::ip::tcp::resolver resolver(io);
         std::array<char, max_decimal_size> digits;
         const auto service = format_decimal(digits, port_);
-        client_resolve_result result;
+        dns_resolve_result result;
         result.addresses_ = resolver.resolve(host_, service, result.error_);
         return result;
     }
 };
 
-bool client_host_needs_lookup(std::string_view host) {
-    return !try_parse_asio_ip_address(host).has_value();
-}
-
-void require_client_host_lookup(std::string_view host, const worker_ref& worker) {
-    if (worker.blocking_pool() == nullptr && client_host_needs_lookup(host)) {
-        throw std::invalid_argument("a DNS host requires an event loop with a blocking pool");
-    }
-}
-
-client_host_resolver::client_host_resolver(client_host_resolver&& other) noexcept :
+dns_resolver::dns_resolver(dns_resolver&& other) noexcept :
     worker_(other.worker_) {
     if (other.stop_) {
         std::terminate();
     }
 }
 
-client_host_resolver& client_host_resolver::operator=(client_host_resolver&& other) noexcept {
+dns_resolver& dns_resolver::operator=(dns_resolver&& other) noexcept {
     if (stop_ || other.stop_) {
         std::terminate();
     }
@@ -63,7 +52,7 @@ client_host_resolver& client_host_resolver::operator=(client_host_resolver&& oth
     return *this;
 }
 
-task<client_resolve_result> client_host_resolver::resolve_query(std::string host, std::uint16_t port, operation_deadline timeout, stop_token stop) {
+task<dns_resolve_result> dns_resolver::resolve_query(std::string host, std::uint16_t port, operation_deadline timeout, stop_token stop) {
     if (stop_) {
         throw std::logic_error("host resolver already has a pending query");
     }
@@ -81,18 +70,31 @@ task<client_resolve_result> client_host_resolver::resolve_query(std::string host
         case blocking_status::failed:
             co_return std::move(result).take_value();
         case blocking_status::timed_out:
-            co_return client_resolve_result{.error_ = asio::error::timed_out};
+            co_return dns_resolve_result{.error_ = asio::error::timed_out};
         case blocking_status::queue_full:
-            co_return client_resolve_result{.error_ = asio::error::no_buffer_space};
+            co_return dns_resolve_result{.error_ = asio::error::no_buffer_space};
         default:
-            co_return client_resolve_result{.error_ = asio::error::operation_aborted};
+            co_return dns_resolve_result{.error_ = asio::error::operation_aborted};
     }
 }
 
-void client_host_resolver::cancel() noexcept {
+void dns_resolver::cancel() noexcept {
     if (stop_) {
         stop_->request_stop();
     }
 }
 
-}  // namespace ruvia::detail
+namespace detail {
+
+bool client_host_needs_lookup(std::string_view host) {
+    return !try_parse_asio_ip_address(host).has_value();
+}
+
+void require_client_host_lookup(std::string_view host, const worker_ref& worker) {
+    if (worker.blocking_pool() == nullptr && client_host_needs_lookup(host)) {
+        throw std::invalid_argument("a DNS host requires an event loop with a blocking pool");
+    }
+}
+
+}  // namespace detail
+}  // namespace ruvia

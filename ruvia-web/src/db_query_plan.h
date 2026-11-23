@@ -57,8 +57,10 @@ struct db_query_backend final {
     // The request's counter block; null outside a request.
     request_io_metrics* io_metrics_{nullptr};
     // Set when the database statement itself failed: a transaction statement
-    // failure has already retired the transaction's lease.
+    // failure has already retired the transaction's lease unless lease_kept_ is set.
     bool* backend_failed_{nullptr};
+    bool keep_on_command_failure_{false};
+    bool* lease_kept_{nullptr};
 #ifdef RUVIA_ENABLE_REDIS
     // Pooled backends only: a transaction's reads may include its own
     // uncommitted writes, which the shared cache must never see or replace.

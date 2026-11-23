@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "model.h"
 
 namespace ruvia {
 
@@ -233,11 +235,124 @@ private:
     std::variant<jwt_payload, jwt_error_code> state_;
 };
 
+template <typename claims_type>
+class jwt_claims_value final {
+public:
+    jwt_claims_value(jwt_payload payload, claims_type claims) noexcept :
+        payload_(std::move(payload)),
+        claims_(std::move(claims)) {}
+    jwt_claims_value(const jwt_claims_value&) = delete;
+    jwt_claims_value& operator=(const jwt_claims_value&) = delete;
+    jwt_claims_value(jwt_claims_value&&) noexcept = default;
+    jwt_claims_value& operator=(jwt_claims_value&&) = delete;
+
+    [[nodiscard]] const jwt_payload& payload() const& noexcept RUVIA_LIFETIMEBOUND {
+        return payload_;
+    }
+    const jwt_payload& payload() const&& = delete;
+    [[nodiscard]] jwt_payload take_payload() && noexcept {
+        return std::move(payload_);
+    }
+
+    [[nodiscard]] const claims_type& claims() const& noexcept RUVIA_LIFETIMEBOUND {
+        return claims_;
+    }
+    const claims_type& claims() const&& = delete;
+    [[nodiscard]] claims_type take_claims() && noexcept {
+        return std::move(claims_);
+    }
+
+private:
+    jwt_payload payload_;
+    claims_type claims_;
+};
+
+template <typename claims_type>
+class jwt_claims_result final {
+public:
+    using value_type = jwt_claims_value<claims_type>;
+
+    explicit jwt_claims_result(value_type value) noexcept :
+        state_(std::in_place_type<value_type>, std::move(value)) {}
+    explicit jwt_claims_result(jwt_error_code code) noexcept :
+        state_(std::in_place_type<jwt_error_code>, code) {}
+    jwt_claims_result(const jwt_claims_result&) = delete;
+    jwt_claims_result& operator=(const jwt_claims_result&) = delete;
+    jwt_claims_result(jwt_claims_result&&) noexcept = default;
+    jwt_claims_result& operator=(jwt_claims_result&&) = delete;
+
+    [[nodiscard]] bool has_value() const noexcept {
+        return std::holds_alternative<value_type>(state_);
+    }
+    [[nodiscard]] std::optional<jwt_error_code> error() const noexcept {
+        if (const auto* code = std::get_if<jwt_error_code>(&state_)) {
+            return *code;
+        }
+        return std::nullopt;
+    }
+    [[nodiscard]] const value_type& value() const& RUVIA_LIFETIMEBOUND {
+        const auto* stored = std::get_if<value_type>(&state_);
+        if (stored == nullptr) {
+            throw std::logic_error("JWT claims result holds an error, not a value");
+        }
+        return *stored;
+    }
+    const value_type& value() const&& = delete;
+    [[nodiscard]] value_type take_value() && {
+        auto* stored = std::get_if<value_type>(&state_);
+        if (stored == nullptr) {
+            throw std::logic_error("JWT claims result holds an error, not a value");
+        }
+        return std::move(*stored);
+    }
+
+private:
+    std::variant<value_type, jwt_error_code> state_;
+};
+
+namespace detail {
+[[nodiscard]] std::string sign_jwt_with_custom_json(std::string_view custom_object_json, const jwt_sign_options& options);
+[[nodiscard]] std::variant<std::pair<jwt_payload, std::string>, jwt_error_code> verify_jwt_with_raw_payload(const jwt_verify_options& options);
+}  // namespace detail
+
 // Option misuse (negative leeway, invalid algorithm/policy, a secret outside the
 // RFC 7518 key bounds) throws even for malformed tokens. Allocation and crypto
 // initialization failures also throw; token data failures are returned.
 [[nodiscard]] std::string sign_jwt(const jwt_sign_options& options);
 [[nodiscard]] jwt_result verify_jwt(const jwt_verify_options& options);
+
+// Signs a JWT embedding all present fields of `custom_claims` (a RUVIA_MODEL,
+// supporting numbers, booleans, arrays, nested objects, enums, UUIDs, etc.)
+// alongside standard registered claims in `options`. Throws std::invalid_argument
+// if any field in `custom_claims` uses a reserved JWT claim name or duplicates `options.claims_`.
+template <typename claims_type>
+    requires detail::is_model<claims_type>
+[[nodiscard]] std::string sign_jwt_claims(const claims_type& custom_claims, const jwt_sign_options& options) {
+    return detail::sign_jwt_with_custom_json(to_json(custom_claims), options);
+}
+
+// Authenticates and verifies `options`, then parses and validates custom claims
+// into `claims_type` (`RUVIA_MODEL`). Structural or validation failure on custom
+// claims reports `jwt_error_code::invalid_payload` or `missing_claim`.
+template <typename claims_type>
+    requires detail::is_model<claims_type>
+[[nodiscard]] jwt_claims_result<claims_type> verify_jwt_claims(const jwt_verify_options& options) {
+    auto verified = detail::verify_jwt_with_raw_payload(options);
+    if (const auto* err = std::get_if<jwt_error_code>(&verified)) {
+        return jwt_claims_result<claims_type>(*err);
+    }
+    auto& [payload, raw_json] = std::get<0>(verified);
+    auto parsed = parse_json<claims_type>(raw_json);
+    if (!parsed.has_value()) {
+        for (const auto& issue : parsed.error().issues()) {
+            if (issue.code() == "required") {
+                return jwt_claims_result<claims_type>(jwt_error_code::missing_claim);
+            }
+        }
+        return jwt_claims_result<claims_type>(jwt_error_code::invalid_payload);
+    }
+    return jwt_claims_result<claims_type>(jwt_claims_value<claims_type>(std::move(payload), std::move(parsed).take_value()));
+}
 // Decodes and validates the three-part token structure, JOSE header (requiring
 // a non-empty "alg" string and rejecting duplicate keys / "crit" / "b64"), and
 // payload claims WITHOUT authenticating the signature or checking time claims.

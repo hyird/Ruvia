@@ -17,12 +17,11 @@
 #include <variant>
 #include <vector>
 
-#include "byte_view.h"
+#include "lifetimebound.h"
 #include "operation_options.h"
 #include "stop_token.h"
 #include "suspend_race.h"
 #include "wait_result.h"
-#include "waiter_list.h"
 #include "worker_ref.h"
 #include "worker_timer.h"
 #include "worker_wait.h"
@@ -227,7 +226,51 @@ struct channel_state final {
     lifecycle_type lifecycle_;
     bool receiver_closed_{false};
     worker_wait_slot<node*, channel_state<t_type>> wait_slot_;
-    waiter_list<channel_send_operation<t_type>> send_waiters_;
+
+    class send_waiter_list final {
+    public:
+        [[nodiscard]] channel_send_operation<t_type>* front() const noexcept {
+            return head_;
+        }
+
+        void push_back(channel_send_operation<t_type>& waiter) noexcept {
+            waiter.previous_ = tail_;
+            waiter.next_ = nullptr;
+            waiter.queued_ = true;
+            if (tail_ != nullptr) {
+                tail_->next_ = std::addressof(waiter);
+            } else {
+                head_ = std::addressof(waiter);
+            }
+            tail_ = std::addressof(waiter);
+        }
+
+        bool remove(channel_send_operation<t_type>& waiter) noexcept {
+            if (!waiter.queued_) {
+                return false;
+            }
+            if (waiter.previous_ != nullptr) {
+                waiter.previous_->next_ = waiter.next_;
+            } else {
+                head_ = waiter.next_;
+            }
+            if (waiter.next_ != nullptr) {
+                waiter.next_->previous_ = waiter.previous_;
+            } else {
+                tail_ = waiter.previous_;
+            }
+            waiter.previous_ = nullptr;
+            waiter.next_ = nullptr;
+            waiter.queued_ = false;
+            return true;
+        }
+
+    private:
+        channel_send_operation<t_type>* head_{nullptr};
+        channel_send_operation<t_type>* tail_{nullptr};
+    };
+
+    send_waiter_list send_waiters_;
 
     void close(bool retire_receiver);
     void worker_stopping() noexcept;
@@ -293,7 +336,7 @@ void channel_state<t_type>::worker_stopping() noexcept {
 // An already-stopped token or expired deadline rejects before reserving a slot;
 // after admission cancellation remains cooperative and does not undo delivery.
 template <typename t_type>
-class channel_send_operation final : public detail::waiter_link<channel_send_operation<t_type>> {
+class channel_send_operation final {
     enum class phase : std::uint8_t {
         cold,
         started,
@@ -320,7 +363,7 @@ public:
 
     ~channel_send_operation() {
         // A frame destroyed while suspended must not leave a dangling waiter.
-        if (this->queued()) {
+        if (queued_) {
             auto lock = state_->lock_state();
             (void)state_->send_waiters_.remove(*this);
         }
@@ -335,7 +378,7 @@ public:
             complete_ready({channel_send_status::closed, nullptr});
             return true;
         }
-        worker_ = detail::worker_ref_access::current();
+        worker_ = worker_ref::current();
         bounds_.start(worker_, "channel send_wait must be awaited on a worker");
         auto& state = *state_;
         auto lock = state.lock_state();
@@ -362,7 +405,7 @@ public:
             auto lock = state.lock_state();
             // A timer is always armed on the awaiting worker, at the deadline or
             // never, so that worker's timer shutdown also ends the wait.
-            if (this->queued()) {
+            if (queued_) {
                 bool armed = false;
                 try {
                     armed = bounds_.arm_deadline<channel_send_operation, &channel_send_operation::on_end>(*this, true);
@@ -484,12 +527,15 @@ private:
     }
 
     std::shared_ptr<state_type> state_;
+    channel_send_operation* previous_{nullptr};
+    channel_send_operation* next_{nullptr};
     t_type value_;
     // The awaiting worker, which may differ from the channel's.
     worker_ref worker_;
     wait_bounds bounds_;
+    bool queued_{false};
     phase phase_{phase::cold};
-    detail::suspend_race_state<outcome_type> completion_;
+    suspend_race_state<outcome_type> completion_;
     // Last so callback unregistration completes before anything it touches
     // begins destruction.
     stop_registration stop_registration_;
@@ -552,18 +598,14 @@ public:
     // options.stop_token_ fired (cancelled) -- returns in the result. Without
     // a timeout or stop token, the wait lasts until a slot frees, the channel
     // closes, or either worker stops.
-    [[nodiscard]] channel_send_operation<t_type> send_wait(t_type&& value, operation_options options = {}) const& {
+    [[nodiscard]] channel_send_operation<t_type> send_wait(t_type&& value, operation_options options = {}) const {
         return channel_send_operation<t_type>(state_, std::move(value), std::move(options));
     }
-    [[nodiscard]] channel_send_operation<t_type> send_wait(const t_type& value, operation_options options = {}) const&
+    [[nodiscard]] channel_send_operation<t_type> send_wait(const t_type& value, operation_options options = {}) const
         requires std::copy_constructible<t_type>
     {
         return channel_send_operation<t_type>(state_, value, std::move(options));
     }
-    channel_send_operation<t_type> send_wait(t_type&&, operation_options = {}) const&& = delete;
-    channel_send_operation<t_type> send_wait(const t_type&, operation_options = {}) const&&
-        requires std::copy_constructible<t_type>
-    = delete;
 
     // Stop sending while allowing the receiver to drain buffered values.
     void close() const {

@@ -12,9 +12,10 @@
 #include <utility>
 #include <vector>
 
-#include "middleware.h"
+#include "http_error.h"
+#include "json_codec.h"
 #include "model.h"
-RUVIA_MODEL(import_record, RUVIA_REQUIRED_FIELD(name, ruvia::string), RUVIA_REQUIRED_FIELD(count, ruvia::int64), RUVIA_OPTIONAL_FIELD(ratio, ruvia::double_value), RUVIA_OPTIONAL_FIELD(enabled, ruvia::bool_value), RUVIA_OPTIONAL_FIELD(labels, ruvia::array<ruvia::string>), RUVIA_OPTIONAL_FIELD(metadata, ruvia::json_object));
+RUVIA_MODEL(import_record, RUVIA_REQUIRED_FIELD(name, ruvia::string), RUVIA_REQUIRED_FIELD(count, std::int64_t), RUVIA_OPTIONAL_FIELD(ratio, double), RUVIA_OPTIONAL_FIELD(enabled, bool), RUVIA_OPTIONAL_FIELD(labels, ruvia::array<ruvia::string>), RUVIA_OPTIONAL_FIELD(metadata, ruvia::json_object));
 
 namespace {
 void print_issues(const std::vector<ruvia::validation_issue>& issues) {
@@ -78,7 +79,7 @@ int main() {
         ruvia::validator validation;
         // Validator accepts optional values, just like query/header lookups.
         const std::optional<std::string_view> name{owned.get<"name">().view()};
-        const std::optional<std::int64_t> count{static_cast<std::int64_t>(owned.get<"count">())};
+        const std::optional<std::int64_t> count{owned.get<"count">()};
         validation.required(name, "name").min_length(name, "name", 2).range(count, "count", 1, 100);
         if (!validation.ok()) {
             print_issues(validation.issues());
@@ -98,13 +99,13 @@ int main() {
 
         // Scalar and array codecs do not require a wrapper model. Integer
         // conversion is exact: no fraction, overflow, or trailing junk.
-        auto parsed_numbers = ruvia::parse_json<ruvia::array<ruvia::uint64>>("[1,2,3]");
+        auto parsed_numbers = ruvia::parse_json<ruvia::array<std::uint64_t>>("[1,2,3]");
         if (!parsed_numbers.has_value()) {
             print_parse_error(parsed_numbers.error());
             return 1;
         }
         auto numbers = std::move(parsed_numbers).take_value();
-        const auto overflow = ruvia::parse_json<ruvia::uint8>("256");
+        const auto overflow = ruvia::parse_json<std::uint8_t>("256");
         if (overflow.has_value()) {
             std::cerr << "integer bounds were not enforced\n";
             return 1;

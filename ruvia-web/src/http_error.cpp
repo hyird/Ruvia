@@ -97,35 +97,6 @@ namespace {
 
 }  // namespace
 
-validation_issue::validation_issue(validation_issue_options options) :
-    field_(utf8_prefix(options.field_, max_validation_text_bytes)),
-    code_(utf8_prefix(options.code_, max_validation_text_bytes)),
-    message_(utf8_prefix(options.message_, max_validation_text_bytes)) {}
-
-void validation_issue::swap(validation_issue& other) noexcept {
-    field_.swap(other.field_);
-    code_.swap(other.code_);
-    message_.swap(other.message_);
-}
-
-validation_issue& validation_issue::operator=(const validation_issue& other) {
-    if (this != &other) {
-        validation_issue candidate(other);
-        swap(candidate);
-    }
-    return *this;
-}
-
-validation_issue& validation_issue::operator=(validation_issue&& other) noexcept {
-    if (this != &other) {
-        swap(other);
-        other.field_.clear();
-        other.code_.clear();
-        other.message_.clear();
-    }
-    return *this;
-}
-
 http_error::http_error(http_error_info_options options) :
     status_(options.status_),
     status_text_(options.status_text_.view()),

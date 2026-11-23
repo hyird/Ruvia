@@ -574,7 +574,7 @@ public:
     RUVIA_ROUTES_END
     ruvia::task<ruvia::http_response> info(ruvia::context& context) {
         const auto state = std::static_pointer_cast<int>(context.connection_state());
-        co_return context.text(std::string(context.connection().local().address().to_string()) + ":" + std::to_string(context.connection().local().port()) + ":" + std::to_string(state ? *state : 0));
+        co_return context.text(std::string(context.connection().local().address().to_string()) + ":" + std::to_string(context.connection().local().port().value()) + ":" + std::to_string(state ? *state : 0));
     }
     ruvia::task<ruvia::http_response> virtual_request(ruvia::context& context) {
         auto response = co_await context.dispatch({.method_ = "GET", .target_ = "/lifecycle/info"});

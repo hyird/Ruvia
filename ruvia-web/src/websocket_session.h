@@ -24,11 +24,12 @@
 #include <asio/error.hpp>
 #include <asio/write.hpp>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "context.h"
 #include "context_access.h"
 #include "event_loop.h"
 #include "inbound_buffer.h"
+#include "inbound_buffer_ops.h"
 #include "middleware.h"
 #include "server_options.h"
 #include "server_socket_stream.h"

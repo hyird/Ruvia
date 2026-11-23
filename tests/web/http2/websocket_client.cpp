@@ -303,7 +303,7 @@ void exercise_closing_peer(closing_peer behavior) {
             ruvia::test::drain_output(connection, retirement);
             output.append(retirement);
             for (std::size_t offset = 0; offset < output.size();) {
-                const auto header_value = ruvia::parse_http2_frame_header(std::span<const char>(output.data() + offset, ruvia::http2_frame_header_bytes));
+                const auto header_value = ruvia::parse_http2_frame_header(ruvia::as_bytes(std::string_view(output.data() + offset, ruvia::http2_frame_header_bytes)));
                 EXPECT_TRUE(header_value.has_value());
                 if (header_value->stream_id_ == 1) {
                     terminal_frames.push_back(static_cast<ruvia::http2_frame_type>(header_value->type_));
@@ -439,9 +439,9 @@ void exercise_handshake_end(handshake_end mode) {
                         ruvia::test::drain_output(connection, output);
                         std::string block;
                         ruvia::hpack_encoder::encode_status(block, ruvia::http_status::ok);
-                        std::array<char, ruvia::http2_frame_header_bytes> header{};
+                        std::array<std::byte, ruvia::http2_frame_header_bytes> header{};
                         EXPECT_TRUE(ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(block.size()), ruvia::http2_frame_type::headers, 0x5, head->stream_id()));
-                        output.append(header.data(), header.size());
+                        output.append(reinterpret_cast<const char*>(header.data()), header.size());
                         output.append(block);
                         co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
                     } else {

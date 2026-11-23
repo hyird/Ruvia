@@ -12,6 +12,7 @@
 #include <variant>
 
 #include "borrowed_text.h"
+#include "byte_view.h"
 #include "http1_connection_plan.h"
 #include "http1_server_request.h"
 #include "http_header.h"
@@ -203,6 +204,16 @@ void append_http1_response_head(const http_response& response, http_response_hea
 // Append only field lines; chunk delimiters belong to the caller. Inputs may
 // alias output. Allocation failure leaves the existing output bytes unchanged.
 void append_http1_response_trailers(std::string& output, const http_response_trailer_section& trailers);
+
+// Appends one non-empty HTTP/1.1 chunk (`<hex-size>\r\n<payload>\r\n`); an
+// empty payload is a no-op so it never emits the terminating zero chunk.
+// Payload may alias output; allocation failure leaves output unchanged.
+void append_http1_chunk(std::string& output, std::string_view payload);
+void append_http1_chunk(std::string& output, byte_view payload);
+
+// Appends the terminating HTTP/1.1 `0\r\n`, optional trailer field lines, and
+// the closing `\r\n` transactionally. Trailer fields may alias output.
+void append_http1_final_chunk(std::string& output, const http_response_trailer_section& trailers = {});
 
 // Connection lifecycle after the encoded interim response. RFC 9112 requires
 // a sender of Connection: close to begin closing after the response containing

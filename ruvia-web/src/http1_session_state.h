@@ -26,7 +26,7 @@
 #include <asio/socket_base.hpp>
 #include <asio/write.hpp>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "borrowed_text.h"
 #include "connection_scanner.h"
 #include "event_loop.h"

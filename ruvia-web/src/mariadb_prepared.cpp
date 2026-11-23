@@ -348,6 +348,11 @@ static_assert(std::is_trivially_copyable_v<MYSQL_BIND>);
         }
         case db_value_type::bool_:
             return MYSQL_TYPE_TINY;
+        case db_value_type::bytes:
+            if (param.bytes().size() > static_cast<std::size_t>((std::numeric_limits<unsigned long>::max)())) {
+                return std::nullopt;
+            }
+            return MYSQL_TYPE_BLOB;
     }
     return std::nullopt;
 }
@@ -710,6 +715,13 @@ using cache_state = mariadb_statement_cache;
                 bind.buffer_type = MYSQL_TYPE_TINY;
                 bind.buffer = &value.flag_;
                 break;
+            case db_value_type::bytes: {
+                const auto raw = param.bytes();
+                bind.buffer_type = MYSQL_TYPE_BLOB;
+                bind.buffer = raw.empty() ? const_cast<char*>("") : const_cast<char*>(reinterpret_cast<const char*>(raw.data()));
+                bind.buffer_length = static_cast<unsigned long>(raw.size());
+                break;
+            }
         }
     }
     if (!params.empty() && mysql_stmt_bind_param(&statement, binds) != 0) {

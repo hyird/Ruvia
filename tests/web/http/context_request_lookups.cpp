@@ -26,7 +26,7 @@ using ruvia::http_header_view;
 #include <asio/io_context.hpp>
 
 #include "app.h"
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "context.h"
 #include "controller.h"
 #include "event_loop.h"
@@ -887,7 +887,7 @@ TEST(Ruvia, context_cookie_deletion_with_prefix_writes_exact_bytes) {
     });
 }
 
-RUVIA_MODEL(context_json_response, RUVIA_REQUIRED_FIELD(number, ruvia::int64), RUVIA_REQUIRED_FIELD(boolean, ruvia::bool_value), RUVIA_REQUIRED_FIELD(real, ruvia::double_value));
+RUVIA_MODEL(context_json_response, RUVIA_REQUIRED_FIELD(number, std::int64_t), RUVIA_REQUIRED_FIELD(boolean, bool), RUVIA_REQUIRED_FIELD(real, double));
 
 using ruvia::test::throws_on;
 
@@ -1692,7 +1692,7 @@ namespace ruvia::test {
 
 class test_scoped_capability final {
 public:
-    test_scoped_capability(ruvia::detail::operation_scope& scope, int& expired_count) noexcept :
+    test_scoped_capability(ruvia::operation_scope& scope, int& expired_count) noexcept :
         expired_count_(&expired_count),
         registration_(scope, *this) {}
 
@@ -1714,7 +1714,7 @@ private:
     }
 
     int* expired_count_;
-    ruvia::detail::capability_registration<&test_scoped_capability::expire> registration_;
+    ruvia::capability_registration<&test_scoped_capability::expire> registration_;
 };
 
 struct cold_frame_probe final {
@@ -1745,7 +1745,7 @@ using namespace ruvia::test;
 // Scoped operations release cold frames and shared registrations exactly once.
 
 TEST(Ruvia, scoped_operation_destruction_destroys_cold_frame) {
-    ruvia::detail::operation_scope scope;
+    ruvia::operation_scope scope;
     bool destroyed = false;
     {
         auto operation = scope.attach(cold_frame_task(cold_frame_probe(destroyed)));
@@ -1756,7 +1756,7 @@ TEST(Ruvia, scoped_operation_destruction_destroys_cold_frame) {
 }
 
 TEST(Ruvia, scoped_capability_move_relinks_and_parent_close_expires_destination) {
-    ruvia::detail::operation_scope scope;
+    ruvia::operation_scope scope;
     int expired_count = 0;
     test_scoped_capability first(scope, expired_count);
     test_scoped_capability moved(std::move(first));
@@ -1774,7 +1774,7 @@ TEST(Ruvia, scoped_capability_move_relinks_and_parent_close_expires_destination)
 
 TEST(Ruvia, scoped_capability_copy_relinks_and_early_destruction_unlinks) {
     int expired_count = 0;
-    ruvia::detail::operation_scope scope;
+    ruvia::operation_scope scope;
     test_scoped_capability source(scope, expired_count);
     {
         test_scoped_capability destroyed_early(source);
@@ -1794,7 +1794,7 @@ TEST(Ruvia, scoped_capability_copy_relinks_and_early_destruction_unlinks) {
 }
 
 TEST(Ruvia, scoped_operation_parent_close_destroys_cold_frame_immediately) {
-    ruvia::detail::operation_scope scope;
+    ruvia::operation_scope scope;
     bool destroyed = false;
     auto operation = scope.attach(cold_frame_task(cold_frame_probe(destroyed)));
     EXPECT_TRUE(!destroyed);

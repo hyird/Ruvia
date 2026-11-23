@@ -14,7 +14,7 @@ namespace ruvia {
 class http_request;
 // Returns the media type before any parameters. The view borrows the input;
 // owning string temporaries cannot be passed through borrowed_text.
-[[nodiscard]] std::string_view http_media_type_only(borrowed_text value) noexcept;
+[[nodiscard]] std::string_view http_media_type_only(borrowed_text value RUVIA_LIFETIMEBOUND) noexcept;
 
 // Validates one Content-Type field value, including RFC 9110's optional empty
 // semicolon-delimited parameter slots. Nonempty parameters require name=value
@@ -35,7 +35,7 @@ struct http_media_range final {
     std::size_t parameter_count_{0};
 };
 
-[[nodiscard]] std::optional<http_media_range> parse_http_media_range(borrowed_text value) noexcept;
+[[nodiscard]] std::optional<http_media_range> parse_http_media_range(borrowed_text value RUVIA_LIFETIMEBOUND) noexcept;
 
 enum class http_accept_token_match_mode : std::uint8_t {
     exact,

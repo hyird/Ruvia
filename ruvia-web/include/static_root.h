@@ -105,6 +105,15 @@ struct static_root_state;
 // snapshot's memory until that refresh instead of failing closed on a disk
 // edit. Both owners configure residency through static_root_options;
 // a standalone static_root never owns refresh or compression.
+struct static_file_metadata final {
+    std::string_view content_type_{};
+    std::string_view cache_control_{};
+    std::string_view etag_{};
+    std::string_view last_modified_{};
+    std::uint64_t size_{0};
+    bool directly_servable_{true};
+};
+
 class static_root final {
 public:
     explicit static_root(const std::filesystem::path& root, static_root_options options = {});
@@ -116,6 +125,14 @@ public:
     static_root& operator=(static_root&&) = delete;
 
     [[nodiscard]] std::filesystem::path path() const;
+    [[nodiscard]] std::size_t entry_count() const noexcept;
+    // Exact normalized relative-path lookup (e.g. "assets/app.js"); borrows this static_root.
+    [[nodiscard]] std::optional<static_file_metadata> find(std::string_view relative_path) const& noexcept RUVIA_LIFETIMEBOUND;
+    std::optional<static_file_metadata> find(std::string_view) const&& = delete;
+    // Normalizes `relative_path` and resolves directory index files; returns nullopt
+    // on dot-segment/invalid paths or unindexed entries without touching the filesystem.
+    [[nodiscard]] std::optional<static_file_metadata> resolve(std::string_view relative_path) const& RUVIA_LIFETIMEBOUND;
+    std::optional<static_file_metadata> resolve(std::string_view) const&& = delete;
 
 private:
     struct state_deleter_type final {

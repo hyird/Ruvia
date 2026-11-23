@@ -67,6 +67,10 @@ public:
         return body_;
     }
 
+    [[nodiscard]] byte_view body_bytes() const noexcept {
+        return as_bytes(body_);
+    }
+
 private:
     friend struct detail::multipart_part_access;
     friend class multipart_parser;
@@ -212,6 +216,10 @@ public:
         return body_;
     }
 
+    [[nodiscard]] byte_view body_bytes() const noexcept {
+        return as_bytes(body_);
+    }
+
     [[nodiscard]] constexpr multipart_chunk_phase phase() const noexcept {
         return phase_;
     }
@@ -279,6 +287,11 @@ public:
     // A failure is terminal: later poll() calls repeat the exact error. feed()
     // throws std::logic_error once the parser is not active or input ended.
     void feed(std::string_view chunk);
+    template <typename bytes_type>
+        requires(!std::convertible_to<bytes_type&&, std::string_view> && std::convertible_to<bytes_type&&, byte_view>)
+    void feed(bytes_type&& chunk) {
+        feed(as_chars(byte_view(std::forward<bytes_type>(chunk))));
+    }
     void finish_input() noexcept;
 
     // If owning part metadata throws, the part stays pending without consuming
@@ -350,5 +363,12 @@ private:
 [[nodiscard]] multipart_body_parse_result parse_multipart_body(std::string_view body RUVIA_LIFETIMEBOUND, multipart_parse_options options);
 
 template <detail::http_temporary_owning_char_string body_type>
+multipart_body_parse_result parse_multipart_body(body_type&&, multipart_parse_options) = delete;
+
+[[nodiscard]] inline multipart_body_parse_result parse_multipart_body(byte_view body RUVIA_LIFETIMEBOUND, multipart_parse_options options) {
+    return parse_multipart_body(as_chars(body), std::move(options));
+}
+
+template <detail::http_temporary_owning_range<std::byte> body_type>
 multipart_body_parse_result parse_multipart_body(body_type&&, multipart_parse_options) = delete;
 }  // namespace ruvia

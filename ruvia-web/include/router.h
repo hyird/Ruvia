@@ -6,8 +6,8 @@
 #include <string_view>
 #include <utility>
 
-#include "callback_ref.h"
 #include "controller.h"
+#include "function_ref.h"
 #include "http_error.h"
 #include "http_tunnel.h"
 #include "middleware.h"
@@ -16,7 +16,7 @@
 #include "task.h"
 #include "websocket.h"
 #include "worker_ref.h"
-#include "worker_state.h"
+#include "worker_services.h"
 
 namespace ruvia {
 
@@ -53,11 +53,24 @@ public:
     router(router&&) = delete;
     router& operator=(router&&) = delete;
 
+    // Mounts macro-declared (`RUVIA_ROUTES_BEGIN` ... `RUVIA_ROUTES_END`)
+    // controllers onto this standalone worker-local router. One instance per
+    // named controller is constructed when `freeze()` compiles the route table.
+    template <typename... controller_types>
+        requires(sizeof...(controller_types) > 0)
+    router& controllers() & RUVIA_LIFETIMEBOUND {
+        const std::array<detail::controller_registrar, sizeof...(controller_types)> registrars{detail::controller_registrar_of<controller_types>()...};
+        return add_controllers(registrars);
+    }
+    template <typename... controller_types>
+        requires(sizeof...(controller_types) > 0)
+    router& controllers() && = delete;
+
     // Methods are case-sensitive HTTP tokens. Extension methods have the same
     // static-path restriction as controller routes. Paths and callbacks are
     // owned before return; modifiers reuse controller middleware/body policies.
     template <route_modifier... modifiers>
-    router& add(std::string_view method, std::string_view path, router_handler handler) & {
+    router& add(std::string_view method, std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
         const std::array<detail::controller_middleware_descriptor, sizeof...(modifiers)> descriptors{detail::make_route_modifier_descriptor<modifiers>()...};
         return add_buffered(method, path, std::move(handler), descriptors);
     }
@@ -65,7 +78,56 @@ public:
     router& add(std::string_view, std::string_view, router_handler) && = delete;
 
     template <route_modifier... modifiers>
-    router& stream(std::string_view method, std::string_view path, router_stream_handler handler) & {
+    router& get(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
+        return add<modifiers...>("GET", path, std::move(handler));
+    }
+    template <route_modifier... modifiers>
+    router& get(std::string_view, router_handler) && = delete;
+
+    template <route_modifier... modifiers>
+    router& post(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
+        return add<modifiers...>("POST", path, std::move(handler));
+    }
+    template <route_modifier... modifiers>
+    router& post(std::string_view, router_handler) && = delete;
+
+    template <route_modifier... modifiers>
+    router& put(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
+        return add<modifiers...>("PUT", path, std::move(handler));
+    }
+    template <route_modifier... modifiers>
+    router& put(std::string_view, router_handler) && = delete;
+
+    template <route_modifier... modifiers>
+    router& patch(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
+        return add<modifiers...>("PATCH", path, std::move(handler));
+    }
+    template <route_modifier... modifiers>
+    router& patch(std::string_view, router_handler) && = delete;
+
+    template <route_modifier... modifiers>
+    router& delete_(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
+        return add<modifiers...>("DELETE", path, std::move(handler));
+    }
+    template <route_modifier... modifiers>
+    router& delete_(std::string_view, router_handler) && = delete;
+
+    template <route_modifier... modifiers>
+    router& head(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
+        return add<modifiers...>("HEAD", path, std::move(handler));
+    }
+    template <route_modifier... modifiers>
+    router& head(std::string_view, router_handler) && = delete;
+
+    template <route_modifier... modifiers>
+    router& options(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
+        return add<modifiers...>("OPTIONS", path, std::move(handler));
+    }
+    template <route_modifier... modifiers>
+    router& options(std::string_view, router_handler) && = delete;
+
+    template <route_modifier... modifiers>
+    router& stream(std::string_view method, std::string_view path, router_stream_handler handler) & RUVIA_LIFETIMEBOUND {
         const std::array<detail::controller_middleware_descriptor, sizeof...(modifiers)> descriptors{detail::make_route_modifier_descriptor<modifiers>()...};
         return add_stream(method, path, std::move(handler), descriptors);
     }
@@ -165,11 +227,12 @@ public:
 private:
     friend class dispatch_configuration<router>;
 
+    router& add_controllers(std::span<const detail::controller_registrar> registrars);
     router& add_buffered(std::string_view method, std::string_view path, router_handler handler, std::span<const detail::controller_middleware_descriptor> modifiers);
     router& add_stream(std::string_view method, std::string_view path, router_stream_handler handler, std::span<const detail::controller_middleware_descriptor> modifiers);
     router& add_websocket(std::string_view path, router_stream_handler handler, websocket_route_config config, std::span<const detail::controller_middleware_descriptor> modifiers);
     router& add_tunnel(std::string_view protocol, std::string_view target, router_stream_handler handler, http_tunnel_route_config config, std::span<const detail::controller_middleware_descriptor> modifiers);
-    void edit_configuration(detail::callback_ref<void(detail::app_configuration&)> edit);
+    void edit_configuration(function_ref<void(detail::app_configuration&)> edit);
 
     std::shared_ptr<detail::router_state> state_;
 };

@@ -16,7 +16,7 @@
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "failure_report.h"
 #include "move_only_function.h"
 #include "worker_ref.h"
@@ -76,6 +76,12 @@ void worker_runtime_context::detach() noexcept {
 
 void worker_runtime_context::wait_for_reservations() noexcept {
     dispatcher_->wait_for_reservations();
+}
+
+worker_shutdown_registration::~worker_shutdown_registration() {
+    if (registry_) {
+        registry_->unlink_shutdown(*this);
+    }
 }
 
 }  // namespace ruvia
@@ -142,12 +148,6 @@ worker_dispatcher::worker_dispatcher(asio::io_context& io_context, std::size_t c
 worker_dispatcher::~worker_dispatcher() {
     notify_waiters(idle_waiters_.take_all(), false);
     notify_waiters(shutdown_notification_waiters_.take_all(), false);
-}
-
-worker_shutdown_registration::~worker_shutdown_registration() {
-    if (registry_) {
-        registry_->unlink_shutdown(*this);
-    }
 }
 
 void worker_dispatcher::schedule_drain_locked() {
@@ -786,7 +786,7 @@ blocking_pool* worker_ref::blocking_pool() const noexcept {
     return dispatcher_ ? dispatcher_->blocking_pool() : nullptr;
 }
 
-asio::io_context::executor_type detail::worker_executor(const worker_ref& worker_value) {
+asio::io_context::executor_type asio_executor(const worker_ref& worker_value) {
     auto* dispatcher = detail::worker_dispatcher::of(worker_value);
     if (dispatcher == nullptr) {
         throw std::logic_error("worker has no execution context");
@@ -794,7 +794,7 @@ asio::io_context::executor_type detail::worker_executor(const worker_ref& worker
     return dispatcher->executor();
 }
 
-worker_ref detail::worker_ref_access::current() noexcept {
+worker_ref worker_ref::current() noexcept {
     const auto* dispatcher = detail::current_worker_dispatcher();
     if (dispatcher == nullptr) {
         return {};
@@ -854,12 +854,11 @@ void detail::worker_ref_access::defer_or_terminate(const worker_ref& worker_valu
     dispatcher->defer_or_terminate(std::move(task_value));
 }
 
-bool detail::worker_ref_access::link_shutdown(const worker_ref& worker_value, worker_shutdown_registration& registration, std::weak_ptr<void> owner, const worker_shutdown_operations_type& operations) {
-    auto* const dispatcher = detail::worker_dispatcher::of(worker_value);
-    if (dispatcher == nullptr) {
+bool worker_ref::link_shutdown(worker_shutdown_registration& registration, std::weak_ptr<void> owner, const detail::worker_shutdown_operations_type& operations) const {
+    if (!dispatcher_) {
         return false;
     }
-    return dispatcher->register_shutdown(registration, std::move(owner), operations);
+    return dispatcher_->register_shutdown(registration, std::move(owner), operations);
 }
 
 bool worker_timer_registration::schedule(const worker_ref& worker_value, std::chrono::steady_clock::time_point deadline_value, move_only_function<void(worker_timer_status)> completion) & {

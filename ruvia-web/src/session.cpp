@@ -13,6 +13,7 @@
 
 #include "context.h"
 #include "context_access.h"
+#include "crypto.h"
 #include "decimal_text.h"
 #include "http_error.h"
 #include "http_header.h"
@@ -246,93 +247,7 @@ namespace {
 // "<key prefix><session id>", inline for typical key sizes.
 using session_key = detail::inline_text_concat<128>;
 
-}  // namespace
-
-task<void> detail::session_access::commit(context& context_value) {
-    auto& state_value = context_value.session_state();
-    if (!state_value.begin_commit()) {
-        co_return;
-    }
-    try {
-        if (const auto* owner = state_value.owner()) {
-            const auto connection = context_value.connection();
-            const bool secure = connection.scheme() == http_scheme::https;
-            // Session Cookie 属于明确的跨替换响应策略，只在最终交付/流提交时应用。
-            // Redis 成功后通过无分配移动发布完整字段，既有 commit guard 保证只持久化一次。
-            auto& response = detail::context_access::response_policy(context_value);
-            auto staged = response.headers().clone(1);
-            const auto publish = [&]() noexcept {
-                response.commit_headers(std::move(staged));
-            };
-            if (const auto* cleared = state_value.cleared()) {
-                detail::append_expired_session_cookie_header(staged, owner->cookie_name_, secure);
-                if (cleared->old_id_.has_value()) {
-                    auto del_task = [&] {
-                        const session_key key({owner->key_prefix_, *cleared->old_id_});
-                        return context_value.redis(owner->redis_alias_).del(key.view());
-                    }();
-                    (void)(co_await std::move(del_task));
-                }
-                publish();
-            } else {
-                std::string_view payload;
-                std::string_view old_id;
-                if (const auto* rotated = state_value.rotate()) {
-                    payload = rotated->payload_;
-                    old_id = rotated->old_id_;
-                } else {
-                    payload = state_value.persist_new()->payload_;
-                }
-
-                std::array<char, detail::secure_token_size> id_buffer;
-                const auto new_id = detail::generate_secure_token(id_buffer);
-                detail::append_session_cookie_header(staged, owner->cookie_name_, new_id, secure);
-
-                const session_key key({owner->key_prefix_, new_id});
-                bool applied = false;
-                if (!old_id.empty()) {
-                    static const redis_script rotation_script(detail::session_rotation_script);
-                    auto eval_task = [&] {
-                        const session_key old_key({owner->key_prefix_, old_id});
-                        // session_middleware::validate requires a positive TTL.
-                        std::array<char, max_decimal_size> ttl_buffer;
-                        const auto ttl = format_decimal(ttl_buffer, static_cast<std::uint64_t>(owner->ttl_.count()));
-                        const std::array<std::string_view, 2> keys{old_key.view(), key.view()};
-                        const std::array<std::string_view, 2> args{payload, ttl};
-                        // Redis executes the entire transition atomically. A stale request may
-                        // neither recreate a revoked identifier nor mint a successor from it.
-                        return context_value.redis(owner->redis_alias_).eval_script(rotation_script, keys, args);
-                    }();
-                    const auto result_value = co_await std::move(eval_task);
-                    if (result_value.kind() == redis_value::kind_type::error) {
-                        throw redis_error(backend_error_code::command_failed, result_value.error());
-                    }
-                    applied = result_value.integer() == 1;
-                } else {
-                    auto set_task = [&] {
-                        redis_set_options options;
-                        options.condition_ = redis_set_condition::if_absent;
-                        options.expiration_ = redis_set_expiration::expires_after(owner->ttl_);
-                        return context_value.redis(owner->redis_alias_).set(key.view(), payload, std::move(options));
-                    }();
-                    const auto result_value = co_await std::move(set_task);
-                    applied = result_value.applied();
-                }
-                if (!applied) {
-                    throw http_error({.status_ = http_status::conflict, .code_ = "session_conflict", .message_ = "session expired or was revoked; retry with a new session"});
-                }
-                publish();
-            }
-        }
-        state_value.finish_commit();
-    } catch (...) {
-        state_value.fail_commit(std::current_exception());
-        throw;
-    }
-    co_return;
-}
-
-const session_config& session_middleware::validate(const session_config& source_value) {
+const session_config& validate_session_config(const session_config& source_value) {
     if (source_value.redis_alias_.empty()) {
         throw std::invalid_argument("session Redis alias must not be empty");
     }
@@ -345,36 +260,198 @@ const session_config& session_middleware::validate(const session_config& source_
     if (source_value.ttl_.count() <= 0) {
         throw std::invalid_argument("session TTL must be greater than zero");
     }
-    // New sessions expire through SET PX in milliseconds; rotation sends the
-    // same TTL as EX seconds, which Redis likewise converts to milliseconds.
     if (source_value.ttl_ > std::chrono::duration_cast<std::chrono::seconds>(std::chrono::milliseconds::max())) {
         throw std::invalid_argument("session TTL must be representable in milliseconds");
     }
+    const cookie_options check_attrs{
+        .path_ = source_value.path_,
+        .domain_ = source_value.domain_,
+        .same_site_ = source_value.same_site_,
+        .http_only_ = cookie_attribute_policy::emit,
+        .secure_ = source_value.secure_.value_or(true) ? cookie_attribute_policy::emit : cookie_attribute_policy::omit,
+    };
+    (void)set_cookie_plan(source_value.cookie_name_, "000000000000000000000000000000000000000000000000", check_attrs);
     return source_value;
+}
+
+}  // namespace
+
+session_store::session_store(const session_config& config) :
+    redis_alias_(validate_session_config(config).redis_alias_),
+    cookie_name_(config.cookie_name_),
+    key_prefix_(config.key_prefix_),
+    ttl_(config.ttl_),
+    path_(config.path_),
+    domain_(config.domain_),
+    same_site_(config.same_site_),
+    secure_(config.secure_),
+    secret_(config.secret_) {}
+
+std::optional<std::string_view> session_store::verify_cookie_id(std::string_view cookie_value) const noexcept {
+    const auto candidate = secret_.empty() ? std::optional<std::string_view>(cookie_value) : verify_signed_cookie_value(secret_, cookie_name_, cookie_value);
+    if (!candidate.has_value() || !detail::is_valid_session_id(*candidate)) {
+        return std::nullopt;
+    }
+    return *candidate;
+}
+
+std::string session_store::format_cookie_value(std::string_view session_id) const {
+    if (!detail::is_valid_session_id(session_id)) {
+        throw std::invalid_argument("session ID must be 48 lowercase hexadecimal characters");
+    }
+    if (secret_.empty()) {
+        return std::string(session_id);
+    }
+    return sign_cookie_value(secret_, cookie_name_, session_id);
+}
+
+cookie_options session_store::cookie_attributes(bool connection_secure) const noexcept {
+    return cookie_options{
+        .path_ = path_,
+        .domain_ = domain_,
+        .same_site_ = same_site_,
+        .http_only_ = cookie_attribute_policy::emit,
+        .secure_ = secure_.value_or(connection_secure) ? cookie_attribute_policy::emit : cookie_attribute_policy::omit,
+    };
+}
+
+cookie_options session_store::deletion_cookie_attributes(bool connection_secure) const noexcept {
+    auto attrs = cookie_attributes(connection_secure);
+    attrs.expires_ = cookie_deletion_expires;
+    return attrs;
+}
+
+task<std::string> session_store::create(const redis_executor& redis, std::string_view payload, operation_options options) const {
+    if (payload.empty()) {
+        throw std::invalid_argument("session payload must not be empty");
+    }
+    std::array<char, detail::secure_token_size> id_buffer;
+    std::string new_id(detail::generate_secure_token(id_buffer));
+    auto set_task = [&] {
+        const session_key key({key_prefix_, new_id});
+        redis_set_options set_opts;
+        set_opts.condition_ = redis_set_condition::if_absent;
+        set_opts.expiration_ = redis_set_expiration::expires_after(ttl_);
+        return redis.with_options(std::move(options)).set(key.view(), payload, std::move(set_opts));
+    }();
+    const auto result_value = co_await std::move(set_task);
+    if (!result_value.applied()) {
+        throw http_error({.status_ = http_status::conflict, .code_ = "session_conflict", .message_ = "session expired or was revoked; retry with a new session"});
+    }
+    co_return new_id;
+}
+
+task<std::optional<std::string>> session_store::load(const redis_executor& redis, std::string_view session_id, operation_options options) const {
+    if (!detail::is_valid_session_id(session_id)) {
+        co_return std::nullopt;
+    }
+    auto get_task = [&] {
+        const session_key key({key_prefix_, session_id});
+        return redis.with_options(std::move(options)).get(key.view());
+    }();
+    co_return co_await std::move(get_task);
+}
+
+task<std::optional<std::string>> session_store::rotate(const redis_executor& redis, std::string_view old_session_id, std::string_view payload, operation_options options) const {
+    if (!detail::is_valid_session_id(old_session_id) || payload.empty()) {
+        co_return std::nullopt;
+    }
+    std::array<char, detail::secure_token_size> id_buffer;
+    std::string new_id(detail::generate_secure_token(id_buffer));
+    static const redis_script rotation_script(detail::session_rotation_script);
+    auto eval_task = [&] {
+        const session_key old_key({key_prefix_, old_session_id});
+        const session_key new_key({key_prefix_, new_id});
+        std::array<char, max_decimal_size> ttl_buffer;
+        const auto ttl_text = format_decimal(ttl_buffer, static_cast<std::uint64_t>(ttl_.count()));
+        const std::array<std::string_view, 2> keys{old_key.view(), new_key.view()};
+        const std::array<std::string_view, 2> args{payload, ttl_text};
+        return redis.with_options(std::move(options)).eval_script(rotation_script, keys, args);
+    }();
+    const auto result_value = co_await std::move(eval_task);
+    if (result_value.kind() == redis_value::kind_type::error) {
+        throw redis_error(backend_error_code::command_failed, result_value.error());
+    }
+    if (result_value.integer() != 1) {
+        co_return std::nullopt;
+    }
+    co_return new_id;
+}
+
+task<bool> session_store::destroy(const redis_executor& redis, std::string_view session_id, operation_options options) const {
+    if (!detail::is_valid_session_id(session_id)) {
+        co_return false;
+    }
+    auto del_task = [&] {
+        const session_key key({key_prefix_, session_id});
+        return redis.with_options(std::move(options)).del(key.view());
+    }();
+    co_return (co_await std::move(del_task)) > 0;
+}
+
+task<void> detail::session_access::commit(context& context_value) {
+    auto& state_value = context_value.session_state();
+    if (!state_value.begin_commit()) {
+        co_return;
+    }
+    try {
+        if (const auto* owner = state_value.owner()) {
+            const auto& store = owner->store_;
+            const auto connection = context_value.connection();
+            const bool secure = connection.scheme() == http_scheme::https;
+            // Session Cookie 属于明确的跨替换响应策略，只在最终交付/流提交时应用。
+            // Redis 成功后通过无分配移动发布完整字段，既有 commit guard 保证只持久化一次。
+            auto& response = detail::context_access::response_policy(context_value);
+            auto staged = response.headers().clone(1);
+            const auto publish = [&]() noexcept {
+                response.commit_headers(std::move(staged));
+            };
+            if (const auto* cleared = state_value.cleared()) {
+                detail::set_session_cookie(staged, store.cookie_name_, "", store.deletion_cookie_attributes(secure));
+                if (cleared->old_id_.has_value()) {
+                    (void)(co_await store.destroy(context_value.redis(store.redis_alias_), *cleared->old_id_));
+                }
+                publish();
+            } else if (const auto* rotated = state_value.rotate()) {
+                const auto new_id = co_await store.rotate(context_value.redis(store.redis_alias_), rotated->old_id_, rotated->payload_);
+                if (!new_id.has_value()) {
+                    throw http_error({.status_ = http_status::conflict, .code_ = "session_conflict", .message_ = "session expired or was revoked; retry with a new session"});
+                }
+                const auto wire_value = store.format_cookie_value(*new_id);
+                detail::set_session_cookie(staged, store.cookie_name_, wire_value, store.cookie_attributes(secure));
+                publish();
+            } else {
+                const auto new_id = co_await store.create(context_value.redis(store.redis_alias_), state_value.persist_new()->payload_);
+                const auto wire_value = store.format_cookie_value(new_id);
+                detail::set_session_cookie(staged, store.cookie_name_, wire_value, store.cookie_attributes(secure));
+                publish();
+            }
+        }
+        state_value.finish_commit();
+    } catch (...) {
+        state_value.fail_commit(std::current_exception());
+        throw;
+    }
+    co_return;
 }
 
 session_middleware::session_middleware() :
     session_middleware(session_config{}) {}
 
 session_middleware::session_middleware(const session_config& config) :
-    redis_alias_(validate(config).redis_alias_),
-    cookie_name_(config.cookie_name_),
-    key_prefix_(config.key_prefix_),
-    ttl_(config.ttl_) {}
+    store_(config) {}
 
 task<void> session_middleware::invoke(context& c, next& next_value) {
     detail::session_access::bind(c, this);
     // A repeated session cookie is treated as absent: loading either occurrence
     // would let an injected cookie fixate or shadow the session.
-    const auto cookie = c.request().unique_cookie(cookie_name_);
-    if (cookie.status_ == unique_lookup_status::found && detail::is_valid_session_id(cookie.value_)) {
-        detail::session_access::observe_presented_id(c, cookie.value_);
-        auto get_task = [&] {
-            const session_key key({key_prefix_, cookie.value_});
-            return c.redis(redis_alias_).get(key.view());
-        }();
-        if (auto stored = co_await std::move(get_task)) {
-            detail::session_access::load(c, std::move(*stored));
+    const auto cookie = c.request().unique_cookie(store_.cookie_name_);
+    if (cookie.status_ == unique_lookup_status::found) {
+        if (const auto verified_id = store_.verify_cookie_id(cookie.value_)) {
+            detail::session_access::observe_presented_id(c, *verified_id);
+            if (auto stored = co_await store_.load(c.redis(store_.redis_alias_), *verified_id)) {
+                detail::session_access::load(c, std::move(*stored));
+            }
         }
     }
 

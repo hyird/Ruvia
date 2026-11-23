@@ -17,12 +17,7 @@ add_library(ruvia-core STATIC ${ruvia_core_sources})
 
 ruvia_configure_library(ruvia-core core)
 
-# Only Asio adapters cross the Core boundary, and only in the build tree.
-add_library(ruvia_core_internal INTERFACE)
-target_include_directories(ruvia_core_internal INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src/asio")
-
 target_include_directories(ruvia-core PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/asio"
     "${PROJECT_SOURCE_DIR}/internal"
 )
 
@@ -62,23 +57,25 @@ ruvia_install_component(ruvia-core core)
 ruvia_install_public_headers(core
     include/asio_bridge.h
     include/blocking_pool.h
-    include/byte_view.h
     include/channel.h
     include/delivery_result.h
     include/event_loop.h
     include/failure_report.h
+    include/function_ref.h
+    include/lifetimebound.h
     include/move_only_function.h
     include/one_shot.h
+    include/operation_interrupt.h
     include/operation_options.h
     include/operation_scope.h
     include/pool_lease.h
+    include/slot_pool.h
     include/stop_token.h
     include/suspend_race.h
     include/task.h
     include/task_scope.h
     include/timeout_duration.h
     include/wait_result.h
-    include/waiter_list.h
     include/worker_cancellation.h
     include/worker_ref.h
     include/worker_runtime.h

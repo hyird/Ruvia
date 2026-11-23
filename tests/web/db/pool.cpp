@@ -565,7 +565,7 @@ struct migrator_loop final {
 }  // namespace
 
 TEST(Ruvia, scoped_operation_scope_tracks_cold_owner_operations) {
-    ruvia::detail::operation_scope operation_scope;
+    ruvia::operation_scope operation_scope;
     auto cold_task = []() -> ruvia::task<void> {
         co_return;
     }();

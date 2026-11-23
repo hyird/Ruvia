@@ -18,6 +18,7 @@
 #include "http_response_body.h"
 #include "http_response_headers.h"
 #include "http_status.h"
+#include "outbound_bytes.h"
 
 namespace ruvia {
 
@@ -92,12 +93,31 @@ public:
     [[nodiscard]] http_response_body_segment_view body_segment(std::size_t index) const& RUVIA_LIFETIMEBOUND;
     http_response_body_segment_view body_segment(std::size_t index) const&& = delete;
     void body(std::string_view value);
+    template <typename bytes_type>
+        requires(!std::same_as<std::remove_cvref_t<bytes_type>, outbound_bytes> &&
+            !std::same_as<bytes_type, std::vector<std::byte>> &&
+            !std::convertible_to<bytes_type&&, std::string_view> &&
+            std::convertible_to<bytes_type&&, byte_view>)
+    void body(bytes_type&& value) {
+        body(as_chars(byte_view(std::forward<bytes_type>(value))));
+    }
     template <std::same_as<std::string> string_type>
     void body(string_type&& value) noexcept {
         body_.set_owned(std::move(value));
     }
+    template <std::same_as<std::vector<std::byte>> vector_type>
+    void body(vector_type&& value) {
+        body(outbound_bytes(std::move(value)).take_string());
+    }
+    template <std::same_as<outbound_bytes> payload_type>
+    void body(payload_type&& value) {
+        body_.set_owned(std::move(value).take_string());
+    }
     // References static-storage bytes without copying.
     void static_body(static_text value) noexcept;
+    void static_body(static_bytes value) noexcept {
+        body_.set_static(as_chars(value.view()));
+    }
     // Own bytes read from a file: all of it, a byte range, or a multipart
     // byte-range payload of it. Unlike body(), the body remains a file
     // representation, even when empty.

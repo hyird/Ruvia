@@ -668,11 +668,11 @@ private:
 namespace ruvia::test {
 
 inline void append_frame(std::string& wire, http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id, std::string_view payload) {
-    std::array<char, http2_frame_header_bytes> header{};
+    std::array<std::byte, http2_frame_header_bytes> header{};
     if (payload.size() > std::numeric_limits<std::uint32_t>::max() || !encode_http2_frame_header(header, static_cast<std::uint32_t>(payload.size()), type, flags, stream_id)) {
         throw std::logic_error("invalid HTTP/2 test frame");
     }
-    wire.append(header.data(), header.size());
+    wire.append(reinterpret_cast<const char*>(header.data()), header.size());
     wire.append(payload);
 }
 
@@ -720,7 +720,7 @@ template <typename stream_type>
     };
     std::array<char, http2_frame_header_bytes> bytes{};
     read_exact(bytes.data(), bytes.size());
-    const auto header = parse_http2_frame_header(bytes);
+    const auto header = parse_http2_frame_header(std::as_bytes(std::span(bytes)));
     if (!header) {
         throw std::runtime_error("invalid HTTP/2 response frame");
     }

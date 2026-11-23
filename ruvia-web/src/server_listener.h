@@ -25,8 +25,7 @@
 #include <openssl/crypto.h>
 #include <openssl/ssl.h>
 
-#include "asio_completion.h"
-#include "asio_ip_address.h"
+#include "asio_bridge.h"
 #include "borrowed_text.h"
 #include "connection_lifecycle.h"
 #include "crypto.h"
@@ -368,7 +367,7 @@ struct prepared_listener_access final {
         if (!state->caller_.is_current() || !state->caller_.accepting()) {
             throw std::logic_error("listener preparation must run on its live caller worker");
         }
-        async_start(std::move(operation), asio::bind_executor(detail::worker_executor(state->caller_), [state](std::exception_ptr failure) {
+        async_start(std::move(operation), asio::bind_executor(asio_executor(state->caller_), [state](std::exception_ptr failure) {
             state->complete(std::move(failure));
         }));
         co_await state->ready_.wait();

@@ -1473,10 +1473,10 @@ void http_client_pool::observe_alt_svc(const http_client_route& route, const htt
                 host = route.dial_host_;
             } else {
                 const auto parsed_authority = parse_http_authority(authority);
-                if (!parsed_authority || parsed_authority->port_kind() != http_authority_port_kind::value || *parsed_authority->port() == 0) {
+                if (!parsed_authority || parsed_authority->port_kind() != http_authority_port_kind::value || parsed_authority->port()->value() == 0) {
                     return true;
                 }
-                port = *parsed_authority->port();
+                port = parsed_authority->port()->value();
                 host = parsed_authority->host();
                 if (!host.empty() && host.front() == '[' && host.back() == ']') {
                     host.remove_prefix(1);

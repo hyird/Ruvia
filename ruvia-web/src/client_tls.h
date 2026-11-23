@@ -43,24 +43,39 @@ inline void validate_client_tls_config(const client_tls_config& config) {
         // The override replaces the origin host for SNI and peer verification.
         validate_client_origin_host(*config.server_name_, "TLS server name must not be empty", "TLS server name is invalid");
     }
-    if (config.mode_ == client_tls_mode::disabled && (config.ca_file_.has_value() || config.identity_.has_value() || config.server_name_.has_value())) {
+    if (config.ca_file_.has_value() && !config.ca_pem_.empty()) {
+        throw std::invalid_argument("client TLS must not specify both CA file and CA PEM");
+    }
+    if (config.mode_ == client_tls_mode::disabled && (config.ca_file_.has_value() || !config.ca_pem_.empty() || config.identity_.has_value() || config.server_name_.has_value())) {
         throw std::invalid_argument("disabled TLS must not have TLS credentials or a server name");
     }
-    // Database drivers read identity files themselves; every client keeps
-    // the one file-based shape.
-    if (config.identity_.has_value() && (!config.identity_->certificate_chain_pem_.empty() || !config.identity_->private_key_pem_.empty())) {
-        throw std::invalid_argument("client TLS identities must be PEM files, not in-memory PEM");
-    }
-    // A staple belongs to a server identity (RFC 6066 §8); a client never sends one.
-    if (config.identity_.has_value() && !config.identity_->ocsp_response_.empty()) {
-        throw std::invalid_argument("client TLS identities must not carry an OCSP response");
+    if (config.identity_.has_value()) {
+        const auto& identity = *config.identity_;
+        // A staple belongs to a server identity (RFC 6066 §8); a client never sends one.
+        if (!identity.ocsp_response_.empty()) {
+            throw std::invalid_argument("client TLS identities must not carry an OCSP response");
+        }
+        const bool has_files = !identity.certificate_chain_file_.empty() || !identity.private_key_file_.empty();
+        const bool has_pem = !identity.certificate_chain_pem_.empty() || !identity.private_key_pem_.empty();
+        if (has_files && has_pem) {
+            throw std::invalid_argument("client TLS identity must not mix file and PEM sources");
+        }
+        if (!has_files && !has_pem) {
+            throw std::invalid_argument("client TLS identity must specify certificate chain and private key");
+        }
+        if (has_files && (identity.certificate_chain_file_.empty() || identity.private_key_file_.empty())) {
+            throw std::invalid_argument("client TLS file identity requires both certificate chain and private key");
+        }
+        if (has_pem && (identity.certificate_chain_pem_.empty() || identity.private_key_pem_.empty())) {
+            throw std::invalid_argument("client TLS PEM identity requires both certificate chain and private key");
+        }
     }
 }
 
 struct client_tls_material;
 
 // Owns validated paths and the password without reading files. Copies share
-// preparation and its parsed credentials; the password is wiped after parsing.
+// preparation and its parsed credentials; secrets are wiped after parsing.
 struct client_tls_config_storage final {
     explicit client_tls_config_storage(const client_tls_config& source_value);
 
@@ -78,12 +93,16 @@ struct client_tls_config_storage final {
     template <http_temporary_owning_char_string host_type>
     std::string_view tls_host(host_type&&) const& = delete;
 
+    // True when preparing credentials reads files or walks the system trust directory.
+    [[nodiscard]] bool requires_filesystem_io() const noexcept;
+
     client_tls_mode mode_;
     tls_version minimum_version_;
     std::uint64_t max_outgoing_records_;
-    // nullopt selects the system or driver trust store.
+    // nullopt selects ca_pem_ when non-empty, else the system or driver trust store.
     std::optional<tls_file_name> ca_file_;
     std::optional<tls_identity_files> identity_;
+    bool has_identity_{false};
     std::optional<std::string> server_name_;
     std::optional<tls_trust_store> trust_store_;
     std::optional<tls_certificate> certificate_;

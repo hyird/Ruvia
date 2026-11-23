@@ -22,7 +22,7 @@
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/stream.hpp>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "client_host_resolver.h"
 #include "client_tls.h"
 #include "http_client_types.h"
@@ -273,9 +273,13 @@ struct associator<associator_type, ruvia::detail::client_tls_write_handler<handl
 
 }  // namespace asio
 
+namespace ruvia {
+class happy_eyeballs_dialer;
+}  // namespace ruvia
+
 namespace ruvia::detail {
 
-class client_happy_eyeballs;
+using client_happy_eyeballs = ::ruvia::happy_eyeballs_dialer;
 
 // Why an owner stopped a transport. The latest non-none reason wins until the
 // owner starts a new operation with reset_abort().
@@ -373,6 +377,9 @@ public:
     void offer_alpn(client_alpn alpn) noexcept {
         endpoint_.alpn_ = client_alpn_bytes(alpn);
     }
+    [[nodiscard]] const asio::ip::tcp::endpoint& local_endpoint() const noexcept {
+        return local_endpoint_;
+    }
     [[nodiscard]] const asio::ip::tcp::endpoint& peer_endpoint() const noexcept {
         return peer_endpoint_;
     }
@@ -399,6 +406,10 @@ public:
     // transport write, which is one TLS record sequence and one deadline cycle.
     [[nodiscard]] task<client_transport_result> write(std::string_view bytes, const operation_deadline& timeout);
     [[nodiscard]] task<client_transport_result> write(std::span<const asio::const_buffer> buffers, const operation_deadline& timeout);
+    // Ends the send direction: TCP shuts down its send side; TLS encrypts and
+    // flushes outbound close_notify under the write deadline without consuming
+    // incoming records on the read lane.
+    [[nodiscard]] task<client_transport_result> shutdown_send(const operation_deadline& timeout);
 
     [[nodiscard]] client_abort_reason abort_reason() const noexcept {
         return abort_reason_;
@@ -464,6 +475,7 @@ private:
     client_tcp_endpoint endpoint_;
     std::optional<asio::ip::tcp::endpoint> literal_endpoint_{};
     client_wire_counters& counters_;
+    asio::ip::tcp::endpoint local_endpoint_;
     asio::ip::tcp::endpoint peer_endpoint_;
     std::chrono::steady_clock::duration connect_duration_{};
     std::chrono::steady_clock::duration tls_duration_{};

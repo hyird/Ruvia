@@ -601,7 +601,8 @@ task<http_response> detail::context_access::static_file(context& context_value, 
     if (!entry_value.has_value()) {
         throw file_not_found_error();
     }
-    const auto mode = context_value.runtime_services().precompressed_static_files() ? detail::static_file_selection_mode::precompressed : detail::static_file_selection_mode::identity_only;
+    const bool allow_precompressed = options.negotiate_precompressed_.value_or(context_value.runtime_services().precompressed_static_files());
+    const auto mode = allow_precompressed ? detail::static_file_selection_mode::precompressed : detail::static_file_selection_mode::identity_only;
     return static_file_resolved(context_value, root, relative, options.content_type_.view(), *entry_value, mode, detail::make_response(head));
 }
 

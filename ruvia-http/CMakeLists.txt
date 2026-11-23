@@ -88,9 +88,6 @@ if(RUVIA_ENABLE_HTTP2)
 endif()
 if(RUVIA_ENABLE_HTTP3)
     target_compile_definitions(ruvia-http PUBLIC RUVIA_ENABLE_HTTP3)
-    # The low-level QUIC facade deliberately exposes ngtcp2 core types while
-    # keeping the OpenSSL crypto adapter in ruvia-web.
-    target_link_libraries(ruvia-http PUBLIC ngtcp2::core)
 endif()
 
 ruvia_install_component(ruvia-http http)
@@ -98,9 +95,11 @@ ruvia_install_component(ruvia-http http)
 set(ruvia_http_headers
     include/binary_text_encoding.h
     include/borrowed_text.h
+    include/byte_view.h
     include/checked_integer.h
     include/decimal_text.h
     include/decode_step.h
+    include/fixed_string.h
     include/http1_chunked_body.h
     include/http1_client_request.h
     include/http1_client_response.h
@@ -154,12 +153,18 @@ set(ruvia_http_headers
     include/http_target_origin.h
     include/http_transfer_coding.h
     include/ip_address.h
+    include/json_codec.h
+    include/model.h
+    include/model_value.h
+    include/outbound_bytes.h
     include/proxy_protocol.h
+    include/quic_varint.h
     include/tls_client_hello.h
     include/url_encoding.h
     include/utf8.h
     include/websocket_client_handshake.h
     include/websocket_connection.h
+    include/websocket_frame.h
     include/websocket_handshake.h
 )
 if(RUVIA_ENABLE_HTTP2)

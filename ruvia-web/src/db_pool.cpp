@@ -653,12 +653,17 @@ task<void> db_pool<driver_type>::retire_failed_transaction_slot(std::size_t inde
 
 // A statement inside an open transaction runs on the slot the transaction
 // already holds, so it neither acquires nor releases one -- unless it fails:
-// a transaction whose statement failed cannot continue, so it is retired and
-// the slot given back. The lease deadline fails it like any other failure.
+// a transaction without an active savepoint retires and gives the slot back,
+// whereas an active savepoint keeps a drained connection open on command_failed
+// so ROLLBACK TO SAVEPOINT can recover it. The lease deadline fails it like any
+// other failure.
 template <typename driver_type>
 template <typename result_type>
-task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t index, std::string sql, std::vector<db_value> params, const operation_options& options, statement_hook_type<result_type> statement) {
+task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t index, std::string sql, std::vector<db_value> params, const operation_options& options, statement_hook_type<result_type> statement, bool keep_on_command_failure, bool* lease_kept) {
     require_slot_index(index);
+    if (lease_kept != nullptr) {
+        *lease_kept = false;
+    }
     const auto timeout = lease_operation_timeout(index, operation_deadline(options.timeout_));
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
     std::exception_ptr failure;
@@ -673,10 +678,24 @@ task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t inde
     } catch (...) {
         failure = std::current_exception();
     }
+    std::string().swap(sql);
+    std::vector<db_value>().swap(params);
+    if (keep_on_command_failure && slot(index).connected_ && db_slot_reusable_after(failure) && !leases_.closing() && !slot(index).close_requested_) {
+        bool lease_expired = false;
+        try {
+            leave_lease_operation(index);
+        } catch (...) {
+            failure = std::current_exception();
+            lease_expired = true;
+        }
+        if (!lease_expired) {
+            if (lease_kept != nullptr) {
+                *lease_kept = true;
+            }
+            std::rethrow_exception(failure);
+        }
+    }
     try {
-        // Release the failed statement's storage before awaiting ROLLBACK.
-        std::string().swap(sql);
-        std::vector<db_value>().swap(params);
         co_await retire_failed_transaction_slot(index, timeout, failure);
     } catch (...) {
         close_slot(index);
@@ -697,13 +716,13 @@ task<db_exec_result> db_pool<driver_type>::execute(std::string sql, std::vector<
 }
 
 template <typename driver_type>
-task<db_rows> db_pool<driver_type>::query_on_transaction_slot(std::size_t slot, std::string sql, std::vector<db_value> params, const operation_options& options) {
-    return run_on_transaction_slot<db_rows>(slot, std::move(sql), std::move(params), options, &driver_type::query);
+task<db_rows> db_pool<driver_type>::query_on_transaction_slot(std::size_t slot, std::string sql, std::vector<db_value> params, const operation_options& options, bool keep_on_command_failure, bool* lease_kept) {
+    return run_on_transaction_slot<db_rows>(slot, std::move(sql), std::move(params), options, &driver_type::query, keep_on_command_failure, lease_kept);
 }
 
 template <typename driver_type>
-task<db_exec_result> db_pool<driver_type>::execute_on_transaction_slot(std::size_t slot, std::string sql, std::vector<db_value> params, const operation_options& options) {
-    return run_on_transaction_slot<db_exec_result>(slot, std::move(sql), std::move(params), options, &driver_type::execute);
+task<db_exec_result> db_pool<driver_type>::execute_on_transaction_slot(std::size_t slot, std::string sql, std::vector<db_value> params, const operation_options& options, bool keep_on_command_failure, bool* lease_kept) {
+    return run_on_transaction_slot<db_exec_result>(slot, std::move(sql), std::move(params), options, &driver_type::execute, keep_on_command_failure, lease_kept);
 }
 
 // Starting a transaction transfers the acquired lease to the transaction

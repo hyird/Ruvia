@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "borrowed_text.h"
-#include "callback_ref.h"
 #include "context.h"
+#include "function_ref.h"
 #include "http_error.h"
 #include "http_header.h"
 #include "http_message.h"
@@ -24,7 +24,7 @@
 #include "rate_limiting.h"
 #include "task.h"
 #include "websocket.h"
-#include "worker_state.h"
+#include "worker_services.h"
 
 namespace ruvia::detail {
 
@@ -338,9 +338,9 @@ class controller_registration_access final {
         static_assert(context_task_result<decltype(handler)>::ok, "handler must take context& and return task<http_response> or task<void>");
         static_assert(std::is_same_v<result_type, http_response> || std::is_same_v<result_type, void>, "handlers must return task<http_response> or task<void>; serialize response models with c.json(model)");
         if constexpr (std::is_same_v<result_type, void>) {
-            return callback_access::make<task<void>(context&)>(instance, &invoke_stream<handler>);
+            return route_stream_handler::from_raw(instance, &invoke_stream<handler>);
         } else {
-            return callback_access::make<task<http_response>(context&)>(instance, &invoke<handler>);
+            return route_handler::from_raw(instance, &invoke<handler>);
         }
     }
 
@@ -348,7 +348,7 @@ class controller_registration_access final {
     [[nodiscard]] static route_stream_handler bind_stream(controller_type* instance) noexcept {
         using result_type = typename context_task_result<decltype(handler)>::type;
         static_assert(context_task_result<decltype(handler)>::ok && std::is_same_v<result_type, void>, "stream/upgrade/tunnel handler must take context& and return task<void>");
-        return callback_access::make<task<void>(context&)>(instance, &invoke_stream<handler>);
+        return route_stream_handler::from_raw(instance, &invoke_stream<handler>);
     }
 
     template <route_modifier... modifier_types>

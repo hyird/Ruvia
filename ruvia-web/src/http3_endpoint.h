@@ -92,6 +92,10 @@ struct http3_cid_key final {
         return from(std::span<const std::uint8_t>(cid.data, cid.datalen));
     }
 
+    [[nodiscard]] static http3_cid_key from(const quic_cid& cid) noexcept {
+        return from(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(cid.data()), cid.size()));
+    }
+
     friend bool operator==(const http3_cid_key& left, const http3_cid_key& right) noexcept {
         return left.size_ == right.size_ && std::memcmp(left.bytes_.data(), right.bytes_.data(), left.size_) == 0;
     }

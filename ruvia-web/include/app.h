@@ -124,28 +124,28 @@ class application final : public listener_controls, public dispatch_configuratio
 public:
     [[nodiscard]] const ruvia::env& env() const& noexcept RUVIA_LIFETIMEBOUND;
     const ruvia::env& env() const&& = delete;
-    application& load_dotenv(dotenv_options options = {}) &;
+    application& load_dotenv(dotenv_options options = {}) & RUVIA_LIFETIMEBOUND;
     application& load_dotenv(dotenv_options options = {}) && = delete;
-    application& load_dotenv(const std::filesystem::path& path, dotenv_options options = {}) &;
+    application& load_dotenv(const std::filesystem::path& path, dotenv_options options = {}) & RUVIA_LIFETIMEBOUND;
     application& load_dotenv(const std::filesystem::path& path, dotenv_options options = {}) && = delete;
     // Validated as one unit; a stopped app only, like every setter below.
-    application& workers(application_worker_config config) &;
+    application& workers(application_worker_config config) & RUVIA_LIFETIMEBOUND;
     application& workers(application_worker_config config) && = delete;
-    application& server(server_config config) &;
+    application& server(server_config config) & RUVIA_LIFETIMEBOUND;
     application& server(server_config config) && = delete;
     // Owns configuration without reading credential files. run() loads and
     // validates TLS credentials before starting workers; loading failure
     // propagates there. Replacing staged configuration cleanses its secrets
     // and closes every inherited socket no run consumed.
-    application& listen(listen_config config) &;
+    application& listen(listen_config config) & RUVIA_LIFETIMEBOUND;
     application& listen(listen_config config) && = delete;
-    application& listen(std::span<const listen_config> configs) &;
+    application& listen(std::span<const listen_config> configs) & RUVIA_LIFETIMEBOUND;
     application& listen(std::span<const listen_config> configs) && = delete;
-    application& listen(std::initializer_list<listen_config> configs) &;
+    application& listen(std::initializer_list<listen_config> configs) & RUVIA_LIFETIMEBOUND;
     application& listen(std::initializer_list<listen_config> configs) && = delete;
-    application& document_root(document_root_config config) &;
+    application& document_root(document_root_config config) & RUVIA_LIFETIMEBOUND;
     application& document_root(document_root_config config) && = delete;
-    application& document_root(std::nullptr_t) &;
+    application& document_root(std::nullptr_t) & RUVIA_LIFETIMEBOUND;
     application& document_root(std::nullptr_t) && = delete;
     // Configures the process-wide ordinary-thread pool every worker's event
     // loop borrows for worker_services_access::run_blocking(), file reads, large
@@ -161,9 +161,9 @@ public:
     // TransmitFile, which needs no pool. run() starts the threads before the
     // first request; after workers stop, running callables are not awaited and
     // may finish on the pool's detached state.
-    application& blocking_pool(blocking_pool_options config) &;
+    application& blocking_pool(blocking_pool_options config) & RUVIA_LIFETIMEBOUND;
     application& blocking_pool(blocking_pool_options config) && = delete;
-    application& blocking_pool(std::nullptr_t) &;
+    application& blocking_pool(std::nullptr_t) & RUVIA_LIFETIMEBOUND;
     application& blocking_pool(std::nullptr_t) && = delete;
     // Peers whose forwarding headers name the real client. Accepts addresses
     // and CIDR blocks ("10.0.0.0/8", "2001:db8::/32", "127.0.0.1"); a malformed
@@ -178,9 +178,9 @@ public:
     // caller can prepend. A hop that names no IP address (no RFC 7239 `for`,
     // `unknown`, an obfuscated name) ends the walk without naming a client:
     // client() is then the nearest trusted address after it, or remote().
-    application& trusted_proxies(trusted_proxy_config config) &;
+    application& trusted_proxies(trusted_proxy_config config) & RUVIA_LIFETIMEBOUND;
     application& trusted_proxies(trusted_proxy_config config) && = delete;
-    application& trusted_proxies(std::nullptr_t) &;
+    application& trusted_proxies(std::nullptr_t) & RUVIA_LIFETIMEBOUND;
     application& trusted_proxies(std::nullptr_t) && = delete;
     // Replaces the whole host callback set (see http_server_callbacks); empty
     // members clear. Stopped app only (std::logic_error while running). The
@@ -188,41 +188,41 @@ public:
     // lock, so a target's destructor may call request_stop() or query app state. A
     // listener whose dispatch_ needs an absent request_stream_ or connection_
     // fails run() with std::invalid_argument.
-    application& callbacks(http_server_callbacks callbacks) &;
+    application& callbacks(http_server_callbacks callbacks) & RUVIA_LIFETIMEBOUND;
     application& callbacks(http_server_callbacks callbacks) && = delete;
     // Runs on the run() caller after worker capabilities are ready, before
     // TCP admission. All hooks must succeed before serving; failure or a
     // stop request rolls back startup. Ready workers can execute posted jobs.
-    application& on_start(app_hook hook) &;
+    application& on_start(app_hook hook) & RUVIA_LIFETIMEBOUND;
     application& on_start(app_hook hook) && = delete;
     // Runs on the run() caller once every worker was told to stop -- admission
     // closed and its connections closing, with handlers possibly still
     // unwinding -- before runtime join. Also runs when published startup is
     // cancelled or a start hook fails. A hook must not throw: a failure is
     // reported, not rethrown.
-    application& on_stop(app_hook hook) &;
+    application& on_stop(app_hook hook) & RUVIA_LIFETIMEBOUND;
     application& on_stop(app_hook hook) && = delete;
     // Clearing retires the old hooks after releasing the application
     // configuration lock, as callbacks() does.
-    application& on_start(std::nullptr_t) &;
+    application& on_start(std::nullptr_t) & RUVIA_LIFETIMEBOUND;
     application& on_start(std::nullptr_t) && = delete;
-    application& on_stop(std::nullptr_t) &;
+    application& on_stop(std::nullptr_t) & RUVIA_LIFETIMEBOUND;
     application& on_stop(std::nullptr_t) && = delete;
 #ifdef RUVIA_ENABLE_DATABASE
-    application& db(db_registration_config config) &;
+    application& db(db_registration_config config) & RUVIA_LIFETIMEBOUND;
     application& db(db_registration_config config) && = delete;
-    application& db(std::nullptr_t) &;
+    application& db(std::nullptr_t) & RUVIA_LIFETIMEBOUND;
     application& db(std::nullptr_t) && = delete;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-    application& redis(redis_registration_config config) &;
+    application& redis(redis_registration_config config) & RUVIA_LIFETIMEBOUND;
     application& redis(redis_registration_config config) && = delete;
-    application& redis(std::nullptr_t) &;
+    application& redis(std::nullptr_t) & RUVIA_LIFETIMEBOUND;
     application& redis(std::nullptr_t) && = delete;
 #endif
-    application& http_client(http_client_config config) &;
+    application& http_client(http_client_config config) & RUVIA_LIFETIMEBOUND;
     application& http_client(http_client_config config) && = delete;
-    application& http_client(std::nullptr_t) &;
+    application& http_client(std::nullptr_t) & RUVIA_LIFETIMEBOUND;
     application& http_client(std::nullptr_t) && = delete;
     // The app's start + wait: binds and serves until request_stop(), then returns
     // after every worker retired (a host's start() then shutdown()). May run again
@@ -259,7 +259,7 @@ private:
     friend class dispatch_configuration<application>;
 
     // The dispatch_configuration guard: the app lock, and a stopped app.
-    void edit_configuration(detail::callback_ref<void(detail::app_configuration&)> edit);
+    void edit_configuration(function_ref<void(detail::app_configuration&)> edit);
 
     application();
     explicit application(std::shared_ptr<detail::app_state> state);

@@ -14,7 +14,7 @@
 #include "worker_task_fixture.h"
 
 namespace {
-thread_local ruvia::detail::operation_scope* expire_on_allocate{};
+thread_local ruvia::operation_scope* expire_on_allocate{};
 thread_local bool fail_allocation{};
 }  // namespace
 
@@ -40,7 +40,7 @@ task<void> count_run(std::shared_ptr<int> lifetime, int& runs) {
 
 task<void> verify_spawn_rollback(const worker_ref& worker) {
     task_scope children(worker);
-    detail::operation_scope operations;
+    operation_scope operations;
     int runs = 0;
     auto lifetime = std::make_shared<int>(0);
     auto operation = operations.attach(count_run(lifetime, runs));

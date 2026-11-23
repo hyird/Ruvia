@@ -102,23 +102,23 @@ void http_server_options::set_trusted_proxies(const trusted_proxy_config& config
 }
 
 void http_server_options::use_callbacks(const http_server_callbacks& callbacks) noexcept {
-    request_stream_ = callback_access::ref(callbacks.request_stream_);
-    connection_ = callback_access::ref(callbacks.connection_);
-    access_log_.callback_ = callback_access::ref(callbacks.access_);
-    connection_failure_.callback_ = callback_access::ref(callbacks.connection_failure_);
-    tls_client_hello_ = callback_access::ref(callbacks.tls_client_hello_);
-    http2_input_ = callback_access::ref(callbacks.http2_input_);
+    request_stream_ = callbacks.request_stream_;
+    connection_ = callbacks.connection_;
+    access_log_.callback_ = callbacks.access_;
+    connection_failure_.callback_ = callbacks.connection_failure_;
+    tls_client_hello_ = callbacks.tls_client_hello_;
+    http2_input_ = callbacks.http2_input_;
 #if defined(RUVIA_ENABLE_HTTP2)
-    http2_frame_ = callback_access::ref(callbacks.http2_frame_);
-    http2_headers_ = callback_access::ref(callbacks.http2_headers_);
+    http2_frame_ = callbacks.http2_frame_;
+    http2_headers_ = callbacks.http2_headers_;
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
-    http3_frame_ = callback_access::ref(callbacks.http3_frame_);
-    http3_field_ = callback_access::ref(callbacks.http3_field_);
+    http3_frame_ = callbacks.http3_frame_;
+    http3_field_ = callbacks.http3_field_;
 #endif
-    connection_admission_ = callback_access::ref(callbacks.connection_admission_);
-    connection_open_ = callback_access::ref(callbacks.connection_open_);
-    connection_close_ = callback_access::ref(callbacks.connection_close_);
+    connection_admission_ = callbacks.connection_admission_;
+    connection_open_ = callbacks.connection_open_;
+    connection_close_ = callbacks.connection_close_;
 }
 
 std::uint32_t callbacks_presence(const http_server_callbacks& callbacks) noexcept {

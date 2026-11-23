@@ -11,9 +11,9 @@
 #include <utility>
 #include <vector>
 
-#include "callback_ref.h"
 #include "context_access.h"
 #include "controller.h"
+#include "function_ref.h"
 #include "http_error.h"
 #include "http_message.h"
 #include "http_request.h"
@@ -62,7 +62,8 @@ void replace_prefix_handlers(std::vector<stored_type>& stored, std::span<const r
     std::vector<stored_type> ordered;
     ordered.reserve(handlers.size());
     for (const auto& registration : handlers) {
-        ordered.emplace_back(std::string_view(registration.first), callback_access::ref(registration.second));
+        using ref_type = decltype(stored_type::handler_);
+        ordered.emplace_back(std::string_view(registration.first), registration.second ? ref_type(*registration.second) : ref_type{});
     }
     // Deepest prefix first: selection is a first-match scan. A nested scope
     // always has more segments; distinct scopes of equal depth cannot nest, so

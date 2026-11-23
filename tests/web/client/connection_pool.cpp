@@ -28,7 +28,7 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "blocking_pool.h"
 #include "content_decoding_fixture.h"
 #include "event_loop.h"
@@ -784,9 +784,9 @@ TEST(Ruvia, http_capsule_client_retains_payloads_across_reads_and_rejects_trunca
         const std::string second_payload(4096, 'b');
         std::string wire{"HTTP/1.1 200 Connection Established\r\n\r\n"};
         const auto append_capsule = [&](std::uint64_t type, std::string_view payload) {
-            std::array<char, 16> header;
+            std::array<std::byte, 16> header;
             const auto encoded = ruvia::encode_http_capsule_header(header, type, payload.size());
-            wire.append(header.data(), std::get<std::size_t>(encoded));
+            wire.append(ruvia::as_chars(std::span<const std::byte>(header)).data(), std::get<std::size_t>(encoded));
             wire.append(payload);
         };
         append_capsule(17, first_payload);

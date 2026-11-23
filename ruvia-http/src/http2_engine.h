@@ -176,11 +176,12 @@ inline constexpr std::size_t max_http2_encoded_header_block_bytes = 4 * max_http
 }
 
 struct http2_header_decode_context final {
-    explicit http2_header_decode_context(http2_stream_state& stream_value) noexcept :
-        stream_(stream_value) {}
+    http2_header_decode_context(http2_stream_state& stream_value, std::size_t max_header_list_size = max_http_header_bytes) noexcept :
+        stream_(stream_value),
+        decoded_header_list_size_(max_header_list_size) {}
 
     http2_stream_state& stream_;
-    binary_field_section_size decoded_header_list_size_{max_http_header_bytes};
+    binary_field_section_size decoded_header_list_size_;
     request_field_state request_fields_{request_field_framing::binary};
 };
 
@@ -624,28 +625,27 @@ private:
     std::size_t observer_depth_{0};
 };
 
-// One compile-time source of truth for every local receive constraint. These values
-// drive both the advertised SETTINGS and the matching session options and fixed
-// capacities; they are intentionally not runtime knobs that can diverge.
 struct http2_local_settings final {
-    static constexpr std::uint32_t header_table_size = 4096;
-    static constexpr std::uint32_t max_concurrent_streams = 128;
-    static constexpr std::uint32_t initial_window_size = 1024 * 1024;
-    static constexpr std::uint32_t max_frame_size = http2_default_max_frame_size;
-    static constexpr std::uint32_t max_header_list_size = static_cast<std::uint32_t>(max_http_header_bytes);
-    static constexpr std::uint32_t enable_connect_protocol = 1;
+    std::uint32_t header_table_size_{4096};
+    std::uint32_t max_concurrent_streams_{128};
+    std::uint32_t initial_window_size_{1024 * 1024};
+    std::uint32_t max_frame_size_{http2_default_max_frame_size};
+    std::uint32_t max_header_list_size_{static_cast<std::uint32_t>(max_http_header_bytes)};
+    std::uint32_t enable_connect_protocol_{1};
 };
-
-static_assert(http2_local_settings::initial_window_size <= static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()));
 
 class http2_stream_table final {
 public:
-    // Hard upper bound on live stream records. Reserved push promises do not hold a
-    // concurrency slot, so this can exceed SETTINGS_MAX_CONCURRENT_STREAMS.
-    static constexpr std::size_t max_streams = static_cast<std::size_t>(http2_local_settings::max_concurrent_streams) * 4;
-    static constexpr std::size_t max_push_streams = max_streams - static_cast<std::size_t>(http2_local_settings::max_concurrent_streams);
+    explicit http2_stream_table(std::size_t max_concurrent_streams = 128) noexcept :
+        max_streams_(max_concurrent_streams * 4),
+        max_push_streams_(max_concurrent_streams * 3) {}
 
-    http2_stream_table() noexcept = default;
+    [[nodiscard]] std::size_t max_streams() const noexcept {
+        return max_streams_;
+    }
+    [[nodiscard]] std::size_t max_push_streams() const noexcept {
+        return max_push_streams_;
+    }
 
     [[nodiscard]] std::size_t size() const noexcept {
         return size_;
@@ -703,7 +703,7 @@ public:
             return existing;
         }
         const bool is_push = (stream_id & 1U) == 0;
-        if (size_ >= max_streams || (is_push && push_size_ >= max_push_streams)) {
+        if (size_ >= max_streams_ || (is_push && push_size_ >= max_push_streams_)) {
             return nullptr;
         }
         for (auto& slot : inline_) {
@@ -841,6 +841,8 @@ private:
     std::array<std::optional<http2_stream_state>, inline_capacity> inline_{};
     std::vector<std::uint32_t> overflow_ids_;
     std::vector<overflow_stream_type> overflow_;
+    std::size_t max_streams_{512};
+    std::size_t max_push_streams_{384};
     std::size_t size_{0};
     std::size_t push_size_{0};
     std::size_t snapshot_iteration_depth_{0};
@@ -849,15 +851,15 @@ private:
 
 // The local SETTINGS frame of the connection preface. Only a client may
 // advertise ENABLE_PUSH=1 (RFC 9113 §6.5.2).
-[[nodiscard]] inline std::array<nghttp2_settings_entry, 8> http2_local_settings_entries(bool enable_push) noexcept {
+[[nodiscard]] inline std::array<nghttp2_settings_entry, 8> http2_local_settings_entries(bool enable_push, const http2_local_settings& settings) noexcept {
     return {{
-        {NGHTTP2_SETTINGS_HEADER_TABLE_SIZE, http2_local_settings::header_table_size},
+        {NGHTTP2_SETTINGS_HEADER_TABLE_SIZE, settings.header_table_size_},
         {NGHTTP2_SETTINGS_ENABLE_PUSH, enable_push ? 1U : 0U},
-        {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, http2_local_settings::max_concurrent_streams},
-        {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, http2_local_settings::initial_window_size},
-        {NGHTTP2_SETTINGS_MAX_FRAME_SIZE, http2_local_settings::max_frame_size},
-        {NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE, http2_local_settings::max_header_list_size},
-        {NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL, http2_local_settings::enable_connect_protocol},
+        {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, settings.max_concurrent_streams_},
+        {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, settings.initial_window_size_},
+        {NGHTTP2_SETTINGS_MAX_FRAME_SIZE, settings.max_frame_size_},
+        {NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE, settings.max_header_list_size_},
+        {NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL, settings.enable_connect_protocol_},
         {NGHTTP2_SETTINGS_NO_RFC7540_PRIORITIES, 1},
     }};
 }
@@ -985,6 +987,10 @@ public:
         std::uint32_t bytes_;
     };
 
+    explicit http2_stream_lease_ledger(std::size_t max_streams = 512) :
+        releases_(max_streams),
+        credits_(max_streams) {}
+
     [[nodiscard]] const release_type* release(std::uint32_t stream_id) const noexcept {
         for (std::size_t index = 0; index < release_count_; ++index) {
             if (releases_[index].stream_id_ == stream_id) {
@@ -1064,9 +1070,9 @@ public:
     }
 
 private:
-    std::array<release_type, http2_stream_table::max_streams> releases_;
+    std::vector<release_type> releases_;
     std::size_t release_count_{0};
-    std::array<credit_type, http2_stream_table::max_streams> credits_;
+    std::vector<credit_type> credits_;
     std::size_t credit_count_{0};
 };
 
@@ -1181,7 +1187,7 @@ public:
     // nghttp2_session_consume(). A no-op once the stream or its debt is gone;
     // a failed release is deferred to the lease ledger. Never throws.
     void return_received_data(std::uint32_t stream_id, std::uint32_t bytes) noexcept;
-    [[nodiscard]] http2_request_content_release_status release_request_content(std::uint32_t stream_id) noexcept;
+    [[nodiscard]] http_request_content_release_status release_request_content(std::uint32_t stream_id) noexcept;
     [[nodiscard]] std::size_t pending_data_output_bytes(std::uint32_t stream_id) const noexcept;
     [[nodiscard]] std::optional<http2_send_window_state> send_window_state(std::uint32_t stream_id) const noexcept;
     [[nodiscard]] bool stream_aborted(std::uint32_t stream_id) const noexcept;
@@ -1231,9 +1237,9 @@ private:
         push_promise,
     };
     struct header_block_type final {
-        header_block_type(header_block_kind kind, http2_stream_state& stream) noexcept :
+        header_block_type(header_block_kind kind, http2_stream_state& stream, std::size_t max_header_list_size) noexcept :
             kind_(kind),
-            context_(stream) {}
+            context_(stream, max_header_list_size) {}
 
         header_block_kind kind_;
         http2_header_decode_context context_;
@@ -1424,6 +1430,7 @@ private:
     std::exception_ptr callback_failure_;
 
     http2_local_connection_state local_connection_state_;
+    http2_local_settings local_settings_{};
     http_connection_role role_{http_connection_role::server};
     bool enable_push_{false};
     bool receive_origin_advertisements_{false};

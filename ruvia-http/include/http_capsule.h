@@ -13,35 +13,35 @@
 #include <variant>
 
 #include "borrowed_text.h"
+#include "byte_view.h"
 #include "decode_step.h"
+#include "quic_varint.h"
 
 namespace ruvia {
 
-enum class http_capsule_codec_error : std::uint8_t {
-    value_out_of_range,
-    output_too_small,
-};
+using http_capsule_codec_error = quic_varint_error;
+
 // RFC 9297 Capsule-Protocol is a Structured Field Boolean Item.
 [[nodiscard]] std::optional<bool> parse_http_capsule_protocol(std::string_view value) noexcept;
 
 inline constexpr std::uint64_t http_datagram_capsule_type = 0;
 struct http_udp_datagram_view final {
     std::uint64_t context_id_{0};
-    std::span<const char> payload_{};
+    byte_view payload_{};
 };
 // RFC 9298: context ID zero carries a UDP payload; unknown contexts are dropped.
 // The payload view borrows `input`.
-[[nodiscard]] std::optional<http_udp_datagram_view> decode_http_udp_datagram(std::span<const char> input RUVIA_LIFETIMEBOUND) noexcept;
-template <detail::http_temporary_owning_range<char> input_type>
+[[nodiscard]] std::optional<http_udp_datagram_view> decode_http_udp_datagram(byte_view input RUVIA_LIFETIMEBOUND) noexcept;
+template <detail::http_temporary_owning_range<std::byte> input_type>
 std::optional<http_udp_datagram_view> decode_http_udp_datagram(input_type&&) noexcept = delete;
 template <typename element_type>
-    requires std::same_as<std::remove_cv_t<element_type>, char>
+    requires std::same_as<std::remove_cv_t<element_type>, std::byte>
 std::optional<http_udp_datagram_view> decode_http_udp_datagram(std::initializer_list<element_type>) noexcept = delete;
-[[nodiscard]] std::variant<std::size_t, http_capsule_codec_error> encode_http_udp_datagram_prefix(std::span<char> output, std::uint64_t context_id = 0) noexcept;
+[[nodiscard]] std::variant<std::size_t, http_capsule_codec_error> encode_http_udp_datagram_prefix(mutable_byte_view output, std::uint64_t context_id = 0) noexcept;
 
 struct http_capsule_event final {
     std::uint64_t type_{0};
-    std::span<const char> payload_{};
+    byte_view payload_{};
     bool end_capsule_{false};
 };
 using http_capsule_callback_type = void (*)(void*, http_capsule_event);
@@ -93,11 +93,11 @@ public:
     // Starts a new capsule stream with the constructed configuration.
     void reset() noexcept;
     // Consumes all of input unless a kept capsule exceeds the length limit.
-    [[nodiscard]] http_capsule_feed_result feed(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context, http_capsule_retention retention = http_capsule_retention::all) &;
-    http_capsule_feed_result feed(std::span<const char>, bool, http_capsule_callback_type, void*, http_capsule_retention = http_capsule_retention::all) && = delete;
+    [[nodiscard]] http_capsule_feed_result feed(byte_view input, bool fin, http_capsule_callback_type callback, void* context, http_capsule_retention retention = http_capsule_retention::all) &;
+    http_capsule_feed_result feed(byte_view, bool, http_capsule_callback_type, void*, http_capsule_retention = http_capsule_retention::all) && = delete;
     template <typename visitor_type>
         requires std::invocable<visitor_type&, http_capsule_event>
-    [[nodiscard]] http_capsule_feed_result feed(std::span<const char> input, bool fin, visitor_type&& visitor, http_capsule_retention retention = http_capsule_retention::all) & {
+    [[nodiscard]] http_capsule_feed_result feed(byte_view input, bool fin, visitor_type&& visitor, http_capsule_retention retention = http_capsule_retention::all) & {
         auto& target = visitor;
         return feed(input, fin, +[](void* context, http_capsule_event event) {
             (*static_cast<std::remove_reference_t<visitor_type>*>(context))(event);
@@ -105,17 +105,17 @@ public:
     }
     template <typename visitor_type>
         requires std::invocable<visitor_type&, http_capsule_event>
-    http_capsule_feed_result feed(std::span<const char>, bool, visitor_type&&, http_capsule_retention = http_capsule_retention::all) && = delete;
+    http_capsule_feed_result feed(byte_view, bool, visitor_type&&, http_capsule_retention = http_capsule_retention::all) && = delete;
     // Stops at the first complete kept capsule. The unconsumed suffix stays with
     // the caller; FIN is committed only after all input is consumed, so a
     // capsule that ends exactly at FIN reports the boundary and leaves the
     // decoder finished. This permits pull-based adapters without buffering a
     // queue of complete capsules.
-    [[nodiscard]] http_capsule_feed_result feed_one(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context, http_capsule_retention retention = http_capsule_retention::all) &;
-    http_capsule_feed_result feed_one(std::span<const char>, bool, http_capsule_callback_type, void*, http_capsule_retention = http_capsule_retention::all) && = delete;
+    [[nodiscard]] http_capsule_feed_result feed_one(byte_view input, bool fin, http_capsule_callback_type callback, void* context, http_capsule_retention retention = http_capsule_retention::all) &;
+    http_capsule_feed_result feed_one(byte_view, bool, http_capsule_callback_type, void*, http_capsule_retention = http_capsule_retention::all) && = delete;
     template <typename visitor_type>
         requires std::invocable<visitor_type&, http_capsule_event>
-    [[nodiscard]] http_capsule_feed_result feed_one(std::span<const char> input, bool fin, visitor_type&& visitor, http_capsule_retention retention = http_capsule_retention::all) & {
+    [[nodiscard]] http_capsule_feed_result feed_one(byte_view input, bool fin, visitor_type&& visitor, http_capsule_retention retention = http_capsule_retention::all) & {
         auto& target = visitor;
         return feed_one(input, fin, +[](void* context, http_capsule_event event) {
             (*static_cast<std::remove_reference_t<visitor_type>*>(context))(event);
@@ -123,16 +123,16 @@ public:
     }
     template <typename visitor_type>
         requires std::invocable<visitor_type&, http_capsule_event>
-    http_capsule_feed_result feed_one(std::span<const char>, bool, visitor_type&&, http_capsule_retention = http_capsule_retention::all) && = delete;
+    http_capsule_feed_result feed_one(byte_view, bool, visitor_type&&, http_capsule_retention = http_capsule_retention::all) && = delete;
 
 private:
     enum class payload_mode : std::uint8_t { deliver,
         skip,
         context_id };
-    [[nodiscard]] http_capsule_feed_result feed_impl(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context, bool one, http_capsule_retention retention);
+    [[nodiscard]] http_capsule_feed_result feed_impl(byte_view input, bool fin, http_capsule_callback_type callback, void* context, bool one, http_capsule_retention retention);
     http_capsule_options config_;
-    std::array<char, 16> header_{};
-    std::array<char, 8> context_id_{};
+    std::array<std::byte, 16> header_{};
+    std::array<std::byte, 8> context_id_{};
     std::size_t header_size_{0}, type_size_{0}, context_id_size_{0};
     std::uint64_t type_{0}, remaining_{0};
     payload_mode mode_{payload_mode::deliver};
@@ -141,7 +141,7 @@ private:
     // Meaningful only while state_ is failed.
     http_capsule_decode_error error_{http_capsule_decode_error::truncated};
 };
-[[nodiscard]] std::variant<std::size_t, http_capsule_codec_error> encode_http_capsule_header(std::span<char> output, std::uint64_t type, std::uint64_t length) noexcept;
+[[nodiscard]] std::variant<std::size_t, http_capsule_codec_error> encode_http_capsule_header(mutable_byte_view output, std::uint64_t type, std::uint64_t length) noexcept;
 enum class http_datagram_error : std::uint8_t {
     send_closed,
     payload_too_large,
@@ -151,12 +151,12 @@ enum class http_datagram_error : std::uint8_t {
 // belongs to this plan; payload() continues to borrow the caller's input.
 class http_datagram_write_plan final {
 public:
-    [[nodiscard]] constexpr std::string_view prefix() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::string_view(prefix_.data(), prefix_size_);
+    [[nodiscard]] constexpr byte_view prefix() const& noexcept RUVIA_LIFETIMEBOUND {
+        return byte_view(prefix_.data(), prefix_size_);
     }
-    std::string_view prefix() const&& = delete;
+    byte_view prefix() const&& = delete;
 
-    [[nodiscard]] constexpr std::span<const char> payload() const noexcept {
+    [[nodiscard]] constexpr byte_view payload() const noexcept {
         return payload_;
     }
 
@@ -164,9 +164,9 @@ private:
     friend class http_datagram_session;
     http_datagram_write_plan() noexcept = default;
 
-    std::array<char, 24> prefix_{};
+    std::array<std::byte, 24> prefix_{};
     std::size_t prefix_size_{0};
-    std::span<const char> payload_{};
+    byte_view payload_{};
 };
 // What one DATAGRAM capsule value carries. `raw` is the HTTP Datagram payload
 // as is, including any protocol-specific Context ID. `connect_udp` is one UDP
@@ -189,25 +189,25 @@ public:
     void close_receive() noexcept {
         receive_open_ = false;
     }
-    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode mode, std::span<const char> payload RUVIA_LIFETIMEBOUND) const noexcept;
-    template <detail::http_temporary_owning_range<char> payload_type>
+    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode mode, byte_view payload RUVIA_LIFETIMEBOUND) const noexcept;
+    template <detail::http_temporary_owning_range<std::byte> payload_type>
     std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode, payload_type&&) const noexcept = delete;
     template <typename element_type>
-        requires std::same_as<std::remove_cv_t<element_type>, char>
+        requires std::same_as<std::remove_cv_t<element_type>, std::byte>
     std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode, std::initializer_list<element_type>) const noexcept = delete;
     // Capsule input is the complete DATAGRAM capsule value, excluding type/length.
     // Returns the payload within `input`. Empty optional means silently dropped:
     // the receive side is closed, or `connect_udp` saw an unknown Context ID.
     // Only `connect_udp` reports errors (malformed Context ID, oversized payload).
-    [[nodiscard]] std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode mode, std::span<const char> input RUVIA_LIFETIMEBOUND) const noexcept;
-    template <detail::http_temporary_owning_range<char> input_type>
-    std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode, input_type&&) const noexcept = delete;
+    [[nodiscard]] std::variant<std::optional<byte_view>, http_datagram_error> receive_datagram(http_datagram_mode mode, byte_view input RUVIA_LIFETIMEBOUND) const noexcept;
+    template <detail::http_temporary_owning_range<std::byte> input_type>
+    std::variant<std::optional<byte_view>, http_datagram_error> receive_datagram(http_datagram_mode, input_type&&) const noexcept = delete;
     template <typename element_type>
-        requires std::same_as<std::remove_cv_t<element_type>, char>
-    std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode, std::initializer_list<element_type>) const noexcept = delete;
+        requires std::same_as<std::remove_cv_t<element_type>, std::byte>
+    std::variant<std::optional<byte_view>, http_datagram_error> receive_datagram(http_datagram_mode, std::initializer_list<element_type>) const noexcept = delete;
 
 private:
-    [[nodiscard]] static std::variant<http_datagram_write_plan, http_datagram_error> plan_datagram_capsule(std::span<const char> payload RUVIA_LIFETIMEBOUND, std::string_view context_prefix) noexcept;
+    [[nodiscard]] static std::variant<http_datagram_write_plan, http_datagram_error> plan_datagram_capsule(byte_view payload RUVIA_LIFETIMEBOUND, byte_view context_prefix) noexcept;
 
     bool send_open_{true};
     bool receive_open_{true};

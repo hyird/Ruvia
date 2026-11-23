@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 
+#include "binary_text_encoding.h"
 #include "db_executor.h"
 #include "db_sql_dialect.h"
 #include "db_sql_scan.h"
@@ -90,6 +91,13 @@ void append_string_literal(std::string& output, std::string_view value, bool bac
             return 64;
         case db_value_type::bool_:
             return 1;
+        case db_value_type::bytes: {
+            const auto value_size = value.bytes().size();
+            if (value_size > ((std::numeric_limits<std::size_t>::max)() - 3) / 2) {
+                throw std::length_error("MariaDB binary parameter is too large");
+            }
+            return value_size * 2 + 3;
+        }
     }
     return 0;
 }
@@ -113,6 +121,11 @@ void append_value_literal(std::string& output, const db_value& value, bool backs
             break;
         case db_value_type::bool_:
             output.push_back(value.bool_value() ? '1' : '0');
+            break;
+        case db_value_type::bytes:
+            output.append("X'");
+            append_lower_hex(output, value.bytes());
+            output.push_back('\'');
             break;
     }
 }

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "byte_view.h"
 #include "client_transport_config.h"
 #include "ip_address.h"
 #include "operation_options.h"
@@ -68,6 +69,11 @@ public:
     // The view borrows this connection until request_stop, shutdown or I/O failure.
     [[nodiscard]] std::string_view alpn() const& RUVIA_LIFETIMEBOUND;
     std::string_view alpn() const&& = delete;
+    // Owner loop, after connect().
+    [[nodiscard]] ip_endpoint local_endpoint() const&;
+    ip_endpoint local_endpoint() const&& = delete;
+    [[nodiscard]] ip_endpoint peer_endpoint() const&;
+    ip_endpoint peer_endpoint() const&& = delete;
     // At most 4 KiB. nullopt is EOF (TCP FIN, TLS close_notify or truncation).
     // Borrowed bytes remain valid until the next read starts or shutdown joins;
     // retain this owner while using the view. EOF does not end the write lane.
@@ -80,6 +86,13 @@ public:
     // have sent a prefix and always retires the stream.
     [[nodiscard]] task<void> write(outbound_bytes bytes, operation_options operation = {}) &;
     task<void> write(outbound_bytes, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(std::span<const byte_view> chunks, operation_options operation = {}) &;
+    task<void> write(std::span<const byte_view>, operation_options = {}) && = delete;
+    // Ends the send direction (TCP FIN or TLS outbound close_notify) while
+    // keeping read() available until peer EOF. Idempotent once completed;
+    // subsequent write() calls throw std::logic_error.
+    [[nodiscard]] task<void> finish(operation_options operation = {}) &;
+    task<void> finish(operation_options = {}) && = delete;
 
     // Immediate whole-connection teardown, not a send half-close. TLS uses
     // the shared transport's bounded best-effort close_notify before closing.

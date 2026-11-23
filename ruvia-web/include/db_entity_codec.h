@@ -16,6 +16,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "binary_text_encoding.h"
 #include "db_entity.h"
 #include "db_executor.h"
 #include "entity_storage.h"
@@ -160,11 +161,48 @@ void for_each_postgresql_array_element(std::string_view source, visitor_type&& v
     }
 }
 
+[[nodiscard]] inline bytes unescape_postgresql_bytea(std::string_view text) {
+    if (text.starts_with("\\x")) {
+        const auto hex = text.substr(2);
+        if (hex.size() % 2 != 0) {
+            throw conversion_error(conversion_error::code_type::invalid_format, "malformed bytea hex literal");
+        }
+        std::vector<std::byte> decoded(hex.size() / 2);
+        if (!decode_hex(hex, decoded)) {
+            throw conversion_error(conversion_error::code_type::invalid_format, "malformed bytea hex literal");
+        }
+        return bytes(std::move(decoded));
+    }
+    std::vector<std::byte> decoded;
+    decoded.reserve(text.size());
+    for (std::size_t i = 0; i < text.size();) {
+        if (text[i] != '\\') {
+            decoded.push_back(static_cast<std::byte>(static_cast<unsigned char>(text[i++])));
+            continue;
+        }
+        if (i + 1 < text.size() && text[i + 1] == '\\') {
+            decoded.push_back(static_cast<std::byte>('\\'));
+            i += 2;
+            continue;
+        }
+        if (i + 3 < text.size() && text[i + 1] >= '0' && text[i + 1] <= '3' && text[i + 2] >= '0' && text[i + 2] <= '7' && text[i + 3] >= '0' && text[i + 3] <= '7') {
+            const auto octet = static_cast<unsigned int>(((text[i + 1] - '0') << 6) | ((text[i + 2] - '0') << 3) | (text[i + 3] - '0'));
+            decoded.push_back(static_cast<std::byte>(octet));
+            i += 4;
+            continue;
+        }
+        throw conversion_error(conversion_error::code_type::invalid_format, "malformed bytea escape literal");
+    }
+    return bytes(std::move(decoded));
+}
+
 template <db_mapped_value t_type>
 [[nodiscard]] t_type decode_array_element(std::string_view text) {
     if constexpr (is_optional<t_type>::value) {
         using v_type = typename is_optional<t_type>::value_type;
         return decode_array_element<v_type>(text);
+    } else if constexpr (std::is_same_v<t_type, bytes>) {
+        return unescape_postgresql_bytea(text);
     } else {
         return convert_text<t_type>(text);
     }
@@ -226,6 +264,12 @@ void decode_db_field(field_type& field, t_type& out) {
         } else {
             throw conversion_error(conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
         }
+    } else if constexpr (std::is_same_v<u_type, bytes>) {
+        if (const auto raw = field.bytes()) {
+            out = bytes(*raw);
+        } else {
+            throw conversion_error(conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
+        }
     } else {
         if (auto value = field.template as<u_type>()) {
             out = *value;
@@ -255,6 +299,8 @@ void decode_entity_field(e_type& entity, field_type& field) {
             }
         }
         entity.template set<c_type::name>(*raw);
+    } else if constexpr (std::is_same_v<value_type, bytes>) {
+        entity.template set<c_type::name>(bytes(as_bytes(*raw)));
     } else {
         auto value = entity_value_slot<value_type>::make_value();
         decode_db_field(field, value);
@@ -331,6 +377,35 @@ private:
     std::optional<std::span<const std::string>> schema_{};
 };
 
+inline void append_postgresql_array_quoted(std::string& output, std::string_view remaining) {
+    output.push_back('"');
+    while (!remaining.empty()) {
+        const auto next_value = std::ranges::find_if(remaining, [](char ch) noexcept {
+            return ch == '"' || ch == '\\' || ch == '\0';
+        });
+        if (next_value == remaining.end()) {
+            output.append(remaining);
+            break;
+        }
+        const auto special = static_cast<std::size_t>(next_value - remaining.begin());
+        if (special != 0) {
+            output.append(remaining.data(), special);
+        }
+        auto escaped_end = special;
+        do {
+            const char ch = remaining[escaped_end];
+            if (ch == '\0') {
+                throw std::invalid_argument("PostgreSQL array text cannot contain NUL");
+            }
+            output.push_back('\\');
+            output.push_back(ch);
+            ++escaped_end;
+        } while (escaped_end < remaining.size() && (remaining[escaped_end] == '"' || remaining[escaped_end] == '\\' || remaining[escaped_end] == '\0'));
+        remaining.remove_prefix(escaped_end);
+    }
+    output.push_back('"');
+}
+
 template <typename t_type>
 void append_entity_array_value(std::string& output, const t_type& value) {
     if constexpr (is_optional<t_type>::value) {
@@ -340,33 +415,23 @@ void append_entity_array_value(std::string& output, const t_type& value) {
             output += "NULL";
         }
     } else if constexpr (std::is_same_v<t_type, std::string> || std::is_same_v<t_type, string>) {
+        append_postgresql_array_quoted(output, std::string_view(value));
+    } else if constexpr (std::is_same_v<t_type, bytes>) {
+        output += "\"\\\\x";
+        append_lower_hex(output, value.view());
         output.push_back('"');
-        auto remaining = std::string_view(value);
-        while (!remaining.empty()) {
-            const auto next_value = std::ranges::find_if(remaining, [](char ch) noexcept {
-                return ch == '"' || ch == '\\' || ch == '\0';
-            });
-            if (next_value == remaining.end()) {
-                output.append(remaining);
-                break;
-            }
-            const auto special = static_cast<std::size_t>(next_value - remaining.begin());
-            if (special != 0) {
-                output.append(remaining.data(), special);
-            }
-            auto escaped_end = special;
-            do {
-                const char ch = remaining[escaped_end];
-                if (ch == '\0') {
-                    throw std::invalid_argument("PostgreSQL array text cannot contain NUL");
-                }
-                output.push_back('\\');
-                output.push_back(ch);
-                ++escaped_end;
-            } while (escaped_end < remaining.size() && (remaining[escaped_end] == '"' || remaining[escaped_end] == '\\' || remaining[escaped_end] == '\0'));
-            remaining.remove_prefix(escaped_end);
-        }
+    } else if constexpr (std::is_same_v<t_type, uuid>) {
+        output += value.to_string();
+    } else if constexpr (std::is_same_v<t_type, decimal>) {
+        value.append_to(output);
+    } else if constexpr (is_civil_date<t_type>) {
+        append_civil_date(output, value);
+    } else if constexpr (is_chrono_timestamp<t_type>) {
         output.push_back('"');
+        append_rfc3339(output, value);
+        output.push_back('"');
+    } else if constexpr (is_ruvia_enum<t_type>) {
+        append_postgresql_array_quoted(output, to_enum_string(value));
     } else if constexpr (std::is_same_v<t_type, bool>) {
         output += value ? "t" : "f";
     } else if constexpr (std::is_floating_point_v<t_type>) {
@@ -382,7 +447,9 @@ template <typename t_type>
 db_value entity_db_value(const t_type& value) {
     if constexpr (std::is_same_v<t_type, std::string> || std::is_same_v<t_type, string>) {
         return db_value(std::string_view(value));
-    } else if constexpr (std::is_same_v<t_type, bool> || std::is_arithmetic_v<t_type>) {
+    } else if constexpr (std::is_same_v<t_type, bytes>) {
+        return db_value(value.view());
+    } else if constexpr (std::is_same_v<t_type, bool> || is_model_integer<t_type> || std::is_floating_point_v<t_type> || std::is_same_v<t_type, uuid> || std::is_same_v<t_type, decimal> || is_civil_date<t_type> || is_chrono_timestamp<t_type> || is_ruvia_enum<t_type>) {
         return db_value(value);
     } else if constexpr (is_std_vector<t_type>::value) {
         std::string encoded;

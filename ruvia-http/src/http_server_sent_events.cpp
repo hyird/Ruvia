@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "decimal_text.h"
+#include "http_field_text.h"
 #include "http_io_buffer.h"
 #include "utf8.h"
 
@@ -394,7 +395,7 @@ void sse_parser::fail() noexcept {
     state_ = decoder_state::failed;
 }
 
-std::string format_sse_message(const sse_message& message) {
+void append_sse_message(std::string& output, const sse_message& message) {
     validate_sse_line_value(message.event_.view(), false);
     if (message.id_.has_value()) {
         validate_sse_line_value(message.id_->view(), true);
@@ -402,13 +403,15 @@ std::string format_sse_message(const sse_message& message) {
     if (message.retry_.has_value() && message.retry_->count() < 0) {
         throw std::invalid_argument("SSE retry delay must not be negative");
     }
+    if (message.data_.has_value() && !is_valid_utf8(message.data_->view())) {
+        throw std::invalid_argument("SSE fields must be valid UTF-8");
+    }
 
-    std::string frame;
     std::array<char, max_decimal_size> retry_buffer{};
     std::string_view retry_digits{};
     std::size_t total_size = 1U;
-    const auto add_size = [&frame, &total_size](std::size_t bytes) {
-        if (bytes > frame.max_size() - total_size) {
+    const auto add_size = [&output, &total_size](std::size_t bytes) {
+        if (bytes > output.max_size() - total_size) {
             throw std::length_error("SSE frame exceeds string capacity");
         }
         total_size += bytes;
@@ -432,35 +435,76 @@ std::string format_sse_message(const sse_message& message) {
         add_size(retry_digits.size());
         add_size(1U);
     }
+    std::size_t data_lines = 0;
     if (message.data_.has_value()) {
-        // Each extra data line adds more framing bytes than its delimiter used.
-        add_size(message.data_->size());
-        add_size(7U);
+        const auto data = message.data_->view();
+        add_size(data.size());
+        data_lines = 1;
+        for (std::size_t index = 0; index < data.size(); ++index) {
+            const char ch = data[index];
+            if (ch == '\r' || ch == '\n') {
+                ++data_lines;
+                if (ch == '\r' && index + 1 < data.size() && data[index + 1] == '\n') {
+                    ++index;
+                }
+            }
+        }
+        if (data_lines > (output.max_size() - total_size) / 7U) {
+            throw std::length_error("SSE frame exceeds string capacity");
+        }
+        total_size += data_lines * 7U;
+    }
+    if (total_size > output.max_size() - output.size()) {
+        throw std::length_error("SSE frame exceeds string capacity");
     }
 
-    frame.reserve(total_size);
-    if (!message.event_.empty()) {
-        frame.append("event: ");
-        frame.append(message.event_.data(), message.event_.size());
-        frame.push_back('\n');
+    const bool aliases_output = detail::http_text_aliases_string(message.event_.view(), output) || (message.id_.has_value() && detail::http_text_aliases_string(message.id_->view(), output)) || (message.data_.has_value() && detail::http_text_aliases_string(message.data_->view(), output));
+    std::string staged;
+    auto& target = aliases_output ? staged : output;
+    const auto original_size = output.size();
+    if (aliases_output) {
+        staged.reserve(total_size);
+    } else if (original_size == 0) {
+        output.reserve(total_size);
+    } else {
+        detail::reserve_geometric(output, original_size + total_size);
     }
-    if (message.id_.has_value()) {
-        frame.append("id:");
-        if (!message.id_->empty()) {
-            frame.push_back(' ');
-            frame.append(message.id_->data(), message.id_->size());
+    try {
+        if (!message.event_.empty()) {
+            target.append("event: ");
+            target.append(message.event_.data(), message.event_.size());
+            target.push_back('\n');
         }
-        frame.push_back('\n');
+        if (message.id_.has_value()) {
+            target.append("id:");
+            if (!message.id_->empty()) {
+                target.push_back(' ');
+                target.append(message.id_->data(), message.id_->size());
+            }
+            target.push_back('\n');
+        }
+        if (message.retry_.has_value()) {
+            target.append("retry: ");
+            target.append(retry_digits);
+            target.push_back('\n');
+        }
+        if (message.data_.has_value()) {
+            append_sse_data_lines(message.data_->view(), target);
+        }
+        target.push_back('\n');
+        if (aliases_output) {
+            detail::reserve_geometric(output, original_size + staged.size());
+            output.append(staged);
+        }
+    } catch (...) {
+        output.resize(original_size);
+        throw;
     }
-    if (message.retry_.has_value()) {
-        frame.append("retry: ");
-        frame.append(retry_digits);
-        frame.push_back('\n');
-    }
-    if (message.data_.has_value()) {
-        append_sse_data_lines(message.data_->view(), frame);
-    }
-    frame.push_back('\n');
+}
+
+std::string format_sse_message(const sse_message& message) {
+    std::string frame;
+    append_sse_message(frame, message);
     return frame;
 }
 

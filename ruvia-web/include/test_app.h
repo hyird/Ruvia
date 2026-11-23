@@ -14,14 +14,26 @@
 
 #include "context.h"
 #include "controller.h"
+#include "event_loop.h"
 #include "http_error.h"
 #include "http_server.h"
+#include "ip_address.h"
 #include "middleware.h"
 #include "model.h"
 #include "outbound_bytes.h"
 #include "rate_limiting.h"
+#include "worker_ref.h"
+#include "worker_services.h"
 
 namespace ruvia {
+
+class http_client;
+#ifdef RUVIA_ENABLE_DATABASE
+class db_client;
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+class redis_client;
+#endif
 // In-memory testing facade for applications built on Ruvia -- the actix
 // test_request / Hono app.request() analog. test_app serves exactly the
 // controllers named through controllers<...>() (none by default),
@@ -117,13 +129,17 @@ public:
     }
 
     template <typename t_type>
-        requires detail::is_model_json_value<t_type>
+        requires(!std::convertible_to<const t_type&, outbound_bytes>) && requires(const t_type& v) {
+            { to_json(v) } -> std::same_as<std::string>;
+        }
     test_request& json(const t_type& value) & {
         body_ = to_json(value);
         return header("Content-Type", "application/json");
     }
     template <typename t_type>
-        requires detail::is_model_json_value<t_type>
+        requires(!std::convertible_to<const t_type&, outbound_bytes>) && requires(const t_type& v) {
+            { to_json(v) } -> std::same_as<std::string>;
+        }
     test_request&& json(const t_type& value) && {
         return std::move(json(value));
     }
@@ -157,6 +173,13 @@ public:
     }
     test_request&& remote(std::string_view address, std::uint16_t port = 0) && {
         return std::move(remote(address, port));
+    }
+
+    test_request& remote(std::string_view address, port_number port) & {
+        return remote(address, port.value());
+    }
+    test_request&& remote(std::string_view address, port_number port) && {
+        return std::move(remote(address, port.value()));
     }
 
     // Pins the steady-clock instant the request arrives at for the app-wide
@@ -224,6 +247,35 @@ public:
     test_app& trusted_proxies(std::nullptr_t) & RUVIA_LIFETIMEBOUND;
     test_app& trusted_proxies(std::nullptr_t) && = delete;
 
+    // The private worker event loop and handle, so tests can construct and
+    // connect standalone db_client / redis_client / http_client instances on
+    // the exact worker that executes test_app requests and lend them below.
+    [[nodiscard]] event_loop loop() const& noexcept;
+    event_loop loop() const&& = delete;
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND;
+    const worker_ref& worker() const&& = delete;
+
+#ifdef RUVIA_ENABLE_REDIS
+    test_app& bind_redis(std::string_view alias, const redis_client& client) & RUVIA_LIFETIMEBOUND;
+    test_app& bind_redis(std::string_view, const redis_client&) && = delete;
+    test_app& bind_redis(std::string_view, const redis_client&&) = delete;
+#endif
+#ifdef RUVIA_ENABLE_DATABASE
+    test_app& bind_db(std::string_view alias, const db_client& client) & RUVIA_LIFETIMEBOUND;
+    test_app& bind_db(std::string_view, const db_client&) && = delete;
+    test_app& bind_db(std::string_view, const db_client&&) = delete;
+#endif
+    test_app& bind_http_client(std::string_view alias, const http_client& client) & RUVIA_LIFETIMEBOUND;
+    test_app& bind_http_client(std::string_view, const http_client&) && = delete;
+    test_app& bind_http_client(std::string_view, const http_client&&) = delete;
+
+    template <typename state_type>
+    test_app& bind_worker_state(state_type& state) & RUVIA_LIFETIMEBOUND {
+        return add_worker_state(detail::worker_state_definition::borrow(state));
+    }
+    template <typename state_type>
+    test_app& bind_worker_state(state_type&) && = delete;
+
     // Dispatches one request through the production route table and returns
     // an independently owned response. Request-level failures become the same error
     // responses a server would send. Handlers execute on one real Ruvia worker,
@@ -235,7 +287,7 @@ private:
     friend class dispatch_configuration<test_app>;
 
     test_app& add_controllers(std::span<const detail::controller_registrar> registrars) &;
-    void edit_configuration(detail::callback_ref<void(detail::app_configuration&)> edit);
+    void edit_configuration(function_ref<void(detail::app_configuration&)> edit);
 
     struct impl_type;
     std::unique_ptr<impl_type> impl_;

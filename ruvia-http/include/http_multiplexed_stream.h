@@ -336,6 +336,10 @@ public:
         return bytes_;
     }
     std::string_view bytes() const&& = delete;
+    [[nodiscard]] byte_view data_bytes() const& noexcept RUVIA_LIFETIMEBOUND {
+        return as_bytes(bytes_);
+    }
+    byte_view data_bytes() const&& = delete;
     [[nodiscard]] std::string take_bytes() && {
         if (owns_bytes_) {
             owns_bytes_ = false;
@@ -343,6 +347,18 @@ public:
             return std::exchange(owned_bytes_, {});
         }
         std::string copied(bytes_);
+        bytes_ = {};
+        return copied;
+    }
+    [[nodiscard]] std::vector<std::byte> take_data_bytes() && {
+        std::vector<std::byte> copied(bytes_.size());
+        if (!bytes_.empty()) {
+            std::memcpy(copied.data(), bytes_.data(), bytes_.size());
+        }
+        if (owns_bytes_) {
+            owns_bytes_ = false;
+            owned_bytes_.clear();
+        }
         bytes_ = {};
         return copied;
     }

@@ -93,7 +93,7 @@ public:
             digest[i * 4U + 3U] = static_cast<std::uint8_t>((words[i] >> 24U) & 0xffU);
         }
         std::array<char, 32> out{};
-        http_encode_lower_hex(out.data(), digest);
+        (void)encode_lower_hex(out, as_bytes(std::span<const std::uint8_t>(digest)));
         return out;
     }
 
@@ -212,7 +212,7 @@ public:
             }
         }
         std::array<char, 64> out{};
-        http_encode_lower_hex(out.data(), digest);
+        (void)encode_lower_hex(out, as_bytes(std::span<const std::uint8_t>(digest)));
         return out;
     }
 
@@ -353,10 +353,10 @@ void emit_peetprint_bytes(sink_type& out, std::uint16_t legacy_version, std::spa
 
 void hash_hex_u16(sha256_hasher& hasher, std::uint16_t value) noexcept {
     const std::array<char, 4> digits = {
-        http_lower_hex_digit(value >> 12U),
-        http_lower_hex_digit(value >> 8U),
-        http_lower_hex_digit(value >> 4U),
-        http_lower_hex_digit(value)
+        lower_hex_digit(value >> 12U),
+        lower_hex_digit(value >> 8U),
+        lower_hex_digit(value >> 4U),
+        lower_hex_digit(value)
     };
     hasher.update(std::string_view(digits.data(), digits.size()));
 }
@@ -456,7 +456,7 @@ std::string tls_client_hello::ja4(bool quic) const {
             out.push_back(first_char);
             out.push_back(last_char);
         } else {
-            http_append_lower_hex(out, first_alpn.substr(0, 1));
+            append_lower_hex(out, first_alpn.substr(0, 1));
         }
     }
     out.push_back('_');

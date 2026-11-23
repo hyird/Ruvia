@@ -1,8 +1,8 @@
 # `ruvia-http` 协议层 API 手册
 
-`ruvia-http`（CMake target `ruvia::http`）是 Ruvia 的纯 Sans-I/O HTTP 协议引擎：HTTP/1.0、HTTP/1.1、HTTP/2（HPACK）、HTTP/3（QPACK、QUIC）、内容与传输编码、Multipart、SSE、Range、Cookie、缓存与条件请求、CORS、WebSocket、RFC 9297 Capsule / HTTP Datagram、RFC 9298 `CONNECT-UDP`、PROXY protocol 与 TLS ClientHello 解析。它只在调用期间借用输入视图，产出纯值状态、事件与写出计划；不执行 socket I/O，不持有定时器或线程，也不依赖 `ruvia::core`、Asio、OpenSSL 或 mimalloc。异步驱动、TLS 与应用框架由 [`ruvia-web`](ruvia-web.md) 提供，运行时原语见 [`ruvia-core`](ruvia-core.md)，构建总入口见 [README](README.md)。
+`ruvia-http`（CMake target `ruvia::http`）是 Ruvia 的纯 Sans-I/O HTTP 协议与声明式模型引擎：HTTP/1.0、HTTP/1.1、HTTP/2（HPACK）、HTTP/3（QPACK、QUIC）、声明式类型化 `RUVIA_MODEL` 与 JSON/Form 编解码、内容与传输编码、Multipart、SSE、Range、Cookie、缓存与条件请求、CORS、WebSocket、RFC 9297 Capsule / HTTP Datagram、RFC 9298 `CONNECT-UDP`、PROXY protocol 与 TLS ClientHello 解析。它只在调用期间借用输入视图，产出纯值状态、事件与写出计划；不执行 socket I/O，不持有定时器或线程，也不依赖 `ruvia::core`、Asio、OpenSSL 或 mimalloc。异步驱动、TLS 与应用框架由 [`ruvia-web`](ruvia-web.md) 提供，运行时原语见 [`ruvia-core`](ruvia-core.md)，构建总入口见 [README](README.md)。
 
-本手册以 `ruvia-http/CMakeLists.txt` 中 `ruvia_install_public_headers(http ...)` 安装的头文件为唯一公开范围：每个安装头在[第 4–13 章](#3-公开头索引)有一个带稳定锚点 `api-<文件名>-h` 的小节，列出其全部非 `detail` 公开声明与契约。`namespace detail` 符号、`RUVIA_DETAIL_*` 宏、`src/` 内部头、private/protected 成员与编译器隐式生成成员不属于公开契约。
+本手册以 `ruvia-http/CMakeLists.txt` 中 `ruvia_install_public_headers(http ...)` 安装的头文件为唯一公开范围：每个安装头在[第 4–14 章](#3-公开头索引)有一个带稳定锚点 `api-<文件名>-h` 的小节，列出其全部非 `detail` 公开声明与契约。`namespace detail` 符号、`RUVIA_DETAIL_*` 宏、`src/` 内部头、private/protected 成员与编译器隐式生成成员不属于公开契约。
 
 ## 目录
 
@@ -31,6 +31,8 @@
   - [4.13 `"http_content_length.h"`](#api-http-content-length-h)
   - [4.14 `"http_field_section_budget.h"`](#api-http-field-section-budget-h)
   - [4.15 `"http_date.h"`](#api-http-date-h)
+  - [4.16 `"byte_view.h"`](#api-byte-view-h)
+  - [4.17 `"outbound_bytes.h"`](#api-outbound-bytes-h)
 - [5. 首部与请求模型](#5-首部与请求模型)
   - [5.1 `"http_header.h"`](#api-http-header-h)
   - [5.2 `"http_request_head_view.h"`](#api-http-request-head-view-h)
@@ -89,12 +91,19 @@
   - [12.1 `"http3_connection.h"`](#api-http3-connection-h)
   - [12.2 `"http3_request_head.h"`](#api-http3-request-head-h)
   - [12.3 `"http3_quic_connection.h"`](#api-http3-quic-connection-h)
+  - [12.4 `"quic_varint.h"`](#api-quic-varint-h)
 - [13. WebSocket、Capsule 与 CONNECT-UDP](#13-websocketcapsule-与-connect-udp)
   - [13.1 `"websocket_handshake.h"`](#api-websocket-handshake-h)
   - [13.2 `"websocket_client_handshake.h"`](#api-websocket-client-handshake-h)
   - [13.3 `"websocket_connection.h"`](#api-websocket-connection-h)
   - [13.4 `"http_capsule.h"`](#api-http-capsule-h)
   - [13.5 `"http_connect_udp.h"`](#api-http-connect-udp-h)
+  - [13.6 `"websocket_frame.h"`](#api-websocket-frame-h)
+- [14. 声明式模型、JSON 编解码与校验](#14-声明式模型json-编解码与校验)
+  - [14.1 `"fixed_string.h"`](#api-fixed-string-h)
+  - [14.2 `"model_value.h"`](#api-model-value-h)
+  - [14.3 `"json_codec.h"`](#api-json-codec-h)
+  - [14.4 `"model.h"`](#api-model-h)
 
 ## 1. 定位与接入
 
@@ -104,10 +113,10 @@
 | --- | --- |
 | CMake target | `ruvia::http`（静态库 `ruvia-http`，导出名 `http`，`find_package(ruvia REQUIRED COMPONENTS http)`），公开要求 `cxx_std_20` |
 | 构建开关 | `RUVIA_BUILD_HTTP`（默认 `ON`）。`RUVIA_BUILD_WEB` 要求它开启 |
-| 私有依赖 | zlib（gzip / deflate）、Brotli 编码与解码库、Zstandard；启用 HTTP/2 时另有 nghttp2，启用 HTTP/3 时另有 nghttp3 1.17+ 与 ngtcp2 core。私有依赖不进入公开头（`http3_quic_connection.h` 除外，见下） |
+| 私有依赖 | zlib（gzip / deflate）、Brotli 编码与解码库、Zstandard；启用 HTTP/2 时另有 nghttp2，启用 HTTP/3 时另有 nghttp3 1.17+ 与 ngtcp2 core。所有第三方 C 库均以 `PRIVATE` 链接并隐藏在实现层后（`http3_quic_connection.h` 以 PIMPL 隔离 ngtcp2，仅前置声明不透明 `ngtcp2_conn` 与 `ngtcp2_callbacks`） |
 | `RUVIA_ENABLE_HTTP2`（默认 `ON`） | 编译 nghttp2 会话实现，安装 [`"http2_connection.h"`](#api-http2-connection-h) 与 [`"http2_hpack.h"`](#api-http2-hpack-h)，并给 `ruvia::http` 加 PUBLIC 编译定义 `RUVIA_ENABLE_HTTP2` |
-| `RUVIA_ENABLE_HTTP3`（默认 `ON`） | 编译 nghttp3 / ngtcp2 实现，安装 [`"http3_connection.h"`](#api-http3-connection-h)、[`"http3_request_head.h"`](#api-http3-request-head-h)、[`"http3_quic_connection.h"`](#api-http3-quic-connection-h)，加 PUBLIC 编译定义 `RUVIA_ENABLE_HTTP3`，并 PUBLIC 链接 `ngtcp2::core`（`http3_quic_connection.h` 直接公开 ngtcp2 类型）。开启 HTTP/3 时根 CMake 强制开启 `RUVIA_ENABLE_HTTP2`；仅当 HTTP/3 关闭时 HTTP/2 才可关闭 |
-| 无条件安装 | 其余公开头，包括名称带 `http2` 但与连接实现无关的 [`"http2_frame.h"`](#api-http2-frame-h)、[`"http2_push.h"`](#api-http2-push-h)，以及 HTTP/2 与 HTTP/3 共用的 [`"http_multiplexed_stream.h"`](#api-http-multiplexed-stream-h) |
+| `RUVIA_ENABLE_HTTP3`（默认 `ON`） | 编译 nghttp3 / ngtcp2 实现，安装 [`"http3_connection.h"`](#api-http3-connection-h)、[`"http3_request_head.h"`](#api-http3-request-head-h)、[`"http3_quic_connection.h"`](#api-http3-quic-connection-h)，并给 `ruvia::http` 加 PUBLIC 编译定义 `RUVIA_ENABLE_HTTP3`（下游无需安装或包含 `<ngtcp2/ngtcp2.h>`）。开启 HTTP/3 时根 CMake 强制开启 `RUVIA_ENABLE_HTTP2`；仅当 HTTP/3 关闭时 HTTP/2 才可关闭 |
+| 无条件安装 | 其余 73 个公开头，包括 [`"http2_frame.h"`](#api-http2-frame-h)、[`"http2_push.h"`](#api-http2-push-h)、[`"http_multiplexed_stream.h"`](#api-http-multiplexed-stream-h)、[`"quic_varint.h"`](#api-quic-varint-h) 与 Model / JSON 头 |
 
 关闭某个协议开关时，其源码不参与编译、其连接头不安装、对应第三方库不进入依赖闭包。下游代码可用 `#if defined(RUVIA_ENABLE_HTTP2)` / `#if defined(RUVIA_ENABLE_HTTP3)` 判断安装内容；`ruviaConfig.cmake` 同时导出同名 CMake 变量。完整安装与 vcpkg 特性选择见 [README](README.md)。
 
@@ -186,7 +195,7 @@ if (step.holds<ruvia::decode_need_input>()) {
 
 ## 3. 公开头索引
 
-共 70 个安装头：无条件 65 个，`RUVIA_ENABLE_HTTP2` 2 个，`RUVIA_ENABLE_HTTP3` 3 个。
+共 78 个安装头：无条件 73 个，`RUVIA_ENABLE_HTTP2` 2 个，`RUVIA_ENABLE_HTTP3` 3 个。
 
 | 章节 | 头文件 | 安装条件 | 领域 |
 | --- | --- | --- | --- |
@@ -205,6 +214,8 @@ if (step.holds<ruvia::decode_need_input>()) {
 | [4.13](#api-http-content-length-h) | `http_content_length.h` | 无条件 | 出站长度受检类型 |
 | [4.14](#api-http-field-section-budget-h) | `http_field_section_budget.h` | 无条件 | 字段区段字节与行数预算 |
 | [4.15](#api-http-date-h) | `http_date.h` | 无条件 | IMF-fixdate 格式化与解析 |
+| [4.16](#api-byte-view-h) | `byte_view.h` | 无条件 | `std::byte` 只读/可写字节视图与防悬垂转换 |
+| [4.17](#api-outbound-bytes-h) | `outbound_bytes.h` | 无条件 | 出站字节立即拥有化与右值零拷贝接管 |
 | [5.1](#api-http-header-h) | `http_header.h` | 无条件 | 首部值类型、视图、查找与字段校验 |
 | [5.2](#api-http-request-head-view-h) | `http_request_head_view.h` | 无条件 | 跨协议出站请求头借用视图 |
 | [5.3](#api-http-request-h) | `http_request.h` | 无条件 | 服务端请求描述符与请求 Trailer |
@@ -254,12 +265,18 @@ if (step.holds<ruvia::decode_need_input>()) {
 | [11.5](#api-http2-hpack-h) | `http2_hpack.h` | `RUVIA_ENABLE_HTTP2` | 独立 HPACK 编解码 |
 | [12.1](#api-http3-connection-h) | `http3_connection.h` | `RUVIA_ENABLE_HTTP3` | HTTP/3 与 QPACK 状态机 |
 | [12.2](#api-http3-request-head-h) | `http3_request_head.h` | `RUVIA_ENABLE_HTTP3` | HTTP/3 服务端请求投影 |
-| [12.3](#api-http3-quic-connection-h) | `http3_quic_connection.h` | `RUVIA_ENABLE_HTTP3` | 基于 ngtcp2 的 QUIC 连接包装 |
+| [12.3](#api-http3-quic-connection-h) | `http3_quic_connection.h` | `RUVIA_ENABLE_HTTP3` | QUIC v1/v2 + HTTP/3 连接状态机（PIMPL 封装 ngtcp2） |
+| [12.4](#api-quic-varint-h) | `quic_varint.h` | 无条件 | RFC 9000 §16 QUIC 变长整数编解码 |
 | [13.1](#api-websocket-handshake-h) | `websocket_handshake.h` | 无条件 | WebSocket 服务端握手 |
 | [13.2](#api-websocket-client-handshake-h) | `websocket_client_handshake.h` | 无条件 | WebSocket 客户端握手 |
 | [13.3](#api-websocket-connection-h) | `websocket_connection.h` | 无条件 | WebSocket 帧状态机与关闭码 |
 | [13.4](#api-http-capsule-h) | `http_capsule.h` | 无条件 | Capsule 编解码与 HTTP Datagram 会话 |
 | [13.5](#api-http-connect-udp-h) | `http_connect_udp.h` | 无条件 | `CONNECT-UDP` 路径与请求校验 |
+| [13.6](#api-websocket-frame-h) | `websocket_frame.h` | 无条件 | RFC 6455 WebSocket 底层帧头编解码、SSE2 掩码与增量读帧 |
+| [14.1](#api-fixed-string-h) | `fixed_string.h` | 无条件 | 编译期字符串字面量 NTTP |
+| [14.2](#api-model-value-h) | `model_value.h` | 无条件 | 模型与 ORM 富值类型（`string`、`bytes`、`uuid`、`decimal`、时间、枚举、`map`、`tagged_variant`） |
+| [14.3](#api-json-codec-h) | `json_codec.h` | 无条件 | RFC 8259 JSON 词法扫描、转义与单遍对象/数组遍历 |
+| [14.4](#api-model-h) | `model.h` | 无条件 | `RUVIA_MODEL` 声明式模型、JSON/Form 编解码、动态 JSON 与校验器 |
 
 ## 4. 基础值与文本工具
 
@@ -268,7 +285,7 @@ if (step.holds<ruvia::decode_need_input>()) {
 ### 4.1 `"borrowed_text.h"`
 <a id="api-borrowed-text-h"></a>
 
-零拷贝借用视图的公共基础：定义 `RUVIA_LIFETIMEBOUND` 宏、`borrowed_text`、`borrowed_span<T>`、`argument_list<T>` 与 `static_text`。保存调用方文本或元素序列的 API 使用这些类型，在编译期拒绝借用即将销毁的临时拥有型容器。源码：[`ruvia-http/include/borrowed_text.h`](../ruvia-http/include/borrowed_text.h)
+零拷贝借用视图的公共基础：公开包含 [`"byte_view.h"`](#api-byte-view-h)（含 `RUVIA_LIFETIMEBOUND`），定义 `borrowed_text`、`borrowed_span<T>`、`borrowed_bytes`、`argument_list<T>`、`static_text` 与 `static_bytes`。保存调用方文本或元素序列的 API 使用这些类型，在编译期拒绝借用即将销毁的临时拥有型容器。源码：[`ruvia-http/include/borrowed_text.h`](../ruvia-http/include/borrowed_text.h)
 
 #### 4.1.1 宏 `RUVIA_LIFETIMEBOUND`
 
@@ -432,9 +449,11 @@ public:
 
 按值接收、并在函数返回前同步消费完毕的只读参数列表。与 `borrowed_span` 不同，它接受花括号列表和临时容器：这些存储至少存活到整个调用表达式结束，足够同步消费者使用。为防止越出该区间，`argument_list` 既不可复制也不可移动（复制构造/复制赋值 `= delete`，因此也没有隐式移动），不能被返回、捕获或保存为成员。`span()` 返回元素视图，只在当前调用期间有效。
 
-#### 4.1.5 `class static_text`
+#### 4.1.5 `class static_text`、`class static_bytes` 与 `borrowed_bytes`
 
-`static_text` 在编译期检查文本是否引用静态存储。默认构造为空。显式 `consteval` 构造接受静态存储的字符数组或 `std::string_view`，拒绝帧局部或运行期存储。数组构造仅移除末尾 NUL，保留内嵌 NUL。`view()` 返回对应的 `std::string_view`。
+- **`static_text`**：编译期校验静态存储字符数组或 `std::string_view`，拒绝栈局部或运行期存储；数组构造仅移除末尾 NUL，保留内嵌 NUL；提供 `view() -> std::string_view` 与 `bytes() -> byte_view`。
+- **`static_bytes`**：编译期校验静态存储 `const std::byte (&)[n]` 或 `byte_view`；提供 `view() -> byte_view`。
+- **`using borrowed_bytes = borrowed_span<std::byte>;`**：防悬垂只读二进制字节切片，拒绝右值 `std::vector<std::byte>` / `std::array<std::byte, N>` 与 `std::initializer_list<std::byte>`。
 
 ---
 
@@ -588,86 +607,71 @@ struct utf8_sequence final {
 ### 4.5 `"binary_text_encoding.h"`
 <a id="api-binary-text-encoding-h"></a>
 
-十六进制与 Base64（RFC 4648）的唯一编解码实现，供百分号编码、令牌/摘要编码、JWS 等使用。编码器支持输出与输入任意重叠（含就地）。源码：[`ruvia-http/include/binary_text_encoding.h`](../ruvia-http/include/binary_text_encoding.h)
+十六进制与 Base64（RFC 4648）的唯一编解码实现，供百分号编码、令牌/摘要编码、Model `bytes` 与 JWS 等使用。编码器支持输出与输入任意重叠（含就地）。公开 include [`"byte_view.h"`](#api-byte-view-h)。源码：[`ruvia-http/include/binary_text_encoding.h`](../ruvia-http/include/binary_text_encoding.h)
 
 #### 4.5.1 十六进制
 
 ```cpp
 namespace ruvia {
-[[nodiscard]] constexpr int http_decode_hex_nibble(char c) noexcept;
-[[nodiscard]] constexpr char http_lower_hex_digit(int value) noexcept;
-[[nodiscard]] constexpr char http_upper_hex_digit(int value) noexcept;
-constexpr char* http_encode_lower_hex(char* output, std::span<const unsigned char> bytes) noexcept;
-inline char* http_encode_lower_hex(char* output, std::string_view bytes) noexcept;
-inline void http_append_lower_hex(std::string& output, std::span<const unsigned char> bytes);
-inline void http_append_lower_hex(std::string& output, std::string_view bytes);
-[[nodiscard]] constexpr std::optional<std::size_t> http_decode_hex(std::string_view input, std::span<std::uint8_t> output) noexcept;
-[[nodiscard]] constexpr bool http_is_lower_hex(std::string_view text, std::size_t required_digits) noexcept;
-constexpr char* http_encode_upper_hex(char* output, std::span<const unsigned char> bytes) noexcept;
-inline char* http_encode_upper_hex(char* output, std::string_view bytes) noexcept;
-inline void http_append_upper_hex(std::string& output, std::span<const unsigned char> bytes);
-inline void http_append_upper_hex(std::string& output, std::string_view bytes);
+[[nodiscard]] constexpr int decode_hex_nibble(char c) noexcept;
+[[nodiscard]] constexpr char lower_hex_digit(int value) noexcept;
+[[nodiscard]] constexpr char upper_hex_digit(int value) noexcept;
+[[nodiscard]] constexpr std::optional<std::size_t> decode_hex(std::string_view input, mutable_byte_view output) noexcept;
+[[nodiscard]] constexpr bool is_lower_hex(std::string_view input, std::size_t required_length) noexcept;
+
+constexpr std::string_view encode_lower_hex(std::span<char> output RUVIA_LIFETIMEBOUND, byte_view bytes);
+inline std::string_view encode_lower_hex(std::span<char> output RUVIA_LIFETIMEBOUND, std::string_view bytes);
+constexpr std::string_view encode_upper_hex(std::span<char> output RUVIA_LIFETIMEBOUND, byte_view bytes);
+inline std::string_view encode_upper_hex(std::span<char> output RUVIA_LIFETIMEBOUND, std::string_view bytes);
+
+inline void append_lower_hex(std::string& output, byte_view bytes);
+inline void append_lower_hex(std::string& output, std::string_view bytes);
+inline void append_upper_hex(std::string& output, byte_view bytes);
+inline void append_upper_hex(std::string& output, std::string_view bytes);
+
+[[nodiscard]] inline std::string encode_lower_hex(byte_view bytes);
+[[nodiscard]] inline std::string encode_lower_hex(std::string_view bytes);
+[[nodiscard]] inline std::string encode_upper_hex(byte_view bytes);
+[[nodiscard]] inline std::string encode_upper_hex(std::string_view bytes);
 }
 ```
 
 | 符号 | 语义 |
 | --- | --- |
-| `http_decode_hex_nibble(c)` | 解码一位十六进制数字（大小写均可），非十六进制字符返回 `-1`。 |
-| `http_lower_hex_digit(value)` / `http_upper_hex_digit(value)` | 把 `value` 的低 4 位编码为小写 / 大写十六进制数字。大小写由调用点选择：百分号编码须用大写（RFC 3986 §2.1），令牌/摘要惯用小写。 |
-| `http_encode_lower_hex(output, bytes)` | 唯一字节序列到小写十六进制的编码器：从 `output` 起恰好写 `2 * bytes.size()` 个字符并返回末尾指针。`output` 可与 `bytes` 任意重叠（含就地）。`std::string_view` 重载按字节的 `unsigned char` 表示编码；该重载非 `constexpr`。 |
-| `http_append_lower_hex(output, bytes)` | 把编码结果追加到 `output`。`bytes` 可以别名 `output`（直到并包括 `output.data()[output.size()]` 处的结尾 NUL）；别名输入在可能重分配的 `resize` 之后按偏移重新定位。结果长度无法容纳时抛 `std::length_error`，此时 `output` 不变。 |
-| `http_decode_hex(input, output)` | 大小写兼容的零分配批量解码；奇数长度、非法数字、容量不足或会覆盖未读输入的重叠返回 `nullopt`；支持从输入起点就地解码。失败可能已写入有效前缀。 |
-| `http_is_lower_hex(text, required_digits)` | 恰好指定长度且只含 `0-9a-f`。 |
-| `http_encode_upper_hex` / `http_append_upper_hex` | 同小写版本的长度、重叠与追加契约，输出 `0-9A-F`。 |
+| `decode_hex_nibble(c)` | 解码一位十六进制数字（大小写均可），非十六进制字符返回 `-1` |
+| `lower_hex_digit(value)` / `upper_hex_digit(value)` | 把 `value` 低 4 位编码为小写 / 大写十六进制字符 |
+| `decode_hex(input, output)` | 大小写兼容的零分配批量解码；奇数长度、非法数字、容量不足或会覆盖未读输入的重叠返回 `std::nullopt`；支持从输入起点就地解码 |
+| `is_lower_hex(input, required_length)` | 恰好指定十六进制位数且仅含 `0-9a-f` |
+| `encode_lower_hex(output, bytes)` / `encode_upper_hex(output, bytes)` | 向 `output` 开头写 `2 * bytes.size()` 个字符并返回借用切片；`output` 过小时在写入前抛 `std::invalid_argument`；支持任意重叠与就地编码 |
+| `append_lower_hex(output, bytes)` / `append_upper_hex(output, bytes)` | 追加编码结果，支持 `bytes` 别名 `output`；长度溢出抛 `std::length_error` 且保留 `output` |
+| 单参 `encode_lower_hex(bytes)` / `encode_upper_hex(bytes)` | 返回拥有型十六进制 `std::string` |
 
 #### 4.5.2 Base64
 
 ```cpp
 namespace ruvia {
-inline constexpr std::string_view http_base64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-inline constexpr std::string_view http_base64_url_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+inline constexpr std::string_view base64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+inline constexpr std::string_view base64_url_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-enum class http_base64_charset : std::uint8_t {
-    standard,
-    url_safe,
-    both,  // decode only
-};
+enum class base64_charset : std::uint8_t { standard, url_safe, both };
+enum class base64_padding : std::uint8_t { required, forbidden, optional };
 
-enum class http_base64_padding : std::uint8_t {
-    required,
-    forbidden,
-    optional,  // decode only
-};
+[[nodiscard]] constexpr std::size_t base64_encoded_size(std::size_t input_size, base64_padding padding = base64_padding::required);
+constexpr std::string_view base64_encode(std::span<char> output RUVIA_LIFETIMEBOUND, byte_view input, base64_charset charset = base64_charset::standard, base64_padding padding = base64_padding::required);
+inline std::string_view base64_encode(std::span<char> output RUVIA_LIFETIMEBOUND, std::string_view input, base64_charset charset = base64_charset::standard, base64_padding padding = base64_padding::required);
+[[nodiscard]] inline std::string base64_encode(byte_view input, base64_charset charset = base64_charset::standard, base64_padding padding = base64_padding::required);
+[[nodiscard]] inline std::string base64_encode(std::string_view input, base64_charset charset = base64_charset::standard, base64_padding padding = base64_padding::required);
 
-[[nodiscard]] constexpr std::size_t http_base64_encoded_size(std::size_t input_size, http_base64_padding padding = http_base64_padding::required);
-inline void http_base64_encode(char* output, std::span<const std::uint8_t> input, http_base64_charset charset = http_base64_charset::standard, http_base64_padding padding = http_base64_padding::required);
-[[nodiscard]] constexpr int http_base64_decode_char(char c) noexcept;
-[[nodiscard]] constexpr int http_base64_url_decode_char(char c) noexcept;
-[[nodiscard]] constexpr std::size_t http_base64_decoded_size_bound(std::size_t input_size) noexcept;
-[[nodiscard]] constexpr std::optional<std::size_t> http_base64_decode(std::string_view input, std::span<std::uint8_t> output, http_base64_charset charset, http_base64_padding padding) noexcept;
+[[nodiscard]] constexpr int base64_decode_char(char c) noexcept;
+[[nodiscard]] constexpr int base64_url_decode_char(char c) noexcept;
+[[nodiscard]] constexpr std::size_t base64_decoded_size_bound(std::size_t input_size) noexcept;
+[[nodiscard]] constexpr std::optional<std::size_t> base64_decode(std::string_view input, mutable_byte_view output, base64_charset charset = base64_charset::standard, base64_padding padding = base64_padding::required) noexcept;
 }
 ```
 
-| 枚举成员 | 值 | 含义 |
-| --- | --- | --- |
-| `http_base64_charset::standard` | 0 | RFC 4648 §4 标准字母表，第 62/63 位为 `+`、`/`。 |
-| `http_base64_charset::url_safe` | 1 | RFC 4648 §5 URL 安全字母表，第 62/63 位为 `-`、`_`。 |
-| `http_base64_padding::required` | 0 | 用 `=` 补齐最后一个量子，长度为 4 的倍数。 |
-| `http_base64_padding::forbidden` | 1 | 不填充（RFC 4648 §3.2），例如 JWS base64url。 |
-| `http_base64_charset::both` | 2 | 仅解码：同时接受标准与 URL-safe 字母表。 |
-| `http_base64_padding::optional` | 2 | 仅解码：允许省略填充；出现 `=` 时仍须精确补齐末量子。 |
-
-| 符号 | 语义 |
-| --- | --- |
-| `http_base64_alphabet` / `http_base64_url_alphabet` | 两种 64 字符字母表。 |
-| `http_base64_encoded_size(input_size, padding)` | 编码后字符数；结果无法用 `std::size_t` 表示时抛 `std::length_error`。 |
-| `http_base64_encode(output, input, charset, padding)` | 唯一 Base64 编码器。前置条件：`output` 至少有 `http_base64_encoded_size(input.size(), padding)` 个字符空间；可与 `input` 任意重叠（含就地）。不写结尾 NUL。 |
-| `http_base64_decode_char(c)` | 标准字母表字符的 6 位值；其他字符（含 `=`）返回 `-1`。 |
-| `http_base64_url_decode_char(c)` | URL 安全版本：`-`→62、`_`→63，`+`、`/` 与其他非法字符返回 `-1`。 |
-| `http_base64_decoded_size_bound(input_size)` | `input_size` 个字符解码后的字节数上界；对合法的无填充输入是精确值。 |
-| `http_base64_decode(input, output, charset, padding)` | 唯一 Base64 解码器，不分配。只接受规范输入：字符属于 `charset`；`=` 恰如 `padding` 要求（`required` 时长度须为 4 的倍数且填充只补齐末量子，`forbidden` 时不得出现 `=`）；末量子不得只有 1 个字符；末量子未用位必须为零（RFC 4648 §3.5）。返回写入的字节数；非法输入或 `output` 不足以容纳时返回 `std::nullopt`。`output` 可从 `input` 起点或之前开始（就地解码），或位于已编码字符之后；若起点落在编码字符内部（首字符之后），会覆盖未读输入，在任何写入前以 `std::nullopt` 拒绝。长度与所有权策略由调用方负责。 |
-
-- **兼容解码**：`both` 与 `optional` 可组合；仍拒绝空白、非法字符、单字符末量子与非零未用位。编码器拒绝这两种仅解码选项，抛 `std::invalid_argument`。
+- **`base64_charset` 与 `base64_padding`**：`standard`（`+/`）、`url_safe`（`-_`）、`both`（仅解码）；`required`（`=` 补齐 4 的倍数）、`forbidden`（无 `=`）、`optional`（仅解码）；编码器收到仅解码选项或缓冲不足时在写入前抛 `std::invalid_argument`。
+- **`base64_encode`**：写入 `output` 开头并返回切片（支持任意重叠与就地编码），或单参直接返回拥有型 `std::string`。
+- **`base64_decode`**：零分配规范解码（RFC 4648 §3.5 拒绝单字符末量子与非零未用位，拒绝覆盖未读输入的重叠），返回解码字节数或 `std::nullopt`。
 
 ---
 
@@ -812,6 +816,7 @@ public:
     [[nodiscard]] static constexpr ip_address ipv4(const std::array<std::uint8_t, 4>& bytes) noexcept;
     [[nodiscard]] static constexpr ip_address ipv6(const std::array<std::uint8_t, 16>& bytes, std::uint32_t scope_id = 0) noexcept;
     [[nodiscard]] static std::optional<ip_address> try_parse(std::string_view text) noexcept;
+    explicit ip_address(std::string_view text);
 
     [[nodiscard]] constexpr ip_address_family family() const noexcept;
     [[nodiscard]] constexpr std::span<const std::uint8_t> bytes() const& noexcept RUVIA_LIFETIMEBOUND;
@@ -867,16 +872,16 @@ namespace ruvia {
 class ip_endpoint final {
 public:
     constexpr ip_endpoint() noexcept = default;
-    constexpr ip_endpoint(ip_address address, std::uint16_t port) noexcept;
+    constexpr ip_endpoint(ip_address address, port_number port) noexcept;
     [[nodiscard]] constexpr ip_address address() const noexcept;
-    [[nodiscard]] constexpr std::uint16_t port() const noexcept;
+    [[nodiscard]] constexpr port_number port() const noexcept;
     friend constexpr bool operator==(const ip_endpoint&, const ip_endpoint&) noexcept = default;
 };
 static_assert(std::is_trivially_copyable_v<ip_endpoint>);
 }
 ```
 
-一个传输端点的地址与端口（默认 `0.0.0.0`、端口 `0`）。端口 `0` 表示端口未知（例如未记录端口的转发客户端地址）。`operator==` 逐成员比较。
+一个传输端点的地址与受检端口 `port_number`（默认 `0.0.0.0`、端口 `0`）。端口 `0` 表示端口未知（例如未记录端口的转发客户端地址）。`operator==` 逐成员比较。
 
 #### 4.7.4 `class ip_cidr`
 
@@ -886,6 +891,7 @@ class ip_cidr final {
 public:
     constexpr ip_cidr() noexcept = default;
     [[nodiscard]] static std::optional<ip_cidr> try_parse(std::string_view text) noexcept;
+    explicit ip_cidr(std::string_view text);
     [[nodiscard]] ip_address network() const noexcept;
     [[nodiscard]] constexpr std::uint8_t prefix_bits() const noexcept;
     [[nodiscard]] ip_address first_address() const noexcept;
@@ -1071,14 +1077,23 @@ public:
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view view() const&& = delete;
+    [[nodiscard]] byte_view bytes() const& noexcept RUVIA_LIFETIMEBOUND;
+    byte_view bytes() const&& = delete;
+    [[nodiscard]] mutable_byte_view mutable_bytes() & noexcept RUVIA_LIFETIMEBOUND;
+    mutable_byte_view mutable_bytes() && = delete;
     [[nodiscard]] std::size_t capacity() const noexcept;
 
     [[nodiscard]] std::span<char> prepare(std::size_t bytes) & RUVIA_LIFETIMEBOUND;
     std::span<char> prepare(std::size_t) && = delete;
+    [[nodiscard]] mutable_byte_view prepare_bytes(std::size_t bytes) & RUVIA_LIFETIMEBOUND;
+    mutable_byte_view prepare_bytes(std::size_t) && = delete;
     [[nodiscard]] std::span<char> prepare_spare() & noexcept RUVIA_LIFETIMEBOUND;
     std::span<char> prepare_spare() && = delete;
+    [[nodiscard]] mutable_byte_view prepare_spare_bytes() & noexcept RUVIA_LIFETIMEBOUND;
+    mutable_byte_view prepare_spare_bytes() && = delete;
     void commit(std::size_t bytes);
     void append(std::string_view bytes);
+    void append(byte_view bytes);
     void consume(std::size_t bytes) noexcept;
 
     void reserve(std::size_t bytes);
@@ -1567,6 +1582,37 @@ inline constexpr std::size_t http_imf_fixdate_size = 29;
 | `http_imf_fixdate_size` | `29`：IMF-fixdate 的线上宽度，例如 `Sun, 06 Nov 1994 08:49:37 GMT`。 |
 | `format_http_date(value)` | 把 UTC 时间戳格式化为 IMF-fixdate（RFC 9110 §5.6.7）；结果是恰好 29 字节、不含结尾 NUL 的定长数组。时间戳无法表示（年份不在 `0000..9999`）时返回 `std::nullopt`。不依赖 C 运行库的时区设置。 |
 | `parse_http_date(value)` | 解析 HTTP-date 的三种形式：IMF-fixdate、过时的 RFC 850 格式与 asctime 格式（RFC 9110 §5.6.7，原 RFC 7231 §7.1.1.1）。格式错误返回 `std::nullopt`。 |
+
+---
+
+### 4.16 `"byte_view.h"`
+<a id="api-byte-view-h"></a>
+
+二进制字节视图的统一基元与显式零拷贝转换，不解码、不校验字符集。源码：[`ruvia-http/include/byte_view.h`](../ruvia-http/include/byte_view.h)
+
+| 声明 | 契约 |
+| --- | --- |
+| `using byte_view = std::span<const std::byte>;` | 全栈只读二进制字节视图 |
+| `using mutable_byte_view = std::span<std::byte>;` | 全栈可写二进制字节视图 |
+| `[[nodiscard]] inline byte_view as_bytes(std::string_view text) noexcept;` | 字符视图转 `byte_view`；临时拥有型 `char` 容器与 `std::initializer_list<char>` 重载 `= delete` |
+| `[[nodiscard]] inline byte_view as_bytes(std::span<const std::uint8_t> octets) noexcept;` | `std::uint8_t`（及独立 `unsigned char`）只读切片转 `byte_view`；临时拥有型容器与 `initializer_list` 重载 `= delete` |
+| `[[nodiscard]] inline mutable_byte_view as_mutable_bytes(std::span<char> buffer) noexcept;` / `std::span<std::uint8_t>` | 可写缓冲转 `mutable_byte_view` |
+| `[[nodiscard]] inline std::string_view as_chars(byte_view bytes_value) noexcept;` | 字节视图转字符视图；临时拥有型 `std::byte` 容器与 `std::initializer_list<std::byte>` 重载 `= delete` |
+
+---
+
+### 4.17 `"outbound_bytes.h"`
+<a id="api-outbound-bytes-h"></a>
+
+出站写操作（响应构建器、流式写出、WebSocket 发送、测试请求等）的统一字节拥有者：借用输入在构造期复制一次，精确右值容器零拷贝 O(1) 接管，空输入零堆分配。公开 include [`"borrowed_text.h"`](#api-borrowed-text-h) 与 [`"byte_view.h"`](#api-byte-view-h)。源码：[`ruvia-http/include/outbound_bytes.h`](../ruvia-http/include/outbound_bytes.h)
+
+| 声明 | 契约 |
+| --- | --- |
+| `outbound_bytes() noexcept = default;` | 空字节（零堆分配），仅移动（不可复制） |
+| `outbound_bytes(std::string&&)`、`outbound_bytes(std::vector<std::byte>&&)`、`outbound_bytes(bytes&&)`、`outbound_bytes(string&&)` | 精确右值零拷贝接管底层缓冲（借用态 `ruvia::string&&` 自动复制为自有存储） |
+| `outbound_bytes(source_type&&)`（可转 `std::string_view` 或 `byte_view`，及 `const bytes&` / `const string&`） | 构造期复制一次为自有存储，调用方缓冲可在构造后立即释放 |
+| `size()`、`empty()`、`view() const&`、`bytes() const&` | 左值只读视图（`const&& = delete`） |
+| `take_string() &&`、`take_vector() &&` | 右值提取 `std::string` 或 `std::vector<std::byte>`（`& = delete`） |
 
 ## 5. 首部与请求模型
 
@@ -4599,12 +4645,17 @@ enum class http_connection_advertisement_error : std::uint8_t {
     invalid_field,
     invalid_stream,
     limit,
+    output_too_small,
 };
 
-[[nodiscard]] std::variant<http_origin_advertisement, http_connection_advertisement_error> decode_http_origin_advertisement(std::span<const char> payload_value);
-[[nodiscard]] std::variant<std::vector<char>, http_connection_advertisement_error> encode_http2_origin_frame(std::span<const std::string_view> origins, std::uint32_t max_frame_size = 16384);
-[[nodiscard]] std::variant<http_alternative_service_advertisement, http_connection_advertisement_error> decode_http2_alternative_service(std::uint32_t stream_id, std::span<const char> payload_value);
-[[nodiscard]] std::variant<std::vector<char>, http_connection_advertisement_error> encode_http2_alternative_service_frame(std::uint32_t stream_id, std::string_view origin, std::string_view field_value, std::uint32_t max_frame_size = 16384);
+[[nodiscard]] std::variant<http_origin_advertisement, http_connection_advertisement_error> decode_http_origin_advertisement(byte_view payload_value);
+[[nodiscard]] std::variant<std::size_t, http_connection_advertisement_error> http_origin_payload_size(std::span<const std::string_view> origins, std::size_t max_payload_bytes = 16384);
+[[nodiscard]] std::variant<std::size_t, http_connection_advertisement_error> encode_http_origin_payload(mutable_byte_view output, std::span<const std::string_view> origins, std::size_t max_payload_bytes = (std::numeric_limits<std::size_t>::max)());
+[[nodiscard]] std::variant<std::vector<std::byte>, http_connection_advertisement_error> encode_http2_origin_frame(std::span<const std::string_view> origins, std::uint32_t max_frame_size = 16384);
+[[nodiscard]] std::variant<http_alternative_service_advertisement, http_connection_advertisement_error> decode_http2_alternative_service(std::uint32_t stream_id, byte_view payload_value);
+[[nodiscard]] std::variant<std::size_t, http_connection_advertisement_error> http2_alternative_service_payload_size(std::uint32_t stream_id, std::string_view origin, std::string_view field_value, std::uint32_t max_frame_size = 16384);
+[[nodiscard]] std::variant<std::size_t, http_connection_advertisement_error> encode_http2_alternative_service_payload(mutable_byte_view output, std::uint32_t stream_id, std::string_view origin, std::string_view field_value, std::uint32_t max_frame_size = 16384);
+[[nodiscard]] std::variant<std::vector<std::byte>, http_connection_advertisement_error> encode_http2_alternative_service_frame(std::uint32_t stream_id, std::string_view origin, std::string_view field_value, std::uint32_t max_frame_size = 16384);
 }
 ```
 
@@ -4686,8 +4737,9 @@ namespace ruvia {
 [[nodiscard]] std::variant<http_priority_fields, http_priority_error> parse_http_priority(std::string_view value) noexcept;
 [[nodiscard]] std::variant<http_priority_fields, http_priority_error> parse_http_priority(const http_header_range_view& headers) noexcept;
 [[nodiscard]] std::variant<std::size_t, http_priority_error> encode_http_priority(std::span<char> output, http_priority_fields fields_value) noexcept;
-[[nodiscard]] std::variant<http_priority_update, http_priority_error> decode_http2_priority_update(std::span<const char> payload_value) noexcept;
-[[nodiscard]] std::variant<std::size_t, http_priority_error> encode_http2_priority_update(std::span<char> output, std::uint32_t stream_id, http_priority_fields fields_value) noexcept;
+[[nodiscard]] std::string format_http_priority(http_priority_fields fields_value);
+[[nodiscard]] std::variant<http_priority_update, http_priority_error> decode_http2_priority_update(byte_view payload_value) noexcept;
+[[nodiscard]] std::variant<std::size_t, http_priority_error> encode_http2_priority_update(mutable_byte_view output, std::uint32_t stream_id, http_priority_fields fields_value) noexcept;
 }
 ```
 
@@ -7831,8 +7883,8 @@ struct http2_frame_header final {
     std::uint32_t stream_id_{0};
 };
 
-[[nodiscard]] inline constexpr std::optional<http2_frame_header> parse_http2_frame_header(std::span<const char> bytes_value) noexcept;
-[[nodiscard]] inline constexpr bool encode_http2_frame_header(std::span<char> output, std::uint32_t length, http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id) noexcept;
+[[nodiscard]] inline constexpr std::optional<http2_frame_header> parse_http2_frame_header(byte_view bytes_value) noexcept;
+[[nodiscard]] inline constexpr bool encode_http2_frame_header(mutable_byte_view output, std::uint32_t length, http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id) noexcept;
 ```
 
 - `http2_frame_header`：解码后的 9 字节帧头。`type_` 保留原始类型字节（可为未知扩展类型），不强制转换为 `http2_frame_type`。
@@ -7850,6 +7902,7 @@ enum class http2_cleartext_preface_probe : std::uint8_t {
 };
 
 [[nodiscard]] inline http2_cleartext_preface_probe probe_http2_cleartext_preface(std::string_view current) noexcept;
+[[nodiscard]] inline http2_cleartext_preface_probe probe_http2_cleartext_preface(byte_view current) noexcept;
 ```
 
 在明文监听器上、HTTP/1 解析之前对已到达字节分类（prior-knowledge h2c）：
@@ -9263,333 +9316,46 @@ while (auto event = connection.next_event()) {
 ### 12.3 `"http3_quic_connection.h"`
 <a id="api-http3-quic-connection-h"></a>
 
-一条 QUIC v1 + HTTP/3 连接：ngtcp2 负责包处理、丢包恢复与流量控制，内部的 [`http3_connection`](#api-http3-connection-h) 负责 QPACK 与 HTTP 流分帧；调用方拥有 UDP socket 与 TLS。仅 `RUVIA_ENABLE_HTTP3`，并公开依赖 ngtcp2 core 头 `<ngtcp2/ngtcp2.h>`。公开 include [`"http3_connection.h"`](#api-http3-connection-h)、[`"borrowed_text.h"`](#api-borrowed-text-h)。源码：[`ruvia-http/include/http3_quic_connection.h`](../ruvia-http/include/http3_quic_connection.h)
+一条 QUIC v1/v2 + HTTP/3 连接状态机：通过 PIMPL 隐藏 `ngtcp2` 实现细节（公开头不包含 `<ngtcp2/ngtcp2.h>`，仅前置声明不透明 `ngtcp2_conn` 与 `ngtcp2_callbacks`），内部的 [`http3_connection`](#api-http3-connection-h) 负责 QPACK 与 HTTP 流分帧；调用方拥有 UDP socket 与 TLS。仅 `RUVIA_ENABLE_HTTP3`。公开 include [`"borrowed_text.h"`](#api-borrowed-text-h)、[`"byte_view.h"`](#api-byte-view-h)、[`"http3_connection.h"`](#api-http3-connection-h)、[`"ip_address.h"`](#api-ip-address-h)。源码：[`ruvia-http/include/http3_quic_connection.h`](../ruvia-http/include/http3_quic_connection.h)
 
-#### 12.3.1 状态、结果与回调结构
+#### 12.3.1 常量、CID、路径、数据报与回调
 
-```cpp
-namespace ruvia {
-
-enum class http3_quic_status : std::uint8_t {
-    accepted,
-    would_block,
-    closed,
-    invalid_state,
-    transport_error,
-    application_error,
-};
-
-struct http3_quic_result final {
-    http3_quic_status status_{http3_quic_status::accepted};
-    std::optional<std::uint64_t> transport_error_code_{};
-    std::optional<http3_error_code> application_error_code_{};
-};
-
-using http3_quic_stateless_reset_token = std::array<std::uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN>;
-
-struct http3_quic_crypto_callbacks final {
-    ngtcp2_client_initial client_initial_{nullptr};
-    ngtcp2_recv_client_initial recv_client_initial_{nullptr};
-    ngtcp2_recv_crypto_data recv_crypto_data_{nullptr};
-    ngtcp2_encrypt encrypt_{nullptr};
-    ngtcp2_decrypt decrypt_{nullptr};
-    ngtcp2_hp_mask hp_mask_{nullptr};
-    ngtcp2_recv_retry recv_retry_{nullptr};
-    ngtcp2_update_key update_key_{nullptr};
-    ngtcp2_delete_crypto_aead_ctx delete_crypto_aead_ctx_{nullptr};
-    ngtcp2_delete_crypto_cipher_ctx delete_crypto_cipher_ctx_{nullptr};
-    ngtcp2_get_path_challenge_data2 get_path_challenge_data_{nullptr};
-    ngtcp2_version_negotiation version_negotiation_{nullptr};
-    ngtcp2_rand rand_{nullptr};
-};
-
-struct http3_quic_owner_callbacks final {
-    ngtcp2_get_new_connection_id2 get_new_connection_id_{nullptr};
-    ngtcp2_remove_connection_id remove_connection_id_{nullptr};
-    ngtcp2_handshake_completed handshake_completed_{nullptr};
-    ngtcp2_handshake_confirmed handshake_confirmed_{nullptr};
-    ngtcp2_recv_stateless_reset2 recv_stateless_reset_{nullptr};
-    ngtcp2_tls_early_data_rejected tls_early_data_rejected_{nullptr};
-};
-
-}  // namespace ruvia
-```
-
-`http3_quic_status`（底层 `std::uint8_t`）：
-
-| 枚举值 | 含义 |
+| 声明 | 契约 |
 | --- | --- |
-| `accepted` | 调用成功 |
-| `would_block` | 暂无可写包，或数据报队列已满 |
-| `closed` | 连接已进入关闭或排空期（RFC 9000 §10.2）：已发送或收到 CONNECTION_CLOSE，或空闲超时。不再处理任何包；拥有者保留连接只为在 `close_period()` 内吸收迟到的对端包 |
-| `invalid_state` | 调用不符合角色或当前状态（如不支持/超长的数据报） |
-| `transport_error` | 连接因 QUIC 传输错误失败 |
-| `application_error` | 连接因 HTTP/3 应用错误失败 |
+| `quic_version_v1 = 0x00000001U`、`quic_version_v2 = 0x6b3343cfU` | QUIC v1 / v2 版本号 |
+| `quic_max_cid_bytes = 20`、`quic_min_initial_dcid_bytes = 8`、`quic_stateless_reset_token_bytes = 16`、`quic_min_stateless_reset_random_bytes = 5` | RFC 9000 连接 ID 与无状态重置尺寸常量 |
+| `using quic_timestamp = std::uint64_t;`、`using http3_quic_stateless_reset_token = std::array<std::byte, 16>;` | 单调纳秒时间戳与 16 字节无状态重置令牌 |
+| `class quic_cid final` | 0..20 字节值语义 Connection ID：`explicit quic_cid(byte_view)`（越界抛 `std::invalid_argument`）、`quic_cid::try_from_bytes(byte_view) noexcept`、`bytes() const&`（`const&& = delete`）、`data()`、`size()`、`empty()`、`operator==` |
+| `struct http3_quic_path final { ip_endpoint local_{}; ip_endpoint remote_{}; std::uintptr_t user_data_{0}; };` | 纯值语义 QUIC 路径（支持 `==`） |
+| `struct http3_quic_datagram final { http3_quic_path path_{}; std::uint32_t ecn_{0}; std::vector<std::byte> bytes_{}; };` | 可移动的出站 UDP 数据报输出缓冲 |
+| `enum class http3_quic_status : std::uint8_t` | `accepted`、`would_block`、`closed`、`invalid_state`、`transport_error`、`application_error` |
+| `struct http3_quic_result final` | `status_`、`transport_error_code_`、`application_error_code_` |
+| `using http3_quic_configure_crypto_callbacks_type = void (*)(ngtcp2_callbacks& callbacks) noexcept;` | 由 TLS/I/O 层在私有 `ngtcp2_callbacks` 上安装 QUIC-TLS 密码学回调（如 `ngtcp2_crypto_ossl`），之后本连接覆盖全部流、确认、流控与生命周期槽位 |
+| `struct http3_quic_owner_callbacks final` | 纯值拥有者生命周期回调（返回 `false` 使连接以回调错误失败）：`get_new_connection_id_(quic_cid&, http3_quic_stateless_reset_token&, std::size_t, void*)`、`remove_connection_id_(const quic_cid&, void*)`、`handshake_completed_(void*)`、`handshake_confirmed_(void*)`、`recv_stateless_reset_(const http3_quic_stateless_reset_token&, void*)`、`tls_early_data_rejected_(void*)` |
 
-`http3_quic_result`：
+#### 12.3.2 `http3_quic_connection_options`、`http3_quic_connection` 与无状态包工具
 
-| 字段 | 默认值 | 含义 |
-| --- | --- | --- |
-| `status_` | `accepted` | 上表状态 |
-| `transport_error_code_` | 空 | `transport_error` 或传输层关闭时：结束连接的 CONNECTION_CLOSE（本端发送或收到，RFC 9000 §19.19）携带的 QUIC 传输错误码（§20.1；TLS alert 为 0x0100–0x01ff） |
-| `application_error_code_` | 空 | `application_error` 或应用层关闭时：CONNECTION_CLOSE 携带的 HTTP/3 码 |
+- **`http3_quic_connection_options`**：持有 `configure_crypto_callbacks_`、`owner_callbacks_`、`quic_cid` 形态的 `source_connection_id_` / `destination_connection_id_` / `original_destination_connection_id_` / `retry_source_connection_id_`、`borrowed_bytes retry_token_`、`stateless_reset_token_`、`disable_active_migration_`、`http3_quic_path initial_path_`、`version_`、`initial_timestamp_`、`std::chrono::nanoseconds` 形态的 `handshake_timeout_` / `idle_timeout_`、流控与流数上限、`max_udp_payload_size_`、`max_pending_datagram_bytes_`、`callback_context_` 与内部 `http3_` 选项。
+- **`class http3_quic_connection final`**：`client(options)` / `server(options)` 工厂构造，仅可移动（`noexcept`）；提供 `role()`、`native()`（左值借用 `ngtcp2_conn*` 供 QUIC-TLS 适配器绑定）、`callback_context()`、`set_tls_session(void*)`、`handshake_completed()`、`after_retry()`、`stateless_reset_received()`、`start_http3()` / `http3_started()` / `open_request_stream()`、0-RTT `start_early_http3(byte_view, http3_peer_settings)` / `reject_early_data()` / `early_data_rejected()` / `encode_early_transport_parameters(mutable_byte_view)`、路径与 I/O `current_path() -> http3_quic_path` / `migrate(path, timestamp)` / `submit_datagram(stream_id, byte_view)` / `max_datagram_payload_size(stream_id)` / `receive_datagram(path, ecn, byte_view, timestamp)` / `next_datagram(capacity, timestamp, output)` / `expire_timers(timestamp)` / `expiry()`、终止 `reset_stream` / `reset_send_stream` / `stop_receiving` / `close` / `closed()` / `close_period() -> std::chrono::nanoseconds`、以及 `next_event()`、`http3()`、`application_error()`、`transport_error()`。
+- **无状态包解复用与响应原语**：
+  - `decode_quic_packet_version_cid(byte_view packet RUVIA_LIFETIMEBOUND, std::size_t short_dcid_size) noexcept -> quic_packet_version_cid`（`status_` 为 `ok` / `version_negotiation` / `invalid`，`dcid_` / `scid_` 借用 `packet`）。
+  - `decode_quic_initial_packet(byte_view packet RUVIA_LIFETIMEBOUND) noexcept -> std::optional<quic_initial_packet_header>`（校验服务端接入所需的客户端 Initial 包，产出 `version_`、`quic_cid dcid_` / `scid_` 与借用 `token_`）。
+  - `write_quic_version_negotiation_packet(mutable_byte_view output, std::uint8_t unused_random, byte_view dcid, byte_view scid, std::span<const std::uint32_t> supported_versions) noexcept -> std::size_t`。
+  - `write_http3_quic_stateless_reset(const http3_quic_stateless_reset_token& token, byte_view random_bytes, mutable_byte_view output, std::size_t max_packet_bytes) noexcept -> std::size_t`。
 
-连接开启期间两者都为空；空闲超时或无状态重置结束的连接也都为空。
+### 12.4 `"quic_varint.h"`
+<a id="api-quic-varint-h"></a>
 
-`http3_quic_stateless_reset_token`：长度为 `NGTCP2_STATELESS_RESET_TOKENLEN`（16）的无状态重置令牌（RFC 9000 §10.3）。
+RFC 9000 §16 62 位变长整数编解码，供 QUIC 包分帧、HTTP/3 流分帧（RFC 9114 §7）与 Capsule / HTTP Datagram（RFC 9297）共用。无条件安装；公开 include [`"byte_view.h"`](#api-byte-view-h)。源码：[`ruvia-http/include/quic_varint.h`](../ruvia-http/include/quic_varint.h)
 
-`http3_quic_crypto_callbacks`：QUIC-TLS 适配器回调（例如 `ngtcp2_crypto_ossl` 的 `ngtcp2_crypto_*_cb`）。连接原样安装，回调收到连接自己的 user data（适配器不读取它）。`client_initial_` 与 `recv_retry_` 仅客户端需要，`recv_client_initial_` 仅服务端需要，其余字段两种角色都必须设置。每个字段原样赋给内部 `ngtcp2_callbacks` 的同名成员（去掉尾部 `_`；`get_path_challenge_data_` 赋给 `get_path_challenge_data2`）。所有流、确认与关闭回调由连接独占，无法传入。
-
-`http3_quic_owner_callbacks`：拥有者生命周期通知；设置时均收到 `http3_quic_connection_options::callback_context_` 作为 user data，返回非零值按 ngtcp2 对该回调的文档使连接失败。
-
-| 字段 | 含义 |
+| 声明 | 契约 |
 | --- | --- |
-| `get_new_connection_id_` | 签发新连接 ID 及其无状态重置令牌（RFC 9000 §5.1.1） |
-| `remove_connection_id_` | 连接 ID 退役 |
-| `handshake_completed_` | 握手完成 |
-| `handshake_confirmed_` | 握手确认 |
-| `recv_stateless_reset_` | 收到无状态重置 |
-| `tls_early_data_rejected_` | 在连接丢弃被拒绝的 0-RTT HTTP/3 流之后调用 |
-
-#### 12.3.2 选项、路径与数据报
-
-```cpp
-namespace ruvia {
-
-struct http3_quic_connection_options final {
-    http3_quic_crypto_callbacks crypto_callbacks_{};
-    http3_quic_owner_callbacks owner_callbacks_{};
-    ngtcp2_cid source_connection_id_{};
-    ngtcp2_cid destination_connection_id_{};
-    std::optional<ngtcp2_cid> original_destination_connection_id_{};
-    std::optional<ngtcp2_cid> retry_source_connection_id_{};
-    borrowed_span<std::uint8_t> retry_token_{};
-    std::optional<http3_quic_stateless_reset_token> stateless_reset_token_{};
-    bool disable_active_migration_{false};
-    ngtcp2_path initial_path_{};
-    std::uint32_t version_{NGTCP2_PROTO_VER_V1};
-    ngtcp2_tstamp initial_timestamp_{0};
-    ngtcp2_duration handshake_timeout_{30 * NGTCP2_SECONDS};
-    ngtcp2_duration idle_timeout_{30 * NGTCP2_SECONDS};
-    std::uint64_t initial_max_data_{16 * 1024 * 1024};
-    std::uint64_t initial_max_stream_data_{1024 * 1024};
-    std::uint64_t initial_max_streams_bidi_{100};
-    std::uint64_t initial_max_streams_uni_{16};
-    std::uint64_t active_connection_id_limit_{4};
-    std::size_t max_udp_payload_size_{1350};
-    std::size_t max_pending_datagram_bytes_{64 * 1024};
-    void* callback_context_{nullptr};
-    http3_connection_options http3_{};
-};
-
-struct http3_quic_path final {
-    std::span<const std::byte> local_;
-    std::span<const std::byte> remote_;
-};
-
-struct http3_quic_datagram final {
-    http3_quic_datagram() noexcept;
-    http3_quic_datagram(const http3_quic_datagram&) = delete;
-    http3_quic_datagram& operator=(const http3_quic_datagram&) = delete;
-    http3_quic_datagram(http3_quic_datagram&&) = delete;
-    http3_quic_datagram& operator=(http3_quic_datagram&&) = delete;
-
-    ngtcp2_path_storage path_{};
-    std::uint32_t ecn_{NGTCP2_ECN_NOT_ECT};
-    std::vector<std::byte> bytes_;
-};
-
-}  // namespace ruvia
-```
-
-`http3_quic_connection_options`：
-
-| 字段 | 默认值 | 含义 |
-| --- | --- | --- |
-| `crypto_callbacks_` | 全空 | QUIC-TLS 适配器回调（12.3.1） |
-| `owner_callbacks_` | 全空 | 拥有者回调（12.3.1） |
-| `source_connection_id_` | 空 | 本端 Source Connection ID；必须非空 |
-| `destination_connection_id_` | 空 | 目标 Connection ID；客户端必须非空 |
-| `original_destination_connection_id_` | 空 | 仅服务端且必需（RFC 9000 §7.3）：客户端首个 Initial 的 Destination Connection ID（使用 Retry 时从 Retry 令牌中取出） |
-| `retry_source_connection_id_` | 空 | 仅服务端：Retry 包中发送、客户端在第二个 Initial 中回显为 Destination Connection ID 的 Source Connection ID（RFC 9000 §7.3、§18.2）；与非空 `retry_token_` 必须同时出现且本身非空 |
-| `retry_token_` | 空 | 仅服务端：来自客户端第二个 Initial 的已验证 Retry 令牌（RFC 9000 §8.1.2），解除 ngtcp2 的抗放大限制；借用至构造完成 |
-| `stateless_reset_token_` | 空 | 仅服务端：`source_connection_id_` 的无状态重置令牌（RFC 9000 §10.3），作为传输参数发送 |
-| `disable_active_migration_` | `false` | 仅服务端：禁止客户端连接迁移（RFC 9000 §9）。UDP 拥有者跨路径按连接 ID 路由时保持 `false` |
-| `initial_path_` | 空 | 初始路径；本地与远端地址都必须设置 |
-| `version_` | `NGTCP2_PROTO_VER_V1` | QUIC 版本 |
-| `initial_timestamp_` | `0` | 创建时刻（ngtcp2 时间戳） |
-| `handshake_timeout_` | `30 * NGTCP2_SECONDS` | 握手超时 |
-| `idle_timeout_` | `30 * NGTCP2_SECONDS` | 空闲超时 |
-| `initial_max_data_` | `16 * 1024 * 1024` | 连接级初始接收窗口 |
-| `initial_max_stream_data_` | `1024 * 1024` | 流级初始接收窗口 |
-| `initial_max_streams_bidi_` | `100` | 对端可打开的双向流初始上限 |
-| `initial_max_streams_uni_` | `16` | 对端可打开的单向流初始上限 |
-| `active_connection_id_limit_` | `4` | 活动连接 ID 上限，须不小于 2；为当前路径与旧路径验证并存时的新候选预留 CID（RFC 9000 §5.1.1） |
-| `max_udp_payload_size_` | `1350` | 发送 UDP 载荷上限；须非零 |
-| `max_pending_datagram_bytes_` | `64 * 1024` | 在 ngtcp2 接受前保留的不可靠输出（HTTP Datagram）字节上限；须非零 |
-| `callback_context_` | `nullptr` | 拥有者回调上下文，`callback_context()` 返回 |
-| `http3_` | 默认 | 内部 [`http3_connection_options`](#api-http3-connection-h)。连接安装自己的 `received_data_credit_sink_`（归还的 `http_received_data_credit` 扩展流与连接接收窗口，RFC 9000 §4.1，DATA 额度只在应用消费后归还，分帧字节立即归还）；在此设置回收器会被拒绝。`own_data_events_` 被强制开启，`enable_h3_datagram_` 开启时自动通告非零 `max_datagram_frame_size` |
-
-上述“须”条件不满足、或服务端专属字段与角色不匹配（服务端缺 `original_destination_connection_id_`，客户端设置了任一服务端专属字段），工厂函数抛 `std::invalid_argument`；ngtcp2 拒绝选项时同样抛 `std::invalid_argument`。
-
-`http3_quic_path`：一条 QUIC 路径（RFC 9000 §9）的本地与远端套接字地址，按平台 `sockaddr` 布局的字节视图。
-
-`http3_quic_datagram`：`next_datagram()` 的输出槽，不可复制也不可移动，由调用方持有并在多次调用间复用。默认构造以 `ngtcp2_path_storage_zero` 初始化 `path_`。`path_` 为该包应发送的路径（迁移期间可能与当前路径不同）、`ecn_` 为 ECN 标记（默认 `NGTCP2_ECN_NOT_ECT`）、`bytes_` 为拥有的包字节。
-
-#### 12.3.3 `class http3_quic_connection`
-
-```cpp
-namespace ruvia {
-
-class http3_quic_connection final {
-public:
-    [[nodiscard]] static http3_quic_connection client(const http3_quic_connection_options& options);
-    [[nodiscard]] static http3_quic_connection server(const http3_quic_connection_options& options);
-
-    ~http3_quic_connection();
-    http3_quic_connection(const http3_quic_connection&) = delete;
-    http3_quic_connection& operator=(const http3_quic_connection&) = delete;
-    http3_quic_connection(http3_quic_connection&&) noexcept;
-    http3_quic_connection& operator=(http3_quic_connection&&) noexcept;
-
-    [[nodiscard]] http_connection_role role() const noexcept;
-    [[nodiscard]] ngtcp2_conn* native() & noexcept RUVIA_LIFETIMEBOUND;
-    ngtcp2_conn* native() && = delete;
-    [[nodiscard]] const ngtcp2_conn* native() const& noexcept RUVIA_LIFETIMEBOUND;
-    const ngtcp2_conn* native() const&& = delete;
-    [[nodiscard]] void* callback_context() const noexcept;
-    void set_tls_session(void* tls_session) noexcept;
-    [[nodiscard]] bool handshake_completed() const noexcept;
-    [[nodiscard]] bool after_retry() const noexcept;
-    [[nodiscard]] bool stateless_reset_received() const noexcept;
-
-    [[nodiscard]] http3_quic_status start_http3();
-    [[nodiscard]] bool http3_started() const noexcept;
-    [[nodiscard]] std::optional<std::int64_t> open_request_stream();
-
-    [[nodiscard]] http3_quic_status start_early_http3(std::span<const std::byte> transport_parameters, http3_peer_settings settings);
-    [[nodiscard]] http3_quic_status reject_early_data();
-    [[nodiscard]] bool early_data_rejected() const noexcept;
-    [[nodiscard]] std::optional<std::size_t> encode_early_transport_parameters(std::span<std::byte> output) const noexcept;
-    [[nodiscard]] http3_quic_path current_path() const& noexcept RUVIA_LIFETIMEBOUND;
-    http3_quic_path current_path() const&& = delete;
-    [[nodiscard]] http3_quic_result migrate(const ngtcp2_path& path, ngtcp2_tstamp timestamp);
-    [[nodiscard]] http3_quic_status submit_datagram(std::int64_t stream_id, std::span<const std::byte> payload);
-    [[nodiscard]] std::size_t max_datagram_payload_size(std::int64_t stream_id) const noexcept;
-    [[nodiscard]] http3_quic_result receive_datagram(const ngtcp2_path& path, std::uint32_t ecn, std::span<const std::byte> bytes, ngtcp2_tstamp timestamp);
-    [[nodiscard]] http3_quic_result next_datagram(std::size_t capacity, ngtcp2_tstamp timestamp, http3_quic_datagram& output);
-    [[nodiscard]] http3_quic_result expire_timers(ngtcp2_tstamp timestamp);
-    [[nodiscard]] ngtcp2_tstamp expiry() const noexcept;
-
-    void reset_stream(std::int64_t stream_id, http3_error_code error) noexcept;
-    void reset_send_stream(std::int64_t stream_id, http3_error_code error) noexcept;
-    void stop_receiving(std::int64_t stream_id, http3_error_code error) noexcept;
-    void close(http3_error_code error) noexcept;
-    [[nodiscard]] bool closed() const noexcept;
-    [[nodiscard]] ngtcp2_duration close_period() const noexcept;
-
-    [[nodiscard]] std::optional<http3_event> next_event() &;
-    std::optional<http3_event> next_event() && = delete;
-    [[nodiscard]] http3_connection& http3() & noexcept RUVIA_LIFETIMEBOUND;
-    http3_connection& http3() && = delete;
-    [[nodiscard]] const http3_connection& http3() const& noexcept RUVIA_LIFETIMEBOUND;
-    const http3_connection& http3() const&& = delete;
-    [[nodiscard]] std::optional<http3_error_code> application_error() const noexcept;
-    [[nodiscard]] std::optional<std::uint64_t> transport_error() const noexcept;
-};
-
-[[nodiscard]] std::size_t write_http3_quic_stateless_reset(const http3_quic_stateless_reset_token& token, std::span<const std::uint8_t> random_bytes, std::span<std::byte> output, std::size_t max_packet_bytes) noexcept;
-
-}  // namespace ruvia
-```
-
-驱动约定：输入数据报必须保持存活，直到 `next_event()` 取尽其产生的事件。写出过程中也可能发布事件（例如确认使流关闭），因此拥有者应在每次 `receive_datagram()`、`next_datagram()` 与 `expire_timers()` 之后取尽 `next_event()`。DATA 在 `receive_datagram()` 返回前已复制到事件自有存储（`own_data_events_` 强制开启）。`http3_transport_action_event` 中 `local` 来源的动作在发布前已执行，`http3_deferred_consume_event` 在内部处理、不会发布。ngtcp2/nghttp3 回调中捕获的异常（包括内存分配失败）由触发它的成员调用重新抛出。
-
-基本访问与 TLS 接入：
-
-| 成员 | 说明 |
-| --- | --- |
-| `client(options)` / `server(options)` | 创建连接；选项非法抛 `std::invalid_argument`（见 12.3.2）。 |
-| 析构、移动构造/赋值 | 仅可移动（`noexcept`），不可复制。 |
-| `role()` | 连接角色。 |
-| `native()` | 仅从左值连接借用底层 `ngtcp2_conn*`，供 QUIC-TLS 适配器的 `ngtcp2_crypto_conn_ref::get_conn` 使用；其他能力都有对应成员。 |
-| `http3()` | 仅从左值连接借用内部 HTTP/3 编解码器。 |
-| `callback_context()` | 返回选项中的 `callback_context_`。 |
-| `set_tls_session(tls_session)` | 设置交给 ngtcp2 的 TLS 会话指针（如 OpenSSL `SSL*`）。 |
-| `handshake_completed()` / `after_retry()` / `stateless_reset_received()` | 握手是否完成 / 客户端是否经历了 Retry / 是否收到无状态重置。 |
-
-HTTP/3 启动与 0-RTT：
-
-| 成员 | 说明 |
-| --- | --- |
-| `start_http3()` | TLS 建立应用密钥后，打开并绑定本端 HTTP/3 控制流与两条 QPACK 流；仅在返回 `would_block` 时可安全重试。 |
-| `http3_started()` | HTTP/3 是否已启动。 |
-| `open_request_stream()` | 客户端打开一条新的双向请求流并返回其 ID；当前不可打开时为 `std::nullopt`。随后经 `http3().submit_request_head()` 提交请求头。 |
-| `start_early_http3(transport_parameters, settings)` | 打开 0-RTT 流之前，从票据恢复经认证保存的传输参数与对端 SETTINGS；TLS 也必须启用早期数据。 |
-| `reject_early_data()` | TLS 拒绝早期数据时，丢弃被拒绝的 HTTP/3 流；从不重放请求，是否在 1-RTT 中重试由调用方显式决定。 |
-| `early_data_rejected()` | 客户端：TLS 已拒绝早期数据，无论经 `reject_early_data()` 报告还是由 QUIC-TLS 适配器在握手中报告。 |
-| `encode_early_transport_parameters(output)` | 编码 0-RTT 依赖的传输参数（RFC 9000 §7.4.1）。客户端取收到的服务端参数，与 TLS 会话票据一同保存并供 `start_early_http3()` 恢复；服务端取本端参数，供票据的恢复检查绑定。返回编码长度；客户端尚未收到或 `output` 过小时为 `std::nullopt`。 |
-
-服务端判断某请求是否来自 0-RTT，应使用 [`http3_request_head::early_data()`](#api-http3-request-head-h)。
-
-路径、迁移与 UDP I/O：
-
-| 成员 | 说明 |
-| --- | --- |
-| `current_path()` | 当前发送路径（含已验证的迁移，RFC 9000 §9），视图借用连接存储，直到下一次处理输入、写出输出或迁移的调用；`const&&` 删除。 |
-| `migrate(path, timestamp)` | 仅客户端、QUIC v1：先验证新路径再切换。调用方必须按输出数据报的 `path_` 发送，并在验证期间保持新旧路径都在接收。 |
-| `receive_datagram(path, ecn, bytes, timestamp)` | 输入一个从 `path` 收到的 UDP 数据报及其 ECN 标记。 |
-| `next_datagram(capacity, timestamp, output)` | 连接开启时写出下一个包（至多 `capacity` 字节）到 `output`，无可写时返回 `would_block`；本地关闭后只写一次 CONNECTION_CLOSE 包，之后返回 `closed`。 |
-| `expire_timers(timestamp)` / `expiry()` | 处理到期的定时器 / 下一次到期时刻；拥有者在 `expiry()` 设定计时器。 |
-
-HTTP Datagram：
-
-| 成员 | 说明 |
-| --- | --- |
-| `submit_datagram(stream_id, payload)` | 载荷位于 HTTP Datagram Quarter Stream ID 之后；连接复制并有界保存（`max_pending_datagram_bytes_`）。不支持或超长返回 `invalid_state`，队列满返回 `would_block`。 |
-| `max_datagram_payload_size(stream_id)` | 该流当前可发送的最大载荷；不支持时为 0。 |
-
-流与连接终止：
-
-| 成员 | 说明 |
-| --- | --- |
-| `reset_stream(id, error)` | 以 RESET_STREAM 与 STOP_SENDING 携带 `error` 放弃请求流的两个方向（RFC 9114 §4.1.1）。 |
-| `reset_send_stream(id, error)` | 只以 RESET_STREAM 结束发送半边，接收半边继续交付（RFC 9000 §3.1、RFC 9114 §4.1）。 |
-| `stop_receiving(id, error)` | 停止读取不再需要其剩余内容的请求（响应已完整时 RFC 9114 §4.1.2 允许 `H3_NO_ERROR`）。 |
-| `close(error)` | 请求有序关闭：下一次 `next_datagram()` 写出携带 `error` 的 CONNECTION_CLOSE（RFC 9000 §10.2；HTTP/3 优雅关闭用 `H3_NO_ERROR`，RFC 9114 §5.2）。 |
-| `closed()` | 已进入关闭或排空期（同 `http3_quic_status::closed`）。 |
-| `close_period()` | 关闭后吸收迟到包的时长：当前 PTO 的三倍（RFC 9000 §10.2）。 |
-
-事件与错误：
-
-| 成员 | 说明 |
-| --- | --- |
-| `next_event()` | 取出下一个 [`http3_event`](#api-http3-connection-h)。 |
-| `http3()` | 内部 `http3_connection` 的引用，用于提交请求/响应、正文、排空等全部 HTTP/3 操作；引用借用本对象。 |
-| `application_error()` | 本连接发送或收到的 CONNECTION_CLOSE、或其失败所因的编解码错误的 HTTP/3 码。 |
-| `transport_error()` | 本连接发送或收到的 CONNECTION_CLOSE 的 QUIC 传输错误码（RFC 9000 §20.1）。 |
-
-`write_http3_quic_stateless_reset(token, random_bytes, output, max_packet_bytes)`：向 `output` 写出一个 QUIC Stateless Reset 包（RFC 9000 §10.3），至多 `max_packet_bytes` 字节；应传入 `触发数据报长度 - 1`，使其严格小于触发它的数据报（§10.3.3）。返回写入字节数；`output`、`max_packet_bytes` 或 `random_bytes` 不足以构成合法 Stateless Reset 时返回 0。
-
-最小驱动循环（示意）：
-
-```cpp
-// options: http3_quic_connection_options；path: ngtcp2_path；ecn: std::uint32_t；
-// bytes: std::span<const std::byte>；now: ngtcp2_tstamp；send_to 为调用方的 UDP 发送函数。
-auto connection = ruvia::http3_quic_connection::client(options);
-ruvia::http3_quic_datagram out;  // 复用，不可移动
-// 收到 UDP 数据报：
-ruvia::http3_quic_result result = connection.receive_datagram(path, ecn, bytes, now);
-while (auto event = connection.next_event()) { /* 处理事件 */ }
-// TLS 应用密钥就绪后：
-if (!connection.http3_started()) { (void)connection.start_http3(); }
-// 发送：
-while (connection.next_datagram(options.max_udp_payload_size_, now, out).status_ == ruvia::http3_quic_status::accepted) {
-    send_to(out.path_, out.bytes_);
-    while (auto event = connection.next_event()) { /* 处理事件 */ }
-}
-// 计时：在 connection.expiry() 到期时调用 expire_timers(now)，随后同样取尽事件。
-```
+| `inline constexpr std::uint64_t quic_varint_max = (std::uint64_t{1} << 62) - 1;` | 最大可编码值 $2^{62}-1$ |
+| `struct quic_varint final { std::uint64_t value_{0}; std::size_t encoded_bytes_{0}; };` | 解码结果与所占线上字节数（支持 `==`） |
+| `enum class quic_varint_error : std::uint8_t { value_out_of_range, output_too_small };` | 编码错误枚举 |
+| `[[nodiscard]] constexpr std::size_t quic_varint_size(std::uint64_t value) noexcept;` | 返回 1、2、4 或 8 字节编码长度 |
+| `[[nodiscard]] constexpr std::optional<quic_varint> decode_quic_varint(byte_view input) noexcept;` | 输入不足首字节宣告长度时返回 `std::nullopt` |
+| `[[nodiscard]] constexpr std::variant<std::size_t, quic_varint_error> encode_quic_varint(mutable_byte_view output, std::uint64_t value) noexcept;` | 编码到 `output` 开头并返回写入字节数；越界或缓冲过小时不写入 |
 
 ## 13. WebSocket、Capsule 与 CONNECT-UDP
 
@@ -10349,28 +10115,25 @@ const auto out = ws.output_plan();
 ### 13.4 `"http_capsule.h"`
 <a id="api-http-capsule-h"></a>
 
-RFC 9297 Capsule Protocol 的增量帧解码、Capsule 头编码、`Capsule-Protocol` 字段解析，以及 HTTP Datagram（RFC 9297 §3.5 DATAGRAM Capsule）与 RFC 9298 UDP 负载的收发规划。无条件安装；公开 include [`"decode_step.h"`](#api-decode-step-h)、[`"borrowed_text.h"`](#api-borrowed-text-h)。源码：[`ruvia-http/include/http_capsule.h`](../ruvia-http/include/http_capsule.h)
+RFC 9297 Capsule Protocol 的增量帧解码、Capsule 头编码、`Capsule-Protocol` 字段解析，以及 HTTP Datagram（RFC 9297 §3.5 DATAGRAM Capsule）与 RFC 9298 UDP 负载的收发规划。无条件安装；公开 include [`"borrowed_text.h"`](#api-borrowed-text-h)、[`"byte_view.h"`](#api-byte-view-h)、[`"decode_step.h"`](#api-decode-step-h)、[`"quic_varint.h"`](#api-quic-varint-h)。源码：[`ruvia-http/include/http_capsule.h`](../ruvia-http/include/http_capsule.h)
 
 #### 13.4.1 编码与 UDP Datagram 工具
 
 ```cpp
 namespace ruvia {
-enum class http_capsule_codec_error : std::uint8_t {
-    value_out_of_range,
-    output_too_small,
-};
+using http_capsule_codec_error = quic_varint_error;
 [[nodiscard]] std::optional<bool> parse_http_capsule_protocol(std::string_view value) noexcept;
 
 inline constexpr std::uint64_t http_datagram_capsule_type = 0;
 struct http_udp_datagram_view final {
     std::uint64_t context_id_{0};
-    std::span<const char> payload_{};
+    byte_view payload_{};
 };
-[[nodiscard]] std::optional<http_udp_datagram_view> decode_http_udp_datagram(std::span<const char> input RUVIA_LIFETIMEBOUND) noexcept;
-template </* 临时拥有型 char 范围 */ typename input_type>
+[[nodiscard]] std::optional<http_udp_datagram_view> decode_http_udp_datagram(byte_view input RUVIA_LIFETIMEBOUND) noexcept;
+template </* 临时拥有型 std::byte 范围 */ typename input_type>
 std::optional<http_udp_datagram_view> decode_http_udp_datagram(input_type&&) noexcept = delete;
-[[nodiscard]] std::variant<std::size_t, http_capsule_codec_error> encode_http_udp_datagram_prefix(std::span<char> output, std::uint64_t context_id = 0) noexcept;
-[[nodiscard]] std::variant<std::size_t, http_capsule_codec_error> encode_http_capsule_header(std::span<char> output, std::uint64_t type, std::uint64_t length) noexcept;
+[[nodiscard]] std::variant<std::size_t, http_capsule_codec_error> encode_http_udp_datagram_prefix(mutable_byte_view output, std::uint64_t context_id = 0) noexcept;
+[[nodiscard]] std::variant<std::size_t, http_capsule_codec_error> encode_http_capsule_header(mutable_byte_view output, std::uint64_t type, std::uint64_t length) noexcept;
 }
 ```
 
@@ -10392,7 +10155,7 @@ std::optional<http_udp_datagram_view> decode_http_udp_datagram(input_type&&) noe
 namespace ruvia {
 struct http_capsule_event final {
     std::uint64_t type_{0};
-    std::span<const char> payload_{};
+    byte_view payload_{};
     bool end_capsule_{false};
 };
 using http_capsule_callback_type = void (*)(void*, http_capsule_event);
@@ -10417,14 +10180,14 @@ public:
     explicit http_capsule_decoder(http_capsule_options config = {});
     [[nodiscard]] decoder_state state() const noexcept;
     void reset() noexcept;
-    [[nodiscard]] http_capsule_feed_result feed(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context, http_capsule_retention retention = http_capsule_retention::all);
+    [[nodiscard]] http_capsule_feed_result feed(byte_view input, bool fin, http_capsule_callback_type callback, void* context, http_capsule_retention retention = http_capsule_retention::all) &;
     template <typename visitor_type>
         requires std::invocable<visitor_type&, http_capsule_event>
-    [[nodiscard]] http_capsule_feed_result feed(std::span<const char> input, bool fin, visitor_type&& visitor, http_capsule_retention retention = http_capsule_retention::all);
-    [[nodiscard]] http_capsule_feed_result feed_one(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context, http_capsule_retention retention = http_capsule_retention::all);
+    [[nodiscard]] http_capsule_feed_result feed(byte_view input, bool fin, visitor_type&& visitor, http_capsule_retention retention = http_capsule_retention::all) &;
+    [[nodiscard]] http_capsule_feed_result feed_one(byte_view input, bool fin, http_capsule_callback_type callback, void* context, http_capsule_retention retention = http_capsule_retention::all) &;
     template <typename visitor_type>
         requires std::invocable<visitor_type&, http_capsule_event>
-    [[nodiscard]] http_capsule_feed_result feed_one(std::span<const char> input, bool fin, visitor_type&& visitor, http_capsule_retention retention = http_capsule_retention::all);
+    [[nodiscard]] http_capsule_feed_result feed_one(byte_view input, bool fin, visitor_type&& visitor, http_capsule_retention retention = http_capsule_retention::all) &;
 };
 }
 ```
@@ -10473,9 +10236,9 @@ enum class http_datagram_error : std::uint8_t {
 
 class http_datagram_write_plan final {
 public:
-    [[nodiscard]] constexpr std::string_view prefix() const& noexcept RUVIA_LIFETIMEBOUND;
-    std::string_view prefix() const&& = delete;
-    [[nodiscard]] constexpr std::span<const char> payload() const noexcept;
+    [[nodiscard]] constexpr byte_view prefix() const& noexcept RUVIA_LIFETIMEBOUND;
+    byte_view prefix() const&& = delete;
+    [[nodiscard]] constexpr byte_view payload() const noexcept;
 };
 
 enum class http_datagram_mode : std::uint8_t {
@@ -10488,12 +10251,12 @@ public:
     http_datagram_session() noexcept = default;
     void close_send() noexcept;
     void close_receive() noexcept;
-    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode mode, std::span<const char> payload RUVIA_LIFETIMEBOUND) const noexcept;
-    template </* 临时拥有型 char 范围 */ typename payload_type>
+    [[nodiscard]] std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode mode, byte_view payload RUVIA_LIFETIMEBOUND) const noexcept;
+    template </* 临时拥有型 std::byte 范围 */ typename payload_type>
     std::variant<http_datagram_write_plan, http_datagram_error> prepare_datagram(http_datagram_mode, payload_type&&) const noexcept = delete;
-    [[nodiscard]] std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode mode, std::span<const char> input RUVIA_LIFETIMEBOUND) const noexcept;
-    template </* 临时拥有型 char 范围 */ typename input_type>
-    std::variant<std::optional<std::span<const char>>, http_datagram_error> receive_datagram(http_datagram_mode, input_type&&) const noexcept = delete;
+    [[nodiscard]] std::variant<std::optional<byte_view>, http_datagram_error> receive_datagram(http_datagram_mode mode, byte_view input RUVIA_LIFETIMEBOUND) const noexcept;
+    template </* 临时拥有型 std::byte 范围 */ typename input_type>
+    std::variant<std::optional<byte_view>, http_datagram_error> receive_datagram(http_datagram_mode, input_type&&) const noexcept = delete;
 };
 }
 ```
@@ -10517,7 +10280,7 @@ public:
 
 `http_datagram_session` 表示一个已接受的 HTTP Datagram 通道：在请求协商后构造（客户端可在响应前乐观发送），不拥有内存或传输；默认收发均打开。`prepare_datagram` / `receive_datagram` 是唯一收发入口，返回的负载借用调用方输入。
 
-**借用约束**：`decode_http_udp_datagram`、`prepare_datagram` 和 `receive_datagram` 拒绝临时拥有型字符容器及字符初始化列表；空 `{}` 仍表示空 span。
+**借用约束**：`decode_http_udp_datagram`、`prepare_datagram` 和 `receive_datagram` 拒绝临时拥有型字节容器及字节初始化列表；空 `{}` 仍表示空 `byte_view`。
 
 | 成员 | 语义 |
 | --- | --- |
@@ -10527,7 +10290,7 @@ public:
 
 ```cpp
 ruvia::http_datagram_session session;
-const std::span<const char> udp_payload = packet;  // 调用方存储
+const ruvia::byte_view udp_payload = packet;  // 调用方存储（std::span<const std::byte>）
 auto planned = session.prepare_datagram(ruvia::http_datagram_mode::connect_udp, udp_payload);
 if (const auto* plan = std::get_if<ruvia::http_datagram_write_plan>(&planned)) {
     // 依次写出 plan->prefix() 与 plan->payload()；写完前保留 plan 与 packet
@@ -10617,3 +10380,106 @@ auto target = ruvia::parse_http_connect_udp_path(std::get<std::string>(path));
 ```
 
 Web 层 CONNECT-UDP 路由与隧道驱动见 [ruvia-web](ruvia-web.md)。
+
+### 13.6 `"websocket_frame.h"`
+<a id="api-websocket-frame-h"></a>
+
+RFC 6455 §5.2–§5.5 底层帧头编解码、SSE2 加速原地掩码、Close 载荷校验与 `http_io_buffer` 零拷贝增量读帧原语，供自定义轻量 WebSocket 帧转发器或网关跳过完整会话状态机直接组合使用。无条件安装；公开 include [`"borrowed_text.h"`](#api-borrowed-text-h)、[`"byte_view.h"`](#api-byte-view-h)、[`"http_io_buffer.h"`](#api-http-io-buffer-h)、[`"http_protocol.h"`](#api-http-protocol-h)、[`"websocket_connection.h"`](#api-websocket-connection-h)。源码：[`ruvia-http/include/websocket_frame.h`](../ruvia-http/include/websocket_frame.h)
+
+| 声明 | 契约 |
+| --- | --- |
+| `websocket_max_frame_header_bytes = 10`、`using websocket_frame_header_bytes = std::array<std::byte, 10>;` | 未掩码帧头最大编码尺寸 |
+| `enum class websocket_protocol_failure : std::uint16_t { protocol_error = 1002, invalid_payload_data = 1007, message_too_large = 1009 };` | 线上帧错误及对应应答 Close 码（`websocket_protocol_failure_close_code` 解包） |
+| `enum class websocket_frame_kind : std::uint8_t { continuation = 0x0, text = 0x1, binary = 0x2, close = 0x8, ping = 0x9, pong = 0xA };` | 含续帧的原始帧种类（`is_websocket_control_frame_kind` 判定控制帧） |
+| `decode_websocket_frame_start(first_byte, second_byte, allow_rsv1, expect_masked) noexcept -> std::optional<websocket_frame_start>` | 校验 RSV1/RSV2/RSV3、掩码标志与 opcode 组合 |
+| `encode_websocket_frame_header(mutable_byte_view output, std::uint8_t opcode_bits, bool final, std::size_t payload_size, bool rsv1 = false, bool masked = false) noexcept -> std::size_t` | 写出 2 / 4 / 10 字节帧头，空间不足返回 0 |
+| `mask_websocket_payload(mutable_byte_view payload, std::span<const std::byte, 4> mask_key) noexcept` | 原地异或掩码/解掩码（x86/x64 自动启用 SSE2 16 字节批处理） |
+| `encode_websocket_close_payload(websocket_close_code code, std::string_view reason = {}) noexcept -> websocket_close_payload_encode_result` | 编码 2 字节大端状态码 + 可选 UTF-8 原因（上限 125 字节） |
+| `websocket_close_payload_failure(byte_view payload_value) noexcept -> std::optional<websocket_protocol_failure>` | 校验对端发来的 Close 载荷状态码与 UTF-8 原因 |
+| `websocket_try_read_frame(http_io_buffer& buffer, std::size_t& pending_consume, protocol_byte_limit message_limit, bool permessage_deflate, bool expect_masked) -> websocket_frame_read_result` | 先由 `consume_websocket_read_frame` 消费上一帧并按水位线收缩缓冲，再单遍解析并原地解掩码下一帧，产出 `need_input()`（带 `missing_bytes()`）、借用 `buffer` 的 `frame()`（`websocket_frame_view`）或 `failure()` |
+
+---
+
+## 14. 声明式模型、JSON 编解码与校验
+
+本章覆盖 Sans-I/O 声明式模型 `RUVIA_MODEL`、富字段值类型、RFC 8259 JSON 词法编解码、动态 JSON token 与校验器。它们全部位于 `ruvia::http`，不依赖事件循环、协程或 HTTP 路由；Web 层的请求路由绑定中间件见 [ruvia-web `"model_binding.h"`](ruvia-web.md#api-model-binding-h)，ORM 实体互操作见 [ruvia-web `"entity_storage.h"`](ruvia-web.md#api-entity-storage-h)。示例：[../examples/models_validation.cpp](../examples/models_validation.cpp)、[../examples/model_values.cpp](../examples/model_values.cpp)。
+
+### 14.1 `"fixed_string.h"`
+<a id="api-fixed-string-h"></a>
+
+把字符串字面量提升为结构化 C++20 NTTP（`fixed_string<N>`，`N` 含结尾 NUL），用作模型字段名（`m.get<"name">()`）、ORM 列名/关系名与校验消息的统一编译期键。源码：[`ruvia-http/include/fixed_string.h`](../ruvia-http/include/fixed_string.h)
+
+| 声明 | 契约 |
+| --- | --- |
+| `constexpr fixed_string(const char (&text)[n]) noexcept` | 从字面量构造（支持类模板实参推导 `fixed_string{"id"}`） |
+| `size()`、`empty()`、`operator==` | 长度为 `n - 1`；不同长度比较恒为 `false` |
+| `view() const&`、`data() const&`、`operator std::string_view() const&` | 左值借用视图（`const&& = delete` 防悬垂临时量） |
+
+### 14.2 `"model_value.h"`
+<a id="api-model-value-h"></a>
+
+`RUVIA_MODEL`、SQL ORM 与 Redis ORM 共用的值类型集合（原生 C++ 标量直接作为字段类型，无需包装类）。源码：[`ruvia-http/include/model_value.h`](../ruvia-http/include/model_value.h)
+
+| 值类型 / 宏 | JSON / Form 表示与核心契约 |
+| --- | --- |
+| 原生 C++ 标量：`bool`、`std::int8_t..std::int64_t`、`std::uint8_t..std::uint64_t`、`float`、`double` | JSON 布尔/数字（范围与有限值校验，NaN/±Inf 序列化为 `null`）；Form 支持 `true`/`1`/`false`/`0` 与十进制数值；`std::int64_t` / `std::uint64_t` 另可配 `RUVIA_STRING_INT64` / `RUVIA_STRING_UINT64` 以十进制字符串或数字双输入序列化为字符串（防 JS `Number.MAX_SAFE_INTEGER` 精度丢失） |
+| `ruvia::string` | 仅移动（显式 `.clone()` 深拷贝）；支持借用切片（`parse_json_borrowed`）与自有 `std::string` 存储，`assign` / `take_string() &&` / `view() const&`（`const&& = delete`） |
+| `ruvia::bytes` + `enum class bytes_encoding { base64, base64url, hex }` | `std::byte` 二进制序列（仅移动，显式 `.clone()` 深拷贝）：隐式接受 `byte_view`（复制）与精确 `std::vector<std::byte>&&`（O(1) 接管），提供 `view() const& -> byte_view`、`take_bytes() && -> std::vector<std::byte>`；默认标准填充 Base64，字段可配 `RUVIA_BASE64URL_BYTES` 或 `RUVIA_HEX_BYTES` |
+| `ruvia::uuid` | 16 字节 RFC 9562 UUID 值类型：默认零 UUID，`explicit uuid(std::string_view)` / `uuid::try_parse(text)`（大小写不敏感 36 字符规范格式，统一格式化为小写），`from_bytes(std::span<const std::byte, 16>)`、`bytes() const&`、`is_nil()`、`version()`、`format_to(span<char, 36>)`、`to_string()`、`<=>`；JSON 与 Form 均为 36 字符字符串 |
+| `ruvia::decimal` | 128 位定点十进制值类型（最高 38 位有效数字，指数标度 `0..28`，精确比较正规化尾随零）：`explicit decimal(std::string_view)` / `decimal::try_parse(text)`、`from_integer(int64_t / uint64_t)`、`is_zero()`、`is_negative()`、`scale()`、`to_string()`、`<=>`；JSON 输出规范十进制字符串并同时接受 JSON 字符串或无精度损失的 JSON 数字字面量，Form 接受十进制字符串 |
+| `civil_date`（`std::chrono::year_month_day`）、`utc_seconds`、`utc_milliseconds`、`utc_microseconds`（`std::chrono::sys_time<...>`） | RFC 3339 / ISO-8601 日期（`YYYY-MM-DD`）与 UTC 时间戳（接受 `Z` 或 `±HH:MM` 偏移并换算为 UTC，序列化固定 `Z` 结尾）；JSON 与 Form 均支持 |
+| `RUVIA_ENUM(EnumType, RUVIA_ENUM_VALUE(EnumType::kVal, "wire"), ...)` | 非侵入式 ADL 枚举字符串映射：提供 `try_parse_enum<E>(text)`、`try_format_enum(val)`、`to_enum_string(val)`；JSON、Form、SQL ORM 与 Redis ORM 统一按映射名读写 |
+| `ruvia::array<T>`、`ruvia::boxed_array<T>` | 仅移动（提供 `.clone()` 与事务性移动赋值，检测自包含防 UB）：`array<T>` 连续存储并支持 `std::vector<T>&&` 零拷贝接管与 `take_items() &&`；`boxed_array<T>` 支持未完成类型的自引用递归模型；Form / Query / Header 中标量 `array<T>` 自动按出现顺序聚合同名重复键 |
+| `ruvia::map<V>` | 保序唯一键映射（JSON 对象动态键值字典，仅移动，提供 `.clone()`）：`find(key)`、`contains(key)`、`insert_or_assign(key, ...)`、`erase(key)`、`entries() const&`、`take_entries() &&` |
+| `ruvia::tagged_variant<TagField, TaggedTypes...>` 与 `ruvia::tagged<TagValue, ModelType>` | 基于内嵌鉴别器字段 `TagField`（如 `"type"`）的单遍可辨识联合体：JSON 解析按鉴别器值路由到具体 `RUVIA_MODEL` 分支，序列化自动注入鉴别器字段（若模型自身未声明同名字段）；提供 `.clone()`、`index()`、`holds<M>()`、`get_if<M>() const&`、`visit(fn)`、`take<M>() &&` |
+
+### 14.3 `"json_codec.h"`
+<a id="api-json-codec-h"></a>
+
+RFC 8259 单遍词法扫描、SSE2/NEON 字符串快速跳读、Copy-on-Unescape 转义解码与容器流式遍历原语。源码：[`ruvia-http/include/json_codec.h`](../ruvia-http/include/json_codec.h)
+
+- **常量与核心类型**：`max_json_depth = 64`、`json_string_encoding`（`literal` / `escaped`）、`json_string_token`（`raw()` / `encoding()`）、`json_number_token`、`json_object_visit_result`（`complete` / `stopped` / `invalid`）。
+- **扫描与写出**：`skip_json_whitespace`、`consume_json_char`、`consume_json_literal`、`find_json_string_token_byte`、`read_json_hex4`、`is_json_high_surrogate` / `is_json_low_surrogate`、`json_string_size_hint`、`json_byte_needs_escape`、`append_json_escape`、`append_json_string`（非法 UTF-8 最大子部分替换为 U+FFFD）、`append_json_member_key`、`append_json_utf8`。
+- **解析与容器遍历**：`parse_json_string`、`json_string_text`、`scan_json_number_token`、`skip_json_number_token`、`parse_json_number_value`、`consume_json_array_elements`、`consume_json_object_members`、`consume_json_object_fields`、`skip_json_value` / `skip_json_array` / `skip_json_object`、`visit_json_object_fields`。
+
+### 14.4 `"model.h"`
+<a id="api-model-h"></a>
+
+声明式模型 `RUVIA_MODEL`、独立 JSON/Form 编解码、零拷贝动态 `json_value` / `json_object` 与领域校验器（不含任何 HTTP 状态码或异常耦合：`validation_issue` 与 `validator` 均定义于本头）。源码：[`ruvia-http/include/model.h`](../ruvia-http/include/model.h)
+
+#### 14.4.1 模型、命名与字段选项宏
+
+| 宏 | 契约 |
+| --- | --- |
+| `RUVIA_MODEL(Name, ...)` | 生成 `struct Name final`；支持混合放置模型级配置宏、字段声明宏与跨字段校验宏 |
+| `RUVIA_NAMING(ruvia::naming_convention::camel_case)` | 模型级自动 wire name 转换（默认 `preserve`，可选 `camel_case` 将 `snake_case` 字段名编译期映射为 `camelCase`，显式 `*_FIELD_NAME` 优先） |
+| `RUVIA_MODEL_VALIDATE(fn)` | 模型级跨字段校验钩子 `void fn(const Name&, ruvia::validator&)`，在全部单字段规则通过后执行 |
+| `RUVIA_REQUIRED_FIELD(field, T, ...)` / `RUVIA_REQUIRED_FIELD_NAME("wire", field, T, ...)` | 必填字段声明 |
+| `RUVIA_OPTIONAL_FIELD(field, T, ...)` / `RUVIA_OPTIONAL_FIELD_NAME("wire", field, T, ...)` | 可选字段声明 |
+| `RUVIA_DEFAULT(expr)`、`RUVIA_INITIAL(expr)`、`RUVIA_NULLABLE`、`RUVIA_OMIT_EMPTY`、`RUVIA_EMIT_NULL` | 字段选项：缺失填充默认值、C++ 默认构造初值、允许 `null`、空值省略、缺失输出 `null` |
+| `RUVIA_ALIAS("legacy_a", ...)` | 输入反序列化兼容别名（主名与别名在同一对象同时出现时按 `duplicate` 拒绝；序列化始终写主 wire name） |
+| `RUVIA_STRING_INT64` / `RUVIA_STRING_UINT64`、`RUVIA_HEX_BYTES` / `RUVIA_BASE64URL_BYTES` | 64 位整数字符串编码策略与 `ruvia::bytes` 二进制编码策略 |
+
+- **生成成员与保证有值解包**：`RUVIA_MODEL` 生成 `.clone()`、事务性移动构造/移动赋值、`operator==`、`is_present<"f">()`、`is_null<"f">()`、`has_value<"f">()`、`set<"f">(v)`、`set_null<"f">()`（仅 `RUVIA_NULLABLE`）、`ensure<"f">()`、`reset<"f">()`（仅可选且无保证值字段）、`get<"f">() const&` 与 `take<"f">() &&`。凡**非 `RUVIA_NULLABLE` 且（必填，或带 `RUVIA_DEFAULT` / `RUVIA_INITIAL`）**的字段，其 `get<"f">()` 直接返回 `const T&`（`take<"f">() &&` 直接返回 `T`），无需二次 `*model.get<"f">()` 解包；其余可选或可空字段返回 `const std::optional<T>&`。
+
+#### 14.4.2 声明式校验规则宏
+
+| 宏 | 适用类型与契约 | issue `code` |
+| --- | --- | --- |
+| `RUVIA_MIN(bound, msg)` / `RUVIA_MAX(bound, msg)` | 仅限数值标量（非 `bool`）、`decimal`、`bytes`、`array`、`boxed_array`、`map`（**严禁用于 `ruvia::string`**，消除字节数与字符数歧义） | `too_small` / `too_big` |
+| `RUVIA_MIN_BYTES(n, msg)` / `RUVIA_MAX_BYTES(n, msg)` | `ruvia::string` 的 UTF-8 字节长度上下界 | `too_small` / `too_big` |
+| `RUVIA_MIN_CHARS(n, msg)` / `RUVIA_MAX_CHARS(n, msg)` | `ruvia::string` 的良构 UTF-8 Unicode 码点数上下界 | `too_small` / `too_big` |
+| `RUVIA_ONE_OF(msg, "a", "b", ...)`、`RUVIA_EMAIL(msg)`、`RUVIA_PATTERN("^...$", msg)` | 字符串枚举集合、邮箱语法、编译期校验的整串锚定模式 | `one_of` / `email` / `pattern` |
+| `RUVIA_CUSTOM(pred, msg)` | 任意类型字段自定义谓词 `bool pred(const T&)` | `custom` |
+| `RUVIA_EACH(rule1, rule2, ...)` | 对 `array<T>`、`boxed_array<T>` 或 `map<V>` 的每个元素应用内嵌规则，失败路径精确定位到 `items[i]` 或 `dict.key` | 继承子规则 `code` |
+
+#### 14.4.3 独立编解码、动态 JSON 与校验器
+
+| 声明 | 契约 |
+| --- | --- |
+| `to_json(value)`、`append_json(std::string& out, value)` | 序列化模型、`tagged_variant`、标量、富值类型、`array`、`boxed_array`、`map`、`json_value`、`json_object` |
+| `parse_json<T>(std::string_view, model_parse_options = {})`、`parse_json<T>(std::string&&, ...)` | 拥有型解析：返回 `model_parse_result<T>`（所有字符串与动态 token 拥有独立存储；未知字段拒绝模式会收集对象内**全部**未知字段路径而非遇首个即停） |
+| `parse_json_borrowed<T>(borrowed_text RUVIA_LIFETIMEBOUND, model_parse_options = {})` | 零拷贝解析：未转义 `ruvia::string` 与动态 `json_value` / `json_object` 直接借用输入缓冲区切片（编译期拒绝右值临时 `std::string`） |
+| `parse_form<Model>(std::string_view)`、`from_json<Model>(const json_value& / const json_object&, options)`、`validate_model(model, validator&)` | URL 表单解析（支持标量 `array<T>` 重复键收集）、从动态 token 解析模型与独立校验 |
+| `json_value`、`json_object`、`json_field_lookup<T>` | 零拷贝或自有存储动态 JSON token（支持从 `RUVIA_MODEL` 或 `tagged_variant` 直接构造、`parse`、`clone()`、`take_owned() &&`、`get<T>()`、`for_each_field`、`for_each_element`、RFC 6901 `visit_pointer`） |
+| `validation_issue`、`model_parse_error`、`model_parse_result<T>`、`validator` | 纯值领域诊断与命令式校验器（`required`、`min_bytes` / `max_bytes`、`min_chars` / `max_chars`、`min_length` / `max_length`、`range`、`one_of`、`issues()`、`take_issues() &&`） |

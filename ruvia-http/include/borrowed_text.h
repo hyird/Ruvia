@@ -9,6 +9,8 @@
 #include <string_view>
 #include <type_traits>
 
+#include "byte_view.h"
+
 namespace ruvia::detail {
 
 // A C-string entry point is kept for literal-friendly APIs, but nullptr must
@@ -35,22 +37,6 @@ concept http_temporary_owning_char_string = http_temporary_owning_range<range_ty
 
 }  // namespace ruvia::detail
 
-#ifndef RUVIA_LIFETIMEBOUND
-#if defined(__has_cpp_attribute)
-#if __has_cpp_attribute(clang::lifetimebound)
-#define RUVIA_LIFETIMEBOUND [[clang::lifetimebound]]
-#elif __has_cpp_attribute(msvc::lifetimebound)
-#define RUVIA_LIFETIMEBOUND [[msvc::lifetimebound]]
-#elif __has_cpp_attribute(gnu::lifetimebound)
-#define RUVIA_LIFETIMEBOUND [[gnu::lifetimebound]]
-#else
-#define RUVIA_LIFETIMEBOUND
-#endif
-#else
-#define RUVIA_LIFETIMEBOUND
-#endif
-#endif
-
 namespace ruvia {
 
 // Text in static storage, checked at compile time.
@@ -70,8 +56,32 @@ public:
         return value_;
     }
 
+    [[nodiscard]] constexpr byte_view bytes() const noexcept {
+        return std::as_bytes(std::span<const char>(value_.data(), value_.size()));
+    }
+
 private:
     std::string_view value_{};
+};
+
+// Binary octets in static storage, checked at compile time.
+class static_bytes final {
+public:
+    constexpr static_bytes() noexcept = default;
+
+    template <std::size_t n>
+    consteval explicit static_bytes(const std::byte (&literal)[n]) noexcept :
+        value_(literal, n) {}
+
+    consteval explicit static_bytes(byte_view value) noexcept :
+        value_(value) {}
+
+    [[nodiscard]] constexpr byte_view view() const noexcept {
+        return value_;
+    }
+
+private:
+    byte_view value_{};
 };
 
 // Zero-copy text held by a configuration or message value that outlives the
@@ -253,6 +263,8 @@ public:
 private:
     std::span<const element_type> values_{};
 };
+
+using borrowed_bytes = borrowed_span<std::byte>;
 
 // Read-only element list taken by value as a function parameter and consumed
 // before that function returns. Unlike borrowed_span it also binds a braced

@@ -255,7 +255,7 @@ private:
         if (source.dial_port_) {
             return source.dial_port_->value();
         }
-        return origin ? origin->port() : std::uint16_t{0};
+        return origin ? origin->port().value() : std::uint16_t{0};
     }
     [[nodiscard]] static std::uint16_t dial_port_value(const http_client_config_storage& source, const std::optional<http_origin_view>&) noexcept {
         return source.dial_port_;
@@ -285,7 +285,7 @@ private:
         fixed_origin_(spec.origin_.has_value()),
         uri_host_(spec.origin_ ? spec.origin_->host() : std::string_view{}),
         scheme_(spec.scheme_),
-        port_(spec.origin_ ? spec.origin_->port() : (spec.scheme_ == http_scheme::https ? 443 : 80)),
+        port_(spec.origin_ ? spec.origin_->port().value() : (spec.scheme_ == http_scheme::https ? std::uint16_t{443} : std::uint16_t{80})),
         authority_(spec.origin_ ? format_http_origin_authority(origin()) : std::string{}),
         connection_limits_(source_value.connection_limits_),
         max_concurrent_http2_streams_per_connection_(source_value.max_concurrent_http2_streams_per_connection_),

@@ -252,9 +252,9 @@ struct upgraded_connection {
 // Appends a capsule; a DATAGRAM capsule (type 0) carries context ID 0 first.
 void append_capsule(std::string& output, std::uint64_t type, std::string_view payload) {
     const bool datagram = type == 0;
-    std::array<char, 16> header{};
+    std::array<std::byte, 16> header{};
     const auto encoded = ruvia::encode_http_capsule_header(header, type, payload.size() + (datagram ? 1 : 0));
-    output.append(header.data(), std::get<std::size_t>(encoded));
+    output.append(reinterpret_cast<const char*>(header.data()), std::get<std::size_t>(encoded));
     if (datagram) {
         output.push_back('\0');
     }

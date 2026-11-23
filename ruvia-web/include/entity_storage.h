@@ -20,8 +20,11 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "byte_view.h"
 #include "checked_integer.h"
 #include "fixed_string.h"
+#include "json_codec.h"
+#include "model.h"
 #include "model_value.h"
 
 namespace ruvia {
@@ -123,15 +126,106 @@ enum class text_scalar_parse_error {
     out_of_range,
 };
 
+template <typename duration_type>
+[[nodiscard]] std::optional<std::chrono::sys_time<duration_type>> try_parse_db_timestamp(std::string_view text) noexcept {
+    if (text.size() < 19 || (text[10] != 'T' && text[10] != 't' && text[10] != ' ') || text[13] != ':' || text[16] != ':') {
+        return std::nullopt;
+    }
+    const auto ymd = try_parse_civil_date(text.substr(0, 10));
+    if (!ymd) {
+        return std::nullopt;
+    }
+    int hh = 0;
+    int mm = 0;
+    int ss = 0;
+    if (!parse_fixed_digits(text, 11, 2, hh) || !parse_fixed_digits(text, 14, 2, mm) || !parse_fixed_digits(text, 17, 2, ss)) {
+        return std::nullopt;
+    }
+    if (hh > 23 || mm > 59 || ss > 59) {
+        return std::nullopt;
+    }
+    std::size_t pos = 19;
+    std::int64_t subsecond_micros = 0;
+    if (pos < text.size() && text[pos] == '.') {
+        ++pos;
+        std::size_t frac_digits = 0;
+        while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') {
+            if (frac_digits < 6) {
+                subsecond_micros = subsecond_micros * 10 + (text[pos] - '0');
+            }
+            ++frac_digits;
+            ++pos;
+        }
+        if (frac_digits == 0 || frac_digits > 9) {
+            return std::nullopt;
+        }
+        while (frac_digits++ < 6) {
+            subsecond_micros *= 10;
+        }
+    }
+    int tz_offset_seconds = 0;
+    if (pos < text.size()) {
+        if (text[pos] == 'Z' || text[pos] == 'z') {
+            ++pos;
+        } else if (text[pos] == '+' || text[pos] == '-') {
+            const bool neg = text[pos] == '-';
+            ++pos;
+            int tz_h = 0;
+            int tz_m = 0;
+            const auto rem = text.size() - pos;
+            if (rem == 2) {
+                if (!parse_fixed_digits(text, pos, 2, tz_h) || tz_h > 23) {
+                    return std::nullopt;
+                }
+                pos += 2;
+            } else if (rem == 4) {
+                if (!parse_fixed_digits(text, pos, 2, tz_h) || !parse_fixed_digits(text, pos + 2, 2, tz_m) || tz_h > 23 || tz_m > 59) {
+                    return std::nullopt;
+                }
+                pos += 4;
+            } else if (rem == 5 && text[pos + 2] == ':') {
+                if (!parse_fixed_digits(text, pos, 2, tz_h) || !parse_fixed_digits(text, pos + 3, 2, tz_m) || tz_h > 23 || tz_m > 59) {
+                    return std::nullopt;
+                }
+                pos += 5;
+            } else {
+                return std::nullopt;
+            }
+            tz_offset_seconds = (tz_h * 3600 + tz_m * 60) * (neg ? -1 : 1);
+        } else {
+            return std::nullopt;
+        }
+    }
+    if (pos != text.size()) {
+        return std::nullopt;
+    }
+    const auto base_seconds = std::chrono::sys_days{*ymd} + std::chrono::hours{hh} + std::chrono::minutes{mm} + std::chrono::seconds{ss - tz_offset_seconds};
+    const auto total_micros = std::chrono::time_point_cast<std::chrono::microseconds>(base_seconds) + std::chrono::microseconds{subsecond_micros};
+    return std::chrono::floor<duration_type>(total_micros);
+}
+
 template <typename t_type>
-concept text_scalar = std::is_same_v<t_type, std::remove_cv_t<t_type>> && (std::is_same_v<t_type, bool> || is_model_integer<t_type> || std::is_floating_point_v<t_type> || std::is_same_v<t_type, std::string> || std::is_same_v<t_type, string> || std::is_same_v<t_type, std::string_view>);
+concept text_scalar = std::is_same_v<t_type, std::remove_cv_t<t_type>> &&
+    (std::is_same_v<t_type, bool> ||
+        is_model_integer<t_type> ||
+        std::is_floating_point_v<t_type> ||
+        std::is_same_v<t_type, std::string> ||
+        std::is_same_v<t_type, string> ||
+        std::is_same_v<t_type, std::string_view> ||
+        std::is_same_v<t_type, bytes> ||
+        std::is_same_v<t_type, uuid> ||
+        std::is_same_v<t_type, decimal> ||
+        is_civil_date<t_type> ||
+        is_chrono_timestamp<t_type> ||
+        is_ruvia_enum<t_type>);
 
 // The one text-to-scalar syntax shared by database results and Redis replies:
 // boolean tokens 1/t/true/TRUE and 0/f/false/FALSE, strict decimal integers
-// (std::from_chars: no whitespace or '+'), and finite floating-point values.
-// std::string_view borrows `text`. A number that is syntactically complete but
-// not representable is out_of_range; any other rejection, including a
-// non-finite value, is invalid_format.
+// (std::from_chars: no whitespace or '+'), finite floating-point values,
+// RFC 9562 UUIDs, exact decimals, ISO 8601 / SQL dates & timestamps, and
+// RUVIA_ENUM wire names. std::string_view borrows `text`. A number that is
+// syntactically complete but not representable is out_of_range; any other
+// rejection, including a non-finite value, is invalid_format.
 template <text_scalar t_type>
 [[nodiscard]] std::variant<t_type, text_scalar_parse_error> parse_text_scalar(std::string_view text) {
     using result_type = std::variant<t_type, text_scalar_parse_error>;
@@ -141,6 +235,33 @@ template <text_scalar t_type>
         return result_type(std::in_place_index<0>, text);
     } else if constexpr (std::is_same_v<t_type, string>) {
         return result_type(std::in_place_index<0>, text);
+    } else if constexpr (std::is_same_v<t_type, bytes>) {
+        return result_type(std::in_place_index<0>, bytes(as_bytes(text)));
+    } else if constexpr (std::is_same_v<t_type, uuid>) {
+        if (const auto parsed = uuid::try_parse(text)) {
+            return result_type(std::in_place_index<0>, *parsed);
+        }
+        return text_scalar_parse_error::invalid_format;
+    } else if constexpr (std::is_same_v<t_type, decimal>) {
+        if (const auto parsed = decimal::try_parse(text)) {
+            return result_type(std::in_place_index<0>, *parsed);
+        }
+        return text_scalar_parse_error::invalid_format;
+    } else if constexpr (is_civil_date<t_type>) {
+        if (const auto parsed = try_parse_civil_date(text)) {
+            return result_type(std::in_place_index<0>, *parsed);
+        }
+        return text_scalar_parse_error::invalid_format;
+    } else if constexpr (is_chrono_timestamp<t_type>) {
+        if (const auto parsed = try_parse_db_timestamp<typename t_type::duration>(text)) {
+            return result_type(std::in_place_index<0>, *parsed);
+        }
+        return text_scalar_parse_error::invalid_format;
+    } else if constexpr (is_ruvia_enum<t_type>) {
+        if (const auto parsed = try_parse_enum<t_type>(text)) {
+            return result_type(std::in_place_index<0>, *parsed);
+        }
+        return text_scalar_parse_error::invalid_format;
     } else if constexpr (std::is_same_v<t_type, bool>) {
         if (text == "1" || text == "t" || text == "true" || text == "TRUE") {
             return result_type(std::in_place_index<0>, true);
@@ -175,6 +296,14 @@ template <text_scalar t_type>
     if (const auto* error = std::get_if<text_scalar_parse_error>(&parsed)) {
         if constexpr (std::is_same_v<t_type, bool>) {
             throw conversion_error(conversion_error::code_type::invalid_format, "text is not a boolean");
+        } else if constexpr (std::is_same_v<t_type, uuid>) {
+            throw conversion_error(conversion_error::code_type::invalid_format, "text is not a valid UUID");
+        } else if constexpr (std::is_same_v<t_type, decimal>) {
+            throw conversion_error(conversion_error::code_type::invalid_format, "text is not a valid decimal");
+        } else if constexpr (is_civil_date<t_type> || is_chrono_timestamp<t_type>) {
+            throw conversion_error(conversion_error::code_type::invalid_format, "text is not a valid date or timestamp");
+        } else if constexpr (is_ruvia_enum<t_type>) {
+            throw conversion_error(conversion_error::code_type::invalid_format, "text is not a valid enum value");
         } else {
             throw conversion_error(*error == text_scalar_parse_error::out_of_range ? conversion_error::code_type::out_of_range : conversion_error::code_type::invalid_format, "text is not a valid number");
         }
@@ -190,6 +319,35 @@ template <typename t_type>
 struct is_std_vector<std::vector<t_type>> : std::true_type {
     using value_type = t_type;
 };
+
+template <typename t_type>
+struct is_optional : std::false_type {};
+template <typename t_type>
+struct is_optional<std::optional<t_type>> : std::true_type {
+    using value_type = t_type;
+};
+
+template <typename value_type>
+[[nodiscard]] value_type clone_entity_value(const value_type& source) {
+    if constexpr (std::is_same_v<value_type, string> || std::is_same_v<value_type, bytes>) {
+        return source.clone();
+    } else if constexpr (is_optional<value_type>::value) {
+        using inner_type = typename is_optional<value_type>::value_type;
+        if (!source) {
+            return std::nullopt;
+        }
+        return std::optional<inner_type>(clone_entity_value(*source));
+    } else if constexpr (is_std_vector<value_type>::value) {
+        value_type cloned;
+        cloned.reserve(source.size());
+        for (const auto& item : source) {
+            cloned.push_back(clone_entity_value(item));
+        }
+        return cloned;
+    } else {
+        return value_type(source);
+    }
+}
 
 template <typename value_type>
 void commit_entity_value(value_type& target, value_type&& owned) noexcept {
@@ -207,6 +365,26 @@ struct entity_value_slot {
         null,
         value };
     entity_value_slot() = default;
+    entity_value_slot(const entity_value_slot&) = delete;
+    entity_value_slot& operator=(const entity_value_slot&) = delete;
+    entity_value_slot(entity_value_slot&& other) noexcept :
+        state_(std::exchange(other.state_, state_type::unset)),
+        value_(std::move(other.value_)) {}
+    entity_value_slot& operator=(entity_value_slot&& other) noexcept {
+        if (this != &other) {
+            commit_entity_value(value_, std::move(other.value_));
+            state_ = std::exchange(other.state_, state_type::unset);
+        }
+        return *this;
+    }
+    [[nodiscard]] entity_value_slot clone() const {
+        entity_value_slot copy;
+        if (state_ == state_type::value) {
+            copy.value_ = clone_entity_value(value_);
+        }
+        copy.state_ = state_;
+        return copy;
+    }
     static t_type make_value() {
         return t_type{};
     }
@@ -242,13 +420,6 @@ constexpr void for_each_descriptor(function_type&& function) {
     }(std::make_index_sequence<std::tuple_size_v<tuple_type>>{});
 }
 
-template <typename t_type>
-struct is_optional : std::false_type {};
-template <typename t_type>
-struct is_optional<std::optional<t_type>> : std::true_type {
-    using value_type = t_type;
-};
-
 template <typename range_type, typename element_type>
 consteval bool is_exact_element_range() noexcept {
     using decayed_type = std::remove_cvref_t<range_type>;
@@ -261,38 +432,58 @@ consteval bool is_exact_element_range() noexcept {
 
 template <typename t_type, typename v_type>
 void assign_entity_value(t_type& out, v_type&& value) {
+    using raw_v_type = std::remove_cvref_t<v_type>;
     constexpr bool movable_rvalue = !std::is_lvalue_reference_v<v_type> && !std::is_const_v<std::remove_reference_t<v_type>>;
-    if constexpr (std::is_arithmetic_v<t_type> && is_ruvia_scalar<v_type>) {
-        assign_entity_value(out, value.value_);
-    } else if constexpr (is_model_integer<t_type> && std::is_arithmetic_v<std::remove_cvref_t<v_type>>) {
-        // 整数输入先检查范围；浮点输入须由调用方显式选择整数转换策略。
-        out = integer_value<t_type>(value).value_;
-    } else if constexpr (std::is_floating_point_v<t_type> && std::is_arithmetic_v<std::remove_cvref_t<v_type>>) {
-        if constexpr (std::is_floating_point_v<std::remove_cvref_t<v_type>>) {
+    if constexpr (std::is_same_v<t_type, bool>) {
+        static_assert(std::is_same_v<raw_v_type, bool>, "bool entity columns require an exact bool value");
+        out = value;
+    } else if constexpr (is_model_integer<t_type>) {
+        static_assert(is_model_integer<raw_v_type>, "integer entity columns require an integer value");
+        out = checked_model_integer<t_type>(value);
+    } else if constexpr (std::is_floating_point_v<t_type> && (is_model_integer<raw_v_type> || std::is_floating_point_v<raw_v_type>)) {
+        if constexpr (std::is_floating_point_v<raw_v_type>) {
             out = checked_model_float<t_type>(value);
         } else {
             out = static_cast<t_type>(value);
         }
     } else if constexpr (std::is_same_v<t_type, string>) {
-        if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, string>) {
+        if constexpr (movable_rvalue && std::is_same_v<raw_v_type, string>) {
             commit_entity_value(out, rebind_model_value(std::move(value)));
-        } else if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, std::string>) {
+        } else if constexpr (movable_rvalue && std::is_same_v<raw_v_type, std::string>) {
             commit_entity_value(out, string(std::move(value)));
         } else {
             auto owned = string(std::string_view(value));
             commit_entity_value(out, std::move(owned));
         }
     } else if constexpr (std::is_same_v<t_type, std::string>) {
-        if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, std::string>) {
+        if constexpr (movable_rvalue && std::is_same_v<raw_v_type, std::string>) {
             std::string owned(std::move(value));
             commit_entity_value(out, std::move(owned));
+        } else if constexpr (movable_rvalue && std::is_same_v<raw_v_type, string>) {
+            commit_entity_value(out, std::move(value).take_string());
         } else {
             std::string owned{std::string_view(value)};
             commit_entity_value(out, std::move(owned));
         }
+    } else if constexpr (std::is_same_v<t_type, bytes>) {
+        if constexpr (movable_rvalue && std::is_same_v<raw_v_type, bytes>) {
+            commit_entity_value(out, std::move(value));
+        } else if constexpr (std::is_same_v<raw_v_type, bytes>) {
+            commit_entity_value(out, value.clone());
+        } else if constexpr (movable_rvalue && std::is_same_v<raw_v_type, std::vector<std::byte>>) {
+            commit_entity_value(out, bytes(std::move(value)));
+        } else {
+            commit_entity_value(out, bytes(byte_view(value)));
+        }
+    } else if constexpr (std::is_same_v<t_type, uuid> && std::is_convertible_v<v_type&&, std::string_view> && !std::is_same_v<raw_v_type, uuid>) {
+        out = uuid(std::string_view(std::forward<v_type>(value)));
+    } else if constexpr (std::is_same_v<t_type, decimal> && std::is_convertible_v<v_type&&, std::string_view> && !std::is_same_v<raw_v_type, decimal>) {
+        out = decimal(std::string_view(std::forward<v_type>(value)));
+    } else if constexpr (std::is_same_v<t_type, decimal> && is_model_integer<raw_v_type>) {
+        out = decimal(checked_model_integer<std::int64_t>(value));
     } else if constexpr (is_optional<t_type>::value) {
         using element_type = typename is_optional<t_type>::value_type;
-        if constexpr (is_optional<std::remove_cvref_t<v_type>>::value) {
+        if constexpr (is_optional<raw_v_type>::value) {
             if (!value) {
                 out.reset();
             } else {
@@ -311,7 +502,7 @@ void assign_entity_value(t_type& out, v_type&& value) {
         }
     } else if constexpr (is_std_vector<t_type>::value) {
         using element_type = typename is_std_vector<t_type>::value_type;
-        if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, t_type>) {
+        if constexpr (movable_rvalue && std::is_same_v<raw_v_type, t_type>) {
             t_type owned(std::move(value));
             commit_entity_value(out, std::move(owned));
         } else if constexpr (std::is_arithmetic_v<element_type> && is_exact_element_range<v_type, element_type>()) {
@@ -384,7 +575,14 @@ public:
     entity_value_storage(const entity_value_storage&) = delete;
     entity_value_storage& operator=(const entity_value_storage&) = delete;
     entity_value_storage(entity_value_storage&&) noexcept = default;
-    entity_value_storage& operator=(entity_value_storage&&) = delete;
+    entity_value_storage& operator=(entity_value_storage&&) noexcept = default;
+    [[nodiscard]] entity_value_storage clone() const {
+        entity_value_storage copy;
+        [&]<std::size_t... i>(std::index_sequence<i...>) {
+            ((std::get<i>(copy.slots_) = std::get<i>(slots_).clone()), ...);
+        }(std::make_index_sequence<sizeof...(columns)>{});
+        return copy;
+    }
     template <fixed_string name>
     [[nodiscard]] const auto& get() const& RUVIA_LIFETIMEBOUND {
         const auto& value = slot<name>();
@@ -464,6 +662,13 @@ private:                                                           \
                                                                    \
 public:                                                            \
     owner() = default;                                             \
+    owner(const owner&) = delete;                                  \
+    owner& operator=(const owner&) = delete;                       \
+    owner(owner&&) noexcept = default;                             \
+    owner& operator=(owner&&) noexcept = default;                  \
+    [[nodiscard]] owner clone() const {                            \
+        return owner(member.clone());                              \
+    }                                                              \
     template <::ruvia::fixed_string field_name>                    \
     static consteval std::size_t column_index() {                  \
         return storage_type::template column_index<field_name>();  \
@@ -628,6 +833,14 @@ public:
         rows_.push_back(std::move(entity));
     }
     void push_back(entity_type&&) && = delete;
+    [[nodiscard]] entity_rows clone() const {
+        entity_rows copy;
+        copy.rows_.reserve(rows_.size());
+        for (const auto& row : rows_) {
+            copy.rows_.push_back(row.clone());
+        }
+        return copy;
+    }
     [[nodiscard]] std::span<const entity_type> rows() const& noexcept RUVIA_LIFETIMEBOUND {
         return rows_;
     }
@@ -639,5 +852,325 @@ public:
 private:
     std::vector<entity_type> rows_;
 };
+
+template <typename t_type>
+concept any_entity = std::same_as<t_type, std::remove_cvref_t<t_type>> &&
+    requires { typename t_type::columns_type; } &&
+    ((requires { requires std::same_as<t_type, typename t_type::db_entity_type>; }) ||
+        (requires { requires std::same_as<t_type, typename t_type::db_projection_type>; }) ||
+        (requires { requires std::same_as<t_type, typename t_type::redis_entity_type>; }));
+
+template <typename t_type>
+concept writable_entity = any_entity<t_type> && !requires { typename t_type::db_projection_type; };
+
+namespace detail {
+
+template <typename column_type>
+consteval bool is_raw_json_entity_column() noexcept {
+    if constexpr (requires { column_type::data_type; }) {
+        using data_enum = std::remove_cvref_t<decltype(column_type::data_type)>;
+        if constexpr (requires { data_enum::json; data_enum::jsonb; }) {
+            return column_type::data_type == data_enum::json || column_type::data_type == data_enum::jsonb;
+        }
+    }
+    return false;
+}
+
+template <typename column_type>
+consteval bool is_patchable_entity_column() noexcept {
+    if constexpr (requires { column_type::options.read_only_; column_type::options.generated_type_; }) {
+        using generated_enum = std::remove_cvref_t<decltype(column_type::options.generated_type_)>;
+        return !column_type::options.read_only_ && column_type::options.generated_type_ == generated_enum::none;
+    }
+    return true;
+}
+
+inline void append_raw_entity_json(std::string& output, std::string_view raw) {
+    auto cursor = raw;
+    skip_json_whitespace(cursor);
+    const auto start = cursor;
+    if (!skip_json_value(cursor, 0)) {
+        throw std::invalid_argument("entity JSON column does not contain valid JSON");
+    }
+    const auto token = start.substr(0, start.size() - cursor.size());
+    skip_json_whitespace(cursor);
+    if (!cursor.empty()) {
+        throw std::invalid_argument("entity JSON column contains trailing JSON tokens");
+    }
+    output.append(token);
+}
+
+template <typename value_type>
+void append_entity_json_scalar_or_array(std::string& output, const value_type& value, bytes_encoding binary_encoding) {
+    if constexpr (std::is_same_v<value_type, std::string>) {
+        append_json_string(output, value);
+    } else if constexpr (std::is_same_v<value_type, bytes>) {
+        append_model_binary(output, value.view(), binary_encoding);
+    } else if constexpr (is_optional<value_type>::value) {
+        if (!value) {
+            output.append("null");
+        } else {
+            append_entity_json_scalar_or_array(output, *value, binary_encoding);
+        }
+    } else if constexpr (is_std_vector<value_type>::value) {
+        output.push_back('[');
+        bool first = true;
+        for (const auto& item : value) {
+            if (!first) {
+                output.push_back(',');
+            }
+            first = false;
+            if constexpr (std::is_same_v<typename is_std_vector<value_type>::value_type, bool>) {
+                append_json_value(output, static_cast<bool>(item));
+            } else {
+                append_entity_json_scalar_or_array(output, item, binary_encoding);
+            }
+        }
+        output.push_back(']');
+    } else {
+        append_json_value(output, value);
+    }
+}
+
+}  // namespace detail
+
+template <any_entity entity_type>
+void append_json(std::string& output, const entity_type& entity, bytes_encoding binary_encoding = bytes_encoding::base64);
+
+template <any_entity entity_type>
+void append_json(std::string& output, const entity_rows<entity_type>& rows, bytes_encoding binary_encoding = bytes_encoding::base64) {
+    output.push_back('[');
+    bool first = true;
+    for (const auto& row : rows) {
+        if (!first) {
+            output.push_back(',');
+        }
+        first = false;
+        append_json(output, row, binary_encoding);
+    }
+    output.push_back(']');
+}
+
+template <any_entity entity_type>
+void append_json(std::string& output, const entity_type& entity, bytes_encoding binary_encoding) {
+    output.push_back('{');
+    bool first = true;
+    detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
+        if (!entity.template is_set<column_type::name>()) {
+            return;
+        }
+        if (!first) {
+            output.push_back(',');
+        }
+        first = false;
+        append_json_string(output, column_type::name.view());
+        output.push_back(':');
+        if (entity.template is_null<column_type::name>()) {
+            output.append("null");
+            return;
+        }
+        const auto& value = entity.template get<column_type::name>();
+        if constexpr (detail::is_raw_json_entity_column<column_type>() && (std::is_same_v<typename column_type::value_type, std::string> || std::is_same_v<typename column_type::value_type, string>)) {
+            detail::append_raw_entity_json(output, std::string_view(value));
+        } else {
+            detail::append_entity_json_scalar_or_array(output, value, binary_encoding);
+        }
+    });
+    if constexpr (requires { typename entity_type::relations_type; }) {
+        detail::for_each_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t> {
+            if (!entity.template is_set<relation_type::name>()) {
+                return;
+            }
+            if (!first) {
+                output.push_back(',');
+            }
+            first = false;
+            append_json_string(output, relation_type::name.view());
+            output.push_back(':');
+            if (entity.template is_null<relation_type::name>()) {
+                output.append("null");
+                return;
+            }
+            append_json(output, entity.template get<relation_type::name>(), binary_encoding);
+        });
+    }
+    output.push_back('}');
+}
+
+template <any_entity entity_type>
+[[nodiscard]] std::string to_json(const entity_type& entity, bytes_encoding binary_encoding = bytes_encoding::base64) {
+    std::string output;
+    append_json(output, entity, binary_encoding);
+    return output;
+}
+
+template <any_entity entity_type>
+[[nodiscard]] std::string to_json(const entity_rows<entity_type>& rows, bytes_encoding binary_encoding = bytes_encoding::base64) {
+    std::string output;
+    append_json(output, rows, binary_encoding);
+    return output;
+}
+
+template <typename model_type, any_entity entity_type>
+    requires detail::is_model<model_type>
+[[nodiscard]] model_type from_entity(const entity_type& source);
+
+namespace detail {
+
+template <typename target_type, typename source_type>
+void assign_patch_value(target_type& out, const source_type& value) {
+    if constexpr (is_std_vector<target_type>::value && is_ruvia_array<source_type>) {
+        using element_type = typename is_std_vector<target_type>::value_type;
+        target_type converted;
+        converted.reserve(value.size());
+        for (const auto& item : value) {
+            auto elem = entity_value_slot<element_type>::make_value();
+            assign_patch_value(elem, item);
+            converted.push_back(std::move(elem));
+        }
+        commit_entity_value(out, std::move(converted));
+    } else if constexpr (std::is_same_v<target_type, std::string> && (is_ruvia_json_value<source_type> || is_ruvia_json_object<source_type>)) {
+        std::string owned(value.view());
+        commit_entity_value(out, std::move(owned));
+    } else if constexpr (std::is_same_v<target_type, string> && (is_ruvia_json_value<source_type> || is_ruvia_json_object<source_type>)) {
+        commit_entity_value(out, string(value.view()));
+    } else {
+        assign_entity_value(out, value);
+    }
+}
+
+template <typename field_type, typename source_type>
+[[nodiscard]] field_type convert_entity_to_model_value(const source_type& value) {
+    if constexpr (is_model<field_type> && any_entity<source_type>) {
+        return ::ruvia::from_entity<field_type>(value);
+    } else if constexpr (is_ruvia_array<field_type>) {
+        using element_type = typename field_type::value_type;
+        field_type result;
+        result.reserve(value.size());
+        for (const auto& item : value) {
+            if constexpr (std::is_same_v<source_type, std::vector<bool>>) {
+                result.push_back(convert_entity_to_model_value<element_type>(static_cast<bool>(item)));
+            } else {
+                result.push_back(convert_entity_to_model_value<element_type>(item));
+            }
+        }
+        return result;
+    } else if constexpr (std::is_same_v<field_type, json_value> && (std::is_same_v<source_type, std::string> || std::is_same_v<source_type, string>)) {
+        auto parsed = json_value::parse(std::string(std::string_view(value)));
+        if (!parsed.has_value()) {
+            throw conversion_error(conversion_error::code_type::invalid_format, "entity JSON field is not valid JSON");
+        }
+        return std::move(parsed).take_value();
+    } else if constexpr (std::is_same_v<field_type, json_object> && (std::is_same_v<source_type, std::string> || std::is_same_v<source_type, string>)) {
+        auto parsed = json_object::parse(std::string(std::string_view(value)));
+        if (!parsed.has_value()) {
+            throw conversion_error(conversion_error::code_type::invalid_format, "entity JSON field is not a valid JSON object");
+        }
+        return std::move(parsed).take_value();
+    } else if constexpr (std::is_same_v<field_type, string>) {
+        return string(std::string_view(value));
+    } else if constexpr (std::is_same_v<field_type, bytes>) {
+        return value.clone();
+    } else if constexpr (is_model_integer<field_type> && is_model_integer<source_type>) {
+        if (!std::in_range<field_type>(value)) {
+            throw conversion_error(conversion_error::code_type::out_of_range, "entity integer value is out of range for model field");
+        }
+        return static_cast<field_type>(value);
+    } else if constexpr (is_model_floating<field_type> && (is_model_integer<source_type> || std::is_floating_point_v<source_type>)) {
+        if constexpr (std::is_floating_point_v<source_type>) {
+            return checked_model_float<field_type>(value);
+        } else {
+            return static_cast<field_type>(value);
+        }
+    } else {
+        return field_type(value);
+    }
+}
+
+}  // namespace detail
+
+// Two-phase transactional patch from a RUVIA_MODEL onto an entity:
+// - Missing model fields leave the entity column untouched.
+// - Explicit `null` model fields call `set_null()` (or throw std::invalid_argument if non-nullable).
+// - Present values convert and assign onto matching writable entity columns.
+// On any exception, `target` remains completely unchanged.
+template <writable_entity entity_type, typename model_type>
+    requires detail::is_model<model_type>
+void apply_model_patch(entity_type& target, const model_type& patch) {
+    auto staged = target.clone();
+    detail::model::visit_model_fields(patch, detail::model::model_access::schema<model_type>(), [&](const auto& descriptor, const auto& slot) {
+        using descriptor_type = std::remove_cvref_t<decltype(descriptor)>;
+        constexpr auto field_name = descriptor_type::source_name;
+        constexpr auto col_index = detail::descriptor_index<typename entity_type::columns_type, field_name>();
+        if constexpr (col_index < std::tuple_size_v<typename entity_type::columns_type>) {
+            using column_type = std::tuple_element_t<col_index, typename entity_type::columns_type>;
+            if constexpr (detail::is_patchable_entity_column<column_type>()) {
+                if (!slot.is_present()) {
+                    return;
+                }
+                if (slot.is_null()) {
+                    if constexpr (column_type::options.nullable_) {
+                        staged.template set_null<field_name>();
+                    } else {
+                        throw std::invalid_argument("cannot patch non-nullable entity column with null");
+                    }
+                    return;
+                }
+                if (slot.has_value()) {
+                    auto converted = detail::entity_value_slot<typename column_type::value_type>::make_value();
+                    detail::assign_patch_value(converted, *slot.value());
+                    staged.template set<field_name>(std::move(converted));
+                }
+            }
+        }
+    });
+    target = std::move(staged);
+}
+
+// Maps set columns (and loaded relations on db_entity) of `source` into a RUVIA_MODEL.
+// Unset columns/unloaded relations leave the corresponding model fields unset.
+template <typename model_type, any_entity entity_type>
+    requires detail::is_model<model_type>
+[[nodiscard]] model_type from_entity(const entity_type& source) {
+    model_type result{};
+    detail::model::visit_model_fields(result, detail::model::model_access::schema<model_type>(), [&](const auto& descriptor, auto& slot) {
+        using descriptor_type = std::remove_cvref_t<decltype(descriptor)>;
+        using slot_type = std::remove_cvref_t<decltype(slot)>;
+        using field_value_type = typename slot_type::value_type;
+        constexpr auto field_name = descriptor_type::source_name;
+        constexpr auto col_index = detail::descriptor_index<typename entity_type::columns_type, field_name>();
+        if constexpr (col_index < std::tuple_size_v<typename entity_type::columns_type>) {
+            if (!source.template is_set<field_name>()) {
+                return;
+            }
+            if (source.template is_null<field_name>()) {
+                if constexpr (slot_type::nullable) {
+                    slot.assign(nullptr);
+                } else {
+                    throw conversion_error(conversion_error::code_type::unexpected_null, "NULL entity column cannot map to non-nullable model field");
+                }
+                return;
+            }
+            slot.assign(detail::convert_entity_to_model_value<field_value_type>(source.template get<field_name>()));
+        } else if constexpr (requires { typename entity_type::relations_type; }) {
+            constexpr auto rel_index = detail::descriptor_index<typename entity_type::relations_type, field_name>();
+            if constexpr (rel_index < std::tuple_size_v<typename entity_type::relations_type>) {
+                if (!source.template is_set<field_name>()) {
+                    return;
+                }
+                if (source.template is_null<field_name>()) {
+                    if constexpr (slot_type::nullable) {
+                        slot.assign(nullptr);
+                    } else {
+                        throw conversion_error(conversion_error::code_type::unexpected_null, "NULL entity relation cannot map to non-nullable model field");
+                    }
+                    return;
+                }
+                slot.assign(detail::convert_entity_to_model_value<field_value_type>(source.template get<field_name>()));
+            }
+        }
+    });
+    return result;
+}
 
 }  // namespace ruvia

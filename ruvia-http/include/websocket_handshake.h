@@ -20,6 +20,29 @@ namespace ruvia {
 
 inline constexpr std::size_t max_websocket_subprotocols = 64;
 
+// The base64-encoded SHA-1 of the client Sec-WebSocket-Key plus the RFC 6455
+// GUID, as it appears in the Sec-WebSocket-Accept response field (28 chars).
+using websocket_accept_key = std::array<char, 28>;
+
+void encode_websocket_accept(std::span<char, 28> output, std::string_view key);
+[[nodiscard]] std::string compute_websocket_accept(std::string_view key);
+
+// RFC 7692 section 7.1 parameters of one permessage-deflate extension element.
+// client_max_window_bits may appear without a value; whether that is
+// acceptable depends on the role, so its presence is kept apart from its value.
+struct permessage_deflate_params final {
+    bool server_no_context_takeover_{false};
+    bool client_no_context_takeover_{false};
+    std::optional<int> server_max_window_bits_{};
+    bool client_max_window_bits_present_{false};
+    std::optional<int> client_max_window_bits_{};
+};
+
+// Grammar shared by offers and responses: every parameter is defined, appears
+// at most once and carries a value exactly where RFC 7692 defines one. Returns
+// nullopt for another extension or a malformed element; role policy is external.
+[[nodiscard]] std::optional<permessage_deflate_params> parse_permessage_deflate_params(std::string_view element) noexcept;
+
 // Allocation-free validated RFC 6455 subprotocol list, suitable for server
 // route configuration and parsing offered protocol lists. Capacity is a product
 // limit of max_websocket_subprotocols distinct protocols across all list elements;
@@ -63,9 +86,9 @@ public:
 
 private:
     [[nodiscard]] bool append_elements(std::string_view value, bool skip_duplicates) noexcept {
-        return detail::http_visit_token_list(value, detail::http_field_list_role::recipient, [this, skip_duplicates](std::string_view protocol) noexcept {
+        return http_visit_token_list(value, http_field_list_role::recipient, [this, skip_duplicates](std::string_view protocol) noexcept {
             return (skip_duplicates && contains(protocol)) || append(protocol);
-        }) == detail::http_field_list_parse_status::ok;
+        }) == http_field_list_parse_status::ok;
     }
 
     std::array<std::string_view, max_websocket_subprotocols> protocols_{};

@@ -24,50 +24,43 @@
 #include "worker_task_fixture.h"
 
 namespace {
-RUVIA_MODEL(narrow_values, RUVIA_REQUIRED_FIELD(i8, ruvia::int8), RUVIA_REQUIRED_FIELD(u8, ruvia::uint8), RUVIA_REQUIRED_FIELD(i16, ruvia::int16), RUVIA_REQUIRED_FIELD(u16, ruvia::uint16), RUVIA_REQUIRED_FIELD(real, ruvia::double_value));
-RUVIA_MODEL(narrow_nullable, RUVIA_OPTIONAL_FIELD(value, ruvia::uint8, RUVIA_NULLABLE));
-RUVIA_MODEL(wide_values, RUVIA_OPTIONAL_FIELD(i32, ruvia::int32), RUVIA_OPTIONAL_FIELD(u32, ruvia::uint32), RUVIA_OPTIONAL_FIELD(i64, ruvia::int64), RUVIA_OPTIONAL_FIELD(u64, ruvia::uint64));
-RUVIA_MODEL(floating_nullable, RUVIA_OPTIONAL_FIELD(single, ruvia::float_value, RUVIA_NULLABLE), RUVIA_OPTIONAL_FIELD(real, ruvia::double_value, RUVIA_NULLABLE));
-
-struct convertible_real final {
-    constexpr operator float() const noexcept {
-        return 1.25f;
-    }
-    constexpr operator double() const noexcept {
-        return 2.5;
-    }
-};
+RUVIA_MODEL(narrow_values, RUVIA_REQUIRED_FIELD(i8, std::int8_t), RUVIA_REQUIRED_FIELD(u8, std::uint8_t), RUVIA_REQUIRED_FIELD(i16, std::int16_t), RUVIA_REQUIRED_FIELD(u16, std::uint16_t), RUVIA_REQUIRED_FIELD(real, double));
+RUVIA_MODEL(narrow_nullable, RUVIA_OPTIONAL_FIELD(value, std::uint8_t, RUVIA_NULLABLE));
+RUVIA_MODEL(wide_values, RUVIA_OPTIONAL_FIELD(i32, std::int32_t), RUVIA_OPTIONAL_FIELD(u32, std::uint32_t), RUVIA_OPTIONAL_FIELD(i64, std::int64_t), RUVIA_OPTIONAL_FIELD(u64, std::uint64_t));
+RUVIA_MODEL(floating_nullable, RUVIA_OPTIONAL_FIELD(single, float, RUVIA_NULLABLE), RUVIA_OPTIONAL_FIELD(real, double, RUVIA_NULLABLE));
 }  // namespace
 
 TEST(Ruvia, model_narrow_value_types_preserve_boundaries) {
-    EXPECT_EQ(ruvia::int8(-128).value_, std::int8_t{-128});
-    EXPECT_EQ(ruvia::uint8(255).value_, std::uint8_t{255});
-    EXPECT_EQ(ruvia::int16(-32768).value_, std::int16_t{-32768});
-    EXPECT_EQ(ruvia::uint16(65535).value_, std::uint16_t{65535});
+    narrow_values boundary;
+    boundary.set<"i8">(-128).set<"u8">(255).set<"i16">(-32768).set<"u16">(65535).set<"real">(1.0);
+    EXPECT_EQ(boundary.get<"i8">(), std::int8_t{-128});
+    EXPECT_EQ(boundary.get<"u8">(), std::uint8_t{255});
+    EXPECT_EQ(boundary.get<"i16">(), std::int16_t{-32768});
+    EXPECT_EQ(boundary.get<"u16">(), std::uint16_t{65535});
     bool rejected = false;
     try {
-        (void)ruvia::int8(128);
+        boundary.set<"i8">(128);
     } catch (const std::out_of_range&) {
         rejected = true;
     }
     EXPECT_TRUE(rejected);
     rejected = false;
     try {
-        (void)ruvia::uint8(-1);
+        boundary.set<"u8">(-1);
     } catch (const std::out_of_range&) {
         rejected = true;
     }
     EXPECT_TRUE(rejected);
     rejected = false;
     try {
-        (void)ruvia::int16(32768);
+        boundary.set<"i16">(32768);
     } catch (const std::out_of_range&) {
         rejected = true;
     }
     EXPECT_TRUE(rejected);
     rejected = false;
     try {
-        (void)ruvia::uint16(65536);
+        boundary.set<"u16">(65536);
     } catch (const std::out_of_range&) {
         rejected = true;
     }
@@ -76,9 +69,9 @@ TEST(Ruvia, model_narrow_value_types_preserve_boundaries) {
 
 TEST(Ruvia, model_narrow_values_parse_json_form_and_reject_float_as_integer) {
     auto json = ruvia::parse_json<narrow_values>(R"({"i8":-128,"u8":255,"i16":-32768,"u16":65535,"real":1.5})").take_value();
-    EXPECT_EQ(json.get<"i8">().value_, std::int8_t{-128});
-    EXPECT_EQ(json.get<"u16">().value_, std::uint16_t{65535});
-    EXPECT_EQ(json.get<"real">().value_, 1.5);
+    EXPECT_EQ(json.get<"i8">(), std::int8_t{-128});
+    EXPECT_EQ(json.get<"u16">(), std::uint16_t{65535});
+    EXPECT_EQ(json.get<"real">(), 1.5);
     {
         const auto result = ruvia::parse_json<narrow_values>(R"({"i8":1.5,"u8":2,"i16":3,"u16":4,"real":1})");
         ASSERT_FALSE(result.has_value());
@@ -87,42 +80,42 @@ TEST(Ruvia, model_narrow_values_parse_json_form_and_reject_float_as_integer) {
         EXPECT_EQ(result.error().issues().front().field(), "i8");
     }
     {
-        const auto result = ruvia::parse_json<ruvia::int8>("128");
+        const auto result = ruvia::parse_json<std::int8_t>("128");
         ASSERT_FALSE(result.has_value());
         EXPECT_EQ(result.error().code(), ruvia::model_parse_error::code_type::invalid_format);
     }
     {
-        const auto result = ruvia::parse_json<ruvia::int8>("-129");
+        const auto result = ruvia::parse_json<std::int8_t>("-129");
         ASSERT_FALSE(result.has_value());
         EXPECT_EQ(result.error().code(), ruvia::model_parse_error::code_type::invalid_format);
     }
     {
-        const auto result = ruvia::parse_json<ruvia::uint8>("-1");
+        const auto result = ruvia::parse_json<std::uint8_t>("-1");
         ASSERT_FALSE(result.has_value());
         EXPECT_EQ(result.error().code(), ruvia::model_parse_error::code_type::invalid_format);
     }
     {
-        const auto result = ruvia::parse_json<ruvia::uint8>("256");
+        const auto result = ruvia::parse_json<std::uint8_t>("256");
         ASSERT_FALSE(result.has_value());
         EXPECT_EQ(result.error().code(), ruvia::model_parse_error::code_type::invalid_format);
     }
     {
-        const auto result = ruvia::parse_json<ruvia::int16>("32768");
+        const auto result = ruvia::parse_json<std::int16_t>("32768");
         ASSERT_FALSE(result.has_value());
         EXPECT_EQ(result.error().code(), ruvia::model_parse_error::code_type::invalid_format);
     }
     {
-        const auto result = ruvia::parse_json<ruvia::int16>("-32769");
+        const auto result = ruvia::parse_json<std::int16_t>("-32769");
         ASSERT_FALSE(result.has_value());
         EXPECT_EQ(result.error().code(), ruvia::model_parse_error::code_type::invalid_format);
     }
     {
-        const auto result = ruvia::parse_json<ruvia::uint16>("65536");
+        const auto result = ruvia::parse_json<std::uint16_t>("65536");
         ASSERT_FALSE(result.has_value());
         EXPECT_EQ(result.error().code(), ruvia::model_parse_error::code_type::invalid_format);
     }
     {
-        const auto result = ruvia::parse_json<ruvia::uint16>("-1");
+        const auto result = ruvia::parse_json<std::uint16_t>("-1");
         ASSERT_FALSE(result.has_value());
         EXPECT_EQ(result.error().code(), ruvia::model_parse_error::code_type::invalid_format);
     }
@@ -132,7 +125,7 @@ TEST(Ruvia, model_narrow_values_parse_json_form_and_reject_float_as_integer) {
         EXPECT_EQ(result.error().code(), ruvia::model_parse_error::code_type::invalid_format);
     }
     auto form = ruvia::parse_form<narrow_values>("i8=-128&u8=255&i16=-32768&u16=65535&real=1.5").take_value();
-    EXPECT_EQ(form.get<"i8">().value_, std::int8_t{-128});
+    EXPECT_EQ(form.get<"i8">(), std::int8_t{-128});
 }
 
 TEST(Ruvia, model_narrow_assignment_checks_native_and_model_scalars_before_replacing_values) {
@@ -146,18 +139,18 @@ TEST(Ruvia, model_narrow_assignment_checks_native_and_model_scalars_before_repla
             rejected = true;
         }
         EXPECT_TRUE(rejected);
-        EXPECT_EQ(model.get<"value">()->value_, std::uint8_t{7});
+        EXPECT_EQ(*model.get<"value">(), std::uint8_t{7});
         EXPECT_TRUE(!model.is_null<"value">());
         EXPECT_TRUE(!model.is_present<"value">());
     };
     check_rejected(-1);
     check_rejected(256);
-    check_rejected(ruvia::int32{-1});
-    check_rejected(ruvia::uint64{256});
+    check_rejected(std::int32_t{-1});
+    check_rejected(std::uint64_t{256});
     auto parsed_value = ruvia::parse_json<narrow_nullable>(R"({"value":null})").take_value();
     bool rejected = false;
     try {
-        parsed_value.set<"value">(ruvia::int64{-1});
+        parsed_value.set<"value">(std::int64_t{-1});
     } catch (const std::out_of_range&) {
         rejected = true;
     }
@@ -186,7 +179,7 @@ TEST(Ruvia, model_integer_assignment_rejects_out_of_range_without_replacing_valu
         model.set<"i32">(std::int64_t{-2147483649});
     });
     check_rejected([&] {
-        model.set<"i32">(ruvia::uint64{4294967296});
+        model.set<"i32">(std::uint64_t{4294967296});
     });
     check_rejected([&] {
         model.set<"u32">(-1);
@@ -195,52 +188,17 @@ TEST(Ruvia, model_integer_assignment_rejects_out_of_range_without_replacing_valu
         model.set<"u32">(std::uint64_t{4294967296});
     });
     check_rejected([&] {
-        model.set<"u32">(ruvia::int64{-1});
+        model.set<"u32">(std::int64_t{-1});
     });
     check_rejected([&] {
         model.set<"i64">((std::numeric_limits<std::uint64_t>::max)());
     });
     check_rejected([&] {
-        model.set<"i64">(ruvia::uint64{(std::numeric_limits<std::uint64_t>::max)()});
-    });
-    check_rejected([&] {
         model.set<"u64">(-1);
     });
     check_rejected([&] {
-        model.set<"u64">(ruvia::int64{-1});
+        model.set<"u64">(std::int64_t{-1});
     });
-}
-
-TEST(Ruvia, model_floating_construction_rejects_finite_overflow_before_narrowing) {
-    const auto check_rejected = [&](auto construct) {
-        bool rejected = false;
-        try {
-            construct();
-        } catch (const std::out_of_range&) {
-            rejected = true;
-        }
-        EXPECT_TRUE(rejected);
-    };
-    const double above_float_max = std::nextafter(static_cast<double>((std::numeric_limits<float>::max)()), std::numeric_limits<double>::infinity());
-    check_rejected([&] {
-        (void)ruvia::float_value(above_float_max);
-    });
-    check_rejected([&] {
-        (void)ruvia::float_value(ruvia::double_value{-above_float_max});
-    });
-    const long double above_float_max_extended = std::nextafter(static_cast<long double>((std::numeric_limits<float>::max)()), std::numeric_limits<long double>::infinity());
-    check_rejected([&] {
-        (void)ruvia::float_value(above_float_max_extended);
-    });
-    if constexpr ((std::numeric_limits<long double>::max)() > (std::numeric_limits<double>::max)()) {
-        const long double above_double_max = std::nextafter(static_cast<long double>((std::numeric_limits<double>::max)()), std::numeric_limits<long double>::infinity());
-        check_rejected([&] {
-            (void)ruvia::double_value(above_double_max);
-        });
-        check_rejected([&] {
-            (void)ruvia::double_value(-above_double_max);
-        });
-    }
 }
 
 TEST(Ruvia, model_floating_assignment_rejects_overflow_without_replacing_values_or_null) {
@@ -256,8 +214,8 @@ TEST(Ruvia, model_floating_assignment_rejects_overflow_without_replacing_values_
             }
             EXPECT_TRUE(rejected);
         }
-        EXPECT_EQ(value.get<"single">()->value_, 7.0f);
-        EXPECT_EQ(value.get<"real">()->value_, 9.0);
+        EXPECT_EQ(*value.get<"single">(), 7.0f);
+        EXPECT_EQ(*value.get<"real">(), 9.0);
         EXPECT_TRUE(!value.is_null<"single">() && !value.is_null<"real">());
         EXPECT_TRUE(value.is_present<"single">() && value.is_present<"real">());
         EXPECT_TRUE(null_value.is_null<"single">() && null_value.is_null<"real">());
@@ -268,7 +226,7 @@ TEST(Ruvia, model_floating_assignment_rejects_overflow_without_replacing_values_
         model.template set<"single">((std::numeric_limits<double>::max)());
     });
     check_rejected([](auto& model) {
-        model.template set<"single">(ruvia::double_value{-(std::numeric_limits<double>::max)()});
+        model.template set<"single">(-(std::numeric_limits<double>::max)());
     });
     if constexpr ((std::numeric_limits<long double>::max)() > (std::numeric_limits<double>::max)()) {
         check_rejected([](auto& model) {
@@ -277,66 +235,38 @@ TEST(Ruvia, model_floating_assignment_rejects_overflow_without_replacing_values_
     }
 }
 
-TEST(Ruvia, model_floating_construction_preserves_boundaries_rounding_and_scalar_inputs) {
-    constexpr auto float_max = (std::numeric_limits<float>::max)();
-    constexpr ruvia::float_value positive{static_cast<double>(float_max)};
-    constexpr ruvia::float_value negative{ruvia::double_value{-static_cast<double>(float_max)}};
-    constexpr ruvia::float_value rounded{1.0 + std::numeric_limits<float>::epsilon() / 4.0};
-    constexpr ruvia::double_value double_boundary{static_cast<long double>((std::numeric_limits<double>::max)())};
-    constexpr ruvia::double_value double_rounded{1.0L + std::numeric_limits<double>::epsilon() / 4.0L};
-    EXPECT_EQ(positive.value_, float_max);
-    EXPECT_EQ(negative.value_, -float_max);
-    EXPECT_EQ(rounded.value_, 1.0f);
-    EXPECT_EQ(double_boundary.value_, (std::numeric_limits<double>::max)());
-    EXPECT_EQ(double_rounded.value_, 1.0);
-    EXPECT_EQ(ruvia::float_value(17).value_, 17.0f);
-    EXPECT_EQ(ruvia::double_value(ruvia::int32{-17}).value_, -17.0);
-    EXPECT_EQ(ruvia::float_value(true).value_, 1.0f);
-    EXPECT_EQ(ruvia::double_value(ruvia::bool_value{false}).value_, 0.0);
-    EXPECT_EQ(ruvia::double_value(ruvia::float_value{1.25f}).value_, 1.25);
-    constexpr ruvia::float_value custom_float{convertible_real{}};
-    constexpr ruvia::double_value custom_double{convertible_real{}};
-    EXPECT_EQ(custom_float.value_, 1.25f);
-    EXPECT_EQ(custom_double.value_, 2.5);
-}
-
 TEST(Ruvia, model_floating_construction_and_assignment_preserve_explicit_nonfinite_inputs) {
     const auto infinity = std::numeric_limits<double>::infinity();
     const auto nan = std::numeric_limits<double>::quiet_NaN();
-    EXPECT_EQ(ruvia::float_value(infinity).value_, std::numeric_limits<float>::infinity());
-    EXPECT_EQ(ruvia::float_value(ruvia::double_value{-infinity}).value_, -std::numeric_limits<float>::infinity());
-    EXPECT_TRUE(std::isnan(ruvia::float_value(ruvia::double_value{nan}).value_));
-    EXPECT_EQ(ruvia::double_value(std::numeric_limits<long double>::infinity()).value_, infinity);
-    EXPECT_TRUE(std::isnan(ruvia::double_value(std::numeric_limits<long double>::quiet_NaN()).value_));
     floating_nullable model;
-    model.set<"single">(ruvia::double_value{infinity});
+    model.set<"single">(infinity);
     model.set<"real">(nan);
-    EXPECT_TRUE(std::isinf(model.get<"single">()->value_));
-    EXPECT_TRUE(std::isnan(model.get<"real">()->value_));
+    EXPECT_TRUE(std::isinf(*model.get<"single">()));
+    EXPECT_TRUE(std::isnan(*model.get<"real">()));
     EXPECT_TRUE(!model.is_null<"single">() && !model.is_null<"real">());
     EXPECT_EQ(ruvia::to_json(model), R"({"single":null,"real":null})");
 }
 
 TEST(Ruvia, model_bytes_own_and_compare_without_allocator_identity) {
     std::byte input[] = {std::byte{0x01}, std::byte{0x02}};
-    const auto bytes_value = std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(input), 2);
+    const ruvia::byte_view bytes_value(input, 2);
     ruvia::bytes first(bytes_value);
     ruvia::bytes second(bytes_value);
 
     EXPECT_TRUE(first == second);
-    first.assign(std::span<const std::uint8_t>{});
+    first.assign(ruvia::byte_view{});
     EXPECT_TRUE(first.empty());
 }
 
 TEST(Ruvia, model_array_and_boxed_array_compare_values_in_order) {
-    ruvia::array<ruvia::int16> first;
-    ruvia::array<ruvia::int16> second;
+    ruvia::array<std::int16_t> first;
+    ruvia::array<std::int16_t> second;
     first.emplace_back(1);
     first.emplace_back(2);
     second.emplace_back(1);
     second.emplace_back(2);
     EXPECT_TRUE(first == second);
-    second[1] = ruvia::int16(3);
+    second[1] = std::int16_t{3};
     EXPECT_TRUE(!(first == second));
 }
 
@@ -405,24 +335,20 @@ TEST(Ruvia, model_string_assign_rvalue_steals_storage) {
 namespace {
 RUVIA_MODEL(binary_model, RUVIA_REQUIRED_FIELD(bytes, ruvia::bytes), RUVIA_OPTIONAL_FIELD(optional, ruvia::bytes, RUVIA_NULLABLE), RUVIA_OPTIONAL_FIELD(empty, ruvia::bytes, RUVIA_OMIT_EMPTY));
 RUVIA_MODEL(binary_array_model, RUVIA_REQUIRED_FIELD(items, ruvia::array<ruvia::bytes>), RUVIA_REQUIRED_FIELD(boxed, ruvia::boxed_array<ruvia::bytes>));
-
-void check_bytes(const ruvia::bytes& actual, std::span<const std::uint8_t> expected) {
-    EXPECT_EQ(actual.size(), expected.size());
-    EXPECT_TRUE(std::equal(actual.view().begin(), actual.view().end(), expected.begin()));
-}
 }  // namespace
 
 TEST(Ruvia, model_json_bytes_roundtrip_empty_and_all_octets) {
-    std::vector<std::uint8_t> octets(256);
+    std::vector<std::byte> octets(256);
     for (std::size_t i = 0; i < octets.size(); ++i) {
-        octets[i] = static_cast<std::uint8_t>(i);
+        octets[i] = static_cast<std::byte>(i);
     }
-    const auto encoded = ruvia::to_json(ruvia::bytes(std::span<const std::uint8_t>(octets)));
+    const auto encoded = ruvia::to_json(ruvia::bytes(ruvia::byte_view(octets)));
     EXPECT_TRUE(encoded.front() == '"' && encoded.back() == '"');
     EXPECT_TRUE(encoded.find("AAECAwQF") != std::string::npos);
     EXPECT_TRUE(encoded.find("/w==") != std::string::npos);
     auto parsed_value = ruvia::parse_json<ruvia::bytes>(encoded).take_value();
-    check_bytes(parsed_value, octets);
+    EXPECT_EQ(parsed_value.size(), octets.size());
+    EXPECT_TRUE(std::equal(parsed_value.view().begin(), parsed_value.view().end(), octets.begin()));
     auto empty = ruvia::parse_json<ruvia::bytes>(R"("")").take_value();
     EXPECT_TRUE(empty.empty());
     EXPECT_EQ(std::string_view(ruvia::to_json(ruvia::bytes{})), R"("")");
@@ -432,10 +358,10 @@ TEST(Ruvia, model_json_bytes_accepts_padding_and_rejects_noncanonical_inputs) {
     auto one = ruvia::parse_json<ruvia::bytes>(R"("Zg==")").take_value();
     auto two = ruvia::parse_json<ruvia::bytes>(R"("Zm8=")").take_value();
     EXPECT_TRUE(one.size() == 1 && two.size() == 2);
-    EXPECT_EQ(one.view().front(), std::uint8_t{0x66});
-    EXPECT_EQ(two.view().back(), std::uint8_t{0x6f});
+    EXPECT_EQ(one.view().front(), std::byte{0x66});
+    EXPECT_EQ(two.view().back(), std::byte{0x6f});
     auto escaped = ruvia::parse_json<ruvia::bytes>(R"("\u005ag\u003d=")").take_value();
-    EXPECT_EQ(escaped.view().front(), std::uint8_t{0x66});
+    EXPECT_EQ(escaped.view().front(), std::byte{0x66});
     for (const auto input : {R"("Zg")", R"("Zh==")", R"("Zm=9")", R"("Zm9v=")", R"("Zm-v")", R"("Zm_v")", R"("Zm9v\n")", R"("Zm9=")", R"("====")", R"("Zg==AAAA")", R"("AA== ")", "null", "[1]", "123"}) {
         {
             const auto result = ruvia::parse_json<ruvia::bytes>(input);
@@ -449,7 +375,7 @@ TEST(Ruvia, model_json_bytes_supports_nested_arrays_nullable_and_omit_empty) {
     auto nested = ruvia::parse_json<binary_array_model>(R"({"items":["AQI=",""],"boxed":["/w=="]})").take_value();
     EXPECT_EQ(nested.get<"items">().size(), std::size_t{2});
     EXPECT_EQ(nested.get<"items">()[0].view().size(), std::size_t{2});
-    EXPECT_EQ(nested.get<"boxed">().front().view().front(), std::uint8_t{255});
+    EXPECT_EQ(nested.get<"boxed">().front().view().front(), std::byte{255});
     auto model = ruvia::parse_json<binary_model>(R"({"bytes":"AQI=","optional":null,"empty":""})").take_value();
     EXPECT_TRUE(model.is_null<"optional">());
     EXPECT_EQ(std::string_view(ruvia::to_json(model)), R"({"bytes":"AQI=","optional":null})");
@@ -457,11 +383,11 @@ TEST(Ruvia, model_json_bytes_supports_nested_arrays_nullable_and_omit_empty) {
 
 TEST(Ruvia, model_bytes_set_and_move_preserve_values) {
     binary_model model;
-    const std::uint8_t raw[] = {1, 2, 3};
-    model.set<"bytes">(std::span<const std::uint8_t>(raw));
-    std::vector<std::uint8_t> owned({4, 5});
+    const std::byte raw[] = {std::byte{1}, std::byte{2}, std::byte{3}};
+    model.set<"bytes">(ruvia::byte_view(raw));
+    std::vector<std::byte> owned({std::byte{4}, std::byte{5}});
     model.set<"bytes">(std::move(owned));
-    EXPECT_EQ(model.get<"bytes">().view()[1], std::uint8_t{5});
+    EXPECT_EQ(model.get<"bytes">().view()[1], std::byte{5});
 }
 
 TEST(Ruvia, model_bytes_repeated_operations_reclaim_storage_and_keep_results) {
@@ -469,7 +395,7 @@ TEST(Ruvia, model_bytes_repeated_operations_reclaim_storage_and_keep_results) {
         binary_model retained;
         {
             {
-                std::vector<std::uint8_t> input(256, 0xff);
+                std::vector<std::byte> input(256, std::byte{0xff});
                 retained.set<"bytes">(std::move(input));
             }
         }
@@ -486,13 +412,13 @@ TEST(Ruvia, model_bytes_repeated_operations_reclaim_storage_and_keep_results) {
                     EXPECT_EQ(result.error().code(), ruvia::model_parse_error::code_type::invalid_format);
                 }
             }
-            EXPECT_EQ(retained.get<"bytes">().view().front(), std::uint8_t{255});
+            EXPECT_EQ(retained.get<"bytes">().view().front(), std::byte{255});
         }
-        std::vector<std::uint8_t> compatible(128, 7);
+        std::vector<std::byte> compatible(128, std::byte{7});
         retained.set<"bytes">(std::move(compatible));
         retained.ensure<"bytes">().assign(retained.get<"bytes">().view().subspan(1));
         EXPECT_EQ(retained.get<"bytes">().size(), std::size_t{127});
-        EXPECT_EQ(retained.get<"bytes">().view().back(), std::uint8_t{7});
+        EXPECT_EQ(retained.get<"bytes">().view().back(), std::byte{7});
         EXPECT_TRUE(saved.size() > 256);
     }
 }
@@ -608,25 +534,25 @@ TEST(Ruvia, model_boxed_array_supports_standard_range_algorithms) {
     }) == constant_values.end());
 }
 
-RUVIA_MODEL(wrapped_scalars, RUVIA_OPTIONAL_FIELD(count, ruvia::uint32), RUVIA_OPTIONAL_FIELD(ratio, ruvia::double_value), RUVIA_OPTIONAL_FIELD(enabled, ruvia::bool_value), RUVIA_OPTIONAL_FIELD(delta, ruvia::int64));
+RUVIA_MODEL(wrapped_scalars, RUVIA_OPTIONAL_FIELD(count, std::uint32_t), RUVIA_OPTIONAL_FIELD(ratio, double), RUVIA_OPTIONAL_FIELD(enabled, bool), RUVIA_OPTIONAL_FIELD(delta, std::int64_t));
 
-RUVIA_MODEL(wrapped_scalars_response, RUVIA_OPTIONAL_FIELD(count, ruvia::uint32), RUVIA_OPTIONAL_FIELD(ratio, ruvia::double_value), RUVIA_OPTIONAL_FIELD(enabled, ruvia::bool_value), RUVIA_OPTIONAL_FIELD(delta, ruvia::int64));
+RUVIA_MODEL(wrapped_scalars_response, RUVIA_OPTIONAL_FIELD(count, std::uint32_t), RUVIA_OPTIONAL_FIELD(ratio, double), RUVIA_OPTIONAL_FIELD(enabled, bool), RUVIA_OPTIONAL_FIELD(delta, std::int64_t));
 
-RUVIA_MODEL(wrapped_defaulted, RUVIA_OPTIONAL_FIELD(retries, ruvia::uint32, RUVIA_DEFAULT(3)));
+RUVIA_MODEL(wrapped_defaulted, RUVIA_OPTIONAL_FIELD(retries, std::uint32_t, RUVIA_DEFAULT(3)));
 
 TEST(Ruvia, model_wrapper_scalar_fields_parse_json_and_forms) {
     constexpr std::string_view body = R"({"count":36,"ratio":9.5,"enabled":true,"delta":-7})";
 
     const auto wrapped = ruvia::parse_json<wrapped_scalars>(body).take_value();
-    EXPECT_EQ(std::uint32_t(wrapped.get<"count">().value()), std::uint32_t{36});
-    EXPECT_TRUE(double(wrapped.get<"ratio">().value()) == 9.5);
-    EXPECT_TRUE(bool(wrapped.get<"enabled">().value()));
-    EXPECT_EQ(std::int64_t(wrapped.get<"delta">().value()), std::int64_t{-7});
+    EXPECT_EQ(wrapped.get<"count">().value(), std::uint32_t{36});
+    EXPECT_TRUE(wrapped.get<"ratio">().value() == 9.5);
+    EXPECT_TRUE(wrapped.get<"enabled">().value());
+    EXPECT_EQ(wrapped.get<"delta">().value(), std::int64_t{-7});
 
     const auto form = ruvia::parse_form<wrapped_scalars>("count=41&ratio=2.5&enabled=true&delta=-9").take_value();
-    EXPECT_EQ(std::uint32_t(form.get<"count">().value()), std::uint32_t{41});
-    EXPECT_TRUE(double(form.get<"ratio">().value()) == 2.5);
-    EXPECT_TRUE(bool(form.get<"enabled">().value()));
+    EXPECT_EQ(form.get<"count">().value(), std::uint32_t{41});
+    EXPECT_TRUE(form.get<"ratio">().value() == 2.5);
+    EXPECT_TRUE(form.get<"enabled">().value());
 }
 
 TEST(Ruvia, model_wrapper_scalar_fields_reject_mistyped_values_but_allow_missing_optional_fields) {
@@ -661,13 +587,13 @@ TEST(Ruvia, model_wrapper_scalar_fields_round_trip_through_json) {
 
 TEST(Ruvia, model_wrapper_scalar_fields_apply_defaults) {
     const auto defaulted = ruvia::parse_json<wrapped_defaulted>("{}").take_value();
-    EXPECT_EQ(std::uint32_t(defaulted.get<"retries">().value()), std::uint32_t{3});
+    EXPECT_EQ(defaulted.get<"retries">(), std::uint32_t{3});
 }
 
 namespace {
 
-RUVIA_MODEL(comparable_model, RUVIA_OPTIONAL_FIELD(number, ruvia::int32, RUVIA_NULLABLE), RUVIA_OPTIONAL_FIELD(text, ruvia::string, RUVIA_NULLABLE));
-RUVIA_MODEL(comparable_tree, RUVIA_REQUIRED_FIELD(value, ruvia::int32), RUVIA_OPTIONAL_FIELD(items, ruvia::array<comparable_model>), RUVIA_OPTIONAL_FIELD(children, ruvia::boxed_array<comparable_tree>));
+RUVIA_MODEL(comparable_model, RUVIA_OPTIONAL_FIELD(number, std::int32_t, RUVIA_NULLABLE), RUVIA_OPTIONAL_FIELD(text, ruvia::string, RUVIA_NULLABLE));
+RUVIA_MODEL(comparable_tree, RUVIA_REQUIRED_FIELD(value, std::int32_t), RUVIA_OPTIONAL_FIELD(items, ruvia::array<comparable_model>), RUVIA_OPTIONAL_FIELD(children, ruvia::boxed_array<comparable_tree>));
 
 }  // namespace
 
@@ -747,12 +673,12 @@ ruvia::json_value dynamic_null_default() {
     return ruvia::json_value::parse("null").take_value();
 }
 
-RUVIA_MODEL(optional_default, RUVIA_OPTIONAL_FIELD(value, ruvia::int32, RUVIA_DEFAULT(evaluated_default()), RUVIA_MIN(5, "too small")));
-RUVIA_MODEL(nullable_default, RUVIA_OPTIONAL_FIELD(value, ruvia::int32, RUVIA_NULLABLE, RUVIA_DEFAULT(evaluated_default())));
-RUVIA_MODEL(null_default, RUVIA_OPTIONAL_FIELD(value, ruvia::int32, RUVIA_NULLABLE, RUVIA_DEFAULT(nullptr)));
+RUVIA_MODEL(optional_default, RUVIA_OPTIONAL_FIELD(value, std::int32_t, RUVIA_DEFAULT(evaluated_default()), RUVIA_MIN(5, "too small")));
+RUVIA_MODEL(nullable_default, RUVIA_OPTIONAL_FIELD(value, std::int32_t, RUVIA_NULLABLE, RUVIA_DEFAULT(evaluated_default())));
+RUVIA_MODEL(null_default, RUVIA_OPTIONAL_FIELD(value, std::int32_t, RUVIA_NULLABLE, RUVIA_DEFAULT(nullptr)));
 RUVIA_MODEL(nullable_dynamic_default, RUVIA_OPTIONAL_FIELD(value, ruvia::json_value, RUVIA_NULLABLE, RUVIA_DEFAULT(dynamic_null_default())));
 RUVIA_MODEL(nonnullable_dynamic_default, RUVIA_OPTIONAL_FIELD(value, ruvia::json_value, RUVIA_DEFAULT(dynamic_null_default())));
-RUVIA_MODEL(failing_default_model, RUVIA_REQUIRED_FIELD(name, ruvia::string), RUVIA_OPTIONAL_FIELD(value, ruvia::int32, RUVIA_DEFAULT(failing_default_value())));
+RUVIA_MODEL(failing_default_model, RUVIA_REQUIRED_FIELD(name, ruvia::string), RUVIA_OPTIONAL_FIELD(value, std::int32_t, RUVIA_DEFAULT(failing_default_value())));
 RUVIA_MODEL(owned_default_model, RUVIA_OPTIONAL_FIELD(value, ruvia::string, RUVIA_DEFAULT(owned_default_value())));
 
 }  // namespace
@@ -760,11 +686,11 @@ RUVIA_MODEL(owned_default_model, RUVIA_OPTIONAL_FIELD(value, ruvia::string, RUVI
 TEST(Ruvia, model_default_expression_is_not_evaluated_for_supplied_or_invalid_input) {
     evaluations = 0;
     optional_default constructed;
-    EXPECT_TRUE(!constructed.get<"value">());
+    EXPECT_TRUE(!constructed.optional<"value">());
     EXPECT_EQ(evaluations, std::size_t{0});
     const auto valid_json = ruvia::parse_json<optional_default>(R"({"value":9})").take_value();
     EXPECT_EQ(evaluations, std::size_t{0});
-    EXPECT_EQ(valid_json.get<"value">()->value_, 9);
+    EXPECT_EQ(valid_json.get<"value">(), 9);
     for (auto input : {R"({"value":null})", R"({"value":"wrong"})", R"({"value":8,"value":9})", R"({"value":)"}) {
         {
             const auto result = ruvia::parse_json<optional_default>(input);
@@ -783,7 +709,7 @@ TEST(Ruvia, model_default_expression_is_not_evaluated_for_supplied_or_invalid_in
     EXPECT_EQ(invalid_rule.error().issues().front().field(), "value");
     EXPECT_EQ(evaluations, std::size_t{0});
     const auto valid_form = ruvia::parse_form<optional_default>("value=9").take_value();
-    EXPECT_EQ(valid_form.get<"value">()->value_, 9);
+    EXPECT_EQ(valid_form.get<"value">(), 9);
     {
         const auto result = ruvia::parse_form<optional_default>("value=wrong");
         ASSERT_FALSE(result.has_value());
@@ -802,17 +728,17 @@ TEST(Ruvia, model_default_expression_runs_once_for_absence_not_for_moves) {
     auto parsed_value = ruvia::parse_json<optional_default>("{}").take_value();
     EXPECT_EQ(evaluations, std::size_t{1});
     EXPECT_TRUE(!parsed_value.is_present<"value">());
-    EXPECT_EQ(parsed_value.get<"value">()->value_, std::int32_t{7});
+    EXPECT_EQ(parsed_value.get<"value">(), std::int32_t{7});
     optional_default moved(std::move(parsed_value));
     optional_default assigned;
     assigned = std::move(moved);
     EXPECT_EQ(evaluations, std::size_t{1});
-    EXPECT_EQ(assigned.get<"value">()->value_, std::int32_t{7});
+    EXPECT_EQ(assigned.get<"value">(), std::int32_t{7});
     assigned.reset<"value">();
-    EXPECT_TRUE(!assigned.get<"value">());
+    EXPECT_TRUE(!assigned.optional<"value">());
     EXPECT_EQ(evaluations, std::size_t{1});
     const auto form = ruvia::parse_form<optional_default>("").take_value();
-    EXPECT_TRUE(!form.is_present<"value">() && form.get<"value">()->value_ == 7);
+    EXPECT_TRUE(!form.is_present<"value">() && form.get<"value">() == 7);
     EXPECT_EQ(evaluations, std::size_t{2});
 }
 
@@ -821,7 +747,7 @@ TEST(Ruvia, model_default_expression_exceptions_unwind_partial_owned_fields) {
     const std::string prefix("{\"name\":\"" + std::string(128, 'n') + "\"");
     {
         auto supplied = ruvia::parse_json<failing_default_model>(std::string(prefix) + ",\"value\":9}").take_value();
-        EXPECT_EQ(supplied.get<"value">()->value_, 9);
+        EXPECT_EQ(supplied.get<"value">(), 9);
         EXPECT_EQ(evaluations, std::size_t{0});
     }
     for (std::size_t index = 0; index < 32; ++index) {
@@ -841,7 +767,7 @@ TEST(Ruvia, model_default_assignment_obeys_field_nullability) {
     auto null = ruvia::parse_json<null_default>("{}").take_value();
     EXPECT_TRUE(null.is_null<"value">() && !null.is_present<"value">());
     auto supplied = ruvia::parse_json<null_default>(R"({"value":9})").take_value();
-    EXPECT_TRUE(!supplied.is_null<"value">() && supplied.get<"value">()->value_ == 9);
+    EXPECT_TRUE(!supplied.is_null<"value">() && *supplied.get<"value">() == 9);
     auto dynamic = ruvia::parse_json<nullable_dynamic_default>("{}").take_value();
     EXPECT_TRUE(dynamic.is_null<"value">() && !dynamic.is_present<"value">());
     EXPECT_EQ(evaluations, std::size_t{1});
@@ -868,7 +794,7 @@ TEST(Ruvia, model_owned_default_is_normalized_to_the_model_resource) {
             retained = std::move(parsed_value);
         }
         EXPECT_EQ(evaluations, std::size_t{1});
-        EXPECT_EQ(retained.get<"value">()->view(), std::string_view(std::string(128, 'd')));
+        EXPECT_EQ(retained.get<"value">().view(), std::string_view(std::string(128, 'd')));
         EXPECT_TRUE(!retained.is_present<"value">());
         retained.reset<"value">();
     }
@@ -1020,13 +946,13 @@ RUVIA_MODEL(required_value, RUVIA_REQUIRED_FIELD(value, ruvia::string));
 RUVIA_MODEL(optional_value, RUVIA_OPTIONAL_FIELD(value, ruvia::string));
 RUVIA_MODEL(required_nullable_value, RUVIA_REQUIRED_FIELD(value, ruvia::string, RUVIA_NULLABLE));
 RUVIA_MODEL(optional_nullable_value, RUVIA_OPTIONAL_FIELD(value, ruvia::string, RUVIA_NULLABLE));
-RUVIA_MODEL(default_value, RUVIA_OPTIONAL_FIELD(value, ruvia::string, RUVIA_DEFAULT("fallback"), RUVIA_MIN(2, "too short")));
-RUVIA_MODEL(nullable_default_value, RUVIA_OPTIONAL_FIELD(value, ruvia::string, RUVIA_NULLABLE, RUVIA_DEFAULT("fallback"), RUVIA_MIN(2, "too short")));
-RUVIA_MODEL(invalid_default_value, RUVIA_OPTIONAL_FIELD(value, ruvia::uint32, RUVIA_DEFAULT(3), RUVIA_MIN(5, "too small")));
+RUVIA_MODEL(default_value, RUVIA_OPTIONAL_FIELD(value, ruvia::string, RUVIA_DEFAULT("fallback"), RUVIA_MIN_BYTES(2, "too short")));
+RUVIA_MODEL(nullable_default_value, RUVIA_OPTIONAL_FIELD(value, ruvia::string, RUVIA_NULLABLE, RUVIA_DEFAULT("fallback"), RUVIA_MIN_BYTES(2, "too short")));
+RUVIA_MODEL(invalid_default_value, RUVIA_OPTIONAL_FIELD(value, std::uint32_t, RUVIA_DEFAULT(3), RUVIA_MIN(5, "too small")));
 RUVIA_MODEL(named_value, RUVIA_OPTIONAL_FIELD_NAME("wire_value", value, ruvia::string, RUVIA_NULLABLE, RUVIA_DEFAULT("fallback")));
-RUVIA_MODEL(patch_value, RUVIA_OPTIONAL_FIELD(enabled, ruvia::bool_value), RUVIA_OPTIONAL_FIELD(remark, ruvia::string, RUVIA_NULLABLE));
+RUVIA_MODEL(patch_value, RUVIA_OPTIONAL_FIELD(enabled, bool), RUVIA_OPTIONAL_FIELD(remark, ruvia::string, RUVIA_NULLABLE));
 RUVIA_MODEL(nested_values, RUVIA_REQUIRED_FIELD(children, ruvia::array<nullable_default_value>));
-RUVIA_MODEL(nullable_kinds, RUVIA_REQUIRED_FIELD(flag, ruvia::bool_value, RUVIA_NULLABLE), RUVIA_REQUIRED_FIELD(number, ruvia::uint32, RUVIA_NULLABLE), RUVIA_REQUIRED_FIELD(child, required_value, RUVIA_NULLABLE), RUVIA_REQUIRED_FIELD(items, ruvia::array<ruvia::string>, RUVIA_NULLABLE), RUVIA_REQUIRED_FIELD(boxes, ruvia::boxed_array<required_value>, RUVIA_NULLABLE), RUVIA_REQUIRED_FIELD(payload, ruvia::json_value, RUVIA_NULLABLE), RUVIA_REQUIRED_FIELD(object, ruvia::json_object, RUVIA_NULLABLE));
+RUVIA_MODEL(nullable_kinds, RUVIA_REQUIRED_FIELD(flag, bool, RUVIA_NULLABLE), RUVIA_REQUIRED_FIELD(number, std::uint32_t, RUVIA_NULLABLE), RUVIA_REQUIRED_FIELD(child, required_value, RUVIA_NULLABLE), RUVIA_REQUIRED_FIELD(items, ruvia::array<ruvia::string>, RUVIA_NULLABLE), RUVIA_REQUIRED_FIELD(boxes, ruvia::boxed_array<required_value>, RUVIA_NULLABLE), RUVIA_REQUIRED_FIELD(payload, ruvia::json_value, RUVIA_NULLABLE), RUVIA_REQUIRED_FIELD(object, ruvia::json_object, RUVIA_NULLABLE));
 RUVIA_MODEL(dynamic_value, RUVIA_OPTIONAL_FIELD(value, ruvia::json_value));
 RUVIA_MODEL(nullable_dynamic_value, RUVIA_OPTIONAL_FIELD(value, ruvia::json_value, RUVIA_NULLABLE));
 RUVIA_MODEL(required_dynamic_value, RUVIA_REQUIRED_FIELD(value, ruvia::json_value));
@@ -1034,7 +960,7 @@ RUVIA_MODEL(required_nullable_dynamic_value, RUVIA_REQUIRED_FIELD(value, ruvia::
 RUVIA_MODEL(dynamic_object, RUVIA_OPTIONAL_FIELD(value, ruvia::json_object));
 RUVIA_MODEL(owned_values, RUVIA_OPTIONAL_FIELD(value, ruvia::json_value, RUVIA_NULLABLE), RUVIA_OPTIONAL_FIELD(object, ruvia::json_object, RUVIA_NULLABLE), RUVIA_OPTIONAL_FIELD(note, ruvia::string, RUVIA_DEFAULT("a default string long enough to allocate storage")));
 RUVIA_MODEL(nullable_response, RUVIA_REQUIRED_FIELD(required, ruvia::string, RUVIA_NULLABLE), RUVIA_OPTIONAL_FIELD(optional, ruvia::string, RUVIA_NULLABLE), RUVIA_OPTIONAL_FIELD(dynamic, ruvia::json_value, RUVIA_NULLABLE));
-RUVIA_MODEL(form_unrepresentable_values, RUVIA_OPTIONAL_FIELD(tags, ruvia::array<ruvia::string>), RUVIA_OPTIONAL_FIELD(data, ruvia::bytes), RUVIA_OPTIONAL_FIELD(child, required_value), RUVIA_OPTIONAL_FIELD(payload, ruvia::json_value), RUVIA_OPTIONAL_FIELD(object, ruvia::json_object), RUVIA_OPTIONAL_FIELD(note, ruvia::string));
+RUVIA_MODEL(form_unrepresentable_values, RUVIA_OPTIONAL_FIELD(tags, ruvia::array<ruvia::string>), RUVIA_OPTIONAL_FIELD(children, ruvia::array<required_value>), RUVIA_OPTIONAL_FIELD(boxed, ruvia::boxed_array<ruvia::string>), RUVIA_OPTIONAL_FIELD(data, ruvia::bytes), RUVIA_OPTIONAL_FIELD(child, required_value), RUVIA_OPTIONAL_FIELD(payload, ruvia::json_value), RUVIA_OPTIONAL_FIELD(object, ruvia::json_object), RUVIA_OPTIONAL_FIELD(note, ruvia::string));
 
 // Models spell value presence only as has_value; entity is_set means "assigned,
 // null included" and must not appear on models with a different meaning.
@@ -1125,7 +1051,7 @@ TEST(Ruvia, model_defaults_only_fill_optional_missing_values) {
     EXPECT_TRUE(missing.get<"value">()->view() == "fallback");
     EXPECT_TRUE(!missing.is_present<"value">());
     auto form = ruvia::parse_form<default_value>("").take_value();
-    EXPECT_TRUE(!form.is_present<"value">() && form.get<"value">()->view() == "fallback");
+    EXPECT_TRUE(!form.is_present<"value">() && form.get<"value">().view() == "fallback");
     const auto invalid = ruvia::parse_form<invalid_default_value>("");
     ASSERT_FALSE(invalid.has_value());
     EXPECT_EQ(invalid.error().code(), ruvia::model_parse_error::code_type::validation_failed);
@@ -1172,7 +1098,12 @@ TEST(Ruvia, model_named_form_and_nested_fields_keep_input_presence) {
 TEST(Ruvia, model_form_rejects_values_for_fields_without_form_representation) {
     auto absent = ruvia::parse_form<form_unrepresentable_values>("note=a&unknown=b").take_value();
     EXPECT_TRUE(absent.is_present<"note">() && !absent.is_present<"tags">());
-    for (const auto body : {"tags=a", "tags=a&tags=b", "data=a", "child=a", "payload=1", "object=%7B%7D"}) {
+    auto repeated = ruvia::parse_form<form_unrepresentable_values>("tags=a&tags=b").take_value();
+    ASSERT_TRUE(repeated.has_value<"tags">());
+    ASSERT_EQ(repeated.get<"tags">()->size(), std::size_t{2});
+    EXPECT_EQ((*repeated.get<"tags">())[0].view(), "a");
+    EXPECT_EQ((*repeated.get<"tags">())[1].view(), "b");
+    for (const auto body : {"children=a", "children=a&children=b", "boxed=a", "data=a", "child=a", "payload=1", "object=%7B%7D"}) {
         {
             const auto result = ruvia::parse_form<form_unrepresentable_values>(body);
             ASSERT_FALSE(result.has_value());
@@ -1368,7 +1299,7 @@ TEST(Ruvia, model_dynamic_owned_tokens_and_presence_survive_rebinding_and_reclai
             retained = std::move(moved);
         }
         EXPECT_TRUE(retained.is_present<"value">() && retained.is_present<"object">());
-        EXPECT_TRUE(!retained.is_present<"note">() && retained.get<"note">().has_value());
+        EXPECT_TRUE(!retained.is_present<"note">() && retained.has_value<"note">());
         EXPECT_TRUE(retained.get<"value">()->get<ruvia::string>("text").take_value()->view() == text);
         for (int index = 0; index < 32; ++index) {
             {
@@ -1590,18 +1521,18 @@ TEST(Ruvia, model_scalar_array_moves_transfer_storage) {
         sequence_type source;
         sequence_type target;
         for (int index = 0; index < 64; ++index) {
-            source.push_back(ruvia::int32(index));
+            source.push_back(static_cast<std::int32_t>(index));
         }
-        target.push_back(ruvia::int32(-1));
+        target.push_back(std::int32_t{-1});
         target = std::move(source);
         EXPECT_TRUE(source.empty());
         EXPECT_EQ(target.size(), std::size_t{64});
         for (std::size_t index = 0; index < target.size(); ++index) {
-            EXPECT_EQ(target[index].value_, static_cast<int>(index));
+            EXPECT_EQ(target[index], static_cast<int>(index));
         }
     };
-    check.template operator()<ruvia::array<ruvia::int32>>();
-    check.template operator()<ruvia::boxed_array<ruvia::int32>>();
+    check.template operator()<ruvia::array<std::int32_t>>();
+    check.template operator()<ruvia::boxed_array<std::int32_t>>();
 }
 
 TEST(Ruvia, model_owned_moves_preserve_buffers) {
@@ -1655,14 +1586,14 @@ concept offers_rvalue_resize = requires(container_type c) { std::move(c).resize(
 TEST(Ruvia, model_value_containers_enforce_lvalue_mutation_and_zero_copy_take) {
     static_assert(!offers_rvalue_assign<ruvia::string, std::string>);
     static_assert(!offers_rvalue_assign<ruvia::string, std::string_view>);
-    static_assert(!offers_rvalue_assign<ruvia::bytes, std::vector<std::uint8_t>>);
-    static_assert(!offers_rvalue_assign<ruvia::bytes, std::span<const std::uint8_t>>);
-    static_assert(!offers_rvalue_reserve<ruvia::array<ruvia::int32>>);
-    static_assert(!offers_rvalue_clear<ruvia::array<ruvia::int32>>);
-    static_assert(!offers_rvalue_resize<ruvia::array<ruvia::int32>>);
-    static_assert(!offers_rvalue_reserve<ruvia::boxed_array<ruvia::int32>>);
-    static_assert(!offers_rvalue_clear<ruvia::boxed_array<ruvia::int32>>);
-    static_assert(!offers_rvalue_resize<ruvia::boxed_array<ruvia::int32>>);
+    static_assert(!offers_rvalue_assign<ruvia::bytes, std::vector<std::byte>>);
+    static_assert(!offers_rvalue_assign<ruvia::bytes, ruvia::byte_view>);
+    static_assert(!offers_rvalue_reserve<ruvia::array<std::int32_t>>);
+    static_assert(!offers_rvalue_clear<ruvia::array<std::int32_t>>);
+    static_assert(!offers_rvalue_resize<ruvia::array<std::int32_t>>);
+    static_assert(!offers_rvalue_reserve<ruvia::boxed_array<std::int32_t>>);
+    static_assert(!offers_rvalue_clear<ruvia::boxed_array<std::int32_t>>);
+    static_assert(!offers_rvalue_resize<ruvia::boxed_array<std::int32_t>>);
 
     std::string text(160, 's');
     const char* const text_ptr = text.data();
@@ -1671,48 +1602,40 @@ TEST(Ruvia, model_value_containers_enforce_lvalue_mutation_and_zero_copy_take) {
     EXPECT_EQ(taken_str.data(), text_ptr);
     EXPECT_TRUE(owned_str.empty());
 
-    std::vector<std::uint8_t> raw_bytes(128, std::uint8_t{0xAB});
-    const std::uint8_t* const bytes_ptr = raw_bytes.data();
+    std::vector<std::byte> raw_bytes(128, std::byte{0xAB});
+    const std::byte* const bytes_ptr = raw_bytes.data();
     ruvia::bytes owned_bytes(std::move(raw_bytes));
     EXPECT_EQ(owned_bytes.data(), bytes_ptr);
-    const std::vector<std::uint8_t> taken_bytes = std::move(owned_bytes).take_bytes();
+    const std::vector<std::byte> taken_bytes = std::move(owned_bytes).take_bytes();
     EXPECT_EQ(taken_bytes.data(), bytes_ptr);
     EXPECT_TRUE(owned_bytes.empty());
 
-    ruvia::array<ruvia::int32> list;
-    list.push_back(ruvia::int32(42));
+    ruvia::array<std::int32_t> list;
+    list.push_back(42);
     const auto taken_items = std::move(list).take_items();
     ASSERT_EQ(taken_items.size(), std::size_t{1});
-    EXPECT_EQ(taken_items[0].value_, 42);
+    EXPECT_EQ(taken_items[0], 42);
     EXPECT_TRUE(list.empty());
 }
 
 TEST(Ruvia, model_value_contracts_try_from_value_array_assign_and_error_take_message) {
-    static_assert(!offers_rvalue_items<ruvia::array<ruvia::int32>>);
-    static_assert(!offers_rvalue_assign<ruvia::array<ruvia::int32>, std::vector<ruvia::int32>>);
+    static_assert(!offers_rvalue_items<ruvia::array<std::int32_t>>);
+    static_assert(!offers_rvalue_assign<ruvia::array<std::int32_t>, std::vector<std::int32_t>>);
     static_assert(!offers_lvalue_take_message<ruvia::model_parse_error>);
 
-    static_assert(noexcept(ruvia::int8::try_from_value(0)));
-    EXPECT_EQ(ruvia::int8::try_from_value(-128)->value_, std::int8_t{-128});
-    EXPECT_EQ(ruvia::int8::try_from_value(127)->value_, std::int8_t{127});
-    EXPECT_FALSE(ruvia::int8::try_from_value(-129).has_value());
-    EXPECT_FALSE(ruvia::int8::try_from_value(128).has_value());
-    EXPECT_EQ(ruvia::uint8::try_from_value(255)->value_, std::uint8_t{255});
-    EXPECT_FALSE(ruvia::uint8::try_from_value(-1).has_value());
-
-    std::vector<ruvia::int32> initial{ruvia::int32(10), ruvia::int32(20)};
+    std::vector<std::int32_t> initial{10, 20};
     const auto* const initial_ptr = initial.data();
-    ruvia::array<ruvia::int32> items_array(std::move(initial));
+    ruvia::array<std::int32_t> items_array(std::move(initial));
     EXPECT_EQ(items_array.items().data(), initial_ptr);
     ASSERT_EQ(items_array.items().size(), std::size_t{2});
-    EXPECT_EQ(items_array.items()[1].value_, 20);
+    EXPECT_EQ(items_array.items()[1], 20);
 
-    std::vector<ruvia::int32> replacement{ruvia::int32(30), ruvia::int32(40), ruvia::int32(50)};
+    std::vector<std::int32_t> replacement{30, 40, 50};
     const auto* const replacement_ptr = replacement.data();
     items_array.assign(std::move(replacement));
     EXPECT_EQ(items_array.items().data(), replacement_ptr);
     ASSERT_EQ(items_array.items().size(), std::size_t{3});
-    EXPECT_EQ(items_array.items()[0].value_, 30);
+    EXPECT_EQ(items_array.items()[0], 30);
 
     std::string str_buf(160, 'q');
     const char* const str_ptr = str_buf.data();
@@ -1722,15 +1645,15 @@ TEST(Ruvia, model_value_contracts_try_from_value_array_assign_and_error_take_mes
     assigned_str.assign("short");
     EXPECT_EQ(assigned_str.view(), "short");
 
-    std::vector<std::uint8_t> byte_buf(128, std::uint8_t{0xCD});
+    std::vector<std::byte> byte_buf(128, std::byte{0xCD});
     const auto* const byte_ptr = byte_buf.data();
     ruvia::bytes assigned_bytes;
     assigned_bytes.assign(std::move(byte_buf));
     EXPECT_EQ(assigned_bytes.data(), byte_ptr);
-    const std::array<std::uint8_t, 2> span_bytes{0x01, 0x02};
+    const std::array<std::byte, 2> span_bytes{std::byte{0x01}, std::byte{0x02}};
     assigned_bytes.assign(span_bytes);
     EXPECT_EQ(assigned_bytes.view().size(), std::size_t{2});
-    EXPECT_EQ(assigned_bytes.view()[1], std::uint8_t{0x02});
+    EXPECT_EQ(assigned_bytes.view()[1], std::byte{0x02});
 
     auto failed = ruvia::parse_json<narrow_values>("{invalid");
     ASSERT_FALSE(failed.has_value());

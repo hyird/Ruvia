@@ -121,7 +121,7 @@ std::optional<http_chunk_size_line> parse_http_chunk_size_line(std::string_view 
     std::size_t parsed_value = 0;
     constexpr auto max_before_shift = std::numeric_limits<std::size_t>::max() >> 4U;
     while (cursor_value < value.size()) {
-        const int nibble = http_decode_hex_nibble(value[cursor_value]);
+        const int nibble = decode_hex_nibble(value[cursor_value]);
         if (nibble < 0) {
             break;
         }
@@ -226,6 +226,10 @@ decoder_state http1_chunked_body_decoder::state() const noexcept {
         return *phase == progress::complete ? decoder_state::finished : decoder_state::active;
     }
     return decoder_state::failed;
+}
+
+std::vector<http_header> http1_chunked_body_decoder::take_trailers() & noexcept {
+    return std::exchange(trailers_, {});
 }
 
 void http1_chunked_body_decoder::reset() noexcept {

@@ -24,7 +24,7 @@
 #include <asio/write.hpp>
 
 #include "app.h"
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "blocking_pool.h"
 #include "context.h"
 #include "controller.h"
@@ -1034,7 +1034,7 @@ ruvia::task<void> identify(ruvia::request_stream& stream) {
     const auto remote = stream.connection().remote();
     const auto text = remote.address().to_string();
     std::string body(text.data(), text.size());
-    body += ":" + std::to_string(remote.port());
+    body += ":" + std::to_string(remote.port().value());
     body += ":" + std::string(stream.connection().client().address().to_string());
     body += stream.connection().via_trusted_proxy() ? ":trusted" : ":direct";
     if (co_await stream.stream().commit() == ruvia::stream_commit_result::body) {

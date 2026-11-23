@@ -32,7 +32,7 @@
 #include "worker_task_fixture.h"
 RUVIA_MODEL(testing_facade_echo, RUVIA_OPTIONAL_FIELD(value, ruvia::string));
 
-RUVIA_MODEL(testing_facade_report, RUVIA_REQUIRED_FIELD(path, ruvia::string), RUVIA_REQUIRED_FIELD(count, ruvia::uint64), RUVIA_REQUIRED_FIELD(tags, ruvia::array<ruvia::string>));
+RUVIA_MODEL(testing_facade_report, RUVIA_REQUIRED_FIELD(path, ruvia::string), RUVIA_REQUIRED_FIELD(count, std::uint64_t), RUVIA_REQUIRED_FIELD(tags, ruvia::array<ruvia::string>));
 
 namespace {
 
@@ -488,7 +488,7 @@ private:
         std::string reply;
         reply.append(c.connection().remote().address().to_string());
         reply.push_back(':');
-        reply.append(std::to_string(c.connection().remote().port()));
+        reply.append(std::to_string(c.connection().remote().port().value()));
         reply.push_back('/');
         reply.append(c.connection().client().address().to_string());
         reply.push_back('/');

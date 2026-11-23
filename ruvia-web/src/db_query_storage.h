@@ -31,6 +31,8 @@ namespace ruvia::detail {
             return db_value(value.double_value());
         case db_value_type::bool_:
             return db_value(value.bool_value());
+        case db_value_type::bytes:
+            return db_value_access::owned_bytes(ruvia::bytes(value.bytes()));
     }
     return db_value(nullptr);
 }

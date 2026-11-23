@@ -33,7 +33,7 @@ public:
         *--cursor_value = '\n';
         *--cursor_value = '\r';
         do {
-            *--cursor_value = http_lower_hex_digit(static_cast<int>(chunk_size & 0x0fU));
+            *--cursor_value = lower_hex_digit(static_cast<int>(chunk_size & 0x0fU));
             chunk_size >>= 4U;
         } while (chunk_size != 0);
         offset_ = static_cast<std::size_t>(cursor_value - storage_.data());
@@ -148,6 +148,10 @@ public:
     http1_chunk_decode_result decode(input_type&&, std::size_t = 0) & = delete;
 
     [[nodiscard]] decoder_state state() const noexcept;
+    // Extracts owned trailers after decode() reported http1_chunk_decode_complete,
+    // without copying them before the next decode() or reset() retires them.
+    [[nodiscard]] std::vector<http_header> take_trailers() & noexcept;
+    std::vector<http_header> take_trailers() && = delete;
     // Starts a new body with the constructed configuration, keeping only
     // small trailer storage.
     void reset() noexcept;

@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "byte_view.h"
 #include "client_transport_config.h"
 #include "db_sql_scan.h"
 #include "decimal_text.h"
@@ -292,7 +293,8 @@ enum class db_value_type : std::uint8_t { null,
     signed_value,
     unsigned_value,
     double_,
-    bool_ };
+    bool_,
+    bytes };
 
 namespace detail {
 
@@ -307,8 +309,9 @@ struct db_mapped_value_traits<std::vector<t_type>, allow_array> : std::bool_cons
 
 }  // namespace detail
 
-// Mapped SQL values own their text independently of db_rows: numbers, bool,
-// std::string, ruvia::string, and one-dimensional std::vector values.
+// Mapped SQL values own their text/bytes independently of db_rows: numbers, bool,
+// std::string, ruvia::string, ruvia::bytes, uuid, decimal, dates/timestamps,
+// RUVIA_ENUM, and one-dimensional std::vector values.
 // Optional wrappers preserve ownership, including nullable array elements;
 // borrowed views, references, and nested arrays are not mapped value types.
 template <typename t_type>
@@ -316,13 +319,13 @@ concept db_mapped_value = detail::db_mapped_value_traits<t_type>::value;
 
 class db_value final {
 private:
-    using storage_type = std::variant<std::monostate, borrowed_text, std::string, std::int64_t, std::uint64_t, double, bool>;
+    using storage_type = std::variant<std::monostate, borrowed_text, std::string, std::int64_t, std::uint64_t, double, bool, borrowed_bytes, ruvia::bytes>;
 
 public:
     db_value(std::nullptr_t);
-    // Text is borrowed until a database operation synchronously clones the
-    // parameter. The source must outlive this value; owning-string rvalues are
-    // rejected so a stored db_value cannot retain a destroyed temporary.
+    // Text and bytes are borrowed until a database operation synchronously clones
+    // the parameter. The source must outlive this value; owning container rvalues
+    // are rejected so a stored db_value cannot retain a destroyed temporary.
     db_value(const char* value);
     db_value(std::string_view value);
 
@@ -332,7 +335,31 @@ public:
     template <typename traits_type, typename allocator_type>
     db_value(const std::basic_string<char, traits_type, allocator_type>&&) = delete;
 
+    db_value(byte_view value);
+    db_value(const ruvia::bytes& value);
+    db_value(ruvia::bytes&&) = delete;
+    db_value(const ruvia::bytes&&) = delete;
+
+    template <typename allocator_type>
+    db_value(const std::vector<std::byte, allocator_type>& value) :
+        db_value(byte_view(value)) {}
+    template <typename allocator_type>
+    db_value(std::vector<std::byte, allocator_type>&&) = delete;
+    template <typename allocator_type>
+    db_value(const std::vector<std::byte, allocator_type>&&) = delete;
+
     db_value(bool value);
+    db_value(const uuid& value);
+    db_value(const decimal& value);
+    db_value(civil_date value);
+    db_value(utc_seconds value);
+    db_value(utc_milliseconds value);
+    db_value(utc_microseconds value);
+
+    template <typename enum_type>
+        requires detail::is_ruvia_enum<std::remove_cvref_t<enum_type>>
+    db_value(enum_type value) :
+        db_value(to_enum_string(value)) {}
 
     db_value(const db_value& other);
     db_value(db_value&&) noexcept = default;
@@ -352,13 +379,17 @@ public:
         storage_(std::in_place_type<double>, detail::checked_model_float<double>(value)) {}
 
     // Reading a different alternative throws std::bad_variant_access; values
-    // are never coerced. Text borrows this value and, for borrowed inputs,
-    // the original source. Compiled statements own their parameter text.
+    // are never coerced. Text and bytes borrow this value and, for borrowed inputs,
+    // the original source. Compiled statements own their parameter text and bytes.
     [[nodiscard]] db_value_type type() const noexcept;
     [[nodiscard]] std::string_view text() const& RUVIA_LIFETIMEBOUND;
     std::string_view text() const&& = delete;
     [[nodiscard]] inline std::string take_text() &&;
     std::string take_text() & = delete;
+    [[nodiscard]] byte_view bytes() const& RUVIA_LIFETIMEBOUND;
+    byte_view bytes() const&& = delete;
+    [[nodiscard]] inline ruvia::bytes take_bytes() &&;
+    ruvia::bytes take_bytes() & = delete;
     [[nodiscard]] std::int64_t signed_value() const;
     [[nodiscard]] std::uint64_t unsigned_value() const;
     [[nodiscard]] double double_value() const;
@@ -367,9 +398,10 @@ public:
 private:
     friend struct detail::db_value_access;
 
-    // Tagged so it never competes with the public borrowing constructors: a
-    // std::string lvalue argument still borrows through string_view.
+    // Tagged so they never compete with the public borrowing constructors: an
+    // owning lvalue argument still borrows through string_view / byte_view.
     db_value(std::in_place_type_t<std::string>, std::string value);
+    db_value(std::in_place_type_t<ruvia::bytes>, ruvia::bytes value);
 
     template <typename t_type>
     [[nodiscard]] static storage_type make_integer_storage(t_type value) {
@@ -390,9 +422,16 @@ struct db_value_access final {
         return db_value(std::in_place_type<std::string>, std::move(value));
     }
 
+    [[nodiscard]] static db_value owned_bytes(ruvia::bytes value) {
+        return db_value(std::in_place_type<ruvia::bytes>, std::move(value));
+    }
+
     [[nodiscard]] static db_value own(db_value&& value) {
         if (const auto* borrowed = std::get_if<borrowed_text>(&value.storage_)) {
             return owned_string(std::string(borrowed->view()));
+        }
+        if (const auto* borrowed = std::get_if<borrowed_bytes>(&value.storage_)) {
+            return owned_bytes(ruvia::bytes(borrowed->view()));
         }
         return std::move(value);
     }
@@ -406,12 +445,26 @@ struct db_value_access final {
         return std::string(std::get<borrowed_text>(value.storage_).view());
     }
 
-    // Prepared statement parameters own their text. Requiring that alternative
-    // gives native text protocols a checked, NUL-terminated borrowing boundary.
+    [[nodiscard]] static ruvia::bytes take_bytes(db_value&& value) {
+        if (auto* owned = std::get_if<ruvia::bytes>(&value.storage_)) {
+            auto result_value = std::move(*owned);
+            value.storage_.template emplace<std::monostate>();
+            return result_value;
+        }
+        return ruvia::bytes(std::get<borrowed_bytes>(value.storage_).view());
+    }
+
+    // Prepared statement parameters own their text and bytes. Requiring those
+    // alternatives gives native protocols a checked borrowing boundary.
     [[nodiscard]] static const std::string& owned_text(const db_value& value) {
         return std::get<std::string>(value.storage_);
     }
     static const std::string& owned_text(const db_value&&) = delete;
+
+    [[nodiscard]] static byte_view owned_byte_span(const db_value& value) {
+        return std::get<ruvia::bytes>(value.storage_).view();
+    }
+    static byte_view owned_byte_span(const db_value&&) = delete;
 };
 
 template <typename t_type>
@@ -420,30 +473,53 @@ inline constexpr bool db_owning_char_string = false;
 template <typename traits_type, typename allocator_type>
 inline constexpr bool db_owning_char_string<std::basic_string<char, traits_type, allocator_type>> = true;
 
+template <>
+inline constexpr bool db_owning_char_string<string> = true;
+
+template <typename t_type>
+inline constexpr bool db_owning_byte_buffer = false;
+
+template <>
+inline constexpr bool db_owning_byte_buffer<ruvia::bytes> = true;
+
+template <typename allocator_type>
+inline constexpr bool db_owning_byte_buffer<std::vector<std::byte, allocator_type>> = true;
+
 // One value the variadic query()/execute() overloads accept. A type that
 // already denotes a whole parameter sequence -- std::span, std::array, or a
 // vector of db_value -- cannot construct a db_value, so it fails this concept and
 // the span overload keeps winning without needing an explicit exclusion.
 template <typename param_type>
-concept db_parameter = std::constructible_from<db_value, param_type&&> || db_owning_char_string<std::remove_cvref_t<param_type>>;
+concept db_parameter = std::constructible_from<db_value, param_type&&> || db_owning_char_string<std::remove_cvref_t<param_type>> || db_owning_byte_buffer<std::remove_cvref_t<param_type>>;
 
 template <typename... params_type>
 concept db_parameter_pack = sizeof...(params_type) > 0 && (db_parameter<params_type> && ...);
 
 // DB entry points clone each value into their own storage before returning,
-// moving rvalue std::string parameters directly into owned text storage.
+// moving rvalue owning string/byte parameters directly into owned storage.
 template <typename param_type>
     requires db_parameter<param_type>
 [[nodiscard]] db_value make_immediate_db_parameter(param_type&& param) {
     if constexpr (std::same_as<param_type&&, std::string&&>) {
         return db_value_access::owned_string(std::move(param));
+    } else if constexpr (std::same_as<param_type&&, string&&>) {
+        return db_value_access::owned_string(std::move(param).take_string());
+    } else if constexpr (std::same_as<param_type&&, ruvia::bytes&&>) {
+        return db_value_access::owned_bytes(std::move(param));
+    } else if constexpr (std::same_as<param_type&&, std::vector<std::byte>&&>) {
+        return db_value_access::owned_bytes(ruvia::bytes(std::move(param)));
     } else if constexpr (std::same_as<std::remove_cvref_t<param_type>, db_value>) {
         if (param.type() == db_value_type::string) {
             return db_value(param.text());
         }
+        if (param.type() == db_value_type::bytes) {
+            return db_value(param.bytes());
+        }
         return db_value(std::forward<param_type>(param));
     } else if constexpr (db_owning_char_string<std::remove_cvref_t<param_type>>) {
         return db_value(std::string_view(param));
+    } else if constexpr (db_owning_byte_buffer<std::remove_cvref_t<param_type>>) {
+        return db_value(byte_view(param));
     } else {
         return db_value(std::forward<param_type>(param));
     }
@@ -453,6 +529,10 @@ template <typename param_type>
 
 inline std::string db_value::take_text() && {
     return detail::db_value_access::take_text(std::move(*this));
+}
+
+inline ruvia::bytes db_value::take_bytes() && {
+    return detail::db_value_access::take_bytes(std::move(*this));
 }
 
 class db_field final {
@@ -469,11 +549,14 @@ public:
     [[nodiscard]] std::optional<std::string_view> value() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> value() const&& = delete;
 
+    [[nodiscard]] std::optional<byte_view> bytes() const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::optional<byte_view> bytes() const&& = delete;
+
     [[nodiscard]] bool is_null() const noexcept {
         return !value().has_value();
     }
-    // string_view is a raw borrow, valid only while this field's row storage
-    // remains alive. Repository mapped results instead require db_mapped_value.
+    // string_view and byte_view are raw borrows, valid only while this field's row
+    // storage remains alive. Repository mapped results instead require db_mapped_value.
     template <detail::text_scalar t_type>
         requires(!std::same_as<t_type, std::string_view>)
     [[nodiscard]] std::optional<t_type> as() const& {
@@ -485,11 +568,17 @@ public:
     }
 
     template <std::same_as<std::string_view> t_type>
-    [[nodiscard]] std::optional<t_type> as() const& RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] std::optional<t_type> as() const& noexcept RUVIA_LIFETIMEBOUND {
         return value();
     }
 
-    template <detail::text_scalar t_type>
+    template <std::same_as<byte_view> t_type>
+    [[nodiscard]] std::optional<t_type> as() const& noexcept RUVIA_LIFETIMEBOUND {
+        return bytes();
+    }
+
+    template <typename t_type>
+        requires(detail::text_scalar<t_type> || std::same_as<t_type, byte_view>)
     [[nodiscard]] std::optional<t_type> as() const&& = delete;
 
 private:
@@ -502,6 +591,7 @@ private:
     db_field() noexcept;
     explicit db_field(std::nullptr_t) noexcept;
     explicit db_field(std::string_view value);
+    explicit db_field(std::string&& value) noexcept;
     db_field(borrowed_tag_type, std::string_view value) noexcept;
     [[nodiscard]] static db_field borrowed(std::string_view value) noexcept;
 
@@ -887,7 +977,7 @@ private:
     // `io_metrics` is the request's counter block, or null outside a request;
     // `request_link` owns the user/request cancellation link of this stream, or
     // is null when one token alone already cancels it.
-    void bind_operation_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept;
+    void bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link) noexcept;
     void expire_capability() noexcept;
     static task<std::optional<db_row>> read_task(detail::request_io_metrics* io_metrics, operation_guard_type operation, std::vector<std::string>& column_names, operation_options operation_value);
     static task<void> close_task(detail::request_io_metrics* io_metrics, operation_guard_type operation, operation_options operation_value);
@@ -896,7 +986,7 @@ private:
     std::unique_ptr<const linked_operation_options> request_link_;
     state_owner_type state_;
     detail::request_io_metrics* io_metrics_{nullptr};
-    detail::capability_registration<&db_stream_result::expire_capability> registration_;
+    ::ruvia::capability_registration<&db_stream_result::expire_capability> registration_;
 };
 
 namespace detail {
@@ -953,6 +1043,10 @@ struct db_result_access final {
 
     [[nodiscard]] static db_field owned_field(std::string_view value) {
         return db_field(value);
+    }
+
+    [[nodiscard]] static db_field owned_field(std::string&& value) noexcept {
+        return db_field(std::move(value));
     }
 
     [[nodiscard]] static db_field borrowed_field(std::string_view value) noexcept {
@@ -1420,6 +1514,18 @@ public:
     task<void> rollback_to_savepoint(std::string_view, operation_options = {}) && = delete;
     [[nodiscard]] task<void> release_savepoint(std::string_view name, operation_options options = {}) &;
     task<void> release_savepoint(std::string_view, operation_options = {}) && = delete;
+
+    // Runs `fn()` inside a named savepoint: releases the savepoint on normal
+    // completion, or rolls back to and releases the savepoint before rethrowing
+    // if `fn()` fails while the transaction remains active.
+    template <typename fn_type, typename result_type = typename std::invoke_result_t<fn_type&>::value_type>
+        requires std::same_as<std::invoke_result_t<fn_type&>, task<result_type>>
+    [[nodiscard]] task<result_type> in_savepoint(std::string_view name, fn_type fn, operation_options options = {}) & {
+        registration_.require_active();
+        return registration_.attach(run_in_savepoint<fn_type, result_type>(*this, std::string(name), std::move(fn), std::move(options)));
+    }
+    template <typename fn_type>
+    auto in_savepoint(std::string_view, fn_type, operation_options = {}) && = delete;
     [[nodiscard]] task<void> notify(std::string_view channel, std::string_view payload = {}, operation_options options = {}) &;
     task<void> notify(std::string_view, std::string_view = {}, operation_options = {}) && = delete;
     [[nodiscard]] task<void> advisory_lock(std::int64_t key, operation_options options = {}) &;
@@ -1469,6 +1575,7 @@ private:
         detail::db_pool_ref_type client_;
         std::size_t slot_;
         operation_options options_;
+        std::vector<std::string> savepoints_{};
     };
 
     using operation_state_type = detail::db_operation_state<lease_type>;
@@ -1476,21 +1583,60 @@ private:
 
     using state_owner_type = std::unique_ptr<operation_state_type>;
 
+    enum class savepoint_op : std::uint8_t {
+        none,
+        create,
+        rollback_to,
+        release,
+    };
+
     db_transaction(detail::db_pool_ref_type client, std::size_t slot, operation_options options);
     template <typename result_type, bool exec_statement>
-    task<result_type> run_statement(std::string sql, std::vector<db_value> params, operation_options options = {});
+    task<result_type> run_statement(std::string sql, std::vector<db_value> params, operation_options options = {}, savepoint_op sp_op = savepoint_op::none, std::string savepoint_name = {});
     // `io_metrics` is the request's counter block, or null outside a request.
     template <typename result_type, bool exec_statement>
-    static task<result_type> statement_task(std::string sql, std::vector<db_value> params, detail::request_io_metrics* io_metrics, operation_guard_type operation, operation_options options, stop_token request_stop);
+    static task<result_type> statement_task(std::string sql, std::vector<db_value> params, detail::request_io_metrics* io_metrics, operation_guard_type operation, operation_options options, stop_token request_stop, savepoint_op sp_op, std::string savepoint_name);
     template <bool commit_lease>
     static task<void> finish_task(detail::request_io_metrics* io_metrics, operation_guard_type operation, operation_options options, stop_token request_stop);
     // A command naming one identifier: SAVEPOINT, RELEASE, CLOSE and the like.
-    task<void> run_identifier_command(std::string_view prefix, std::string_view name, operation_options options);
+    task<void> run_identifier_command(std::string_view prefix, std::string_view name, operation_options options, savepoint_op sp_op = savepoint_op::none);
+    template <typename fn_type, typename result_type>
+    static task<result_type> run_in_savepoint(db_transaction& transaction, std::string name, fn_type fn, operation_options options) {
+        co_await transaction.savepoint(name, options);
+        std::exception_ptr failure;
+        try {
+            if constexpr (std::is_void_v<result_type>) {
+                co_await std::invoke(fn);
+                if (transaction.active()) {
+                    co_await transaction.release_savepoint(name, options);
+                }
+                co_return;
+            } else {
+                auto result = co_await std::invoke(fn);
+                if (transaction.active()) {
+                    co_await transaction.release_savepoint(name, options);
+                }
+                co_return result;
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        if (transaction.active()) {
+            try {
+                co_await transaction.rollback_to_savepoint(name, options);
+                if (transaction.active()) {
+                    co_await transaction.release_savepoint(name, options);
+                }
+            } catch (...) {
+            }
+        }
+        std::rethrow_exception(failure);
+    }
     void require_postgresql_transaction(std::string_view feature) const;
     task<void> query_void_prepared(std::string_view sql, std::span<const db_value> params, operation_options options);
     task<bool> query_bool_prepared(std::string_view sql, std::span<const db_value> params, operation_options options);
     void reset() noexcept;
-    void bind_operation_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link, stop_token request_stop) noexcept;
+    void bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, std::unique_ptr<const linked_operation_options> request_link, stop_token request_stop) noexcept;
     void expire_capability() noexcept;
 
     [[nodiscard]] detail::db_query_backend query_backend(const lease_type& lease) const;
@@ -1502,7 +1648,7 @@ private:
     detail::request_io_metrics* io_metrics_{nullptr};
     stop_token request_stop_;
     std::size_t option_borrows_{0};
-    detail::capability_registration<&db_transaction::expire_capability> registration_;
+    ::ruvia::capability_registration<&db_transaction::expire_capability> registration_;
 };
 
 // 复制只登记借用并复制选项，不复制连接租约。视图存活时不可移动或销毁事务；
@@ -1560,7 +1706,7 @@ private:
 
     db_transaction* transaction_;
     operation_options options_;
-    detail::capability_registration<&db_transaction::expire_capability>& registration_;
+    ::ruvia::capability_registration<&db_transaction::expire_capability>& registration_;
 };
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -1582,13 +1728,13 @@ public:
 
 private:
     friend class db_executor;
-    db_query_result_cache(detail::db_query_cache_state& state_value, detail::operation_scope& scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) noexcept;
+    db_query_result_cache(detail::db_query_cache_state& state_value, ::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) noexcept;
     void expire_capability() noexcept;
     detail::db_query_cache_state* state_;
     detail::request_io_metrics* io_metrics_;
     operation_options options_;
     stop_token request_stop_;
-    detail::capability_registration<&db_query_result_cache::expire_capability> registration_;
+    ::ruvia::capability_registration<&db_query_result_cache::expire_capability> registration_;
 };
 #endif
 
@@ -1630,9 +1776,49 @@ public:
     }
 
     [[nodiscard]] task<db_transaction> begin_transaction(db_transaction_options options = {}) const;
+
+    // Runs `fn(tx)` inside a newly opened transaction, committing automatically
+    // if `tx` is still active when `fn` returns, or rolling back if `fn` throws
+    // while `tx` remains active.
+    template <typename fn_type, typename result_type = typename std::invoke_result_t<fn_type&, db_transaction&>::value_type>
+        requires std::same_as<std::invoke_result_t<fn_type&, db_transaction&>, task<result_type>>
+    [[nodiscard]] task<result_type> in_transaction(fn_type fn, db_transaction_options options = {}) const {
+        registration_.require_active();
+        return registration_.attach(run_in_transaction<fn_type, result_type>(*this, std::move(fn), std::move(options)));
+    }
+
     [[nodiscard]] task<void> notify(std::string_view channel, std::string_view payload = {}) const;
 
 private:
+    template <typename fn_type, typename result_type>
+    static task<result_type> run_in_transaction(db_executor executor, fn_type fn, db_transaction_options options) {
+        auto tx = co_await executor.begin_transaction(std::move(options));
+        std::exception_ptr failure;
+        try {
+            if constexpr (std::is_void_v<result_type>) {
+                co_await std::invoke(fn, tx);
+                if (tx.active()) {
+                    co_await tx.commit();
+                }
+                co_return;
+            } else {
+                auto result = co_await std::invoke(fn, tx);
+                if (tx.active()) {
+                    co_await tx.commit();
+                }
+                co_return result;
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        if (tx.active()) {
+            try {
+                co_await tx.rollback();
+            } catch (...) {
+            }
+        }
+        std::rethrow_exception(failure);
+    }
     friend class detail::db_registry;
     friend class db_command_set<db_executor>;
     template <typename, typename>
@@ -1651,10 +1837,10 @@ private:
     // cache is nullptr when the alias has no query cache; without Redis
     // support it is always nullptr. `io_metrics` is the request's counter
     // block, or null outside a request.
-    db_executor(detail::db_pool_ref_type client, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept;
+    db_executor(detail::db_pool_ref_type client, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept;
     [[nodiscard]] detail::db_query_backend query_backend() const;
-    static task<db_stream_result> query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop);
-    static task<db_transaction> begin_transaction_prepared(detail::db_query_backend backend, detail::operation_scope& operation_scope, operation_options operation_options, stop_token request_stop, db_transaction_options transaction_options);
+    static task<db_stream_result> query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop);
+    static task<db_transaction> begin_transaction_prepared(detail::db_query_backend backend, ::ruvia::operation_scope& operation_scope, operation_options operation_options, stop_token request_stop, db_transaction_options transaction_options);
 
     detail::db_query_cache_state* cache_{nullptr};
     detail::db_pool_ref_type client_;
@@ -1664,9 +1850,9 @@ private:
     // outside a request.
     stop_token request_stop_;
     friend class detail::worker_client_registry_view;
-    [[nodiscard]] db_executor bind_caller_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
+    [[nodiscard]] db_executor bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
     void expire_capability() noexcept;
-    detail::capability_registration<&db_executor::expire_capability> registration_;
+    ::ruvia::capability_registration<&db_executor::expire_capability> registration_;
 };
 
 #ifdef RUVIA_ENABLE_DATABASE

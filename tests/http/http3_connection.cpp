@@ -639,7 +639,7 @@ TEST(Ruvia, http3_received_data_credits_of_different_streams_do_not_merge) {
 [[nodiscard]] ruvia::http_received_data_credit http2_data_credit(std::string_view body) {
     const auto append_frame = [](std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id, std::string_view payload) {
         std::array<char, ruvia::http2_frame_header_bytes> header{};
-        if (!ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(payload.size()), type, flags, stream_id)) {
+        if (!ruvia::encode_http2_frame_header(ruvia::as_mutable_bytes(std::span(header)), static_cast<std::uint32_t>(payload.size()), type, flags, stream_id)) {
             throw std::logic_error("invalid test HTTP/2 frame");
         }
         wire.append(header.data(), header.size());

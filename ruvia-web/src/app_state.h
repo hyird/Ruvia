@@ -15,7 +15,6 @@
 
 #include "app.h"
 #include "blocking_pool.h"
-#include "callback_ref.h"
 #include "controller.h"
 #include "document_root_publisher.h"
 #include "env.h"

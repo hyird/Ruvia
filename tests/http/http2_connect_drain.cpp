@@ -31,7 +31,7 @@ constexpr std::uint8_t end_headers_flag = 0x4;
 
 void append_frame(std::string& wire, std::uint8_t type, std::uint8_t flags, std::uint32_t stream_id, std::string_view payload) {
     std::array<char, ruvia::http2_frame_header_bytes> header{};
-    if (!ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(payload.size()), static_cast<ruvia::http2_frame_type>(type), flags, stream_id)) {
+    if (!ruvia::encode_http2_frame_header(ruvia::as_mutable_bytes(std::span(header)), static_cast<std::uint32_t>(payload.size()), static_cast<ruvia::http2_frame_type>(type), flags, stream_id)) {
         throw std::logic_error("invalid test HTTP/2 frame");
     }
     wire.append(header.data(), header.size());
@@ -62,7 +62,7 @@ struct wire_frame final {
 std::vector<wire_frame> parse_frames(std::string_view output) {
     std::vector<wire_frame> frames;
     while (!output.empty()) {
-        const auto header = ruvia::parse_http2_frame_header(std::span(output.data(), output.size()));
+        const auto header = ruvia::parse_http2_frame_header(ruvia::as_bytes(output));
         if (!header || output.size() < ruvia::http2_frame_header_bytes + header->length_) {
             throw std::logic_error("invalid HTTP/2 test output");
         }
@@ -1331,7 +1331,7 @@ std::size_t advertised_receive_window(std::string_view output) {
     std::uint32_t connection_window = 65535;
     std::uint32_t stream_window = 65535;
     while (!output.empty()) {
-        const auto header = ruvia::parse_http2_frame_header(std::span(output.data(), output.size()));
+        const auto header = ruvia::parse_http2_frame_header(ruvia::as_bytes(output));
         if (!header || output.size() < ruvia::http2_frame_header_bytes + header->length_) {
             throw std::logic_error("invalid initial HTTP/2 output");
         }
@@ -1407,7 +1407,7 @@ TEST(Ruvia, http2_public_receive_credit_restores_exact_window) {
     std::size_t connection_updates = 0;
     std::size_t stream_updates = 0;
     while (!updates.empty()) {
-        const auto header = ruvia::parse_http2_frame_header(std::span(updates.data(), updates.size()));
+        const auto header = ruvia::parse_http2_frame_header(ruvia::as_bytes(updates));
         EXPECT_TRUE(header.has_value());
         if (!header) {
             return;
@@ -2269,15 +2269,15 @@ TEST(Ruvia, http2_frame_observer_preserves_enabled_origin_and_alternative_servic
             const std::array<std::string_view, 1> origins{"https://example.test"};
             auto origin_frame = ruvia::encode_http2_origin_frame(origins);
             auto alternative_frame = ruvia::encode_http2_alternative_service_frame(0, origins[0], "h3=\":443\"");
-            ASSERT_TRUE(std::holds_alternative<std::vector<char>>(origin_frame));
-            ASSERT_TRUE(std::holds_alternative<std::vector<char>>(alternative_frame));
-            const auto& origin_bytes = std::get<std::vector<char>>(origin_frame);
-            const auto& alternative_bytes = std::get<std::vector<char>>(alternative_frame);
+            ASSERT_TRUE(std::holds_alternative<std::vector<std::byte>>(origin_frame));
+            ASSERT_TRUE(std::holds_alternative<std::vector<std::byte>>(alternative_frame));
+            const auto& origin_bytes = std::get<std::vector<std::byte>>(origin_frame);
+            const auto& alternative_bytes = std::get<std::vector<std::byte>>(alternative_frame);
             std::string wire;
             append_frame(wire, ruvia::http2_frame_type::settings, 0, 0);
-            wire.append(origin_bytes.data(), origin_bytes.size());
+            wire.append(ruvia::as_chars(origin_bytes));
             append_frame(wire, static_cast<ruvia::http2_frame_type>(0xee), 0, 0, "discard me");
-            wire.append(alternative_bytes.data(), alternative_bytes.size());
+            wire.append(ruvia::as_chars(alternative_bytes));
             std::size_t origin_count = 0;
             std::size_t alternative_count = 0;
             for (std::size_t cursor = 0; cursor < wire.size(); cursor += fragment) {

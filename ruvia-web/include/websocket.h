@@ -264,7 +264,7 @@ private:
     std::uint64_t message_id_;
     websocket_opcode opcode_;
     bool compress_;
-    detail::capability_registration<&websocket_message_writer::expire_capability> registration_;
+    ::ruvia::capability_registration<&websocket_message_writer::expire_capability> registration_;
 };
 
 }  // namespace ruvia

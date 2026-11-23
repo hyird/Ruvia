@@ -132,6 +132,20 @@ bool parse_request_target(http_known_method method, std::string_view target, req
 
 namespace ruvia {
 
+std::optional<http_request_target_view> parse_http_request_target(http_known_method method, borrowed_text target) noexcept {
+    detail::request_target_view parsed;
+    if (!detail::parse_request_target(method, target.view(), parsed)) {
+        return std::nullopt;
+    }
+    return http_request_target_view{
+        .scheme_ = parsed.scheme_,
+        .authority_ = parsed.authority_,
+        .path_ = parsed.path_,
+        .query_ = parsed.query_,
+        .form_ = parsed.form_,
+    };
+}
+
 bool is_valid_http_connect_authority(std::string_view authority) noexcept {
     detail::request_target_view target;
     return detail::parse_request_target(http_known_method::connect, authority, target);

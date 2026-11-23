@@ -1,12 +1,16 @@
 #pragma once
 
+#include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "borrowed_text.h"
+#include "byte_view.h"
 #include "http_header.h"
 #include "http_request.h"
 #include "http_request_expectation.h"
@@ -16,15 +20,10 @@ namespace ruvia {
 class http3_connection;
 
 // A validated HTTP/3 request head (RFC 9114 §4.3.1), published by a server
-// http3_connection as http3_request_head_event. nghttp3 rejects the
-// framing-level violations of §4.1.2 and §4.3.1 -- uppercase names,
-// misplaced, repeated or missing pseudo-header fields, connection-specific
-// fields, TE other than "trailers", malformed Content-Length -- and the
-// connection adds the request semantics every HTTP version shares in
-// ruvia-http (target grammar, :authority/Host agreement, the recipient field
-// rules, Expect, Cookie joining). A head it cannot represent as an
-// http_request is a malformed request the connection answers itself with
-// H3_MESSAGE_ERROR (§4.1.2); no head is published for it.
+// http3_connection as http3_request_head_event. Field names and values are
+// packed into one contiguous byte arena (`storage_`) with integer slice
+// descriptors so decoding a head requires no per-header heap allocations and
+// moving the head never invalidates slices.
 class http3_request_head final {
 public:
     http3_request_head(http3_request_head&&) noexcept = default;
@@ -68,22 +67,40 @@ public:
     [[nodiscard]] http_request build_request(borrowed_text body = {}) const& RUVIA_LIFETIMEBOUND;
     http_request build_request(borrowed_text body = {}) const&& = delete;
 
+    template <typename bytes_type>
+        requires(!std::convertible_to<bytes_type&&, borrowed_text> && std::convertible_to<bytes_type&&, borrowed_bytes>)
+    [[nodiscard]] http_request build_request(bytes_type&& body RUVIA_LIFETIMEBOUND) const& RUVIA_LIFETIMEBOUND {
+        return build_request(borrowed_text(as_chars(borrowed_bytes(std::forward<bytes_type>(body)).view())));
+    }
+    template <typename bytes_type>
+        requires(!std::convertible_to<bytes_type&&, borrowed_text> && std::convertible_to<bytes_type&&, borrowed_bytes>)
+    http_request build_request(bytes_type&&) const&& = delete;
+
 private:
     friend class http3_connection;
+
+    struct field_slice final {
+        std::uint32_t name_offset_{0};
+        std::uint32_t name_size_{0};
+        std::uint32_t value_offset_{0};
+        std::uint32_t value_size_{0};
+    };
+
     struct regular_field final {
         std::uint32_t index_;
         detail::http_field_kind kind_;
     };
 
-    http3_request_head(std::int64_t stream_id, std::vector<http_header> fields, bool stream_ended, bool early_data);
-    // nullopt: the head is malformed (RFC 9114 §4.1.2).
-    [[nodiscard]] static std::optional<http3_request_head> try_parse(std::int64_t stream_id, std::vector<http_header> fields, bool stream_ended, bool early_data);
+    http3_request_head(std::int64_t stream_id, std::string storage, std::vector<field_slice> fields, bool stream_ended, bool early_data);
+    [[nodiscard]] static std::optional<http3_request_head> try_parse(std::int64_t stream_id, std::string storage, std::vector<field_slice> fields, bool stream_ended, bool early_data);
     [[nodiscard]] bool validate();
+    [[nodiscard]] std::string_view field_name(std::uint32_t index) const noexcept;
     [[nodiscard]] std::string_view field_value(std::uint32_t index) const noexcept;
 
     static constexpr std::uint32_t absent = 0xffffffffU;
 
-    std::vector<http_header> fields_;
+    std::string storage_;
+    std::vector<field_slice> fields_;
     std::vector<regular_field> regular_;
     std::string cookie_;
     std::int64_t stream_id_{-1};

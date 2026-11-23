@@ -122,15 +122,18 @@ constexpr std::array<std::uint8_t, 32> stateless_reset_secret{0x52, 0x75, 0x76, 
 // active migration.
 class quic_server_session final {
 public:
-    quic_server_session(SSL_CTX* context, const ngtcp2_path& path, std::span<const std::byte> initial, ngtcp2_tstamp now) {
+    quic_server_session(SSL_CTX* context, const ruvia::http3_quic_path& path, std::span<const std::byte> initial, ruvia::quic_timestamp now) {
         ngtcp2_pkt_hd header{};
         if (ngtcp2_accept(&header, reinterpret_cast<const std::uint8_t*>(initial.data()), initial.size()) != 0) {
             throw std::invalid_argument("datagram is not an acceptable QUIC Initial");
         }
-        const auto source = ruvia::test::http3_test_random_connection_id(16);
-        if (ngtcp2_crypto_generate_stateless_reset_token(stateless_reset_token_.data(), stateless_reset_secret.data(), stateless_reset_secret.size(), &source) != 0) {
+        const auto raw_source = ruvia::test::http3_test_raw_random_connection_id(16);
+        if (ngtcp2_crypto_generate_stateless_reset_token(reinterpret_cast<std::uint8_t*>(stateless_reset_token_.data()), stateless_reset_secret.data(), stateless_reset_secret.size(), &raw_source) != 0) {
             throw std::runtime_error("cannot derive a stateless reset token");
         }
+        const ruvia::quic_cid source(std::as_bytes(std::span(raw_source.data, raw_source.datalen)));
+        const ruvia::quic_cid destination(std::as_bytes(std::span(header.scid.data, header.scid.datalen)));
+        const ruvia::quic_cid original_destination(std::as_bytes(std::span(header.dcid.data, header.dcid.datalen)));
         tls_.reset(SSL_new(context));
         if (!tls_ || ngtcp2_crypto_ossl_configure_server_session(tls_.get()) != 0) {
             throw std::runtime_error("cannot create the server TLS session");
@@ -143,11 +146,11 @@ public:
         }
         crypto_.reset(crypto);
         connection_.emplace(ruvia::http3_quic_connection::server({
-            .crypto_callbacks_ = ruvia::test::http3_test_crypto_callbacks(ruvia::http_connection_role::server),
+            .configure_crypto_callbacks_ = ruvia::test::http3_test_configure_crypto_callbacks(ruvia::http_connection_role::server),
             .owner_callbacks_ = {.get_new_connection_id_ = ruvia::test::http3_test_new_connection_id},
             .source_connection_id_ = source,
-            .destination_connection_id_ = header.scid,
-            .original_destination_connection_id_ = header.dcid,
+            .destination_connection_id_ = destination,
+            .original_destination_connection_id_ = original_destination,
             .stateless_reset_token_ = stateless_reset_token_,
             .disable_active_migration_ = true,
             .initial_path_ = path,
@@ -207,12 +210,8 @@ void drain_events(ruvia::http3_quic_connection& connection, std::list<ruvia::htt
     }
 }
 
-sockaddr_in loopback_address(std::uint16_t port) {
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_port = htons(port);
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    return address;
+ruvia::ip_endpoint loopback_endpoint(std::uint16_t port) {
+    return {ruvia::ip_address::ipv4({127, 0, 0, 1}), ruvia::port_number{port}};
 }
 
 // A client and a server connection joined by an in-memory datagram relay on
@@ -220,22 +219,20 @@ sockaddr_in loopback_address(std::uint16_t port) {
 class in_memory_h3_pair final {
 public:
     explicit in_memory_h3_pair(ruvia::test::tls_identity& identity) :
-        client_address_(loopback_address(50000)),
-        server_address_(loopback_address(443)),
+        client_address_(loopback_endpoint(50000)),
+        server_address_(loopback_endpoint(443)),
         client_path_{
-            .local = {reinterpret_cast<ngtcp2_sockaddr*>(&client_address_), sizeof(client_address_)},
-            .remote = {reinterpret_cast<ngtcp2_sockaddr*>(&server_address_), sizeof(server_address_)},
-            .user_data = nullptr,
+            .local_ = client_address_,
+            .remote_ = server_address_,
         },
         server_path_{
-            .local = {reinterpret_cast<ngtcp2_sockaddr*>(&server_address_), sizeof(server_address_)},
-            .remote = {reinterpret_cast<ngtcp2_sockaddr*>(&client_address_), sizeof(client_address_)},
-            .user_data = nullptr,
+            .local_ = server_address_,
+            .remote_ = client_address_,
         },
         client_initial_destination_(ruvia::test::http3_test_random_connection_id(18)),
         client_tls_(identity.ca_file_, "localhost") {
         client_.emplace(ruvia::http3_quic_connection::client({
-            .crypto_callbacks_ = ruvia::test::http3_test_crypto_callbacks(ruvia::http_connection_role::client),
+            .configure_crypto_callbacks_ = ruvia::test::http3_test_configure_crypto_callbacks(ruvia::http_connection_role::client),
             .owner_callbacks_ = {.get_new_connection_id_ = ruvia::test::http3_test_new_connection_id},
             .source_connection_id_ = ruvia::test::http3_test_random_connection_id(16),
             .destination_connection_id_ = client_initial_destination_,
@@ -280,12 +277,12 @@ public:
         return *server_;
     }
 
-    sockaddr_in client_address_;
-    sockaddr_in server_address_;
-    ngtcp2_path client_path_;
-    ngtcp2_path server_path_;
-    ngtcp2_tstamp now_{NGTCP2_SECONDS};
-    ngtcp2_cid client_initial_destination_;
+    ruvia::ip_endpoint client_address_;
+    ruvia::ip_endpoint server_address_;
+    ruvia::http3_quic_path client_path_;
+    ruvia::http3_quic_path server_path_;
+    ruvia::quic_timestamp now_{NGTCP2_SECONDS};
+    ruvia::quic_cid client_initial_destination_;
     ruvia::test::http3_test_client_tls client_tls_;
     std::optional<ruvia::http3_quic_connection> client_;
     std::optional<quic_server_session> server_;
@@ -295,7 +292,7 @@ public:
     ruvia::http3_quic_status last_server_receive_{ruvia::http3_quic_status::accepted};
 
 private:
-    std::size_t relay(ruvia::http3_quic_connection& from, std::list<ruvia::http3_event>& from_events, ruvia::http3_quic_connection& to, const ngtcp2_path& to_path, std::list<ruvia::http3_event>& to_events, ruvia::http3_quic_status& last_receive) {
+    std::size_t relay(ruvia::http3_quic_connection& from, std::list<ruvia::http3_event>& from_events, ruvia::http3_quic_connection& to, const ruvia::http3_quic_path& to_path, std::list<ruvia::http3_event>& to_events, ruvia::http3_quic_status& last_receive) {
         std::size_t moved = 0;
         ruvia::http3_quic_datagram datagram;
         for (;;) {
@@ -463,24 +460,19 @@ TEST(Ruvia, http3_ngtcp2_openssl_client_emits_a_real_quic_initial_packet) {
         return;
     }
 
-    auto local = loopback_address(44300);
-    auto remote = loopback_address(443);
-    const ngtcp2_path path{
-        .local = {reinterpret_cast<ngtcp2_sockaddr*>(&local), sizeof(local)},
-        .remote = {reinterpret_cast<ngtcp2_sockaddr*>(&remote), sizeof(remote)},
-        .user_data = nullptr,
+    const ruvia::http3_quic_path path{
+        .local_ = loopback_endpoint(44300),
+        .remote_ = loopback_endpoint(443),
     };
 
     constexpr std::array<std::uint8_t, 8> source_id{0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17};
     constexpr std::array<std::uint8_t, 8> destination_id{0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27};
-    ngtcp2_cid source_connection_id;
-    ngtcp2_cid destination_connection_id;
-    ngtcp2_cid_init(&source_connection_id, source_id.data(), source_id.size());
-    ngtcp2_cid_init(&destination_connection_id, destination_id.data(), destination_id.size());
+    const ruvia::quic_cid source_connection_id(std::as_bytes(std::span(source_id)));
+    const ruvia::quic_cid destination_connection_id(std::as_bytes(std::span(destination_id)));
 
-    constexpr ngtcp2_tstamp timestamp = NGTCP2_SECONDS;
+    constexpr ruvia::quic_timestamp timestamp = NGTCP2_SECONDS;
     auto connection = ruvia::http3_quic_connection::client({
-        .crypto_callbacks_ = ruvia::test::http3_test_crypto_callbacks(ruvia::http_connection_role::client),
+        .configure_crypto_callbacks_ = ruvia::test::http3_test_configure_crypto_callbacks(ruvia::http_connection_role::client),
         .owner_callbacks_ = {.get_new_connection_id_ = ruvia::test::http3_test_new_connection_id},
         .source_connection_id_ = source_connection_id,
         .destination_connection_id_ = destination_connection_id,
@@ -494,8 +486,7 @@ TEST(Ruvia, http3_ngtcp2_openssl_client_emits_a_real_quic_initial_packet) {
     const auto result = connection.next_datagram(1350, timestamp, datagram);
     EXPECT_TRUE(result.status_ == ruvia::http3_quic_status::accepted);
     EXPECT_TRUE(datagram.bytes_.size() >= 1200);
-    EXPECT_TRUE(datagram.path_.path.remote.addrlen == sizeof(remote));
-    EXPECT_TRUE(datagram.path_.path.remote.addr == reinterpret_cast<ngtcp2_sockaddr*>(&datagram.path_.remote_addrbuf));
+    EXPECT_EQ(datagram.path_, path);
     EXPECT_TRUE(connection.expiry() > timestamp);
 
     SSL_set_app_data(tls.get(), nullptr);
@@ -521,10 +512,11 @@ TEST(Ruvia, http3_quic_server_accepts_a_client_initial_and_serves_a_request_in_m
     if (parameters != nullptr) {
         EXPECT_TRUE(parameters->disable_active_migration == 1);
         EXPECT_TRUE(parameters->original_dcid_present == 1);
-        EXPECT_TRUE(ngtcp2_cid_eq(&parameters->original_dcid, &pair.client_initial_destination_) != 0);
+        const ruvia::quic_cid received_odcid(std::as_bytes(std::span(parameters->original_dcid.data, parameters->original_dcid.datalen)));
+        EXPECT_EQ(received_odcid, pair.client_initial_destination_);
         EXPECT_TRUE(parameters->stateless_reset_token_present == 1);
         const auto& token = pair.server_session().stateless_reset_token();
-        EXPECT_TRUE(std::equal(token.begin(), token.end(), std::begin(parameters->stateless_reset_token)));
+        EXPECT_TRUE(std::ranges::equal(token, std::as_bytes(std::span(parameters->stateless_reset_token))));
     }
 
     EXPECT_TRUE(pair.client().start_http3() == ruvia::http3_quic_status::accepted);
@@ -605,11 +597,6 @@ TEST(Ruvia, http3_quic_server_drains_with_goaway_then_closes_the_connection_grac
     EXPECT_TRUE(after_close.bytes_.empty());
 }
 
-template <typename address_type>
-[[nodiscard]] bool same_address(std::span<const std::byte> bytes, const address_type& address) {
-    return std::ranges::equal(bytes, std::as_bytes(std::span(&address, 1)));
-}
-
 // RFC 9000 §7.4.1: a client remembers the server's transport parameters with
 // its session ticket only once they are authenticated, and a later
 // connection restores them for 0-RTT. current_path() reports the addresses
@@ -623,11 +610,11 @@ TEST(Ruvia, http3_quic_client_encodes_early_transport_parameters_after_the_hands
     EXPECT_FALSE(pair.client().encode_early_transport_parameters(parameters).has_value());
 
     const auto client_path = pair.client().current_path();
-    EXPECT_TRUE(same_address(client_path.local_, pair.client_address_));
-    EXPECT_TRUE(same_address(client_path.remote_, pair.server_address_));
+    EXPECT_EQ(client_path.local_, pair.client_address_);
+    EXPECT_EQ(client_path.remote_, pair.server_address_);
     const auto server_path = pair.server().current_path();
-    EXPECT_TRUE(same_address(server_path.local_, pair.server_address_));
-    EXPECT_TRUE(same_address(server_path.remote_, pair.client_address_));
+    EXPECT_EQ(server_path.local_, pair.server_address_);
+    EXPECT_EQ(server_path.remote_, pair.client_address_);
 
     pair.exchange();
     ASSERT_TRUE(pair.client().handshake_completed());
@@ -645,11 +632,11 @@ TEST(Ruvia, http3_quic_client_encodes_early_transport_parameters_after_the_hands
     EXPECT_FALSE(pair.client().encode_early_transport_parameters(std::span(parameters.data(), *size - 1)).has_value());
     const auto again = pair.client().encode_early_transport_parameters(parameters);
     EXPECT_EQ(again, size);
-    EXPECT_TRUE(same_address(pair.client().current_path().local_, pair.client_address_));
+    EXPECT_EQ(pair.client().current_path().local_, pair.client_address_);
 
     // A new connection to the same server restores them before 0-RTT.
     auto resumed = ruvia::http3_quic_connection::client({
-        .crypto_callbacks_ = ruvia::test::http3_test_crypto_callbacks(ruvia::http_connection_role::client),
+        .configure_crypto_callbacks_ = ruvia::test::http3_test_configure_crypto_callbacks(ruvia::http_connection_role::client),
         .owner_callbacks_ = {.get_new_connection_id_ = ruvia::test::http3_test_new_connection_id},
         .source_connection_id_ = ruvia::test::http3_test_random_connection_id(16),
         .destination_connection_id_ = ruvia::test::http3_test_random_connection_id(18),
@@ -728,11 +715,10 @@ private:
         return static_cast<ngtcp2_tstamp>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
     }
 
-    [[nodiscard]] ngtcp2_path path() noexcept {
+    [[nodiscard]] ruvia::http3_quic_path path() const noexcept {
         return {
-            .local = {reinterpret_cast<ngtcp2_sockaddr*>(endpoint_.data()), static_cast<ngtcp2_socklen>(endpoint_.size())},
-            .remote = {reinterpret_cast<ngtcp2_sockaddr*>(peer_.data()), static_cast<ngtcp2_socklen>(peer_.size())},
-            .user_data = nullptr,
+            .local_ = ruvia::to_ip_endpoint(endpoint_),
+            .remote_ = ruvia::to_ip_endpoint(peer_),
         };
     }
 
@@ -1966,8 +1952,8 @@ TEST(Ruvia, http3_quic_stateless_reset_closes_client_and_enforces_size_bounds) {
     EXPECT_TRUE(RAND_bytes(random_bytes.data(), static_cast<int>(random_bytes.size())) == 1);
     std::array<std::byte, 64> reset_packet{};
     // Packets of 21 bytes or less cannot form a valid Stateless Reset.
-    EXPECT_EQ(ruvia::write_http3_quic_stateless_reset(token, random_bytes, reset_packet, 21), std::size_t{0});
-    const auto written = ruvia::write_http3_quic_stateless_reset(token, random_bytes, reset_packet, 44);
+    EXPECT_EQ(ruvia::write_http3_quic_stateless_reset(token, std::as_bytes(std::span(random_bytes)), reset_packet, 21), std::size_t{0});
+    const auto written = ruvia::write_http3_quic_stateless_reset(token, std::as_bytes(std::span(random_bytes)), reset_packet, 44);
     EXPECT_TRUE(written >= 22 && written <= 44);
 
     const auto status = pair.client().receive_datagram(pair.client_path_, NGTCP2_ECN_NOT_ECT, std::span<const std::byte>(reset_packet.data(), written), pair.now_);

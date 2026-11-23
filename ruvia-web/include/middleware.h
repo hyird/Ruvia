@@ -15,13 +15,9 @@
 #include <utility>
 
 #include "borrowed_text.h"
-#include "callback_ref.h"
+#include "function_ref.h"
 #include "task.h"
 #include "worker_services.h"
-
-// The three non-owning callable shapes a route runs: a buffered handler, a
-// streaming (response-stream / websocket / tunnel) handler, and one middleware
-// frame. Each binds a worker-local instance to a process-invariant invoke thunk.
 
 namespace ruvia {
 
@@ -29,12 +25,14 @@ class context;
 class http_response;
 class next;
 
+using route_handler = function_ref<task<http_response>(context&)>;
+using route_stream_handler = function_ref<task<void>(context&)>;
+using route_middleware = function_ref<task<void>(context&, next&)>;
+
 namespace detail {
-
-using route_handler = callback_ref<task<http_response>(context&)>;
-using route_stream_handler = callback_ref<task<void>(context&)>;
-using route_middleware = callback_ref<task<void>(context&, next&)>;
-
+using ::ruvia::route_handler;
+using ::ruvia::route_middleware;
+using ::ruvia::route_stream_handler;
 }  // namespace detail
 
 }  // namespace ruvia

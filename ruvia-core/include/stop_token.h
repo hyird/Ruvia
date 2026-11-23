@@ -26,7 +26,7 @@ namespace detail {
 class stop_state;
 class stop_callback_node;
 
-enum class stop_registration_phase : unsigned char {
+enum class stop_registration_phase : std::uint8_t {
     idle,
     registering,
     registered,

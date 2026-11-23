@@ -7,11 +7,13 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
 
+#include "byte_view.h"
 #include "checked_integer.h"
 #include "http_header.h"
 
@@ -70,6 +72,7 @@ struct http_priority_update final {
 // dictionary member replaces the earlier member, including an invalid value.
 [[nodiscard]] std::variant<http_priority_fields, http_priority_error> parse_http_priority(const http_header_range_view& headers) noexcept;
 [[nodiscard]] std::variant<std::size_t, http_priority_error> encode_http_priority(std::span<char> output, http_priority_fields fields_value) noexcept;
-[[nodiscard]] std::variant<http_priority_update, http_priority_error> decode_http2_priority_update(std::span<const char> payload_value) noexcept;
-[[nodiscard]] std::variant<std::size_t, http_priority_error> encode_http2_priority_update(std::span<char> output, std::uint32_t stream_id, http_priority_fields fields_value) noexcept;
+[[nodiscard]] std::string format_http_priority(http_priority_fields fields_value);
+[[nodiscard]] std::variant<http_priority_update, http_priority_error> decode_http2_priority_update(byte_view payload_value) noexcept;
+[[nodiscard]] std::variant<std::size_t, http_priority_error> encode_http2_priority_update(mutable_byte_view output, std::uint32_t stream_id, http_priority_fields fields_value) noexcept;
 }  // namespace ruvia

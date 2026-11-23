@@ -34,7 +34,8 @@ namespace {
 
 using postgresql_pool = db_pool<postgresql_driver>;
 
-// pg_type OID of float8 (double precision); libpq's headers name no type OIDs.
+// pg_type OIDs for bytea and float8 (double precision); libpq's headers name no type OIDs.
+constexpr unsigned int postgresql_bytea_oid = 17;
 constexpr unsigned int postgresql_float8_oid = 701;
 
 void validate_postgresql_string_param(std::string_view value) {
@@ -44,6 +45,32 @@ void validate_postgresql_string_param(std::string_view value) {
     if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
         throw std::length_error("PostgreSQL parameter is too large");
     }
+}
+
+void validate_postgresql_bytes_param(byte_view value) {
+    if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        throw std::length_error("PostgreSQL binary parameter is too large");
+    }
+}
+
+[[nodiscard]] std::string decode_postgresql_bytea_field(const char* raw_ptr, std::size_t raw_length) {
+    const std::string_view raw(raw_ptr, raw_length);
+    if (raw.starts_with("\\x")) {
+        const auto hex = raw.substr(2);
+        if (hex.size() % 2 == 0) {
+            std::string decoded(hex.size() / 2, '\0');
+            if (decode_hex(hex, mutable_byte_view(reinterpret_cast<std::byte*>(decoded.data()), decoded.size()))) {
+                return decoded;
+            }
+        }
+    }
+    std::size_t unescaped_length = 0;
+    std::unique_ptr<unsigned char, decltype(&PQfreemem)> unescaped(
+        PQunescapeBytea(reinterpret_cast<const unsigned char*>(raw_ptr), &unescaped_length), &PQfreemem);
+    if (!unescaped) {
+        throw std::bad_alloc();
+    }
+    return std::string(reinterpret_cast<const char*>(unescaped.get()), unescaped_length);
 }
 
 void validate_postgresql_double_param(double value) {
@@ -113,7 +140,13 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value) {
                 fields_value.push_back(db_result_access::null_field());
                 continue;
             }
-            fields_value.push_back(db_result_access::borrowed_field(std::string_view(PQgetvalue(&result_value, row_index, field_index), static_cast<std::size_t>(PQgetlength(&result_value, row_index, field_index)))));
+            const auto* raw_ptr = PQgetvalue(&result_value, row_index, field_index);
+            const auto raw_len = static_cast<std::size_t>(PQgetlength(&result_value, row_index, field_index));
+            if (PQftype(&result_value, field_index) == postgresql_bytea_oid && PQfformat(&result_value, field_index) == 0) {
+                fields_value.push_back(db_result_access::owned_field(decode_postgresql_bytea_field(raw_ptr, raw_len)));
+            } else {
+                fields_value.push_back(db_result_access::borrowed_field(std::string_view(raw_ptr, raw_len)));
+            }
         }
         db_result_access::append_row(output, row_start, field_count);
     }
@@ -125,12 +158,19 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value) {
         column_names.reserve(field_count);
         populate_postgresql_column_names(column_names, result_value, field_count);
     }
+    std::string decoded_bytea;
     return db_result_access::materialize_stream_row(fields_value, column_names, field_count, [&](std::size_t field) -> std::optional<std::string_view> {
         const auto field_index = static_cast<int>(field);
         if (PQgetisnull(&result_value, 0, field_index) != 0) {
             return std::nullopt;
         }
-        return std::string_view(PQgetvalue(&result_value, 0, field_index), static_cast<std::size_t>(PQgetlength(&result_value, 0, field_index)));
+        const auto* raw_ptr = PQgetvalue(&result_value, 0, field_index);
+        const auto raw_len = static_cast<std::size_t>(PQgetlength(&result_value, 0, field_index));
+        if (PQftype(&result_value, field_index) == postgresql_bytea_oid && PQfformat(&result_value, field_index) == 0) {
+            decoded_bytea = decode_postgresql_bytea_field(raw_ptr, raw_len);
+            return std::string_view(decoded_bytea);
+        }
+        return std::string_view(raw_ptr, raw_len);
     });
 }
 
@@ -197,7 +237,7 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
     if (PQenterPipelineMode(connection) == 0) {
         throw postgresql_error(*connection, "PQenterPipelineMode", backend_error_code::io_error);
     }
-    if (PQsendQueryParams(connection, sql.data(), encoded.count(), encoded.types(), encoded.values(), nullptr, nullptr, 0) == 0) {
+    if (PQsendQueryParams(connection, sql.data(), encoded.count(), encoded.types(), encoded.values(), encoded.lengths(), encoded.formats(), 0) == 0) {
         throw postgresql_error(*connection, "PQsendQueryParams", backend_error_code::command_failed);
     }
     if (PQsetSingleRowMode(connection) == 0) {
@@ -219,12 +259,14 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
     const auto count = encoded.count();
     const auto* values = encoded.values();
     const auto* types = encoded.types();
+    const auto* lengths = encoded.lengths();
+    const auto* formats = encoded.formats();
     const auto queue_failure = [&connection](std::string_view operation) {
         return postgresql_error(connection, operation, backend_error_code::io_error);
     };
     postgresql_flight flight{lookup.statement_, 0, lookup.inserted_};
     if (!lookup.statement_.has_value()) {
-        if (PQsendQueryParams(&connection, sql.data(), count, types, values, nullptr, nullptr, 0) == 0) {
+        if (PQsendQueryParams(&connection, sql.data(), count, types, values, lengths, formats, 0) == 0) {
             throw queue_failure("PQsendQueryParams");
         }
     } else {
@@ -244,7 +286,7 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
             }
             flight.setup_commands_ += 2;
         }
-        if (PQsendQueryPrepared(&connection, name, count, values, nullptr, nullptr, 0) == 0) {
+        if (PQsendQueryPrepared(&connection, name, count, values, lengths, formats, 0) == 0) {
             throw queue_failure("PQsendQueryPrepared");
         }
     }
@@ -467,7 +509,7 @@ postgresql_statement_name make_postgresql_statement_name(std::string_view sql, s
     constexpr std::string_view prefix{"ruvia_"};
     postgresql_statement_name name;
     prefix.copy(name.data(), prefix.size());
-    http_encode_lower_hex(name.data() + prefix.size(), std::span(digest.data(), (name.size() - prefix.size()) / 2));
+    (void)encode_lower_hex(std::span<char>(name).subspan(prefix.size(), name.size() - prefix.size() - 1), std::span<const std::byte>(digest.data(), (name.size() - prefix.size()) / 2));
     name.back() = '\0';
     return name;
 }
@@ -528,7 +570,9 @@ postgresql_params::postgresql_params(std::span<const db_value> params) :
     count_(params.size()),
     heap_encoded_(),
     heap_values_(),
-    heap_types_() {
+    heap_types_(),
+    heap_lengths_(),
+    heap_formats_() {
     // libpq counts parameters in an int.
     if (!std::in_range<int>(params.size())) {
         throw std::invalid_argument("too many PostgreSQL query parameters");
@@ -542,6 +586,8 @@ postgresql_params::postgresql_params(std::span<const db_value> params) :
         const auto type = param.type();
         if (type == db_value_type::string) {
             validate_postgresql_string_param(db_value_access::owned_text(param));
+        } else if (type == db_value_type::bytes) {
+            validate_postgresql_bytes_param(db_value_access::owned_byte_span(param));
         } else if (type == db_value_type::signed_value || type == db_value_type::unsigned_value || type == db_value_type::double_) {
             if (type == db_value_type::double_) {
                 validate_postgresql_double_param(param.double_value());
@@ -552,6 +598,8 @@ postgresql_params::postgresql_params(std::span<const db_value> params) :
     if (!inline_params) {
         heap_values_.reserve(params.size());
         heap_types_.reserve(params.size());
+        heap_lengths_.reserve(params.size());
+        heap_formats_.reserve(params.size());
     }
     const bool inline_numerics = inline_params || numeric_count <= inline_capacity;
     if (!inline_numerics) {
@@ -562,14 +610,28 @@ postgresql_params::postgresql_params(std::span<const db_value> params) :
     for (std::size_t i = 0; i < params.size(); ++i) {
         const auto& param = params[i];
         const auto type = param.type();
-        const unsigned int oid = type == db_value_type::double_ ? postgresql_float8_oid : 0U;
+        unsigned int oid = 0U;
+        if (type == db_value_type::double_) {
+            oid = postgresql_float8_oid;
+        } else if (type == db_value_type::bytes) {
+            oid = postgresql_bytea_oid;
+        }
         const char* text = nullptr;
+        int length = 0;
+        int format = 0;
         switch (type) {
             case db_value_type::null:
                 break;
             case db_value_type::string:
                 text = db_value_access::owned_text(param).c_str();
                 break;
+            case db_value_type::bytes: {
+                const auto raw = db_value_access::owned_byte_span(param);
+                text = raw.empty() ? "" : reinterpret_cast<const char*>(raw.data());
+                length = static_cast<int>(raw.size());
+                format = 1;
+                break;
+            }
             case db_value_type::bool_:
                 text = param.bool_value() ? "true" : "false";
                 break;
@@ -597,9 +659,13 @@ postgresql_params::postgresql_params(std::span<const db_value> params) :
         if (inline_params) {
             inline_types_[i] = oid;
             inline_values_[i] = text;
+            inline_lengths_[i] = length;
+            inline_formats_[i] = format;
         } else {
             heap_types_.push_back(oid);
             heap_values_.push_back(text);
+            heap_lengths_.push_back(length);
+            heap_formats_.push_back(format);
         }
     }
 }

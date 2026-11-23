@@ -130,6 +130,10 @@ public:
     void discard_content() noexcept;
 
     [[nodiscard]] decoder_state state() const noexcept;
+    // Extracts owned trailers after decode() or finish_input() reported
+    // http1_body_trailers, avoiding a copy into http_request_trailers.
+    [[nodiscard]] std::vector<http_header> take_trailers() & noexcept;
+    std::vector<http_header> take_trailers() && = delete;
     // Starts another body with the constructed framing and configuration.
     // Allocation failure while recreating discarded codecs preserves the
     // previous body's state and progress.

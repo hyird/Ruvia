@@ -77,7 +77,7 @@ bool is_retryable_db_error(const db_error& error) noexcept {
     return false;
 }
 
-db_executor::db_executor(detail::db_pool_ref_type client, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept :
+db_executor::db_executor(detail::db_pool_ref_type client, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept :
     cache_(cache),
     client_(client),
     io_metrics_(io_metrics),
@@ -180,7 +180,7 @@ task<db_stream_result> db_executor::query_stream(std::string_view sql, std::span
     return registration_.attach(query_stream_prepared(client_, std::move(statement.sql_), std::move(statement.params_), scope, io_metrics_, options_, request_stop_));
 }
 
-task<db_stream_result> db_executor::query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) {
+task<db_stream_result> db_executor::query_stream_prepared(detail::db_pool_ref_type client, std::string sql, std::vector<db_value> params, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options, stop_token request_stop) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     // The stream outlives this call, so it owns the link its reads use.
     auto request_link = detail::make_request_link(options, request_stop);
@@ -198,7 +198,7 @@ task<db_transaction> db_executor::begin_transaction(db_transaction_options optio
     return registration_.attach(begin_transaction_prepared(query_backend(), scope, options_, request_stop_, std::move(options)));
 }
 
-task<db_transaction> db_executor::begin_transaction_prepared(detail::db_query_backend backend, detail::operation_scope& operation_scope, operation_options operation_options_value, stop_token request_stop, db_transaction_options transaction_options) {
+task<db_transaction> db_executor::begin_transaction_prepared(detail::db_query_backend backend, ::ruvia::operation_scope& operation_scope, operation_options operation_options_value, stop_token request_stop, db_transaction_options transaction_options) {
     detail::scoped_request_io_timer timer(backend.io_metrics_, detail::request_io_kind::db);
     // The transaction outlives this call, so it owns the link its statements use.
     auto request_link = detail::make_request_link(operation_options_value, request_stop);
@@ -219,7 +219,7 @@ task<void> db_executor::notify(std::string_view channel, std::string_view payloa
     return registration_.attach(discard_rows_task(start_db_statement<false>(options_, request_stop_, client_, std::move(statement.sql_), std::move(statement.params_), io_metrics_)));
 }
 
-db_executor db_executor::bind_caller_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
+db_executor db_executor::bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
     registration_.require_active();
     db_executor bound(client_, scope, io_metrics, cache_);
     bound.request_stop_ = stop_token_value;
@@ -349,7 +349,7 @@ db_query_plan db_query_plan::prepare(const db_query& query, const db_query* coun
 task<db_rows> query_db_backend(const db_query_backend& backend, std::string sql, std::vector<db_value> params, operation_options& options) {
     return visit_db_pool(backend.pool_, [&](auto& pool) {
         if (backend.slot_.has_value()) {
-            return pool.query_on_transaction_slot(*backend.slot_, std::move(sql), std::move(params), options);
+            return pool.query_on_transaction_slot(*backend.slot_, std::move(sql), std::move(params), options, backend.keep_on_command_failure_, backend.lease_kept_);
         }
         return pool.query(std::move(sql), std::move(params), std::move(options), backend.io_metrics_);
     });

@@ -563,8 +563,8 @@ struct jwt_token_parts final {
     return jwt_token_parts{token.substr(0, first), token.substr(first + 1, second - first - 1), token.substr(second + 1), token.substr(0, second)};
 }
 
-void jwt_base64_url_encode_into(char* out, std::string_view input) noexcept {
-    http_base64_encode(out, std::span(reinterpret_cast<const std::uint8_t*>(input.data()), input.size()), http_base64_charset::url_safe, http_base64_padding::forbidden);
+void jwt_base64_url_encode_into(std::span<char> out, std::string_view input) noexcept {
+    (void)base64_encode(out, as_bytes(input), base64_charset::url_safe, base64_padding::forbidden);
 }
 
 struct jwt_decoded_section final {
@@ -575,13 +575,13 @@ struct jwt_decoded_section final {
 
     // False for invalid base64url; only the heap buffer allocation throws.
     [[nodiscard]] bool decode(std::string_view input) {
-        const auto bound = http_base64_decoded_size_bound(input.size());
+        const auto bound = base64_decoded_size_bound(input.size());
         char* target = inline_.data();
         if (bound > inline_capacity) {
             heap_.resize(bound);
             target = heap_.data();
         }
-        const auto decoded_size = http_base64_decode(input, std::span(reinterpret_cast<std::uint8_t*>(target), bound), http_base64_charset::url_safe, http_base64_padding::forbidden);
+        const auto decoded_size = base64_decode(input, std::span<std::byte>(reinterpret_cast<std::byte*>(target), bound), base64_charset::url_safe, base64_padding::forbidden);
         if (!decoded_size) {
             return false;
         }
@@ -668,15 +668,13 @@ void validate_jwt_custom_claims(std::span<const jwt_claim_view> claims) {
 // Encodes the base64url signature into `out`. The caller has validated the
 // secret with validate_jwt_hmac_secret and bounded signing_input by
 // hmac_max_input_size.
-[[nodiscard]] std::string_view jwt_hmac_encode(hmac_digest digest, std::string_view secret, std::string_view signing_input, char* out) {
-    std::array<std::uint8_t, hmac_max_digest_size> mac;
+[[nodiscard]] std::string_view jwt_hmac_encode(hmac_digest digest, std::string_view secret, std::string_view signing_input, std::span<char> out) {
+    std::array<std::byte, hmac_max_digest_size> mac{};
     if (!compute_hmac(digest, secret, signing_input, mac)) {
         throw std::runtime_error("JWT HMAC signing failed");
     }
     const auto digest_size = hmac_digest_size(digest);
-    const auto encoded_size = http_base64_encoded_size(digest_size, http_base64_padding::forbidden);
-    jwt_base64_url_encode_into(out, std::string_view(reinterpret_cast<const char*>(mac.data()), digest_size));
-    return std::string_view(out, encoded_size);
+    return base64_encode(out, byte_view(mac.data(), digest_size), base64_charset::url_safe, base64_padding::forbidden);
 }
 
 }  // namespace
@@ -829,49 +827,106 @@ std::optional<std::string_view> jwt_payload::claim(std::string_view name) const&
 }
 
 std::string sign_jwt(const jwt_sign_options& options) {
-    detail::validate_jwt_custom_claims(options.claims_);
+    return detail::sign_jwt_with_custom_json({}, options);
+}
+
+namespace detail {
+
+std::string sign_jwt_with_custom_json(std::string_view custom_object_json, const jwt_sign_options& options) {
+    validate_jwt_custom_claims(options.claims_);
+    std::string_view custom_members{};
+    if (!custom_object_json.empty()) {
+        std::vector<std::string> model_claim_names;
+        auto scan = custom_object_json;
+        const bool valid_custom = consume_json_object_fields(scan, 0, [&](std::string_view name, std::string_view& value_input) {
+            if (name.empty() || jwt_is_reserved_claim(name)) {
+                throw std::invalid_argument("JWT custom claim name is empty or reserved");
+            }
+            if (!::ruvia::is_valid_utf8(name)) {
+                throw std::invalid_argument("JWT custom claim name must be well-formed UTF-8");
+            }
+            for (const auto& existing : options.claims_) {
+                if (existing.name_.view() == name) {
+                    throw std::invalid_argument("JWT custom claim names must be unique");
+                }
+            }
+            for (const auto& prev : model_claim_names) {
+                if (prev == name) {
+                    throw std::invalid_argument("JWT custom claim names must be unique");
+                }
+            }
+            model_claim_names.emplace_back(name);
+            return skip_json_value(value_input, 1);
+        });
+        skip_json_whitespace(scan);
+        if (!valid_custom || !scan.empty()) {
+            throw std::invalid_argument("JWT custom claims JSON must be a valid JSON object");
+        }
+        auto trimmed = custom_object_json;
+        skip_json_whitespace(trimmed);
+        // Strip outer '{' and '}'
+        trimmed.remove_prefix(1);
+        while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\t' || trimmed.back() == '\r' || trimmed.back() == '\n')) {
+            trimmed.remove_suffix(1);
+        }
+        if (!trimmed.empty() && trimmed.back() == '}') {
+            trimmed.remove_suffix(1);
+        }
+        skip_json_whitespace(trimmed);
+        while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\t' || trimmed.back() == '\r' || trimmed.back() == '\n')) {
+            trimmed.remove_suffix(1);
+        }
+        custom_members = trimmed;
+    }
     if ((options.expires_in_.has_value() && options.expires_in_->count() < 0) || (options.not_before_delay_.has_value() && options.not_before_delay_->count() < 0)) {
         throw std::invalid_argument("JWT signing time offsets must not be negative");
     }
-    const auto digest = detail::jwt_hmac_digest(options.algorithm_);
-    detail::validate_jwt_hmac_secret(hmac_digest_size(digest), options.secret_);
-    const auto encoded_header = detail::jwt_encoded_header(options.algorithm_);
+    const auto digest = jwt_hmac_digest(options.algorithm_);
+    validate_jwt_hmac_secret(hmac_digest_size(digest), options.secret_);
+    const auto encoded_header = jwt_encoded_header(options.algorithm_);
     const auto now = std::chrono::system_clock::now();
 
-    std::size_t payload_reserve = 64U + options.issuer_.size() + options.subject_.size() + options.audience_.size() + options.id_.size() + (options.expires_in_.has_value() ? 20U : 0U) + (options.not_before_delay_.has_value() ? 20U : 0U);
+    std::size_t payload_reserve = 64U + options.issuer_.size() + options.subject_.size() + options.audience_.size() + options.id_.size() + (options.expires_in_.has_value() ? 20U : 0U) + (options.not_before_delay_.has_value() ? 20U : 0U) + custom_members.size();
     for (const auto& claim : options.claims_) {
         payload_reserve += claim.name_.size() + claim.value_.size() + 8U;
     }
-    detail::inline_text_buffer<512> payload(payload_reserve);
+    inline_text_buffer<512> payload(payload_reserve);
     payload.push_back('{');
     bool first = true;
     if (!options.issuer_.empty()) {
-        detail::jwt_append_json_member(payload, first, "iss", options.issuer_);
+        jwt_append_json_member(payload, first, "iss", options.issuer_);
     }
     if (!options.subject_.empty()) {
-        detail::jwt_append_json_member(payload, first, "sub", options.subject_);
+        jwt_append_json_member(payload, first, "sub", options.subject_);
     }
     if (!options.audience_.empty()) {
-        detail::jwt_append_json_member(payload, first, "aud", options.audience_);
+        jwt_append_json_member(payload, first, "aud", options.audience_);
     }
     if (!options.id_.empty()) {
-        detail::jwt_append_json_member(payload, first, "jti", options.id_);
+        jwt_append_json_member(payload, first, "jti", options.id_);
     }
     std::array<char, 21> date_buffer;
-    detail::jwt_append_json_numeric_date(payload, first, "iat", detail::jwt_signing_date(date_buffer, now, std::chrono::seconds{0}));
+    jwt_append_json_numeric_date(payload, first, "iat", jwt_signing_date(date_buffer, now, std::chrono::seconds{0}));
     if (options.expires_in_.has_value()) {
-        detail::jwt_append_json_numeric_date(payload, first, "exp", detail::jwt_signing_date(date_buffer, now, *options.expires_in_));
+        jwt_append_json_numeric_date(payload, first, "exp", jwt_signing_date(date_buffer, now, *options.expires_in_));
     }
     if (options.not_before_delay_.has_value()) {
-        detail::jwt_append_json_numeric_date(payload, first, "nbf", detail::jwt_signing_date(date_buffer, now, *options.not_before_delay_));
+        jwt_append_json_numeric_date(payload, first, "nbf", jwt_signing_date(date_buffer, now, *options.not_before_delay_));
     }
     for (const auto& claim : options.claims_) {
-        detail::jwt_append_json_member(payload, first, claim.name_.view(), claim.value_.view());
+        jwt_append_json_member(payload, first, claim.name_.view(), claim.value_.view());
+    }
+    if (!custom_members.empty()) {
+        if (!first) {
+            payload.push_back(',');
+        }
+        first = false;
+        payload.append(custom_members);
     }
     payload.push_back('}');
 
-    const auto encoded_payload_size = http_base64_encoded_size(payload.size(), http_base64_padding::forbidden);
-    const auto signature_size = http_base64_encoded_size(hmac_digest_size(digest), http_base64_padding::forbidden);
+    const auto encoded_payload_size = base64_encoded_size(payload.size(), base64_padding::forbidden);
+    const auto signature_size = base64_encoded_size(hmac_digest_size(digest), base64_padding::forbidden);
     const auto payload_offset = encoded_header.size() + 1;
     if (encoded_payload_size > std::numeric_limits<std::size_t>::max() - 1 - payload_offset || signature_size > std::numeric_limits<std::size_t>::max() - (payload_offset + encoded_payload_size + 1)) {
         throw std::length_error("JWT token is too large");
@@ -881,50 +936,51 @@ std::string sign_jwt(const jwt_sign_options& options) {
     token.resize(signing_input_size + 1 + signature_size);
     encoded_header.copy(token.data(), encoded_header.size());
     token[encoded_header.size()] = '.';
-    detail::jwt_base64_url_encode_into(token.data() + payload_offset, payload.view());
+    jwt_base64_url_encode_into(std::span<char>(token.data() + payload_offset, encoded_payload_size), payload.view());
     token[signing_input_size] = '.';
     const std::string_view signing_input(token.data(), signing_input_size);
     if (signing_input.size() > hmac_max_input_size) {
         throw std::length_error("JWT signing input is too large");
     }
-    (void)detail::jwt_hmac_encode(digest, options.secret_, signing_input, token.data() + signing_input_size + 1);
+    (void)jwt_hmac_encode(digest, options.secret_, signing_input, std::span<char>(token.data() + signing_input_size + 1, signature_size));
     return token;
 }
 
-jwt_result verify_jwt(const jwt_verify_options& options) {
+namespace {
+
+[[nodiscard]] jwt_result verify_jwt_internal(const jwt_verify_options& options, std::string* raw_payload_out) {
     using code_type = jwt_error_code;
-    using access = detail::jwt_payload_access;
+    using access = jwt_payload_access;
     if (options.leeway_.count() < 0) {
         throw std::invalid_argument("JWT verification leeway must not be negative");
     }
     if (options.expiration_claim_ != jwt_expiration_claim_policy::require && options.expiration_claim_ != jwt_expiration_claim_policy::allow_missing) {
         throw std::invalid_argument("JWT expiration claim policy is invalid");
     }
-    const auto digest = detail::jwt_hmac_digest(options.algorithm_);
-    detail::validate_jwt_hmac_secret(hmac_digest_size(digest), options.secret_);
-    const auto parts = detail::jwt_split_token(options.token_.view());
+    const auto digest = jwt_hmac_digest(options.algorithm_);
+    validate_jwt_hmac_secret(hmac_digest_size(digest), options.secret_);
+    const auto parts = jwt_split_token(options.token_.view());
     if (!parts) {
         return access::result(code_type::malformed_token);
     }
-    // No HMAC can be computed over a larger input, so no such token is authentic.
     if (parts->signing_input_.size() > hmac_max_input_size) {
         return access::result(code_type::malformed_token);
     }
     std::array<char, 88> expected_buf;
-    const auto expected = detail::jwt_hmac_encode(digest, options.secret_, parts->signing_input_, expected_buf.data());
+    const auto expected = jwt_hmac_encode(digest, options.secret_, parts->signing_input_, expected_buf);
     if (!constant_time_bytes_equal(expected, parts->signature_)) {
         return access::result(code_type::signature_mismatch);
     }
-    if (parts->header_ != detail::jwt_encoded_header(options.algorithm_)) {
-        detail::jwt_decoded_section header_value;
+    if (parts->header_ != jwt_encoded_header(options.algorithm_)) {
+        jwt_decoded_section header_value;
         if (!header_value.decode(parts->header_)) {
             return access::result(code_type::malformed_token);
         }
-        if (const auto code = detail::jwt_validate_jose_header(header_value.view(), detail::jwt_algorithm_name(options.algorithm_))) {
+        if (const auto code = jwt_validate_jose_header(header_value.view(), jwt_algorithm_name(options.algorithm_))) {
             return access::result(*code);
         }
     }
-    detail::jwt_decoded_section payload_json;
+    jwt_decoded_section payload_json;
     if (!payload_json.decode(parts->payload_)) {
         return access::result(code_type::malformed_token);
     }
@@ -939,12 +995,10 @@ jwt_result verify_jwt(const jwt_verify_options& options) {
     }
     if (expires_at != nullptr || not_before != nullptr) {
         const auto now = std::chrono::system_clock::now();
-        // RFC 7519 §4.1.4: exp == now - leeway is already expired.
-        if (expires_at != nullptr && detail::jwt_compare_numeric_date(expires_at->text(), now, -options.leeway_) != std::strong_ordering::greater) {
+        if (expires_at != nullptr && jwt_compare_numeric_date(expires_at->text(), now, -options.leeway_) != std::strong_ordering::greater) {
             return access::result(code_type::expired);
         }
-        // RFC 7519 §4.1.5: nbf == now + leeway is already valid.
-        if (not_before != nullptr && detail::jwt_compare_numeric_date(not_before->text(), now, options.leeway_) == std::strong_ordering::greater) {
+        if (not_before != nullptr && jwt_compare_numeric_date(not_before->text(), now, options.leeway_) == std::strong_ordering::greater) {
             return access::result(code_type::not_yet_valid);
         }
     }
@@ -954,12 +1008,30 @@ jwt_result verify_jwt(const jwt_verify_options& options) {
     if (!options.subject_.empty() && payload_value->subject() != options.subject_.view()) {
         return access::result(code_type::claim_mismatch);
     }
-    // RFC 7519 §4.1.3: a token that names audiences is rejected unless this
-    // verifier identifies itself with one of them.
     if (options.audience_.empty() ? !payload_value->audiences().empty() : !payload_value->has_audience(options.audience_.view())) {
         return access::result(code_type::claim_mismatch);
     }
+    if (raw_payload_out != nullptr) {
+        raw_payload_out->assign(payload_json.view());
+    }
     return access::result(std::move(*payload_value));
+}
+
+}  // namespace
+
+std::variant<std::pair<jwt_payload, std::string>, jwt_error_code> verify_jwt_with_raw_payload(const jwt_verify_options& options) {
+    std::string raw_payload;
+    auto res = verify_jwt_internal(options, &raw_payload);
+    if (!res.has_value()) {
+        return *res.error();
+    }
+    return std::pair<jwt_payload, std::string>{std::move(res).take_value(), std::move(raw_payload)};
+}
+
+}  // namespace detail
+
+jwt_result verify_jwt(const jwt_verify_options& options) {
+    return detail::verify_jwt_internal(options, nullptr);
 }
 
 jwt_result decode_jwt_unverified(const jwt_decode_unverified_options& options) {

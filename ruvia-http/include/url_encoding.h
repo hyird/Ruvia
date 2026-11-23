@@ -57,8 +57,8 @@ enum class url_decode_mode : std::uint8_t { percent,
     if (index >= input.size() || input.size() - index < 3 || input[index] != '%') {
         return std::nullopt;
     }
-    const auto high = http_decode_hex_nibble(input[index + 1]);
-    const auto low = http_decode_hex_nibble(input[index + 2]);
+    const auto high = decode_hex_nibble(input[index + 1]);
+    const auto low = decode_hex_nibble(input[index + 2]);
     if (high < 0 || low < 0) {
         return std::nullopt;
     }
@@ -75,7 +75,7 @@ enum class url_decode_mode : std::uint8_t { percent,
 // Appends the canonical uppercase pct-encoded triplet for byte. Callers own the
 // policy deciding which bytes need escaping. Failure leaves output unchanged.
 inline void append_percent_byte(std::string& output, unsigned char byte) {
-    const char triplet[]{'%', http_upper_hex_digit(byte >> 4), http_upper_hex_digit(byte)};
+    const char triplet[]{'%', upper_hex_digit(byte >> 4), upper_hex_digit(byte)};
     output.append(triplet, sizeof(triplet));
 }
 
@@ -83,7 +83,7 @@ inline void append_percent_byte(std::string& output, unsigned char byte) {
 // every other octet (including '%' and '+') becomes uppercase %XX.
 // Borrows unchanged input, otherwise replaces storage. Input may alias storage.
 // Allocation/length failure preserves storage. Owning temporaries are rejected.
-[[nodiscard]] std::string_view percent_encode_url_component(borrowed_text text, std::string& storage);
+[[nodiscard]] std::string_view percent_encode_url_component(borrowed_text text RUVIA_LIFETIMEBOUND, std::string& storage RUVIA_LIFETIMEBOUND);
 
 // Repairs an application-supplied RFC 3986 URI-reference (for example a
 // Location field value) by percent-encoding every byte that cannot appear
@@ -99,7 +99,7 @@ inline void append_percent_byte(std::string& output, unsigned char byte) {
 // `reference` may alias `storage`. Keep the input owner alive until the result
 // is consumed; owning-string temporaries are rejected even when their particular
 // contents would require transformation.
-[[nodiscard]] std::string_view percent_encode_uri_reference(borrowed_text reference, std::string& storage);
+[[nodiscard]] std::string_view percent_encode_uri_reference(borrowed_text reference RUVIA_LIFETIMEBOUND, std::string& storage RUVIA_LIFETIMEBOUND);
 
 namespace detail {
 template <typename visitor_type>
@@ -162,7 +162,7 @@ template <typename visitor_type>
 // rejects returns no value and leaves `storage` unchanged. `input` may alias
 // `storage`. Keep its owner alive until the result is consumed; owning-string
 // temporaries are rejected regardless of their contents.
-[[nodiscard]] std::optional<std::string_view> decode_url_component(borrowed_text text, std::string& storage, url_decode_mode mode = url_decode_mode::percent);
+[[nodiscard]] std::optional<std::string_view> decode_url_component(borrowed_text text RUVIA_LIFETIMEBOUND, std::string& storage RUVIA_LIFETIMEBOUND, url_decode_mode mode = url_decode_mode::percent);
 
 // Origin-form path identity, the one canonical form shared by route matching,
 // path-scoped middleware and fallbacks, and decoded route parameters. A path

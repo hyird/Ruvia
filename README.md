@@ -4,9 +4,9 @@ Ruvia 是基于 C++20 协程的 HTTP/Web 框架，提供协程路由处理、声
 
 | 库目录 | CMake Target | 职责与公开依赖 |
 | --- | --- | --- |
-| `ruvia-core` | `ruvia::core` | 协程任务、事件循环、有界通道与阻塞卸载池；依赖 standalone Asio、`Threads::Threads` 与 mimalloc。 |
-| `ruvia-http` | `ruvia::http` | 独立 sans-I/O 的 HTTP/1.0、HTTP/1.1、可选 HTTP/2 与 HTTP/3、内容压缩及 WebSocket 协议层；HTTP/2 会话与 HPACK 使用 nghttp2，HTTP/3 的 QPACK/QUIC 使用 nghttp3 与 ngtcp2。 |
-| `ruvia-web` | `ruvia::web` | 服务端、出站客户端、路由、中间件、Model/ORM、TLS 与数据接入；依赖 `ruvia::core`、`ruvia::http` 与 OpenSSL 3.0+，HTTP/3 通过 ngtcp2 的 OpenSSL 适配层接入 QUIC TLS。 |
+| `ruvia-core` | `ruvia::core` | 协程任务、事件循环、有界通道、连接槽位池与阻塞卸载池；依赖 standalone Asio、`Threads::Threads` 与 mimalloc。 |
+| `ruvia-http` | `ruvia::http` | 独立 sans-I/O 的 HTTP/1.0、HTTP/1.1、可选 HTTP/2 与 HTTP/3、声明式类型化 Model/JSON、内容压缩及 WebSocket 协议层；HTTP/2 会话与 HPACK 内部封装 nghttp2，HTTP/3 的 QPACK/QUIC 内部封装 nghttp3 与 ngtcp2。 |
+| `ruvia-web` | `ruvia::web` | 服务端、出站客户端、路由、中间件、Model 请求绑定、ORM、TLS 与数据接入；依赖 `ruvia::core`、`ruvia::http` 与 OpenSSL 3.0+，HTTP/3 通过 ngtcp2 的 OpenSSL 适配层接入 QUIC TLS。 |
 
 ## 构建与接入
 

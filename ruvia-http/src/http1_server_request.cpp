@@ -342,7 +342,9 @@ http1_server_request_parse_result http1_server_request_parser::parse(borrowed_te
     return http1_server_request_parse_result(header_bytes, decode_complete{});
 }
 
-http_request make_http_request(borrowed_text method, borrowed_text target, std::span<const http_header_view> headers, borrowed_span<std::byte> body) {
+namespace {
+
+[[nodiscard]] http_request make_http_request_impl(borrowed_text method, borrowed_text target, http_protocol_version protocol_version, borrowed_text explicit_scheme, borrowed_text explicit_authority, borrowed_text explicit_protocol, std::span<const http_header_view> headers, borrowed_span<std::byte> body) {
     const auto method_view = method.view();
     const auto target_text = target.view();
     if (!is_valid_http_method_token(method_view)) {
@@ -351,16 +353,46 @@ http_request make_http_request(borrowed_text method, borrowed_text target, std::
     auto request = http_request_access::make();
     http_request_access::set_method(request, method_view);
     http_request_access::set_target(request, target_text);
+    http_request_access::set_protocol_version(request, protocol_version);
+
+    const bool binary_framing = protocol_version == http_protocol_version::http2 || protocol_version == http_protocol_version::http3;
+    if (!explicit_protocol.empty() && (!binary_framing || request.known_method() != http_known_method::connect || !is_valid_http_header_name(explicit_protocol.view()))) {
+        throw make_http_protocol_error(http_parse_error::invalid_request_line);
+    }
 
     request_target_view target_view;
-    if (!parse_request_target(request.known_method(), target_text, target_view)) {
+    if (!explicit_protocol.empty()) {
+        if (!detail::is_valid_origin_form_target(target_text)) {
+            throw make_http_protocol_error(http_parse_error::invalid_request_target);
+        }
+        const auto separator = target_text.find('?');
+        target_view.path_ = separator == std::string_view::npos ? target_text : target_text.substr(0, separator);
+        target_view.query_ = separator == std::string_view::npos ? std::string_view{} : target_text.substr(separator + 1);
+        target_view.form_ = protocol_version == http_protocol_version::http3 ? http_request_target_form::http3 : http_request_target_form::http2;
+    } else if (!parse_request_target(request.known_method(), target_text, target_view)) {
         throw make_http_protocol_error(http_parse_error::invalid_request_target);
     }
+    if (!explicit_scheme.empty()) {
+        if (!detail::is_valid_uri_scheme(explicit_scheme.view())) {
+            throw make_http_protocol_error(http_parse_error::invalid_request_target);
+        }
+        target_view.scheme_ = explicit_scheme.view();
+    }
+    if (!explicit_authority.empty()) {
+        if (!detail::is_valid_uri_authority(explicit_authority.view())) {
+            throw make_http_protocol_error(http_parse_error::invalid_host);
+        }
+        target_view.authority_ = explicit_authority.view();
+    }
+    if (binary_framing) {
+        target_view.form_ = protocol_version == http_protocol_version::http3 ? http_request_target_form::http3 : http_request_target_form::http2;
+    }
+
     // The same recipient field rules as the wire parsers: repeated singleton
     // fields such as Range or If-Range make the request invalid instead of
     // resolving to one of their lines.
     http_field_section_budget budget;
-    detail::request_field_state fields(detail::request_field_framing::http1);
+    detail::request_field_state fields(binary_framing ? detail::request_field_framing::binary : detail::request_field_framing::http1);
     static constexpr std::size_t inline_kind_capacity = 32;
     std::array<detail::http_field_kind, inline_kind_capacity> inline_kinds{};
     for (std::size_t i = 0; i < headers.size(); ++i) {
@@ -375,12 +407,15 @@ http_request make_http_request(borrowed_text method, borrowed_text target, std::
         if (i < inline_kind_capacity) {
             inline_kinds[i] = kind;
         }
-        if (detail::validate_request_field(kind, header.value(), detail::http_field_list_role::recipient, fields) != detail::request_field_status::ok) {
+        if (detail::validate_request_field(kind, header.value(), http_field_list_role::recipient, fields) != detail::request_field_status::ok) {
             throw make_http_protocol_error(kind == detail::http_field_kind::host ? http_parse_error::invalid_host : http_parse_error::invalid_header);
         }
     }
 
     apply_parsed_request_target(request, target_view);
+    if (!explicit_protocol.empty()) {
+        http_request_access::set_protocol(request, http_canonical_extended_connect_protocol(explicit_protocol));
+    }
     http_request_access::reserve_headers(request, headers.size());
     for (std::size_t i = 0; i < headers.size(); ++i) {
         auto field = headers[i];
@@ -394,6 +429,16 @@ http_request make_http_request(borrowed_text method, borrowed_text target, std::
     }
     http_request_access::set_body(request, body.view());
     return request;
+}
+
+}  // namespace
+
+http_request make_http_request(borrowed_text method, borrowed_text target, argument_list<http_header_view> headers, borrowed_span<std::byte> body) {
+    return make_http_request_impl(method, target, http_protocol_version::http11, {}, {}, {}, headers.span(), body);
+}
+
+http_request make_http_request(const http_request_options& options) {
+    return make_http_request_impl(options.method_, options.target_, options.protocol_version_, options.scheme_, options.authority_, options.protocol_, options.headers_.view(), options.body_);
 }
 
 bool should_drop_invalid_cleartext_http1_input(std::string_view buffer, http_parse_error error) noexcept {

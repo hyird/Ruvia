@@ -16,37 +16,16 @@
 // RFC 8441 / RFC 9220 Extended CONNECT path.
 namespace ruvia::detail {
 
-// The base64-encoded SHA-1 of the client key plus the RFC 6455 GUID, as it
-// appears in the Sec-websocket-Accept response field (always 28 bytes).
-using websocket_accept_key_type = std::array<char, 28>;
-
-// Throws std::length_error before inspecting the view when key + the RFC
-// GUID cannot be represented by the SHA-1 64-bit bit-length field or by the
-// size_t arithmetic used by the incremental implementation.
-void encode_websocket_accept(websocket_accept_key_type& output, std::string_view key);
+using websocket_accept_key_type = ::ruvia::websocket_accept_key;
+using ::ruvia::encode_websocket_accept;
+using ::ruvia::parse_permessage_deflate_params;
+using ::ruvia::permessage_deflate_params;
 
 [[nodiscard]] bool append_websocket_extension_list(std::string_view value, bool& has_extension) noexcept;
 [[nodiscard]] std::string_view choose_websocket_subprotocol(const websocket_subprotocol_set& offered, std::span<const std::string_view> supported) noexcept;
 [[nodiscard]] std::string_view choose_websocket_subprotocol(const http_request& request, std::span<const std::string_view> supported) noexcept;
 void validate_websocket_response_headers(std::span<const http_header_view> headers, std::string_view subprotocol, std::string_view extension);
 [[nodiscard]] websocket_compression websocket_negotiate_permessage_deflate(const http_request& request, websocket_server_deflate_options config);
-
-// RFC 7692 section 7.1 parameters of one permessage-deflate extension element.
-// client_max_window_bits may appear without a value; whether that is
-// acceptable depends on the role, so its presence is kept apart from its value.
-struct permessage_deflate_params final {
-    bool server_no_context_takeover_{false};
-    bool client_no_context_takeover_{false};
-    std::optional<int> server_max_window_bits_;
-    bool client_max_window_bits_present_{false};
-    std::optional<int> client_max_window_bits_;
-};
-
-// Grammar shared by offers and responses: every parameter is defined, appears
-// at most once and carries a value exactly where RFC 7692 defines one (an
-// undefined or malformed parameter cannot be negotiated). Returns nullopt for
-// another extension or a malformed element; role policy is left to callers.
-[[nodiscard]] std::optional<permessage_deflate_params> parse_permessage_deflate_params(std::string_view element) noexcept;
 
 // Request-side Sec-WebSocket-* field checks. A recipient (server) skips a
 // repeated offered subprotocol; a sender (client) must offer unique ones

@@ -467,7 +467,7 @@ std::variant<multipart_boundary, multipart_boundary_error> parse_multipart_bound
     std::optional<multipart_boundary> boundary;
     std::array<char, 70> decoded{};
     detail::http_mime_parameter_names parameter_names;
-    const bool valid = detail::http_all_parameters(content_type_value, [&](std::string_view parameter) {
+    const bool valid = http_all_parameters(content_type_value, [&](std::string_view parameter) {
         if (parameter.empty()) {
             return true;
         }

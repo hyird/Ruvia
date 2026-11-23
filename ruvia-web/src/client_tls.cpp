@@ -35,13 +35,19 @@ namespace ruvia::detail {
 // while a flight that ends without running leaves it idle for the next caller.
 struct client_tls_material final {
     ~client_tls_material() {
-        erase_password();
+        erase_secrets();
     }
-    void erase_password() noexcept {
+    void erase_secrets() noexcept {
         if (!password_.empty()) {
             OPENSSL_cleanse(password_.data(), password_.size());
             std::string{}.swap(password_);
         }
+        if (!private_key_pem_.empty()) {
+            OPENSSL_cleanse(private_key_pem_.data(), private_key_pem_.size());
+            std::string{}.swap(private_key_pem_);
+        }
+        std::string{}.swap(certificate_chain_pem_);
+        std::string{}.swap(ca_pem_);
     }
 
     [[nodiscard]] bool settled() const noexcept {
@@ -65,22 +71,26 @@ struct client_tls_material final {
         return true;
     }
 
-    // The one file read, on the pool thread of the flight's callable: the
-    // flight alone reads password_ and writes the credentials until it
-    // publishes settled_.
+    // The one credential parse, on the pool thread of the flight's callable
+    // (or directly when all inputs are in-memory PEM on a worker without a pool):
+    // the flight alone reads secrets and writes credentials until settled_ is published.
     void parse(const client_tls_config_storage& config) noexcept {
         try {
-            auto trust = config.ca_file_ ? load_tls_trust_store(*config.ca_file_) : tls_trust_store::load_default();
+            auto trust = config.ca_file_
+                ? load_tls_trust_store(*config.ca_file_)
+                : (!ca_pem_.empty() ? tls_trust_store::load_pem(ca_pem_) : tls_trust_store::load_default());
             std::optional<tls_certificate> certificate;
             if (config.identity_) {
                 certificate = load_tls_certificate(*config.identity_, password_);
+            } else if (!certificate_chain_pem_.empty()) {
+                certificate = tls_certificate::load_pem(certificate_chain_pem_, private_key_pem_, password_);
             }
             trust_store_ = std::move(trust);
             certificate_ = std::move(certificate);
         } catch (...) {
             failure_ = std::current_exception();
         }
-        erase_password();
+        erase_secrets();
     }
 
     // Ends the flight, settling the material when it parsed, and wakes every
@@ -101,6 +111,10 @@ struct client_tls_material final {
     // Guarded by mutex_.
     std::unique_ptr<stop_source> flight_;
     std::atomic<bool> settled_{false};
+    bool has_ca_pem_{false};
+    std::string ca_pem_;
+    std::string certificate_chain_pem_;
+    std::string private_key_pem_;
     std::string password_;
     // Immutable once settled_ is published.
     std::optional<tls_trust_store> trust_store_;
@@ -221,12 +235,13 @@ public:
 client_tls_config_storage::client_tls_config_storage(const client_tls_config& source_value) :
     mode_(source_value.mode_),
     minimum_version_(source_value.minimum_version_),
-    max_outgoing_records_(source_value.max_outgoing_records_) {
+    max_outgoing_records_(source_value.max_outgoing_records_),
+    has_identity_(source_value.identity_.has_value()) {
     validate_client_tls_config(source_value);
     if (source_value.ca_file_.has_value()) {
         ca_file_.emplace(make_tls_file_name(*source_value.ca_file_));
     }
-    if (source_value.identity_.has_value()) {
+    if (source_value.identity_.has_value() && source_value.identity_->certificate_chain_pem_.empty()) {
         identity_.emplace(make_tls_identity_files(*source_value.identity_));
     }
     if (source_value.server_name_.has_value()) {
@@ -234,10 +249,25 @@ client_tls_config_storage::client_tls_config_storage(const client_tls_config& so
     }
     if (mode_ != client_tls_mode::disabled) {
         material_ = std::make_shared<client_tls_material>();
+        if (!source_value.ca_pem_.empty()) {
+            material_->has_ca_pem_ = true;
+            material_->ca_pem_.assign(source_value.ca_pem_);
+        }
         if (source_value.identity_) {
+            material_->certificate_chain_pem_.assign(source_value.identity_->certificate_chain_pem_);
+            material_->private_key_pem_.assign(source_value.identity_->private_key_pem_);
             material_->password_.assign(source_value.identity_->private_key_password_);
         }
     }
+}
+
+bool client_tls_config_storage::requires_filesystem_io() const noexcept {
+    if (mode_ == client_tls_mode::disabled || material_ == nullptr) {
+        return false;
+    }
+    // File-backed CA, system trust directory walk (neither ca_file_ nor ca_pem_),
+    // or file-backed identity requires filesystem I/O.
+    return ca_file_.has_value() || !material_->has_ca_pem_ || identity_.has_value();
 }
 
 task<client_tls_config_storage> prepare_client_tls_config(worker_ref worker, client_tls_config_storage config, operation_options options) {
@@ -280,16 +310,22 @@ task<client_tls_config_storage> prepare_client_tls_config(worker_ref worker, cli
         leading = material->start_flight(flight);
     }
     if (leading) {
-        // Do not cancel the blocking wait: OpenSSL cannot interrupt a file read,
-        // and retiring the owner must join that read before reporting
-        // completion. The read settles the material for every follower even if
-        // this caller stopped meanwhile.
-        auto result = co_await run_blocking(std::move(worker), [config = std::move(config), lead = client_tls_flight_lead(material)]() mutable {
+        if (!config.requires_filesystem_io() && worker.blocking_pool() == nullptr) {
+            client_tls_flight_lead lead(material);
             lead.parse(config);
-            return std::move(config);
-        });
-        check();
-        config = std::move(result).take_value();
+            check();
+        } else {
+            // Do not cancel the blocking wait: OpenSSL cannot interrupt a file read,
+            // and retiring the owner must join that read before reporting
+            // completion. The read settles the material for every follower even if
+            // this caller stopped meanwhile.
+            auto result = co_await run_blocking(std::move(worker), [config = std::move(config), lead = client_tls_flight_lead(material)]() mutable {
+                lead.parse(config);
+                return std::move(config);
+            });
+            check();
+            config = std::move(result).take_value();
+        }
     }
     if (material->failure_) {
         std::rethrow_exception(material->failure_);
@@ -307,6 +343,7 @@ client_tls_config_storage::client_tls_config_storage(const client_tls_config_sto
     mode_(source_value.mode_),
     minimum_version_(source_value.minimum_version_),
     max_outgoing_records_(source_value.max_outgoing_records_),
+    has_identity_(source_value.has_identity_),
     trust_store_(source_value.trust_store_),
     certificate_(source_value.certificate_),
     material_(source_value.material_) {
@@ -334,7 +371,7 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
         throw std::logic_error("client TLS trust store was not parsed");
     }
     config.trust_store_->install(context_value);
-    if (!config.identity_.has_value()) {
+    if (!config.has_identity_) {
         return;
     }
     if (!config.certificate_.has_value()) {

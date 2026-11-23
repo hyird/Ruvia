@@ -15,10 +15,10 @@
 
 #include "borrowed_text.h"
 #include "byte_view.h"
-#include "callback_ref.h"
 #include "connection_lifecycle.h"
 #include "context.h"
 #include "context_access.h"
+#include "function_ref.h"
 #include "http1_server_response.h"
 #include "http_field_section_budget.h"
 #include "http_header.h"
@@ -108,7 +108,7 @@ websocket& context::websocket() & {
 namespace {
 
 template <typename view_type>
-task<std::optional<view_type>> read_body(detail::callback_ref<task<std::optional<std::span<const std::byte>>>(operation_options)> read, bool& read_active, operation_options operation) {
+task<std::optional<view_type>> read_body(function_ref<task<std::optional<std::span<const std::byte>>>(operation_options)> read, bool& read_active, operation_options operation) {
     auto lease = detail::claim_operation_lane(read_active, "request body read is already in progress");
     const auto chunk = co_await read(std::move(operation));
     if (!chunk) {
@@ -157,7 +157,7 @@ task<stream_commit_result> response_stream_writer::commit(operation_options oper
     }));
 }
 
-task<stream_commit_result> detail::streaming_access::commit_prepared(response_stream_writer& writer, callback_ref<void()> prepare, operation_options operation) {
+task<stream_commit_result> detail::streaming_access::commit_prepared(response_stream_writer& writer, function_ref<void()> prepare, operation_options operation) {
     writer.require_output();
     return writer.operation_scope_.attach(run_response_stream_output({writer.target_, writer.output_active_, *writer.interrupts_, *writer.worker_, writer.context_}, std::move(operation), "response stream commit", [target = writer.target_, commit = writer.commit_, prepare] {
         prepare();

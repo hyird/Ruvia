@@ -15,6 +15,7 @@
 
 #include "borrowed_text.h"
 #include "decimal_text.h"
+#include "http1_chunked_body.h"
 #include "http1_connection_plan.h"
 #include "http_connection_fields.h"
 #include "http_date_parts.h"
@@ -159,7 +160,7 @@ void append_http1_response_head(const http_response& response, http_response_hea
     };
     charge(head_budget.add(detail::http1_status_line_size(reason_phrase)));
     detail::http_connection_options connection_options;
-    detail::http_upgrade_protocols upgrade_protocols;
+    http_upgrade_protocols upgrade_protocols;
     for (const auto& header : response.headers()) {
         const auto known_bit = detail::http_response_header_access::known_bit(header);
         if (known_bit == detail::response_header_transfer_encoding || known_bit == detail::response_header_content_length) {
@@ -215,6 +216,75 @@ void append_http1_response_trailers(std::string& output, const http_response_tra
     detail::emit_response_trailer_fields(sink, fields);
 }
 
+void append_http1_chunk(std::string& output, std::string_view payload) {
+    if (payload.empty()) {
+        return;
+    }
+    const http1_chunk_header header(payload.size());
+    const auto prefix = header.view();
+    const auto overhead = prefix.size() + http1_chunk_data_terminator.size();
+    if (payload.size() > output.max_size() - overhead || overhead + payload.size() > output.max_size() - output.size()) {
+        throw std::length_error("HTTP/1 chunk exceeds string capacity");
+    }
+    const auto frame_bytes = overhead + payload.size();
+    if (detail::http_text_aliases_string(payload, output)) {
+        const std::string owned_payload(payload);
+        detail::reserve_geometric(output, output.size() + frame_bytes);
+        output.append(prefix);
+        output.append(owned_payload);
+        output.append(http1_chunk_data_terminator);
+        return;
+    }
+    detail::reserve_geometric(output, output.size() + frame_bytes);
+    output.append(prefix);
+    output.append(payload);
+    output.append(http1_chunk_data_terminator);
+}
+
+void append_http1_chunk(std::string& output, byte_view payload) {
+    append_http1_chunk(output, as_chars(payload));
+}
+
+void append_http1_final_chunk(std::string& output, const http_response_trailer_section& trailers) {
+    const auto fields = trailers.fields();
+    if (fields.empty()) {
+        constexpr std::string_view empty_final_chunk = "0\r\n\r\n";
+        if (empty_final_chunk.size() > output.max_size() - output.size()) {
+            throw std::length_error("HTTP/1 final chunk exceeds string capacity");
+        }
+        detail::reserve_geometric(output, output.size() + empty_final_chunk.size());
+        output.append(empty_final_chunk);
+        return;
+    }
+    auto budget = http_trailer_section_budget();
+    for (const auto& field : fields) {
+        if (!budget.add_field(field.name(), field.value())) {
+            throw std::length_error("HTTP response trailers are too large");
+        }
+    }
+    const auto total_bytes = http1_last_chunk_prefix.size() + budget.bytes();
+    if (total_bytes > output.max_size() - output.size()) {
+        throw std::length_error("HTTP/1 final chunk exceeds string capacity");
+    }
+    const auto trailer_field_bytes = budget.bytes() - http1_trailer_section_terminator.size();
+    if (detail::http_wire_inputs_overlap(output, fields)) {
+        std::array<char, max_http_header_bytes> scratch;
+        detail::http_raw_wire_sink sink(scratch.data());
+        detail::emit_response_trailer_fields(sink, fields);
+        detail::check_http_wire_end(sink.position(), scratch.data() + trailer_field_bytes);
+        detail::reserve_geometric(output, output.size() + total_bytes);
+        output.append(http1_last_chunk_prefix);
+        output.append(scratch.data(), trailer_field_bytes);
+        output.append(http1_trailer_section_terminator);
+        return;
+    }
+    detail::reserve_geometric(output, output.size() + total_bytes);
+    output.append(http1_last_chunk_prefix);
+    detail::http_string_wire_sink sink(output);
+    detail::emit_response_trailer_fields(sink, fields);
+    output.append(http1_trailer_section_terminator);
+}
+
 namespace {
 
 // Lists one generated option; an application Connection line is extended
@@ -237,17 +307,17 @@ void visit_offered_upgrade_protocols(const http_request& request, visitor_type&&
         if (detail::http_request_access::header_kind(request, index) != detail::http_field_kind::upgrade) {
             continue;
         }
-        (void)detail::http_upgrade_protocols{}.parse_field(headers[index].value(), detail::http_field_list_role::recipient, [&visiting, &visitor](const detail::http_upgrade_protocol& protocol) noexcept {
+        (void)http_upgrade_protocols{}.parse_field(headers[index].value(), http_field_list_role::recipient, [&visiting, &visitor](const http_upgrade_protocol& protocol) noexcept {
             visiting = visitor(protocol);
             return visiting;
         });
     }
 }
 
-[[nodiscard]] bool request_offers_upgrade_protocol(const http_request& request, const detail::http_upgrade_protocol& selected) noexcept {
+[[nodiscard]] bool request_offers_upgrade_protocol(const http_request& request, const http_upgrade_protocol& selected) noexcept {
     bool offered = false;
-    visit_offered_upgrade_protocols(request, [&offered, &selected](const detail::http_upgrade_protocol& protocol) noexcept {
-        offered = detail::http_upgrade_protocol_equals(protocol, selected);
+    visit_offered_upgrade_protocols(request, [&offered, &selected](const http_upgrade_protocol& protocol) noexcept {
+        offered = http_upgrade_protocol_equals(protocol, selected);
         return !offered;
     });
     return offered;
@@ -363,16 +433,16 @@ bool http1_request_offers_upgrade(const http_request& request) noexcept {
         return false;
     }
     detail::http_connection_options connection_options;
-    detail::http_upgrade_protocols upgrade_protocols;
+    http_upgrade_protocols upgrade_protocols;
     const auto headers = request.headers();
     for (std::size_t index = 0; index < headers.size(); ++index) {
         const auto kind = detail::http_request_access::header_kind(request, index);
         if (kind == detail::http_field_kind::connection) {
-            if (connection_options.parse_field(headers[index].value(), detail::http_connection_field_role::request_recipient) != detail::http_field_list_parse_status::ok) {
+            if (connection_options.parse_field(headers[index].value(), detail::http_connection_field_role::request_recipient) != http_field_list_parse_status::ok) {
                 return false;
             }
         } else if (kind == detail::http_field_kind::upgrade) {
-            if (upgrade_protocols.parse_field(headers[index].value(), detail::http_field_list_role::recipient) != detail::http_field_list_parse_status::ok) {
+            if (upgrade_protocols.parse_field(headers[index].value(), http_field_list_role::recipient) != http_field_list_parse_status::ok) {
                 return false;
             }
         }
@@ -393,7 +463,7 @@ http1_response_head_plan prepare_http1_upgrade_response_head(http_response& resp
         bool offered = http1_control.upgrade_protocols().has_protocol();
         for (const auto& header : response.headers()) {
             if (offered && detail::http_response_header_access::known_bit(header) == detail::response_header_upgrade) {
-                (void)detail::http_upgrade_protocols{}.parse_field(header.value(), detail::http_field_list_role::sender, [&offered, &request](const detail::http_upgrade_protocol& selected) noexcept {
+                (void)http_upgrade_protocols{}.parse_field(header.value(), http_field_list_role::sender, [&offered, &request](const http_upgrade_protocol& selected) noexcept {
                     offered = request_offers_upgrade_protocol(request, selected);
                     return offered;
                 });
@@ -404,7 +474,7 @@ http1_response_head_plan prepare_http1_upgrade_response_head(http_response& resp
         }
     } else {
         std::string_view offered_protocol;
-        visit_offered_upgrade_protocols(request, [&offered_protocol](const detail::http_upgrade_protocol& protocol) noexcept {
+        visit_offered_upgrade_protocols(request, [&offered_protocol](const http_upgrade_protocol& protocol) noexcept {
             const auto end = protocol.version_.empty() ? protocol.name_.data() + protocol.name_.size() : protocol.version_.data() + protocol.version_.size();
             offered_protocol = std::string_view(protocol.name_.data(), static_cast<std::size_t>(end - protocol.name_.data()));
             return false;
@@ -550,7 +620,7 @@ constexpr std::string_view crlf = "\r\n";
 struct http1_interim_header_facts final {
     http_field_section_budget section_;
     detail::http_connection_options connection_options_;
-    detail::http_upgrade_protocols upgrade_protocols_;
+    http_upgrade_protocols upgrade_protocols_;
 };
 
 [[nodiscard]] const char* common_validation_message(detail::http_interim_response_header_validation_status status) noexcept {

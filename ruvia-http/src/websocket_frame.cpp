@@ -13,14 +13,15 @@
 #include "utf8.h"
 #include "websocket_connection.h"
 #include "websocket_deflate.h"
+#include "websocket_inbound_assembler.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 websocket_encoded_close_payload::websocket_encoded_close_payload(websocket_close_code code, std::string_view reason) noexcept :
     size_(static_cast<std::uint8_t>(reason.size() + 2)) {
     const auto code_value = code.value();
-    bytes_[0] = static_cast<char>((code_value >> 8) & 0xFF);
-    bytes_[1] = static_cast<char>(code_value & 0xFF);
+    bytes_[0] = static_cast<std::byte>((code_value >> 8) & 0xFFU);
+    bytes_[1] = static_cast<std::byte>(code_value & 0xFFU);
     if (!reason.empty()) {
         std::memcpy(bytes_.data() + 2, reason.data(), reason.size());
     }
@@ -30,13 +31,13 @@ websocket_close_payload_encode_result encode_websocket_close_payload(websocket_c
     if (reason.size() > 123) {
         return websocket_close_payload_encode_result(websocket_close_payload_encode_failure(websocket_close_payload_encode_error::reason_too_large));
     }
-    if (!::ruvia::is_valid_utf8(reason)) {
+    if (!is_valid_utf8(reason)) {
         return websocket_close_payload_encode_result(websocket_close_payload_encode_failure(websocket_close_payload_encode_error::invalid_reason));
     }
     return websocket_close_payload_encode_result(websocket_encoded_close_payload(code, reason));
 }
 
-std::optional<websocket_protocol_failure> websocket_close_payload_failure(std::string_view payload_value) noexcept {
+std::optional<websocket_protocol_failure> websocket_close_payload_failure(byte_view payload_value) noexcept {
     // A malformed frame is a protocol error (close 1002); an otherwise-valid
     // frame whose reason is not valid UTF-8 is invalid payload data (close
     // 1007, RFC 6455 section 8.1).
@@ -46,14 +47,16 @@ std::optional<websocket_protocol_failure> websocket_close_payload_failure(std::s
     if (payload_value.size() < 2) {
         return std::nullopt;
     }
-    if (!websocket_close_code::is_valid_value(read_websocket_uint16(payload_value.data()))) {
+    if (!websocket_close_code::is_valid_value(detail::read_websocket_uint16(payload_value))) {
         return websocket_protocol_failure::protocol_error;
     }
-    if (!::ruvia::is_valid_utf8(payload_value.substr(2))) {
+    if (!is_valid_utf8(as_chars(payload_value.subspan(2)))) {
         return websocket_protocol_failure::invalid_payload_data;
     }
     return std::nullopt;
 }
+
+namespace detail {
 
 void websocket_inbound_assembler::release_completed(websocket_receive_storage& storage) noexcept {
     if (std::holds_alternative<websocket_inbound_idle>(state_)) {
@@ -86,7 +89,7 @@ websocket_inbound_result websocket_inbound_assembler::accept(const websocket_fra
         if (encoding == websocket_inbound_content_encoding::per_message_deflate) {
             return websocket_inbound_result::make_message(message, websocket_inbound_content_encoding::per_message_deflate);
         }
-        if (opcode == websocket_opcode::text && !::ruvia::is_valid_utf8(message_)) {
+        if (opcode == websocket_opcode::text && !is_valid_utf8(message_)) {
             return websocket_inbound_result::make_failure(websocket_protocol_failure::invalid_payload_data);
         }
         return websocket_inbound_result::make_message(message, websocket_inbound_content_encoding::identity);
@@ -102,7 +105,7 @@ websocket_inbound_result websocket_inbound_assembler::accept(const websocket_fra
             if (frame.compressed()) {
                 return websocket_inbound_result::make_message(message, websocket_inbound_content_encoding::per_message_deflate);
             }
-            if (opcode == websocket_opcode::text && !::ruvia::is_valid_utf8(frame.payload())) {
+            if (opcode == websocket_opcode::text && !is_valid_utf8(frame.payload())) {
                 return websocket_inbound_result::make_failure(websocket_protocol_failure::invalid_payload_data);
             }
             return websocket_inbound_result::make_message(message, websocket_inbound_content_encoding::identity);
@@ -116,4 +119,5 @@ websocket_inbound_result websocket_inbound_assembler::accept(const websocket_fra
     return websocket_inbound_result::make_continue();
 }
 
-}  // namespace ruvia::detail
+}  // namespace detail
+}  // namespace ruvia

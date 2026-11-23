@@ -227,6 +227,16 @@ int http2_engine::append_data_frame(const nghttp2_frame& frame, std::string_view
 
 http2_engine::http2_engine(http_connection_role role, const http2_connection_options& options) :
     memory_table_(make_c_library_mem_table<nghttp2_mem>(memory_)),
+    streams_(options.max_concurrent_streams_),
+    leases_(streams_.max_streams()),
+    local_settings_{
+        .header_table_size_ = options.header_table_size_,
+        .max_concurrent_streams_ = options.max_concurrent_streams_,
+        .initial_window_size_ = options.initial_window_size_,
+        .max_frame_size_ = options.max_frame_size_,
+        .max_header_list_size_ = options.max_header_list_size_,
+        .enable_connect_protocol_ = options.enable_connect_protocol_ ? 1U : 0U,
+    },
     role_(role) {
     enable_push_ = role == http_connection_role::client && options.enable_push_;
     receive_origin_advertisements_ = role == http_connection_role::client && options.receive_origin_advertisements_;
@@ -281,8 +291,8 @@ void http2_engine::create_session() {
     nghttp2_option_set_no_http_messaging(option.get(), 1);
     // RFC 9113 §6.5.2: no concurrency limit applies until the peer sets one.
     nghttp2_option_set_peer_max_concurrent_streams(option.get(), (std::numeric_limits<std::uint32_t>::max)());
-    nghttp2_option_set_max_reserved_remote_streams(option.get(), static_cast<std::uint32_t>(http2_stream_table::max_push_streams));
-    nghttp2_option_set_max_send_header_block_length(option.get(), max_http2_encoded_header_block_bytes);
+    nghttp2_option_set_max_reserved_remote_streams(option.get(), static_cast<std::uint32_t>(streams_.max_push_streams()));
+    nghttp2_option_set_max_send_header_block_length(option.get(), std::size_t{4} * (std::max)(max_http_header_bytes, std::size_t{local_settings_.max_header_list_size_}));
     // Keep connection-local compression bounded even if the peer permits more.
     nghttp2_option_set_max_deflate_dynamic_table_size(option.get(), 4096);
     nghttp2_option_set_max_settings(option.get(), http2_received_settings::max_frame_entries);
@@ -407,9 +417,9 @@ void http2_engine::begin_connection() {
     if (started_) {
         return;
     }
-    const auto entries = http2_local_settings_entries(enable_push_);
+    const auto entries = http2_local_settings_entries(enable_push_, local_settings_);
     check_nghttp2(nghttp2_submit_settings(session_.get(), NGHTTP2_FLAG_NONE, entries.data(), entries.size()));
-    check_nghttp2(nghttp2_session_set_local_window_size(session_.get(), NGHTTP2_FLAG_NONE, 0, static_cast<std::int32_t>(http2_local_settings::initial_window_size)));
+    check_nghttp2(nghttp2_session_set_local_window_size(session_.get(), NGHTTP2_FLAG_NONE, 0, static_cast<std::int32_t>((std::max)(local_settings_.initial_window_size_, std::uint32_t{65535}))));
     started_ = true;
     flush_session();
 }
@@ -608,9 +618,10 @@ int http2_engine::on_begin_frame(const nghttp2_frame_hd& header) {
             header_block_bytes_ = header.length;
             header_block_in_progress_ = (header.flags & NGHTTP2_FLAG_END_HEADERS) == 0;
             break;
-        case NGHTTP2_CONTINUATION:
+        case NGHTTP2_CONTINUATION: {
             header_block_in_progress_ = (header.flags & NGHTTP2_FLAG_END_HEADERS) == 0;
-            if (header.length > max_http2_encoded_header_block_bytes - header_block_bytes_) {
+            const auto max_encoded_header_block_bytes = std::size_t{4} * local_settings_.max_header_list_size_;
+            if (header.length > max_encoded_header_block_bytes - header_block_bytes_) {
                 // A partial block cannot be skipped without desynchronizing the
                 // connection-wide HPACK state (RFC 9113 §4.3).
                 fail_connection(http2_error_code::compression_error);
@@ -618,6 +629,7 @@ int http2_engine::on_begin_frame(const nghttp2_frame_hd& header) {
             }
             header_block_bytes_ += header.length;
             break;
+        }
         case static_cast<std::uint8_t>(http2_frame_type::alternative_service):
         case static_cast<std::uint8_t>(http2_frame_type::origin):
             header_block_in_progress_ = false;
@@ -758,8 +770,20 @@ void http2_engine::on_goaway_frame(const nghttp2_frame& frame) {
     // A GOAWAY boundary can cover more live streams than the concurrency budget:
     // reserved push promises hold no concurrency slot (RFC 9113 §5.1.2, §8.4.2)
     // yet remain open and must be closed here.
-    std::array<std::uint32_t, http2_stream_table::max_streams> unprocessed_stream_ids;
-    std::size_t unprocessed_count = 0;
+    std::array<std::uint32_t, 512> inline_unprocessed{};
+    std::size_t inline_count = 0;
+    std::vector<std::uint32_t> overflow_unprocessed;
+    const auto record_unprocessed = [&](std::uint32_t id) {
+        if (!overflow_unprocessed.empty()) {
+            overflow_unprocessed.push_back(id);
+        } else if (inline_count < inline_unprocessed.size()) {
+            inline_unprocessed[inline_count++] = id;
+        } else {
+            overflow_unprocessed.reserve(streams_.size());
+            overflow_unprocessed.assign(inline_unprocessed.begin(), inline_unprocessed.end());
+            overflow_unprocessed.push_back(id);
+        }
+    };
     if (role_ == http_connection_role::client) {
         bool response_started_above_last = false;
         streams_.for_each([&](http2_stream_state& stream) {
@@ -772,7 +796,7 @@ void http2_engine::on_goaway_frame(const nghttp2_frame& frame) {
                 response_started_above_last = true;
                 return;
             }
-            unprocessed_stream_ids[unprocessed_count++] = stream.id();
+            record_unprocessed(stream.id());
         });
         if (response_started_above_last) {
             fail_connection(http2_error_code::protocol_error);
@@ -781,11 +805,12 @@ void http2_engine::on_goaway_frame(const nghttp2_frame& frame) {
     } else {
         streams_.for_each([&](http2_stream_state& stream) {
             if ((stream.id() & 1U) == 0 && stream.id() > goaway.last_stream_id() && !http2_stream_is_closed(stream)) {
-                unprocessed_stream_ids[unprocessed_count++] = stream.id();
+                record_unprocessed(stream.id());
             }
         });
     }
-    std::ranges::sort(std::span(unprocessed_stream_ids).first(unprocessed_count));
+    const std::span<std::uint32_t> unprocessed_stream_ids = overflow_unprocessed.empty() ? std::span<std::uint32_t>(inline_unprocessed.data(), inline_count) : std::span<std::uint32_t>(overflow_unprocessed);
+    std::ranges::sort(unprocessed_stream_ids);
 
     // A valid peer GOAWAY is graceful shutdown, not a local connection error. Its
     // sender opens no further streams (RFC 9113 §6.8), so our directional GOAWAY
@@ -797,8 +822,7 @@ void http2_engine::on_goaway_frame(const nghttp2_frame& frame) {
     }
     peer_goaway_ = goaway;
     publish_event(http2_queued_event(goaway));
-    for (std::size_t i = 0; i < unprocessed_count; ++i) {
-        const auto stream_id = unprocessed_stream_ids[i];
+    for (const auto stream_id : unprocessed_stream_ids) {
         if (role_ == http_connection_role::server) {
             (void)close_stream(stream_id, http_stream_close_source::peer_goaway, goaway.error());
             continue;
@@ -821,7 +845,7 @@ void http2_engine::on_advertisement_frame(const nghttp2_frame_hd& header) {
     if (role_ != http_connection_role::client) {
         return;
     }
-    const auto payload = std::span<const char>(extension_payload_.data(), extension_payload_.size());
+    const auto payload = as_bytes(extension_payload_);
     if (header.type == static_cast<std::uint8_t>(http2_frame_type::origin)) {
         if (!receive_origin_advertisements_ || header.stream_id != 0 || (header.flags & 0xf) != 0) {
             return;
@@ -880,7 +904,7 @@ void http2_engine::on_priority_update_frame(const nghttp2_frame& frame) {
             std::erase_if(priorities_, [this](const auto& entry_value) noexcept {
                 return entry_value.stream_id_ <= highest_peer_stream_id_;
             });
-            if (priorities_.size() >= http2_local_settings::max_concurrent_streams) {
+            if (priorities_.size() >= local_settings_.max_concurrent_streams_) {
                 return;
             }
             priorities_.push_back({id, fields});
@@ -1011,7 +1035,7 @@ http_submit_status http2_engine::begin_drain() {
     // A client that ignores the first GOAWAY and withholds the ACK still cannot
     // extend the round trip indefinitely: one concurrency window of further
     // streams is admitted, then the boundary becomes final.
-    const auto stream_budget = std::uint32_t{2} * http2_local_settings::max_concurrent_streams;
+    const auto stream_budget = local_settings_.max_concurrent_streams_ > http2_max_stream_id / 2 ? http2_max_stream_id : std::uint32_t{2} * local_settings_.max_concurrent_streams_;
     const auto round_trip_limit = last_peer_stream_id_ > http2_max_stream_id - stream_budget ? http2_max_stream_id : last_peer_stream_id_ + stream_budget;
     // nghttp2's shutdown notice is the 2^31-1 GOAWAY that, unlike a final
     // GOAWAY, leaves new peer streams admitted and input read while no stream
@@ -1081,7 +1105,7 @@ http_submit_status http2_engine::submit_max_concurrent_streams(std::uint32_t lim
     if (local_connection_state_.fatal_failure() != nullptr) {
         return http_submit_status::closed;
     }
-    if (limit > http2_local_settings::max_concurrent_streams) {
+    if (limit > local_settings_.max_concurrent_streams_) {
         return http_submit_status::invalid_message;
     }
     const nghttp2_settings_entry entry{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, limit};
@@ -1406,7 +1430,7 @@ std::size_t http2_engine::available_local_request_streams(std::size_t local_limi
     if (draining() || local_request_admission_error().has_value()) {
         return 0;
     }
-    auto limit = (std::min)(local_limit, static_cast<std::size_t>(http2_local_settings::max_concurrent_streams));
+    auto limit = (std::min)(local_limit, static_cast<std::size_t>(local_settings_.max_concurrent_streams_));
     limit = (std::min)(limit, static_cast<std::size_t>(peer_setting(NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS)));
     return limit > active_local_request_streams_ ? limit - active_local_request_streams_ : 0;
 }

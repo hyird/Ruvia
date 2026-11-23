@@ -31,9 +31,6 @@
 #include <asio/io_context.hpp>
 
 #include "asio_bridge.h"
-#include "asio_completion.h"
-#include "asio_ip_address.h"
-#include "byte_view.h"
 #include "event_loop.h"
 #include "failure_report.h"
 #include "move_only_function.h"
@@ -817,59 +814,6 @@ TEST(Ruvia, equivalent_failures_distinguish_long_messages) {
     const auto right = std::make_exception_ptr(std::runtime_error(prefix + "b"));
     EXPECT_TRUE(!ruvia::equivalent_failures(left, right));
     EXPECT_TRUE(ruvia::equivalent_failures(left, std::make_exception_ptr(std::runtime_error(prefix + "a"))));
-}
-
-TEST(Ruvia, byte_views_preserve_octets_including_embedded_nul) {
-    const char raw[] = {'a', '\0', '\xff'};
-    const auto text = std::string_view(raw, sizeof(raw));
-    const auto bytes_value = ruvia::as_bytes(text);
-    EXPECT_EQ(bytes_value.size(), std::size_t{3});
-    EXPECT_TRUE(bytes_value[0] == std::byte{'a'});
-    EXPECT_TRUE(bytes_value[1] == std::byte{0});
-    EXPECT_TRUE(bytes_value[2] == std::byte{0xff});
-    EXPECT_TRUE(ruvia::as_chars(bytes_value).data() == text.data());
-    EXPECT_EQ(ruvia::as_chars(bytes_value).size(), text.size());
-    EXPECT_EQ(ruvia::as_chars({bytes_value.data(), bytes_value.data() + bytes_value.size()}), text);
-}
-
-namespace {
-
-template <typename source_type>
-concept accepts_char_view_source = requires(source_type&& source) { ruvia::as_chars(std::forward<source_type>(source)); };
-
-template <typename element_type>
-concept accepts_braced_char_view_source = requires(element_type element) { ruvia::as_chars({element}); };
-
-template <typename source_type>
-concept accepts_byte_view_source = requires(source_type&& source) { ruvia::as_bytes(std::forward<source_type>(source)); };
-
-template <typename element_type>
-concept accepts_braced_byte_view_source = requires(element_type element) { ruvia::as_bytes({element}); };
-
-static_assert(!accepts_char_view_source<std::initializer_list<std::byte>&>);
-static_assert(!accepts_char_view_source<const std::initializer_list<std::byte>&>);
-static_assert(!accepts_char_view_source<std::initializer_list<std::byte>>);
-static_assert(!accepts_braced_char_view_source<std::byte>);
-static_assert(!accepts_byte_view_source<std::string&&>);
-static_assert(!accepts_byte_view_source<std::vector<char>&&>);
-static_assert(!accepts_byte_view_source<std::initializer_list<char>>);
-static_assert(!accepts_braced_byte_view_source<char>);
-
-}  // namespace
-
-TEST(Ruvia, empty_byte_views_round_trip) {
-    EXPECT_TRUE(ruvia::as_bytes({}).empty());
-    EXPECT_TRUE(ruvia::as_chars({}).empty());
-}
-
-TEST(Ruvia, byte_views_accept_named_owners_and_preserve_storage_addresses) {
-    const std::string owned_text("abc", 3);
-    const std::vector<std::byte> owned_bytes{std::byte{'x'}, std::byte{0}, std::byte{'z'}};
-    const auto text_bytes = ruvia::as_bytes(owned_text);
-    const auto chars_value = ruvia::as_chars(owned_bytes);
-    EXPECT_TRUE(reinterpret_cast<const char*>(text_bytes.data()) == owned_text.data());
-    EXPECT_TRUE(chars_value.data() == reinterpret_cast<const char*>(owned_bytes.data()));
-    EXPECT_EQ(chars_value, std::string_view("x\0z", 3));
 }
 
 TEST(Ruvia, ip_address_parsing_handles_ipv4_ipv6_and_view_bounds) {

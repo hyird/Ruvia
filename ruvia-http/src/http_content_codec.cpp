@@ -248,7 +248,7 @@ void http_content_encoder::reset() {
     phase_ = phase::fresh;
 }
 
-http_worker_codecs::~http_worker_codecs() {
+http_content_codecs::~http_content_codecs() {
     for (auto* encoders : {&gzip_, &deflate_, &brotli_, &zstd_}) {
         for (std::size_t i = 0; i < encoders->count_; ++i) {
             destroy_encoder(*encoders->free_[i]);
@@ -257,7 +257,7 @@ http_worker_codecs::~http_worker_codecs() {
     }
 }
 
-http_worker_codecs::encoder_pool_type& http_worker_codecs::pool(http_content_coding coding) {
+http_content_codecs::encoder_pool_type& http_content_codecs::pool(http_content_coding coding) {
     switch (coding) {
         case http_content_coding::gzip:
             return gzip_;
@@ -273,15 +273,15 @@ http_worker_codecs::encoder_pool_type& http_worker_codecs::pool(http_content_cod
     throw std::logic_error("identity content coding has no encoder");
 }
 
-http_content_encoder_lease http_worker_codecs::acquire_encoder(http_content_coding coding) {
+http_content_encoder_lease http_content_codecs::acquire_encoder(http_content_coding coding) {
     auto& encoders = pool(coding);
     if (encoders.count_ != 0) {
         return http_content_encoder_lease(*this, *encoders.free_[--encoders.count_]);
     }
-    return http_content_encoder_lease(*this, *(new http_content_encoder(coding)));
+    return http_content_encoder_lease(*this, *(new http_content_encoder(coding, options_)));
 }
 
-void http_worker_codecs::release_encoder(http_content_encoder& encoder) noexcept {
+void http_content_codecs::release_encoder(http_content_encoder& encoder) noexcept {
     auto& encoders = pool(encoder.coding());
     if (encoders.count_ < encoders.free_.size()) {
         try {
@@ -294,7 +294,7 @@ void http_worker_codecs::release_encoder(http_content_encoder& encoder) noexcept
     destroy_encoder(encoder);
 }
 
-void http_worker_codecs::destroy_encoder(http_content_encoder& encoder) noexcept {
+void http_content_codecs::destroy_encoder(http_content_encoder& encoder) noexcept {
     delete &encoder;
 }
 

@@ -22,8 +22,7 @@
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 
-#include "asio_completion.h"
-#include "asio_ip_address.h"
+#include "asio_bridge.h"
 #include "client_happy_eyeballs.h"
 #include "client_host_resolver.h"
 #include "client_tls.h"
@@ -221,6 +220,7 @@ task<client_transport_result> client_tcp_transport::connect(const operation_dead
     const auto connect_started = std::chrono::steady_clock::now();
     connect_duration_ = {};
     tls_duration_ = {};
+    local_endpoint_ = {};
     peer_endpoint_ = {};
     tls_close_ready_ = false;
     writing_ = false;
@@ -296,6 +296,9 @@ task<client_transport_result> client_tcp_transport::connect(const operation_dead
     connect_duration_ = std::chrono::steady_clock::now() - connect_started;
     std::error_code peer_error;
     peer_endpoint_ = stream_->next_layer().socket().remote_endpoint(peer_error);
+    if (!peer_error) {
+        local_endpoint_ = stream_->next_layer().socket().local_endpoint(peer_error);
+    }
     if (peer_error) {
         co_return finish(read_, timeout, peer_error, 0, client_transport_status::connect_failed);
     }
@@ -413,6 +416,106 @@ task<client_transport_result> client_tcp_transport::write(std::string_view bytes
 
 task<client_transport_result> client_tcp_transport::write(std::span<const asio::const_buffer> buffers, const operation_deadline& timeout) {
     return write_buffers(buffers, timeout);
+}
+
+task<client_transport_result> client_tcp_transport::shutdown_send(const operation_deadline& timeout) {
+    if (abort_reason_ != client_abort_reason::none) {
+        co_return aborted();
+    }
+    if (!stream_) {
+        co_return client_transport_result{.status_ = client_transport_status::io_failed, .error_ = std::make_error_code(std::errc::not_connected)};
+    }
+    if (!secure()) {
+        std::error_code error;
+        stream_->next_layer().socket().shutdown(asio::ip::tcp::socket::shutdown_send, error);
+        if (error) {
+            co_return finish(write_, timeout, error, 0, client_transport_status::io_failed);
+        }
+        co_return client_transport_result{};
+    }
+    auto& layer = stream_->next_layer();
+    auto& socket = layer.socket();
+    SSL* const native = stream_->native_handle();
+    if (!layer.records_whole() || !socket.is_open() || SSL_is_init_finished(native) != 1) {
+        tls_close_ready_ = false;
+        co_return client_transport_result{.status_ = client_transport_status::tls_failed, .error_ = std::make_error_code(std::errc::io_error)};
+    }
+    if ((SSL_get_shutdown(native) & SSL_SENT_SHUTDOWN) != 0) {
+        tls_close_ready_ = false;
+        co_return client_transport_result{};
+    }
+    BIO* const previous_wbio = SSL_get_wbio(native);
+    if (previous_wbio == nullptr || BIO_up_ref(previous_wbio) != 1) {
+        tls_close_ready_ = false;
+        throw std::bad_alloc();
+    }
+    BIO* const capture = BIO_new(BIO_s_mem());
+    if (capture == nullptr) {
+        BIO_free(previous_wbio);
+        tls_close_ready_ = false;
+        throw std::bad_alloc();
+    }
+    SSL_set0_wbio(native, capture);
+    std::array<char, 128> inline_alert{};
+    std::size_t alert_size = 0;
+    std::string heap_alert;
+    int shutdown_rc = -1;
+    unsigned long ssl_err = 0;
+    try {
+        ::ERR_clear_error();
+        shutdown_rc = ::SSL_shutdown(native);
+        if (shutdown_rc < 0) {
+            ssl_err = ::ERR_get_error();
+        } else {
+            char* alert_ptr = nullptr;
+            const long len = BIO_get_mem_data(capture, &alert_ptr);
+            if (len < 0 || (len > 0 && alert_ptr == nullptr)) {
+                shutdown_rc = -1;
+            } else if (len > 0) {
+                alert_size = static_cast<std::size_t>(len);
+                if (alert_size <= inline_alert.size()) {
+                    std::copy_n(alert_ptr, alert_size, inline_alert.data());
+                } else {
+                    heap_alert.assign(alert_ptr, alert_size);
+                }
+            }
+        }
+    } catch (...) {
+        SSL_set0_wbio(native, previous_wbio);
+        tls_close_ready_ = false;
+        throw;
+    }
+    SSL_set0_wbio(native, previous_wbio);
+    tls_close_ready_ = false;
+    if (shutdown_rc < 0) {
+        const auto code = ssl_err == 0 ? std::make_error_code(std::errc::protocol_error) : std::error_code(static_cast<int>(ssl_err), asio::error::get_ssl_category());
+        co_return client_transport_result{.status_ = client_transport_status::tls_failed, .error_ = code};
+    }
+    if (alert_size == 0) {
+        co_return client_transport_result{};
+    }
+    if (!arm(write_, timeout)) {
+        co_return aborted();
+    }
+    struct write_guard final {
+        bool& writing_;
+        explicit write_guard(bool& writing) noexcept :
+            writing_(writing) {
+            writing_ = true;
+        }
+        ~write_guard() noexcept {
+            writing_ = false;
+        }
+    } guard(writing_);
+    const auto buf = heap_alert.empty() ? asio::buffer(inline_alert.data(), alert_size) : asio::buffer(heap_alert.data(), heap_alert.size());
+    const auto completion = co_await async_asio<std::size_t>([this, buf](auto handler) mutable {
+        asio::async_write(stream_->next_layer(), buf, std::move(handler));
+    });
+    auto result_value = finish(write_, timeout, completion.code(), completion.code() ? 0 : completion.value(), client_transport_status::io_failed);
+    if (result_value.status_ == client_transport_status::eof) {
+        result_value.status_ = client_transport_status::io_failed;
+    }
+    co_return result_value;
 }
 
 }  // namespace ruvia::detail

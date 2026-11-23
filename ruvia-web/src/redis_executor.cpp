@@ -286,12 +286,12 @@ namespace ruvia {
 struct redis_script::storage_type final {
     explicit storage_type(std::string body) :
         body_(std::move(body)) {
-        std::array<unsigned char, 20> digest;
+        std::array<std::byte, 20> digest{};
         std::size_t size = 0;
-        if (EVP_Q_digest(nullptr, "SHA1", nullptr, body_.data(), body_.size(), digest.data(), &size) != 1 || size != digest.size()) {
+        if (EVP_Q_digest(nullptr, "SHA1", nullptr, body_.data(), body_.size(), reinterpret_cast<unsigned char*>(digest.data()), &size) != 1 || size != digest.size()) {
             throw std::runtime_error("Redis script SHA1 computation failed");
         }
-        http_encode_lower_hex(sha1_.data(), std::span<const unsigned char>(digest));
+        (void)encode_lower_hex(sha1_, digest);
     }
     std::string body_;
     std::array<char, 40> sha1_;
@@ -372,12 +372,12 @@ void require_positive_redis_ttl(duration_type ttl, const char* message) {
 
 }  // namespace
 
-redis_executor::redis_executor(detail::redis_client_runtime& runtime, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept :
+redis_executor::redis_executor(detail::redis_client_runtime& runtime, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept :
     runtime_(&runtime),
     io_metrics_(io_metrics),
     registration_(operation_scope, *this) {}
 
-redis_executor::redis_executor(detail::redis_client_runtime& runtime, detail::operation_scope& operation_scope, operation_options options) noexcept :
+redis_executor::redis_executor(detail::redis_client_runtime& runtime, ::ruvia::operation_scope& operation_scope, operation_options options) noexcept :
     runtime_(&runtime),
     operation_options_(std::move(options)),
     registration_(operation_scope, *this) {}
@@ -509,7 +509,7 @@ redis_subscription redis_executor::subscription() const {
     return redis_subscription(runtime_->subscriptions(), registration_.scope(), operation_options_, request_stop_);
 }
 
-redis_executor redis_executor::bind_caller_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
+redis_executor redis_executor::bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) && {
     registration_.require_active();
     redis_executor bound(*runtime_, scope, io_metrics);
     bound.request_stop_ = stop_token_value;
@@ -518,7 +518,7 @@ redis_executor redis_executor::bind_caller_scope(detail::operation_scope& scope,
 }
 
 template <redis_batch_mode mode>
-redis_batch<mode>::redis_batch(detail::redis_pool& pool, operation_options options, stop_token request_stop, detail::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept :
+redis_batch<mode>::redis_batch(detail::redis_pool& pool, operation_options options, stop_token request_stop, ::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept :
     pool_(&pool),
     options_(std::move(options)),
     request_stop_(std::move(request_stop)),

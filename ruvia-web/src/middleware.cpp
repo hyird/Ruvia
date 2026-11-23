@@ -10,7 +10,6 @@
 #include <type_traits>
 #include <utility>
 
-#include "callback_ref.h"
 #include "context.h"
 #include "context_access.h"
 #include "http_error.h"
@@ -183,7 +182,7 @@ task<http_response> detail::route_table::respond_through_chain(middleware_chain 
     auto respond = [terminal](context& terminal_context) -> task<void> {
         detail::context_access::set_response(terminal_context, co_await terminal(terminal_context));
     };
-    chain.terminal_ = callback_access::bind<task<void>(context&)>(respond);
+    chain.terminal_ = route_stream_handler(respond);
     co_await run_chain(chain, context_value);
     if (detail::context_access::has_response(context_value)) {
         co_return detail::context_access::take_response(context_value);

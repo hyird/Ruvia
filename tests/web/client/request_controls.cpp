@@ -11,7 +11,7 @@
 
 #include <asio.hpp>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "event_loop.h"
 #include "http_client.h"
 #include "http_content_codec.h"
@@ -144,7 +144,7 @@ private:
         while (stream == 0) {
             std::array<char, ruvia::http2_frame_header_bytes> bytes;
             co_await asio::async_read(socket_, asio::buffer(bytes), asio::use_awaitable);
-            const auto header = ruvia::parse_http2_frame_header(bytes);
+            const auto header = ruvia::parse_http2_frame_header(std::as_bytes(std::span(bytes)));
             if (!header) {
                 throw std::runtime_error("invalid HTTP/2 request frame");
             }
@@ -382,7 +382,7 @@ void informational_backpressure(bool fail_callback) {
         while (requests != 2) {
             std::array<char, ruvia::http2_frame_header_bytes> bytes;
             co_await asio::async_read(socket, asio::buffer(bytes), asio::use_awaitable);
-            const auto header = ruvia::parse_http2_frame_header(bytes);
+            const auto header = ruvia::parse_http2_frame_header(std::as_bytes(std::span(bytes)));
             if (!header) {
                 throw std::runtime_error("invalid multiplexed frame");
             }

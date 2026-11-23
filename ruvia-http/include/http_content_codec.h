@@ -176,9 +176,9 @@ private:
 // A fresh http_content_encoder's encode().
 [[nodiscard]] std::optional<std::string> encode_http_content(http_content_coding coding, std::string_view input, http_content_encode_options options, http_content_encoder_options encoder_options = {});
 
-class http_worker_codecs;
+class http_content_codecs;
 
-// RAII lease for a pooled encoder from http_worker_codecs. Destroying a
+// RAII lease for a pooled encoder from http_content_codecs. Destroying a
 // non-discarded lease resets and returns the encoder to the pool, unless the
 // scope is unwinding an exception: failed native state never crosses
 // representations. discard() destroys a failed encoder instead of pooling it.
@@ -206,28 +206,29 @@ public:
     void discard() noexcept;
 
 private:
-    friend class http_worker_codecs;
+    friend class http_content_codecs;
 
-    http_content_encoder_lease(http_worker_codecs& codecs, http_content_encoder& encoder) noexcept :
+    http_content_encoder_lease(http_content_codecs& codecs, http_content_encoder& encoder) noexcept :
         codecs_(&codecs),
         encoder_(&encoder),
         uncaught_exceptions_(std::uncaught_exceptions()) {}
 
     void release() noexcept;
 
-    http_worker_codecs* codecs_{nullptr};
+    http_content_codecs* codecs_{nullptr};
     http_content_encoder* encoder_{nullptr};
     int uncaught_exceptions_{0};
 };
 
-// Per-worker reusable content encoder pool, for buffered and streaming
+// Reusable single-threaded content encoder pool, for buffered and streaming
 // responses alike. Not thread-safe.
-class http_worker_codecs final {
+class http_content_codecs final {
 public:
-    http_worker_codecs() noexcept = default;
-    ~http_worker_codecs();
-    http_worker_codecs(const http_worker_codecs&) = delete;
-    http_worker_codecs& operator=(const http_worker_codecs&) = delete;
+    explicit http_content_codecs(http_content_encoder_options options = {}) noexcept :
+        options_(options) {}
+    ~http_content_codecs();
+    http_content_codecs(const http_content_codecs&) = delete;
+    http_content_codecs& operator=(const http_content_codecs&) = delete;
 
     // identity has no encoder and throws std::logic_error.
     [[nodiscard]] http_content_encoder_lease acquire_encoder(http_content_coding coding);
@@ -246,6 +247,7 @@ private:
     void release_encoder(http_content_encoder& encoder) noexcept;
     static void destroy_encoder(http_content_encoder& encoder) noexcept;
 
+    http_content_encoder_options options_{};
     encoder_pool_type gzip_;
     encoder_pool_type deflate_;
     encoder_pool_type brotli_;
@@ -262,7 +264,7 @@ inline void http_content_encoder_lease::release() noexcept {
 inline void http_content_encoder_lease::discard() noexcept {
     if (encoder_ != nullptr) {
         codecs_ = nullptr;
-        http_worker_codecs::destroy_encoder(*std::exchange(encoder_, nullptr));
+        http_content_codecs::destroy_encoder(*std::exchange(encoder_, nullptr));
     }
 }
 

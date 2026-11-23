@@ -109,7 +109,7 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
                         value_.set(cache_control_directive::private_);
                         value_.set(cache_control_directive::private_unqualified);
                         value_.private_fields_.clear();
-                    } else if (detail::is_http_token_or_quoted_string(arg)) {
+                    } else if (is_http_token_or_quoted_string(arg)) {
                         value_.set(cache_control_directive::private_);
                         if (!value_.is_unqualified_private()) {
                             const bool added = parse_nominated_field_list_arg(arg, [this](std::string_view field_name) noexcept {
@@ -131,7 +131,7 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
                         value_.set(cache_control_directive::no_cache);
                         value_.set(cache_control_directive::no_cache_unqualified);
                         value_.no_cache_fields_.clear();
-                    } else if (detail::is_http_token_or_quoted_string(arg)) {
+                    } else if (is_http_token_or_quoted_string(arg)) {
                         value_.set(cache_control_directive::no_cache);
                         if (!value_.is_unqualified_no_cache()) {
                             const bool added = parse_nominated_field_list_arg(arg, [this](std::string_view field_name) noexcept {

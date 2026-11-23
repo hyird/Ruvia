@@ -19,6 +19,7 @@
 #include "utf8.h"
 #include "websocket_deflate.h"
 #include "websocket_frame.h"
+#include "websocket_inbound_assembler.h"
 
 namespace ruvia {
 
@@ -29,13 +30,13 @@ enum class websocket_payload_storage : std::uint8_t {
     borrow,
 };
 
-[[nodiscard]] constexpr websocket_termination websocket_failure_termination(detail::websocket_protocol_failure failure) noexcept {
+[[nodiscard]] constexpr websocket_termination websocket_failure_termination(websocket_protocol_failure failure) noexcept {
     switch (failure) {
-        case detail::websocket_protocol_failure::protocol_error:
+        case websocket_protocol_failure::protocol_error:
             break;
-        case detail::websocket_protocol_failure::invalid_payload_data:
+        case websocket_protocol_failure::invalid_payload_data:
             return websocket_termination::invalid_payload_data;
-        case detail::websocket_protocol_failure::message_too_large:
+        case websocket_protocol_failure::message_too_large:
             return websocket_termination::message_too_large;
     }
     return websocket_termination::protocol_error;
@@ -208,7 +209,7 @@ public:
             payload_value = owned_payload.emplace(payload_value);
             storage = websocket_payload_storage::copy;
         }
-        detail::websocket_frame_header_type header;
+        websocket_frame_header_bytes header{};
         const bool masked = role_ == websocket_connection_role::client;
         websocket_mask_key_type mask{};
         if (masked && !mask_key_generator_(mask_key_context_, mask)) {
@@ -217,7 +218,7 @@ public:
         const bool borrow = storage == websocket_payload_storage::borrow && !masked;
         const bool continuation = position == websocket_fragment_position::middle || position == websocket_fragment_position::last;
         const bool final = position == websocket_fragment_position::whole || position == websocket_fragment_position::last;
-        const auto header_size = detail::encode_websocket_frame_header(header, continuation ? std::uint8_t{0} : static_cast<std::uint8_t>(opcode), final, payload_value.size(), rsv1, masked);
+        const auto header_size = encode_websocket_frame_header(header, continuation ? std::uint8_t{0} : static_cast<std::uint8_t>(opcode), final, payload_value.size(), rsv1, masked);
         const auto mask_size = masked ? mask.size() : std::size_t{0};
         std::size_t additional_size = 0;
         for (const auto size : {borrowed_output_.size(), header_size, mask_size, borrow ? 0 : payload_value.size()}) {
@@ -232,12 +233,12 @@ public:
         // An earlier borrowed payload precedes this frame on the wire.
         out_buffer_.append(borrowed_output_);
         borrowed_output_ = {};
-        out_buffer_.append(std::string_view(header.data(), header_size));
+        out_buffer_.append(byte_view(header.data(), header_size));
         if (masked) {
-            out_buffer_.append(std::string_view(mask.data(), mask.size()));
+            out_buffer_.append(byte_view(mask));
             const auto payload_start = out_buffer_.size();
             out_buffer_.append(payload_value);
-            detail::decode_masked_websocket_payload(out_buffer_.data() + payload_start, payload_value.size(), mask.data());
+            mask_websocket_payload(out_buffer_.mutable_bytes().subspan(payload_start, payload_value.size()), mask);
         } else if (borrow) {
             borrowed_output_ = payload_value;
         } else {
@@ -248,8 +249,8 @@ public:
     void fail(std::uint16_t code) {
         if (close_phase_ == close_phase_type::open) {
             // Every protocol failure code is a valid Close code, so encoding succeeds.
-            const auto payload_value = detail::encode_websocket_close_payload(websocket_close_code(code), {});
-            append_frame(websocket_opcode::close, payload_value.encoded()->bytes());
+            const auto payload_value = encode_websocket_close_payload(websocket_close_code(code), {});
+            append_frame(websocket_opcode::close, payload_value.encoded()->view());
             close_phase_ = close_phase_type::final_output_queued;
             return;
         }
@@ -471,15 +472,15 @@ std::optional<websocket_event> websocket_connection::next_event() & {
             return std::nullopt;
         }
 
-        const auto protocol_failure_event = [this](detail::websocket_protocol_failure failure) {
-            const auto close_code = detail::websocket_protocol_failure_close_code(failure);
+        const auto protocol_failure_event = [this](websocket_protocol_failure failure) {
+            const auto close_code = websocket_protocol_failure_close_code(failure);
             impl_->fail(close_code);
             impl_->record_termination(websocket_failure_termination(failure));
             return websocket_event::protocol_error(close_code);
         };
 
         for (;;) {
-            const auto read = detail::websocket_try_read_frame(*impl_->input_, impl_->pending_consume_, impl_->receive_message_limit_, impl_->deflate_.has_value(), impl_->role_ == websocket_connection_role::server);
+            const auto read = websocket_try_read_frame(*impl_->input_, impl_->pending_consume_, impl_->receive_message_limit_, impl_->deflate_.has_value(), impl_->role_ == websocket_connection_role::server);
             if (const auto* need_input = read.need_input()) {
                 impl_->needed_input_bytes_ = need_input->missing_bytes();
                 return std::nullopt;
@@ -512,7 +513,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
                 // Close: the frame reader admits no other control opcode.
                 std::uint16_t code = 1005;
                 if (payload_value.size() >= 2) {
-                    code = detail::read_websocket_uint16(payload_value.data());
+                    code = detail::read_websocket_uint16(as_bytes(payload_value));
                 }
                 const auto reason = payload_value.size() > 2 ? payload_value.substr(2) : std::string_view{};
                 if (impl_->close_phase_ == close_phase_type::open) {
@@ -545,14 +546,14 @@ std::optional<websocket_event> websocket_connection::next_event() & {
             // Only a negotiated deflate admits RSV1, so a compressed message implies deflate_.
             const auto inflate_result = impl_->deflate_->decompress(message.payload(), impl_->inbound_inflated_, impl_->receive_message_limit_, impl_->receive_storage_);
             if (inflate_result == websocket_inflate_status::too_large) {
-                return protocol_failure_event(detail::websocket_protocol_failure::message_too_large);
+                return protocol_failure_event(websocket_protocol_failure::message_too_large);
             }
             if (inflate_result != websocket_inflate_status::ok) {
-                return protocol_failure_event(detail::websocket_protocol_failure::protocol_error);
+                return protocol_failure_event(websocket_protocol_failure::protocol_error);
             }
             const std::string_view view = impl_->inbound_inflated_;
             if (message.opcode() == websocket_opcode::text && !is_valid_utf8(view)) {
-                return protocol_failure_event(detail::websocket_protocol_failure::invalid_payload_data);
+                return protocol_failure_event(websocket_protocol_failure::invalid_payload_data);
             }
             if (impl_->close_phase_ != close_phase_type::open) {
                 impl_->assembler_.release_completed(impl_->receive_storage_);
@@ -692,16 +693,16 @@ websocket_close_submit_status websocket_connection::submit_close(websocket_close
     if (impl_->role_ == websocket_connection_role::server && code.value() == 1010) {
         return websocket_close_submit_status::invalid_code;
     }
-    const auto payload_value = detail::encode_websocket_close_payload(code, reason);
+    const auto payload_value = encode_websocket_close_payload(code, reason);
     if (const auto* failure = payload_value.failure()) {
         switch (failure->error()) {
-            case detail::websocket_close_payload_encode_error::invalid_reason:
+            case websocket_close_payload_encode_error::invalid_reason:
                 return websocket_close_submit_status::invalid_reason;
-            case detail::websocket_close_payload_encode_error::reason_too_large:
+            case websocket_close_payload_encode_error::reason_too_large:
                 return websocket_close_submit_status::reason_too_large;
         }
     }
-    impl_->append_frame(websocket_opcode::close, payload_value.encoded()->bytes());
+    impl_->append_frame(websocket_opcode::close, payload_value.encoded()->view());
     impl_->close_phase_ = close_phase_type::local_close_queued;
     return websocket_close_submit_status::accepted;
 }

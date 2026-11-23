@@ -8,7 +8,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "byte_view.h"
+#include "lifetimebound.h"
 #include "operation_options.h"
 #include "stop_token.h"
 #include "suspend_race.h"
@@ -28,7 +28,7 @@
 //   await_resume   take_value().
 //
 // Domain events complete the pending waiter through the slot under the same
-// lock; a detail::worker_shutdown_registration routes worker_stopping there.
+// lock; a worker_shutdown_registration routes worker_stopping there.
 
 namespace ruvia {
 
@@ -40,10 +40,10 @@ template <typename t_type, typename state_type>
 class worker_wait_slot;
 
 // A shared owner that links itself into its worker's shutdown registry
-// through a detail::worker_shutdown_registration member named
-// shutdown_registration_ (see make_worker_wait_state()).
+// through a worker_shutdown_registration member named shutdown_registration_
+// (see make_worker_wait_state()).
 template <typename state_type>
-concept worker_shutdown_registered = detail::worker_shutdown_observer<state_type> && std::same_as<decltype(state_type::shutdown_registration_), detail::worker_shutdown_registration>;
+concept worker_shutdown_registered = worker_shutdown_observer<state_type> && std::same_as<decltype(state_type::shutdown_registration_), worker_shutdown_registration>;
 
 // The domain state contract: the bound worker, the lock guarding the slot,
 // the slot itself, and the shutdown registration that routes the worker's
@@ -295,7 +295,7 @@ private:
 
     std::shared_ptr<state_type> state_;
     wait_bounds bounds_;
-    detail::suspend_race_state<wait_result<t_type>> completion_;
+    suspend_race_state<wait_result<t_type>> completion_;
     // Last so callback unregistration completes before the state, timer, and
     // borrowed dispatcher begin destruction.
     stop_registration stop_registration_;
@@ -312,7 +312,7 @@ template <typename state_type, typename... arg_types>
     }
 [[nodiscard]] std::shared_ptr<state_type> make_worker_wait_state(arg_types&&... args) {
     auto state_value = std::make_shared<state_type>(std::forward<arg_types>(args)...);
-    if (!detail::worker_ref_access::register_shutdown<state_type>(state_value->worker(), state_value, &state_type::shutdown_registration_)) {
+    if (!state_value->worker().register_shutdown(state_value, &state_type::shutdown_registration_)) {
         throw std::runtime_error("cannot register state on a stopping worker");
     }
     return state_value;

@@ -694,7 +694,7 @@ namespace {
     const auto known_bit = field.response_bit_;
     const auto kind = field.kind_;
     detail::http_connection_options connection_options;
-    detail::http_upgrade_protocols upgrade_protocols;
+    http_upgrade_protocols upgrade_protocols;
     switch (detail::parse_http_response_control_field(kind, value, connection_options, upgrade_protocols)) {
         case detail::http_response_control_field_status::invalid_connection:
             throw std::invalid_argument("invalid HTTP Connection header");
@@ -1136,7 +1136,7 @@ void http_response_headers::add_vary_token(std::string_view token) {
                 continue;
             }
             const auto value = header_value.value();
-            const auto present = detail::http_find_header_token(value, [token](std::string_view member) noexcept {
+            const auto present = http_find_header_token(value, [token](std::string_view member) noexcept {
                 return member == "*" || http_ascii_equals_ignore_case(member, token);
             });
             if (!present.empty()) {

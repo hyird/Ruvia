@@ -26,7 +26,7 @@ namespace ruvia {
 // checks delimiters, not host/port syntax. Rejects unbalanced brackets, bytes
 // after ']' other than ':', and colons in port. Outputs are unspecified on
 // failure and otherwise borrow value; an empty host/port is representable.
-[[nodiscard]] bool split_uri_host_port(borrowed_text value, std::string_view& host, std::string_view& port, bool& has_port) noexcept;
+[[nodiscard]] bool split_uri_host_port(borrowed_text value RUVIA_LIFETIMEBOUND, std::string_view& host, std::string_view& port, bool& has_port) noexcept;
 
 // A complete HTTP(S)/WS(S) URL, without userinfo or IPv6 zones. All non-default
 // text borrows the input without decoding or normalization. Scheme case and
@@ -66,7 +66,7 @@ public:
     }
 
 private:
-    friend std::optional<http_url_view> parse_http_url(borrowed_text, http_authority_policy) noexcept;
+    friend std::optional<http_url_view> parse_http_url(borrowed_text value RUVIA_LIFETIMEBOUND, http_authority_policy) noexcept;
     constexpr http_url_view(std::string_view scheme, std::string_view authority_text, http_authority_view authority, std::string_view path, std::optional<std::string_view> query, std::optional<std::string_view> fragment, std::string_view raw_target) noexcept :
         scheme_(scheme),
         authority_text_(authority_text),
@@ -89,6 +89,6 @@ private:
 // backslashes and encoded NUL in the path. No dot-segment normalization.
 // RFC-valid receiver authority spellings remain accepted by default; select
 // endpoint explicitly for endpoint configuration, not generic HTTP reception.
-[[nodiscard]] std::optional<http_url_view> parse_http_url(borrowed_text value, http_authority_policy policy = http_authority_policy::rfc) noexcept;
+[[nodiscard]] std::optional<http_url_view> parse_http_url(borrowed_text value RUVIA_LIFETIMEBOUND, http_authority_policy policy = http_authority_policy::rfc) noexcept;
 
 }  // namespace ruvia

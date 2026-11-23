@@ -14,6 +14,7 @@
 #include "delivery_result.h"
 #include "move_only_function.h"
 #include "worker_timer.h"
+
 namespace ruvia {
 
 using worker_id_type = std::uint64_t;
@@ -22,17 +23,6 @@ using worker_id_type = std::uint64_t;
 [[nodiscard]] std::uint64_t worker_selection_hash(std::string_view key) noexcept;
 
 class blocking_pool;
-
-namespace detail {
-class worker_dispatcher;
-
-// Per-owner-type phase table; a null entry skips that phase.
-struct worker_shutdown_operations_type final {
-    using phase_type = void (*)(void* owner) noexcept;
-
-    phase_type stopping_;
-    phase_type stopping_complete_;
-};
 
 // An owner observes its worker's shutdown through `void worker_stopping()
 // noexcept`, run in the first notification pass, and/or `void
@@ -43,6 +33,17 @@ concept worker_shutdown_observer = requires(owner_type& owner) {
     { owner.worker_stopping() } noexcept;
 } || requires(owner_type& owner) {
     { owner.worker_stopping_complete() } noexcept;
+};
+
+namespace detail {
+class worker_dispatcher;
+
+// Per-owner-type phase table; a null entry skips that phase.
+struct worker_shutdown_operations_type final {
+    using phase_type = void (*)(void* owner) noexcept;
+
+    phase_type stopping_;
+    phase_type stopping_complete_;
 };
 
 template <typename owner_type>
@@ -68,8 +69,10 @@ template <typename owner_type>
 template <typename owner_type>
 inline constexpr worker_shutdown_operations_type worker_shutdown_operations = make_worker_shutdown_operations<owner_type>();
 
+}  // namespace detail
+
 // Intrusive link of one shared owner into its worker's shutdown registry,
-// held as a member of that owner (see worker_ref_access::register_shutdown).
+// held as a member of that owner (see worker_ref::register_shutdown).
 // Linking and unlinking are O(1) under the registry mutex and never allocate.
 // The link keeps the registry alive, so destruction unlinks even after the
 // owner released its own worker_ref, on any thread. Declare it as the
@@ -85,10 +88,10 @@ public:
     ~worker_shutdown_registration();
 
 private:
-    friend class worker_dispatcher;
+    friend class detail::worker_dispatcher;
 
-    const worker_shutdown_operations_type* operations_{nullptr};
-    std::shared_ptr<worker_dispatcher> registry_;
+    const detail::worker_shutdown_operations_type* operations_{nullptr};
+    std::shared_ptr<detail::worker_dispatcher> registry_;
     // Aliases the owner object; locking it pins the owner, and therefore this
     // registration, for the duration of one phase callback.
     std::weak_ptr<void> owner_;
@@ -97,11 +100,12 @@ private:
     bool linked_{false};
 };
 
-}  // namespace detail
-
 class worker_ref final {
 public:
     worker_ref() noexcept = default;
+
+    // The worker whose event loop runs on the calling thread; empty elsewhere.
+    [[nodiscard]] static worker_ref current() noexcept;
 
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] bool accepting() const noexcept;
@@ -113,6 +117,22 @@ public:
     // blocking_status::unavailable. The pool's owner keeps it alive for at
     // least the worker's lifetime.
     [[nodiscard]] ruvia::blocking_pool* blocking_pool() const noexcept;
+
+    // Links `owner->*registration` into the worker's shutdown registry, so the
+    // worker's stop reaches the owner's worker_stopping() and
+    // worker_stopping_complete() phases on the stopping thread. The registry
+    // holds only a weak reference: an owner already being destroyed is skipped,
+    // and destroying the registration unlinks it. Returns false, linking
+    // nothing, once the worker no longer accepts work (or on an empty
+    // worker_ref). Linking an already registered member throws std::logic_error;
+    // a null owner or member throws std::invalid_argument.
+    template <worker_shutdown_observer owner_type>
+    [[nodiscard]] bool register_shutdown(const std::shared_ptr<owner_type>& owner, worker_shutdown_registration std::type_identity_t<owner_type>::* registration) const {
+        if (owner == nullptr || registration == nullptr) {
+            throw std::invalid_argument("worker shutdown registration requires an owner member");
+        }
+        return link_shutdown((*owner).*registration, std::weak_ptr<void>(owner), detail::worker_shutdown_operations<owner_type>);
+    }
 
     // The general bounded post. Reserves admission before synchronously
     // invoking `factory`, so the caller's inputs are consumed only after
@@ -159,37 +179,17 @@ public:
 
     // Resumes `continuation` on the worker in a later turn, never inline --
     // for a coroutine suspended in an operation this worker already runs.
-    // Requests made from one thread resume in the order they were made; there
-    // is no order between requests made from different threads (on a worker
-    // with a single owner, the worker's own requests reach the event loop only
-    // after its current handler returns). Unlike post() it cannot be refused by
-    // a full queue; on the worker's own thread it goes straight to the event
-    // loop without a type-erased callable. Requested from another thread once
-    // the worker's execution context has been detached, or on an empty worker_ref,
-    // it terminates. A request the event loop is destroyed before running is
-    // dropped and the coroutine never resumes, so the worker must run until
-    // every operation it admitted has completed, as for any started task.
     void defer_resume(std::coroutine_handle<> continuation) const noexcept;
 
     // The completion lane of an operation the worker already admitted:
-    // cancellation, cleanup, or result delivery. It takes no retirement
-    // protection of its own; loop-level cleanup that belongs to no admitted
-    // operation uses event_loop::defer_cleanup() instead. Unlike post() a full queue
-    // never refuses it; on the worker's own thread it runs in a later turn,
-    // never inline. Returns false, destroying `completion` on the caller's
-    // thread, once the worker's execution context has been detached (or on an
-    // empty worker_ref): the admitted operation has then retired with
-    // its worker. Throws std::invalid_argument for an empty callable.
+    // cancellation, cleanup, or result delivery.
     [[nodiscard]] bool defer_completion(move_only_function<void()> completion) const;
 
 private:
     explicit worker_ref(std::shared_ptr<detail::worker_dispatcher> dispatcher) noexcept;
-    // post() behind its type-erasure boundary: the same admission as
-    // post_factory(), with a factory that hands over the built callable.
     [[nodiscard]] post_result<> post_task(move_only_function<void()> task) const;
+    [[nodiscard]] bool link_shutdown(worker_shutdown_registration& registration, std::weak_ptr<void> owner, const detail::worker_shutdown_operations_type& operations) const;
 
-    // Owns the stable dispatcher endpoint, not the worker's io_context.
-    // The worker detaches that endpoint before destroying its execution context.
     std::shared_ptr<detail::worker_dispatcher> dispatcher_;
     friend class detail::worker_dispatcher;
 };
@@ -198,34 +198,7 @@ namespace detail {
 
 // What core's own inline headers need beyond the public worker_ref surface.
 struct worker_ref_access {
-    // defer_completion() for an intrusive node that has no owner to hand a
-    // refusal back to: a detached or empty worker, or a failed dispatch, is
-    // terminal.
     static void defer_or_terminate(const worker_ref& worker, move_only_function<void()> task) noexcept;
-
-    // Links `owner->*registration` into the worker's shutdown registry, so
-    // the worker's stop reaches the owner's worker_stopping() and
-    // worker_stopping_complete() phases on the stopping thread. The registry
-    // holds only a weak reference: an owner already being destroyed is
-    // skipped, and destroying the registration unlinks it. Returns false,
-    // linking nothing, once the worker no longer accepts work (or on an
-    // empty worker_ref). Linking an already registered
-    // member throws std::logic_error; a null owner or member throws
-    // std::invalid_argument.
-    template <typename owner_type>
-        requires worker_shutdown_observer<owner_type>
-    [[nodiscard]] static bool register_shutdown(const worker_ref& worker, const std::shared_ptr<owner_type>& owner, worker_shutdown_registration owner_type::* registration) {
-        if (owner == nullptr || registration == nullptr) {
-            throw std::invalid_argument("worker shutdown registration requires an owner member");
-        }
-        return link_shutdown(worker, (*owner).*registration, std::weak_ptr<void>(owner), worker_shutdown_operations<owner_type>);
-    }
-
-    // The worker whose event loop runs on the calling thread; empty elsewhere.
-    [[nodiscard]] static worker_ref current() noexcept;
-
-private:
-    [[nodiscard]] static bool link_shutdown(const worker_ref& worker, worker_shutdown_registration& registration, std::weak_ptr<void> owner, const worker_shutdown_operations_type& operations);
 };
 
 }  // namespace detail

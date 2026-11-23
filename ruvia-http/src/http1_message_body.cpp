@@ -109,6 +109,10 @@ decoder_state http1_body_decoder::state() const noexcept {
     return state_;
 }
 
+std::vector<http_header> http1_body_decoder::take_trailers() & noexcept {
+    return chunked_ ? chunked_->take_trailers() : std::vector<http_header>{};
+}
+
 void http1_body_decoder::discard_content() noexcept {
     discard_content_ = true;
     transfer_.reset();

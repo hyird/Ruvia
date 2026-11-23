@@ -8,6 +8,7 @@
 #include <string_view>
 #include <variant>
 
+#include "byte_view.h"
 #include "http_authority.h"
 #include "http_connection_advertisement.h"
 #include "http_header.h"
@@ -27,9 +28,9 @@ inline constexpr std::size_t http_max_prefixed_origin_length = 0xffff;
     return true;
 }
 
-inline char* write_http_prefixed_origin(char* out, std::string_view origin) noexcept {
-    *out++ = static_cast<char>(origin.size() >> 8);
-    *out++ = static_cast<char>(origin.size());
+inline std::byte* write_http_prefixed_origin(std::byte* out, std::string_view origin) noexcept {
+    *out++ = static_cast<std::byte>((origin.size() >> 8) & 0xffU);
+    *out++ = static_cast<std::byte>(origin.size() & 0xffU);
     if (!origin.empty()) {
         std::memcpy(out, origin.data(), origin.size());
     }
@@ -50,11 +51,15 @@ inline char* write_http_prefixed_origin(char* out, std::string_view origin) noex
     return payload_limit - remaining;
 }
 
-inline void write_http_origin_payload(std::span<char> payload, std::span<const std::string_view> origins) noexcept {
+inline void write_http_origin_payload(mutable_byte_view payload, std::span<const std::string_view> origins) noexcept {
     auto* out = payload.data();
     for (const auto origin : origins) {
         out = write_http_prefixed_origin(out, origin);
     }
+}
+
+inline void write_http_origin_payload(std::span<char> payload, std::span<const std::string_view> origins) noexcept {
+    write_http_origin_payload(as_mutable_bytes(payload), origins);
 }
 
 // RFC 9113 §4.1 / §5.1.1: 24-bit frame payload limit and 31-bit stream ID limit.
@@ -83,11 +88,15 @@ inline constexpr std::uint32_t http2_max_stream_id = 0x7fffffffU;
     return std::size_t{2} + origin.size() + field_value.size();
 }
 
-inline void http2_write_alternative_service_payload(std::span<char> payload, std::string_view origin, std::string_view field_value) noexcept {
+inline void http2_write_alternative_service_payload(mutable_byte_view payload, std::string_view origin, std::string_view field_value) noexcept {
     auto* out = write_http_prefixed_origin(payload.data(), origin);
     if (!field_value.empty()) {
         std::memcpy(out, field_value.data(), field_value.size());
     }
+}
+
+inline void http2_write_alternative_service_payload(std::span<char> payload, std::string_view origin, std::string_view field_value) noexcept {
+    http2_write_alternative_service_payload(as_mutable_bytes(payload), origin, field_value);
 }
 
 }  // namespace ruvia::detail

@@ -488,7 +488,7 @@ http_response_content_coding_status evaluate_http_response_content_coding(const 
         if (detail::http_response_header_access::known_bit(header) != detail::response_header_content_encoding) {
             continue;
         }
-        const auto status = detail::visit_http_content_coding_field(header.value(), detail::http_field_list_role::recipient, [&](std::string_view token, std::optional<http_content_coding> coding) {
+        const auto status = detail::visit_http_content_coding_field(header.value(), http_field_list_role::recipient, [&](std::string_view token, std::optional<http_content_coding> coding) {
             if (coding.has_value()) {
                 accepted = accepted && selection.accepts(*coding);
             } else if (evaluate_extensions) {
@@ -496,7 +496,7 @@ http_response_content_coding_status evaluate_http_response_content_coding(const 
             }
             return true;
         });
-        invalid = invalid || status != detail::http_field_list_parse_status::ok;
+        invalid = invalid || status != http_field_list_parse_status::ok;
     }
     if (invalid) {
         return http_response_content_coding_status::invalid;

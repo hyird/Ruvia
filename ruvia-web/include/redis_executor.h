@@ -1028,7 +1028,7 @@ private:
 
     // `io_metrics` is the request's counter block, or null outside a request;
     // `request_stop` is the caller request's cancellation, empty outside one.
-    redis_batch(detail::redis_pool& pool, operation_options options, stop_token request_stop, detail::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
+    redis_batch(detail::redis_pool& pool, operation_options options, stop_token request_stop, ::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
     void require_ready() const;
     [[nodiscard]] detail::redis_command_payload consume();
     redis_batch& append_owned(detail::redis_owned_command command);
@@ -1048,7 +1048,7 @@ private:
     stop_token request_stop_;
     std::vector<detail::redis_owned_command> commands_;
     detail::request_io_metrics* io_metrics_;
-    detail::capability_registration<&redis_batch::expire_capability> registration_;
+    ::ruvia::capability_registration<&redis_batch::expire_capability> registration_;
 };
 
 using redis_pipeline = redis_batch<redis_batch_mode::pipeline>;
@@ -1258,7 +1258,7 @@ public:
 private:
     friend class redis_executor;
 
-    redis_subscription(detail::redis_subscription_set& subscriptions, detail::operation_scope& scope, const operation_options& options, const stop_token& request_stop);
+    redis_subscription(detail::redis_subscription_set& subscriptions, ::ruvia::operation_scope& scope, const operation_options& options, const stop_token& request_stop);
 
     void expire_capability() noexcept;
     task<void> send(std::string_view command, std::span<const std::string_view> names, bool require_names);
@@ -1268,7 +1268,7 @@ private:
     linked_operation_options cancellation_;
     std::unique_ptr<detail::redis_subscription_connection> connection_;
     // Declared after the connection so it unlinks before the connection closes.
-    detail::capability_registration<&redis_subscription::expire_capability> registration_;
+    ::ruvia::capability_registration<&redis_subscription::expire_capability> registration_;
 };
 
 template <typename entity_type>
@@ -1411,9 +1411,9 @@ private:
     }
 
     // `io_metrics` is the request's counter block, or null outside a request.
-    redis_executor(detail::redis_client_runtime& runtime, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept;
+    redis_executor(detail::redis_client_runtime& runtime, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept;
     // A standalone client handle: no request, so no request I/O metrics.
-    redis_executor(detail::redis_client_runtime& runtime, detail::operation_scope& operation_scope, operation_options options) noexcept;
+    redis_executor(detail::redis_client_runtime& runtime, ::ruvia::operation_scope& operation_scope, operation_options options) noexcept;
 
     // `reply_timeout` starts when the command is written (see redis_pool).
     [[nodiscard]] task<redis_value> execute(detail::redis_pool& pool, detail::redis_owned_command&& command, std::optional<timeout_duration> reply_timeout = std::nullopt) const;
@@ -1428,7 +1428,7 @@ private:
     [[nodiscard]] task<result_type> issue(detail::redis_owned_command&& command, decoder_type decoder) const;
 
     friend class detail::worker_client_registry_view;
-    [[nodiscard]] redis_executor bind_caller_scope(detail::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
+    [[nodiscard]] redis_executor bind_caller_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
     void expire_capability() noexcept;
     [[nodiscard]] detail::redis_pool& pool() const noexcept;
     [[nodiscard]] detail::redis_pool& blocking_pool() const noexcept;
@@ -1438,7 +1438,7 @@ private:
     // The caller request's cancellation, linked into every operation; empty
     // outside a request.
     stop_token request_stop_;
-    detail::capability_registration<&redis_executor::expire_capability> registration_;
+    ::ruvia::capability_registration<&redis_executor::expire_capability> registration_;
 };
 
 #ifdef RUVIA_ENABLE_REDIS

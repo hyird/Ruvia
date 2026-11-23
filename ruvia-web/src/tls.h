@@ -234,6 +234,8 @@ class tls_trust_store final {
 public:
     // Loads a PEM CA bundle; the file name is NUL-terminated UTF-8.
     [[nodiscard]] static tls_trust_store load_file(const char* file);
+    // Loads a PEM CA/CRL bundle from text in memory without copying it.
+    [[nodiscard]] static tls_trust_store load_pem(std::string_view pem);
     // OpenSSL's default verify locations (the system trust store).
     [[nodiscard]] static tls_trust_store load_default();
 

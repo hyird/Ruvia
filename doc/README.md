@@ -101,8 +101,8 @@ ruvia_link_controllers(my_service user_controllers)
 | --- | --- | --- | --- |
 | [basic_http.cpp](../examples/basic_http.cpp) | `ruvia_example_basic_http` | 默认 | 控制器与嵌套路由组、中间件、路径参数 `:id` 与通配符 `*`、Query/Header/Cookie 读取、文本/JSON/重定向/错误响应、`url_for`、全局与前缀级 `on_error` / `on_not_found` |
 | [api_surface.cpp](../examples/api_surface.cpp) | `ruvia_example_api_surface` | 默认 | `context` / `context_request` / `http_response` 完整接口：`accepts` 协商、多方法路由 `RUVIA_ALL` / `RUVIA_ON`、缓冲式 `multipart()`、签名 Cookie、流式 `PUT` / `PATCH` |
-| [models_validation.cpp](../examples/models_validation.cpp) | `ruvia_example_models_validation` | 默认 | `RUVIA_MODEL` 声明、字段校验规则宏、递归模型 `boxed_array`、`ruvia::bytes` Base64、从 JSON/Form/Query/Path/Header/Cookie 自动绑定校验与 `json_if` / `form_if` |
-| [model_values.cpp](../examples/model_values.cpp) | `ruvia_example_model_values` | 默认 | 独立使用 `parse_json` / `to_json` / `parse_form`、动态 JSON 视图与领域校验结果 |
+| [models_validation.cpp](../examples/models_validation.cpp) | `ruvia_example_models_validation` | 默认 | `RUVIA_MODEL` 原生标量与富类型声明、`RUVIA_MIN_BYTES` / `RUVIA_MAX_BYTES` / `RUVIA_MIN_CHARS` / `RUVIA_MAX_CHARS` 校验规则、递归模型 `boxed_array`、`ruvia::bytes`（Base64 / Base64URL / Hex）、`json_body` / `strict_json_body` 等自动请求绑定校验与 `json_if` / `form_if` |
+| [model_values.cpp](../examples/model_values.cpp) | `ruvia_example_model_values` | 默认 | 独立使用 `ruvia::http` 的 `parse_json` / `parse_json_borrowed` / `to_json` / `parse_form`、`uuid` / `decimal` / `civil_date` / `utc_*` / `RUVIA_ENUM` / `map` / `tagged_variant` 与动态 JSON 视图 |
 | [middleware_next.cpp](../examples/middleware_next.cpp) | `ruvia_example_middleware_next` | 默认 | 中间件职责链、前置/后置响应头处理、`co_await next_value()` 与 `c.respond(...)` 短路拦截 |
 | [request_policies.cpp](../examples/request_policies.cpp) | `ruvia_example_request_policies` | 默认 | 路由级请求体大小限制 `body_limit<N>`、请求级状态 `bind_request_state` / `request_state`、子请求 `c.dispatch(...)` 与 `csrf_middleware` |
 | [files_static.cpp](../examples/files_static.cpp) | `ruvia_example_files_static` | 默认 | 单文件响应 `c.file()`、不可变静态快照 `static_root` 与 `c.static_file()`、定时刷新 `document_root`、Range、ETag 与预压缩 |
@@ -117,8 +117,8 @@ ruvia_link_controllers(my_service user_controllers)
 | [ops.cpp](../examples/ops.cpp) | `ruvia_example_ops` | 默认 | `security_headers_middleware`、全局与路由级 `rate_limit`、健康与就绪探针、`trusted_proxies`、`stats()`、生命周期与日志钩子 |
 | [workers_blocking.cpp](../examples/workers_blocking.cpp) | `ruvia_example_workers_blocking` | 默认 | Worker 局部状态 `use_worker_state<T>()`、跨 Worker 任务投递 `worker.post(...)` 与 `c.run_blocking(...)` 阻塞池卸载 |
 | [testing.cpp](../examples/testing.cpp) | `ruvia_example_testing` | 默认 | 使用 `test_app`、`test_request`、`dispatch_response` 在内存内无 Socket 测试完整路由与中间件管线 |
-| [auth_jwt.cpp](../examples/auth_jwt.cpp) | `ruvia_example_auth_jwt` | `RUVIA_ENABLE_JWT` | HMAC-SHA256/384/512 JWT 签发 `sign_jwt`、Bearer 提取 `extract_bearer_token`、值语义校验 `verify_jwt` 与鉴权中间件 |
-| [database.cpp](../examples/database.cpp) | `ruvia_example_database` | `MARIADB` 或 `POSTGRESQL` | 数据库连接池配置、启动迁移 `db_migrator::run`、参数化查询、编译期 SQL 校验模板、流式游标 `query_stream` 与事务 |
+| [auth_jwt.cpp](../examples/auth_jwt.cpp) | `ruvia_example_auth_jwt` | `RUVIA_ENABLE_JWT` | HMAC-SHA256/384/512 JWT 签发 `sign_jwt` / `sign_jwt_claims`、Bearer 提取 `extract_bearer_token`、值语义校验 `verify_jwt` / `verify_jwt_claims` 与鉴权中间件 |
+| [database.cpp](../examples/database.cpp) | `ruvia_example_database` | `MARIADB` 或 `POSTGRESQL` | 数据库连接池配置、启动迁移 `db_migrator::run`、参数化查询、编译期 SQL 校验模板、流式游标 `query_stream`、事务与嵌套 `savepoint` |
 | [sql_queries.cpp](../examples/sql_queries.cpp) | `ruvia_example_sql_queries` | `MARIADB` 或 `POSTGRESQL` | 离线 SQL 构建器 `db_query`、Schema DDL 构建器 `db_schema`、PL/pgSQL 过程块 `db_procedure` 与 TimescaleDB 策略生成 |
 | [orm.cpp](../examples/orm.cpp) | `ruvia_example_orm` | `RUVIA_ENABLE_POSTGRESQL` | PostgreSQL 强类型 ORM：实体与投影宏、Upsert / FindAndCount / Update / Increment、`query_builder`、窗口函数、`RETURNING`、事务抢占与 Redis 查询缓存 |
 | [orm_columns.cpp](../examples/orm_columns.cpp) | `ruvia_example_orm_columns` | `RUVIA_ENABLE_POSTGRESQL` | PostgreSQL `STORED` 生成列与事务隔离级别（`repeatable_read`）/ 只读事务模式（`read_only`） |

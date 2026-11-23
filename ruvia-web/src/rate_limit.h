@@ -41,7 +41,7 @@ using ::ruvia::rate_limit_key_buffer_bytes;
         buffer[1] = '6';
         buffer[2] = 's';
         buffer[3] = '/';
-        http_encode_lower_hex(buffer.data() + 4, std::span<const unsigned char>(raw.data(), 16));
+        (void)encode_lower_hex(buffer.subspan(4, 32), std::as_bytes(std::span<const unsigned char>(raw.data(), 16)));
         buffer[36] = '/';
         const auto end = std::to_chars(buffer.data() + 37, buffer.data() + rate_limit_key_buffer_bytes, address.scope_id()).ptr;
         return std::string_view(buffer.data(), static_cast<std::size_t>(end - buffer.data()));
@@ -52,7 +52,7 @@ using ::ruvia::rate_limit_key_buffer_bytes;
     buffer[0] = 'v';
     buffer[1] = '6';
     buffer[2] = '/';
-    http_encode_lower_hex(buffer.data() + 3, std::span<const unsigned char>(raw.data(), 8));
+    (void)encode_lower_hex(buffer.subspan(3, 16), std::as_bytes(std::span<const unsigned char>(raw.data(), 8)));
     return std::string_view(buffer.data(), 19);
 }
 

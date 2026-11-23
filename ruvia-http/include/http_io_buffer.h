@@ -70,6 +70,14 @@ public:
         return std::string_view(data(), size());
     }
     std::string_view view() const&& = delete;
+    [[nodiscard]] byte_view bytes() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::as_bytes(std::span<const char>(data(), size()));
+    }
+    byte_view bytes() const&& = delete;
+    [[nodiscard]] mutable_byte_view mutable_bytes() & noexcept RUVIA_LIFETIMEBOUND {
+        return std::as_writable_bytes(std::span<char>(data(), size()));
+    }
+    mutable_byte_view mutable_bytes() && = delete;
     // Bytes the storage holds without reallocating, readable bytes included.
     [[nodiscard]] std::size_t capacity() const noexcept {
         return capacity_;
@@ -81,12 +89,20 @@ public:
     // Throws std::length_error when the size exceeds the addressable range.
     [[nodiscard]] std::span<char> prepare(std::size_t bytes) & RUVIA_LIFETIMEBOUND;
     std::span<char> prepare(std::size_t) && = delete;
+    [[nodiscard]] mutable_byte_view prepare_bytes(std::size_t bytes) & RUVIA_LIFETIMEBOUND {
+        return std::as_writable_bytes(prepare(bytes));
+    }
+    mutable_byte_view prepare_bytes(std::size_t) && = delete;
     // Returns the current writable tail without growing. Only when that tail
     // is empty and the consumed prefix covers the live bytes is it reclaimed.
     // The result may be empty even when capacity() > size(); a reader must
     // prepare() more room before issuing I/O if no spare space is returned.
     [[nodiscard]] std::span<char> prepare_spare() & noexcept RUVIA_LIFETIMEBOUND;
     std::span<char> prepare_spare() && = delete;
+    [[nodiscard]] mutable_byte_view prepare_spare_bytes() & noexcept RUVIA_LIFETIMEBOUND {
+        return std::as_writable_bytes(prepare_spare());
+    }
+    mutable_byte_view prepare_spare_bytes() && = delete;
     // Appends the first `bytes` bytes of the writable space, which the caller
     // has written. Throws std::length_error past the storage.
     void commit(std::size_t bytes);
@@ -94,6 +110,9 @@ public:
     // A slice of the readable window can be appended without allocating
     // when the existing storage can be compacted to make room.
     void append(std::string_view bytes);
+    void append(byte_view bytes) {
+        append(as_chars(bytes));
+    }
     // Drops the first min(bytes, size()) readable bytes without moving any.
     void consume(std::size_t bytes) noexcept;
 

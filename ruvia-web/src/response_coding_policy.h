@@ -37,7 +37,7 @@ public:
     }
 
 private:
-    http_worker_codecs content_codecs_;
+    http_content_codecs content_codecs_;
     websocket_deflate_codecs websocket_deflate_;
 };
 

@@ -50,11 +50,11 @@ namespace ruvia::detail {
 
 http_client_websocket_handshake::http_client_websocket_handshake(websocket_client_negotiation_config_view config) :
     negotiation_(config) {
-    std::array<std::uint8_t, 16> nonce;
+    std::array<std::byte, 16> nonce{};
     if (!fill_random_bytes(nonce)) {
         throw std::runtime_error("failed to generate WebSocket handshake key");
     }
-    http_base64_encode(key_.data(), nonce);
+    (void)base64_encode(key_, nonce);
 }
 
 void accept_extended_connect_websocket_response(http_client_websocket_handshake& websocket, http_status_code status, std::span<const http_header> headers, bool stream_ended, std::string_view error_message) {
@@ -246,7 +246,7 @@ private:
         return {.scan_interval_ = interval};
     }
     static bool mask_key(void*, websocket_mask_key_type& key) noexcept {
-        return fill_random_bytes(std::span<unsigned char>(reinterpret_cast<unsigned char*>(key.data()), key.size()));
+        return fill_random_bytes(key);
     }
     static void abort_transport(void* target) noexcept {
         static_cast<websocket_session_connection<http_client_websocket_transport>*>(target)->abort();

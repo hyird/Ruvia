@@ -11,8 +11,8 @@
 
 #include "blocking_pool.h"
 #include "borrowed_text.h"
-#include "callback_ref.h"
 #include "context.h"
+#include "function_ref.h"
 #include "http2_push.h"
 #include "http_header.h"
 #include "http_request.h"
@@ -20,6 +20,7 @@
 #include "http_status.h"
 #include "http_tunnel.h"
 #include "move_only_function.h"
+#include "operation_interrupt.h"
 #include "operation_options.h"
 #include "operation_scope.h"
 #include "static_root.h"
@@ -52,13 +53,12 @@ struct request_body_state final {
 namespace detail {
 struct request_stream_access;
 class router_state;
-class operation_lane_lease;
 class websocket_route_endpoint;
 // Commits a tunnel request's success head and returns the established tunnel.
-using request_stream_tunnel_accept = callback_ref<task<std::reference_wrapper<http_tunnel>>(http_status_code, http_tunnel_route_config)>;
+using request_stream_tunnel_accept = function_ref<task<std::reference_wrapper<http_tunnel>>(http_status_code, http_tunnel_route_config)>;
 // Negotiates against a validated endpoint the caller keeps alive until the
 // returned task completes.
-using request_stream_websocket_accept = callback_ref<task<websocket_accept_result>(const websocket_route_endpoint&)>;
+using request_stream_websocket_accept = function_ref<task<websocket_accept_result>(const websocket_route_endpoint&)>;
 }  // namespace detail
 
 // One HTTP request a listener_dispatch::request_stream listener received over
@@ -180,7 +180,7 @@ private:
 
     [[nodiscard]] task<std::reference_wrapper<http_tunnel>> accept_tunnel_impl(http_status_code status, http_tunnel_route_config config);
     [[nodiscard]] task<websocket_accept_result> accept_websocket_impl(websocket_route_config config);
-    [[nodiscard]] detail::operation_lane_lease claim_websocket_accept();
+    [[nodiscard]] operation_lane_lease claim_websocket_accept();
     void require_unselected_response() const;
 
     context& context_;
@@ -188,7 +188,7 @@ private:
     // Null unless tunnel_requested().
     const detail::request_stream_tunnel_accept* accept_tunnel_;
     const detail::request_stream_websocket_accept* accept_websocket_;
-    detail::operation_scope operation_scope_;
+    ::ruvia::operation_scope operation_scope_;
     bool routed_{false};
 };
 

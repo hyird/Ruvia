@@ -90,8 +90,8 @@ public:
         auto& queued = frames_.emplace_back(total_bytes);
         auto* const dst = queued.bytes_.data();
         dst[0] = std::byte{0x0c};
-        (void)encode_quic_varint({reinterpret_cast<char*>(dst + 1), length_varint_bytes}, length);
-        write_http_origin_payload({reinterpret_cast<char*>(dst + 1 + length_varint_bytes), length}, origins);
+        (void)encode_quic_varint(mutable_byte_view(dst + 1, length_varint_bytes), length);
+        (void)encode_http_origin_payload(mutable_byte_view(dst + 1 + length_varint_bytes, length), origins);
         pending_bytes_ += total_bytes;
         unwritten_bytes_ += total_bytes;
         return http_submit_status::accepted;
@@ -446,12 +446,12 @@ std::size_t http3_stream_output::byte_size() const noexcept {
 class http3_connection::impl final {
 public:
     struct body_chunk final {
-        explicit body_chunk(std::string_view bytes) :
-            bytes_(bytes) {}
-        explicit body_chunk(std::string&& bytes) noexcept :
+        explicit body_chunk(byte_view bytes) :
+            bytes_(std::vector<std::byte>(bytes.begin(), bytes.end())) {}
+        explicit body_chunk(outbound_bytes&& bytes) noexcept :
             bytes_(std::move(bytes)) {}
 
-        std::string bytes_;
+        outbound_bytes bytes_;
         std::size_t acknowledged_{0};
         bool provided_{false};
     };
@@ -468,8 +468,10 @@ public:
             building_header_size_(0) {}
 
         std::deque<body_chunk> body_;
-        // The section being decoded; its kind is building_trailers_.
+        // The section being decoded; server requests pack into contiguous arena.
         std::optional<std::vector<http_header>> building_fields_;
+        std::optional<std::vector<http3_request_head::field_slice>> building_request_slices_;
+        std::string building_request_storage_;
         std::size_t building_field_count_{0};
         std::optional<http_received_status> building_status_;
         bool building_status_invalid_{false};
@@ -486,6 +488,7 @@ public:
         bool received_head_{false};
         // Client: the request waits for 100 (Continue) (RFC 9110 §10.1.1).
         bool continue_pending_{false};
+        bool request_content_canceled_{false};
         bool connect_{false};
         bool websocket_{false};
         // Server: the head is an RFC 9220 WebSocket bootstrap that left the
@@ -544,12 +547,12 @@ public:
             if (role != http_connection_role::server) {
                 throw std::invalid_argument("HTTP/3 client cannot advertise origins");
             }
-            const auto payload_size = detail::http_origin_payload_size(options.origins_, 16384);
+            const auto payload_size = http_origin_payload_size(options.origins_, 16384);
             if (payload_size.index() != 0) {
                 throw std::invalid_argument("invalid HTTP/3 initial ORIGIN advertisement");
             }
             initial_origin_payload_.resize(std::get<0>(payload_size));
-            detail::write_http_origin_payload(initial_origin_payload_, options.origins_);
+            (void)encode_http_origin_payload(as_writable_bytes(std::span<char>(initial_origin_payload_)), options.origins_);
             initial_origin_vec_ = {
                 .base = reinterpret_cast<std::uint8_t*>(initial_origin_payload_.data()),
                 .len = initial_origin_payload_.size(),
@@ -700,8 +703,10 @@ public:
     }
 
     void abandon_header_block(stream_state& stream) noexcept {
-        if (stream.building_fields_) {
+        if (stream.building_fields_ || stream.building_request_slices_) {
             stream.building_fields_.reset();
+            stream.building_request_slices_.reset();
+            stream.building_request_storage_.clear();
             stream.building_field_count_ = 0;
             stream.building_status_.reset();
             stream.building_status_invalid_ = false;
@@ -847,7 +852,10 @@ public:
         // for it (RFC 9110 §10.1.1).
         const auto signal = stream.continue_pending_ ? std::optional(http_client_request_content_signal::exchange_complete) : std::nullopt;
         publish(detail::http_stream_event_access::make<http3_response_head_event>(stream_id, std::move(head), signal, stream_ended));
-        stream.continue_pending_ = false;
+        if (stream.continue_pending_) {
+            stream.continue_pending_ = false;
+            stream.request_content_canceled_ = true;
+        }
         stream.remote_content_ = content;
         stream.received_head_ = true;
         stream.metadata_only_ = plan.content_semantics() == http_response_content_semantics::without_content;
@@ -932,15 +940,22 @@ public:
     static int begin_section(impl& self, nghttp3_conn* connection, std::int64_t stream_id, bool trailers) noexcept {
         return callback_guard(self, [&] {
             auto& stream = self.ensure_stream(stream_id);
-            if (stream.building_fields_) {
+            if (stream.building_fields_ || stream.building_request_slices_) {
                 throw std::logic_error("overlapping nghttp3 header callbacks");
             }
             const auto result = nghttp3_conn_set_stream_user_data(connection, stream_id, &stream);
             if (result != 0) {
                 throw std::logic_error("failed to bind nghttp3 stream state");
             }
-            stream.building_fields_.emplace();
-            stream.building_fields_->reserve(trailers ? 4 : 16);
+            if (!trailers && self.role_ == http_connection_role::server) {
+                stream.building_request_slices_.emplace();
+                stream.building_request_slices_->reserve(16);
+                stream.building_request_storage_.clear();
+                stream.building_request_storage_.reserve(256);
+            } else {
+                stream.building_fields_.emplace();
+                stream.building_fields_->reserve(trailers ? 4 : 16);
+            }
             stream.building_trailers_ = trailers;
             stream.building_field_count_ = 0;
             stream.building_status_.reset();
@@ -962,7 +977,7 @@ public:
     static int recv_header_callback(nghttp3_conn*, std::int64_t stream_id, std::int32_t, nghttp3_rcbuf* name, nghttp3_rcbuf* value, std::uint8_t, void* user_data, void*) noexcept {
         auto& self = *static_cast<impl*>(user_data);
         auto* stream = self.find_stream(stream_id);
-        if (stream == nullptr || !stream->building_fields_) {
+        if (stream == nullptr || (!stream->building_fields_ && !stream->building_request_slices_)) {
             self.callback_error_ = std::make_exception_ptr(std::logic_error("nghttp3 header callback without section"));
             return NGHTTP3_ERR_CALLBACK_FAILURE;
         }
@@ -986,16 +1001,29 @@ public:
                 }
                 return;
             }
-            stream->building_fields_->emplace_back(name_view, value_view);
-            if (!stream->building_trailers_ && self.role_ == http_connection_role::server) {
+            if (stream->building_request_slices_) {
+                auto& storage = stream->building_request_storage_;
+                detail::reserve_geometric(storage, storage.size() + name_view.size() + value_view.size());
+                const auto name_offset = static_cast<std::uint32_t>(storage.size());
+                storage.append(name_view);
+                const auto value_offset = static_cast<std::uint32_t>(storage.size());
+                storage.append(value_view);
+                detail::reserve_geometric(*stream->building_request_slices_, stream->building_request_slices_->size() + 1);
+                stream->building_request_slices_->push_back(http3_request_head::field_slice{
+                    .name_offset_ = name_offset,
+                    .name_size_ = static_cast<std::uint32_t>(name_view.size()),
+                    .value_offset_ = value_offset,
+                    .value_size_ = static_cast<std::uint32_t>(value_view.size()),
+                });
                 if (name_view == ":method") {
                     stream->request_method_ = classify_http_method(value_view);
                     stream->connect_ = value_view == "CONNECT";
                 } else if (name_view == ":protocol") {
-                    // RFC 9110 §7.8: upgrade tokens compare case-insensitively.
                     stream->websocket_ = http_canonical_extended_connect_protocol(value_view) == "websocket";
                 }
+                return;
             }
+            stream->building_fields_->emplace_back(name_view, value_view);
         });
     }
 
@@ -1014,12 +1042,15 @@ public:
             }
             return;
         }
-        if (trailers) {
-            stream.received_trailers_ = std::move(fields);
+        stream.received_trailers_ = std::move(fields);
+    }
+
+    void receive_request_head_section(std::int64_t stream_id, stream_state& stream, std::string storage, std::vector<http3_request_head::field_slice> slices, bool stream_ended) {
+        if (stream.read_aborted_) {
             return;
         }
         stream.received_head_ = true;
-        auto head = http3_request_head::try_parse(stream_id, std::move(fields), stream_ended, stream.early_data_);
+        auto head = http3_request_head::try_parse(stream_id, std::move(storage), std::move(slices), stream_ended, stream.early_data_);
         if (!head) {
             reject_received_message(stream_id, stream);
             return;
@@ -1034,10 +1065,17 @@ public:
         auto& self = *static_cast<impl*>(user_data);
         return callback_guard(self, [&] {
             auto* stream = self.find_stream(stream_id);
-            if (stream == nullptr || !stream->building_fields_) {
+            if (stream == nullptr || (!stream->building_fields_ && !stream->building_request_slices_)) {
                 throw std::logic_error("nghttp3 ended unknown field section");
             }
             self.observe_field(stream_id, *stream, http3_field_observation_phase::end, stream->building_field_count_);
+            if (stream->building_request_slices_) {
+                auto storage = std::move(stream->building_request_storage_);
+                auto slices = std::move(*stream->building_request_slices_);
+                self.abandon_header_block(*stream);
+                self.receive_request_head_section(stream_id, *stream, std::move(storage), std::move(slices), fin != 0);
+                return;
+            }
             auto fields = std::move(*stream->building_fields_);
             const auto status = stream->building_status_;
             const bool status_invalid = stream->building_status_invalid_;
@@ -1184,7 +1222,7 @@ public:
                 break;
             }
             vectors[count++] = {
-                reinterpret_cast<std::uint8_t*>(chunk.bytes_.data()),
+                const_cast<std::uint8_t*>(reinterpret_cast<const std::uint8_t*>(chunk.bytes_.bytes().data())),
                 chunk.bytes_.size(),
             };
             chunk.provided_ = true;
@@ -1327,6 +1365,14 @@ public:
         auto* stream = open_content_stream(stream_id);
         if (stream == nullptr) {
             return http_finish_status::closed;
+        }
+        if (role_ == http_connection_role::client && !stream->connect_) {
+            if (stream->continue_pending_) {
+                throw std::logic_error("HTTP/3 stream is awaiting 100-continue");
+            }
+            if (stream->request_content_canceled_) {
+                throw std::logic_error("HTTP/3 request content was canceled");
+            }
         }
         if (!stream->local_content_.length_complete()) {
             return http_finish_status::invalid_message;
@@ -1716,10 +1762,18 @@ http_submit_status http3_connection::submit_websocket_request_head(std::int64_t 
         });
 }
 
-http_data_submit_result http3_connection::submit_data_impl(std::int64_t stream_id, std::string_view bytes, std::string* owned_bytes) {
+http_data_submit_result http3_connection::submit_data_impl(std::int64_t stream_id, byte_view bytes, outbound_bytes* owned_bytes) {
     auto* stream = impl_->open_content_stream(stream_id);
     if (stream == nullptr) {
         return {.status_ = http_data_submit_status::closed};
+    }
+    if (impl_->role_ == http_connection_role::client && !stream->connect_) {
+        if (stream->continue_pending_) {
+            return {.status_ = http_data_submit_status::expectation_pending};
+        }
+        if (stream->request_content_canceled_) {
+            throw std::logic_error("HTTP/3 request content was canceled");
+        }
     }
     if (bytes.empty()) {
         return {};
@@ -1743,7 +1797,7 @@ http_data_submit_result http3_connection::submit_data_impl(std::int64_t stream_i
     if (moved) {
         stream->body_.emplace_back(std::move(*owned_bytes));
     } else {
-        stream->body_.emplace_back(bytes.substr(0, accepted));
+        stream->body_.emplace_back(bytes.subspan(0, accepted));
     }
     stream->pending_bytes_ += accepted;
     const int result = nghttp3_conn_resume_stream(impl_->connection_, stream_id);
@@ -1762,11 +1816,27 @@ http_data_submit_result http3_connection::submit_data_impl(std::int64_t stream_i
 }
 
 http_data_submit_result http3_connection::submit_data(std::int64_t stream_id, std::string_view bytes) {
-    return submit_data_impl(stream_id, bytes, nullptr);
+    return submit_data_impl(stream_id, as_bytes(bytes), nullptr);
 }
 
-http_data_submit_result http3_connection::submit_data_owned(std::int64_t stream_id, std::string&& bytes) {
-    return submit_data_impl(stream_id, bytes, &bytes);
+http_data_submit_result http3_connection::submit_data_owned(std::int64_t stream_id, outbound_bytes&& bytes) {
+    const auto view = bytes.bytes();
+    return submit_data_impl(stream_id, view, &bytes);
+}
+
+http_request_content_release_status http3_connection::release_request_content(std::int64_t stream_id) noexcept {
+    if (impl_->connection_error_) {
+        return http_request_content_release_status::closed;
+    }
+    auto* stream = impl_->find_stream(stream_id);
+    if (stream == nullptr || stream->write_aborted_) {
+        return http_request_content_release_status::closed;
+    }
+    if (impl_->role_ != http_connection_role::client || !stream->continue_pending_) {
+        return http_request_content_release_status::not_pending;
+    }
+    stream->continue_pending_ = false;
+    return http_request_content_release_status::released;
 }
 
 std::size_t http3_connection::unacknowledged_data_bytes(std::int64_t stream_id) const noexcept {
@@ -1985,7 +2055,7 @@ http3_transport_result http3_connection::read_datagram(std::span<const std::byte
         return {.status_ = http3_transport_status::events_pending};
     }
     impl_->reset_drained_events();
-    const auto parsed = detail::decode_quic_varint({reinterpret_cast<const char*>(payload.data()), payload.size()});
+    const auto parsed = decode_quic_varint(payload);
     if (!impl_->enable_h3_datagram_ || !parsed || parsed->value_ > ((std::uint64_t{1} << 60) - 1)) {
         impl_->connection_error_ = http3_error_code::datagram_error;
         return {.status_ = http3_transport_status::protocol_error, .error_code_ = impl_->connection_error_};
@@ -1994,7 +2064,11 @@ http3_transport_result http3_connection::read_datagram(std::span<const std::byte
     const auto* stream = impl_->find_stream(id);
     if (stream != nullptr && !stream->read_aborted_ && (stream->received_head_ || (impl_->role_ == http_connection_role::client && stream->head_submitted()))) {
         const auto content = payload.subspan(parsed->encoded_bytes_);
-        impl_->publish(http3_datagram_event(id, std::string(reinterpret_cast<const char*>(content.data()), content.size())));
+        if (impl_->own_data_events_) {
+            impl_->publish(http3_datagram_event(id, std::vector<std::byte>(content.begin(), content.end())));
+        } else {
+            impl_->publish(http3_datagram_event(id, content));
+        }
     }
     return {};
 }
@@ -2005,7 +2079,7 @@ std::optional<http3_datagram_prefix> http3_connection::datagram_prefix(std::int6
         return std::nullopt;
     }
     http3_datagram_prefix prefix;
-    const auto encoded = detail::encode_quic_varint({reinterpret_cast<char*>(prefix.bytes_.data()), prefix.bytes_.size()}, static_cast<std::uint64_t>(stream_id) / 4);
+    const auto encoded = encode_quic_varint(mutable_byte_view(prefix.bytes_), static_cast<std::uint64_t>(stream_id) / 4);
     if (encoded.index() != 0) {
         return std::nullopt;
     }

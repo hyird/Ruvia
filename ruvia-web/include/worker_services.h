@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -46,6 +47,89 @@ template <typename t_type>
 [[nodiscard]] const void* type_key() noexcept {
     return &type_key_tag<std::remove_cvref_t<t_type>>::value;
 }
+
+// Startup-registered recipe for one per-worker state type: the erased user
+// factory plus the instance create/destroy pair. The factory runs once inside
+// each worker's active identity window before that worker begins dispatching
+// callbacks or requests.
+class worker_state_definition final {
+public:
+    worker_state_definition(const worker_state_definition&) = delete;
+    worker_state_definition& operator=(const worker_state_definition&) = delete;
+
+    worker_state_definition(worker_state_definition&& other) noexcept :
+        type_key_(std::exchange(other.type_key_, nullptr)),
+        factory_(std::exchange(other.factory_, nullptr)),
+        destroy_factory_(std::exchange(other.destroy_factory_, nullptr)),
+        create_instance_(std::exchange(other.create_instance_, nullptr)),
+        destroy_instance_(std::exchange(other.destroy_instance_, nullptr)) {}
+    worker_state_definition& operator=(worker_state_definition&&) = delete;
+
+    ~worker_state_definition() {
+        auto* const factory = std::exchange(factory_, nullptr);
+        auto* const destroy = std::exchange(destroy_factory_, nullptr);
+        if (factory != nullptr && destroy != nullptr) {
+            destroy(factory);
+        }
+    }
+
+    template <typename t_type, typename factory_type>
+    [[nodiscard]] static worker_state_definition make(factory_type&& factory) {
+        using stored_type = std::decay_t<factory_type>;
+        static_assert(std::is_invocable_v<stored_type&>, "worker state factory must be invocable with no arguments");
+        static_assert(std::is_constructible_v<t_type, std::invoke_result_t<stored_type&>>, "worker state factory must return a value that constructs T");
+        worker_state_definition definition;
+        definition.type_key_ = detail::type_key<t_type>();
+        definition.factory_ = new stored_type(std::forward<factory_type>(factory));
+        definition.destroy_factory_ = [](void* stored_factory) noexcept {
+            delete static_cast<stored_type*>(stored_factory);
+        };
+        definition.create_instance_ = [](void* stored_factory) -> void* {
+            return new t_type((*static_cast<stored_type*>(stored_factory))());
+        };
+        definition.destroy_instance_ = [](void* instance) noexcept {
+            delete static_cast<t_type*>(instance);
+        };
+        return definition;
+    }
+
+    template <typename t_type>
+    [[nodiscard]] static worker_state_definition borrow(t_type& instance) noexcept {
+        static_assert(!std::is_const_v<t_type>, "a borrowed worker state must be mutable");
+        worker_state_definition definition;
+        definition.type_key_ = detail::type_key<t_type>();
+        definition.factory_ = std::addressof(instance);
+        definition.destroy_factory_ = [](void*) noexcept {};
+        definition.create_instance_ = [](void* borrowed) -> void* {
+            return borrowed;
+        };
+        definition.destroy_instance_ = [](void*) noexcept {};
+        return definition;
+    }
+
+    [[nodiscard]] const void* type_key() const noexcept {
+        return type_key_;
+    }
+
+    [[nodiscard]] bool valid() const noexcept {
+        return type_key_ != nullptr && factory_ != nullptr && destroy_factory_ != nullptr && create_instance_ != nullptr && destroy_instance_ != nullptr;
+    }
+
+private:
+    friend class worker_state_registry;
+
+    using destroy_factory_type = void (*)(void*) noexcept;
+    using create_instance_type = void* (*)(void*);
+    using destroy_instance_type = void (*)(void*) noexcept;
+
+    worker_state_definition() noexcept = default;
+
+    const void* type_key_{nullptr};
+    void* factory_{nullptr};
+    destroy_factory_type destroy_factory_{nullptr};
+    create_instance_type create_instance_{nullptr};
+    destroy_instance_type destroy_instance_{nullptr};
+};
 
 // A copyable view of the complete client registry set owned by one worker, or
 // of the clients a router borrows for its dispatches. The only other state is
@@ -155,7 +239,7 @@ private:
     friend class ::ruvia::web_worker_context;
 
     // `io_metrics` is the request's counter block, null for a posted job.
-    constexpr worker_services(const worker_ref& worker, const ::ruvia::stop_token& stop_token, const detail::worker_state_registry* worker_states, detail::worker_client_registry_view clients, detail::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, const ruvia::env* env) noexcept :
+    constexpr worker_services(const worker_ref& worker, const ::ruvia::stop_token& stop_token, const detail::worker_state_registry* worker_states, detail::worker_client_registry_view clients, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, const ruvia::env* env) noexcept :
         worker_(&worker),
         stop_token_(&stop_token),
         worker_states_(worker_states),
@@ -187,7 +271,7 @@ private:
     const ::ruvia::stop_token* stop_token_;
     const detail::worker_state_registry* worker_states_;
     detail::worker_client_registry_view clients_;
-    detail::operation_scope* operation_scope_;
+    ::ruvia::operation_scope* operation_scope_;
     detail::request_io_metrics* io_metrics_;
     const ruvia::env* env_;
 };

@@ -539,6 +539,9 @@ namespace {
         if (is_sidecar_extension) {
             state_value.has_sidecars_ = true;
         }
+        if (directly_servable) {
+            ++state_value.servable_count_;
+        }
         state_value.entries_.push_back(std::move(entry));
     }
     if (ec) {
@@ -592,6 +595,36 @@ void static_root::state_deleter_type::operator()(detail::static_root_state* stat
 
 std::filesystem::path static_root::path() const {
     return http_make_path_from_native_path(state_->root_);
+}
+
+namespace {
+
+[[nodiscard]] static_file_metadata to_static_file_metadata(const detail::static_root_entry_view& entry) noexcept {
+    return {
+        .content_type_ = entry.content_type(),
+        .cache_control_ = entry.get_cache_control(),
+        .etag_ = entry.etag(),
+        .last_modified_ = entry.last_modified(),
+        .size_ = entry.size(),
+        .directly_servable_ = entry.directly_servable(),
+    };
+}
+
+}  // namespace
+
+std::size_t static_root::entry_count() const noexcept {
+    return state_->servable_count_;
+}
+
+std::optional<static_file_metadata> static_root::find(std::string_view relative_path) const& noexcept {
+    const auto entry = detail::static_root_access::find(*this, relative_path);
+    return entry ? std::optional<static_file_metadata>(to_static_file_metadata(*entry)) : std::nullopt;
+}
+
+std::optional<static_file_metadata> static_root::resolve(std::string_view relative_path) const& {
+    std::string storage;
+    const auto entry = detail::static_root_access::try_resolve(*this, relative_path, storage);
+    return entry ? std::optional<static_file_metadata>(to_static_file_metadata(*entry)) : std::nullopt;
 }
 
 namespace detail {

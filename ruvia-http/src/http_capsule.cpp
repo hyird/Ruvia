@@ -1,6 +1,7 @@
 #include "http_capsule.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -16,14 +17,15 @@ namespace ruvia {
 
 namespace {
 // CONNECT-UDP context ID 0 (RFC 9298 section 5) as its one-byte variable-length integer.
-constexpr std::string_view udp_payload_context_id{"\0", 1};
+constexpr std::array<std::byte, 1> udp_payload_context_id{std::byte{0}};
 // Largest UDP payload: 65535 minus the 8-byte UDP header.
 constexpr std::size_t max_udp_payload_size = 65527;
 }  // namespace
+
 // One DATAGRAM capsule (RFC 9297 section 3.5) whose value is `context_prefix`
 // followed by the borrowed payload.
-std::variant<http_datagram_write_plan, http_datagram_error> http_datagram_session::plan_datagram_capsule(std::span<const char> payload_value, std::string_view context_prefix) noexcept {
-    if (payload_value.size() > detail::quic_varint_max - context_prefix.size()) {
+std::variant<http_datagram_write_plan, http_datagram_error> http_datagram_session::plan_datagram_capsule(byte_view payload_value, byte_view context_prefix) noexcept {
+    if (payload_value.size() > quic_varint_max - context_prefix.size()) {
         return http_datagram_error::payload_too_large;
     }
     http_datagram_write_plan plan;
@@ -37,6 +39,7 @@ std::variant<http_datagram_write_plan, http_datagram_error> http_datagram_sessio
     plan.prefix_size_ += context_prefix.size();
     return plan;
 }
+
 std::optional<bool> parse_http_capsule_protocol(std::string_view value) noexcept {
     http_structured_parser parser{http_structured_text_input{value}};
     parser.spaces();
@@ -53,35 +56,39 @@ std::optional<bool> parse_http_capsule_protocol(std::string_view value) noexcept
     return item.boolean_;
 }
 
-std::optional<http_udp_datagram_view> decode_http_udp_datagram(std::span<const char> input) noexcept {
-    const auto id = detail::decode_quic_varint(input);
+std::optional<http_udp_datagram_view> decode_http_udp_datagram(byte_view input) noexcept {
+    const auto id = decode_quic_varint(input);
     if (!id) {
         return std::nullopt;
     }
     return http_udp_datagram_view{id->value_, input.subspan(id->encoded_bytes_)};
 }
-std::variant<std::size_t, http_capsule_codec_error> encode_http_udp_datagram_prefix(std::span<char> output, std::uint64_t context_id) noexcept {
-    return detail::encode_quic_varint(output, context_id);
+
+std::variant<std::size_t, http_capsule_codec_error> encode_http_udp_datagram_prefix(mutable_byte_view output, std::uint64_t context_id) noexcept {
+    return encode_quic_varint(output, context_id);
 }
-std::variant<std::size_t, http_capsule_codec_error> encode_http_capsule_header(std::span<char> output, std::uint64_t type, std::uint64_t length) noexcept {
-    if (type > detail::quic_varint_max || length > detail::quic_varint_max) {
+
+std::variant<std::size_t, http_capsule_codec_error> encode_http_capsule_header(mutable_byte_view output, std::uint64_t type, std::uint64_t length) noexcept {
+    if (type > quic_varint_max || length > quic_varint_max) {
         return http_capsule_codec_error::value_out_of_range;
     }
-    const auto type_size = detail::quic_varint_size(type);
-    const auto length_size = detail::quic_varint_size(length);
+    const auto type_size = quic_varint_size(type);
+    const auto length_size = quic_varint_size(length);
     if (output.size() < type_size + length_size) {
         return http_capsule_codec_error::output_too_small;
     }
-    (void)detail::encode_quic_varint(output, type);
-    (void)detail::encode_quic_varint(output.subspan(type_size), length);
+    (void)encode_quic_varint(output, type);
+    (void)encode_quic_varint(output.subspan(type_size), length);
     return type_size + length_size;
 }
+
 http_capsule_decoder::http_capsule_decoder(http_capsule_options config) :
     config_(config) {
-    if (config.max_capsule_bytes_ > detail::quic_varint_max) {
+    if (config.max_capsule_bytes_ > quic_varint_max) {
         throw std::invalid_argument("capsule length exceeds varint range");
     }
 }
+
 void http_capsule_decoder::reset() noexcept {
     header_size_ = 0;
     type_size_ = 0;
@@ -92,13 +99,16 @@ void http_capsule_decoder::reset() noexcept {
     payload_ = false;
     state_ = decoder_state::active;
 }
-http_capsule_feed_result http_capsule_decoder::feed(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, http_capsule_retention retention) & {
+
+http_capsule_feed_result http_capsule_decoder::feed(byte_view input, bool fin, http_capsule_callback_type callback_value, void* context_value, http_capsule_retention retention) & {
     return feed_impl(input, fin, callback_value, context_value, false, retention);
 }
-http_capsule_feed_result http_capsule_decoder::feed_one(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, http_capsule_retention retention) & {
+
+http_capsule_feed_result http_capsule_decoder::feed_one(byte_view input, bool fin, http_capsule_callback_type callback_value, void* context_value, http_capsule_retention retention) & {
     return feed_impl(input, fin, callback_value, context_value, true, retention);
 }
-http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, bool one, http_capsule_retention retention) {
+
+http_capsule_feed_result http_capsule_decoder::feed_impl(byte_view input, bool fin, http_capsule_callback_type callback_value, void* context_value, bool one, http_capsule_retention retention) {
     if (feeding_) {
         throw std::logic_error("recursive capsule feed");
     }
@@ -134,14 +144,14 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
                 header_[header_size_++] = input.front();
                 input = input.subspan(1);
                 if (type_size_ == 0) {
-                    const auto type = detail::decode_quic_varint(std::span<const char>(header_).first(header_size_));
+                    const auto type = decode_quic_varint(byte_view(header_).first(header_size_));
                     if (!type) {
                         continue;
                     }
                     type_ = type->value_;
                     type_size_ = type->encoded_bytes_;
                 }
-                const auto length = detail::decode_quic_varint(std::span<const char>(header_).subspan(type_size_, header_size_ - type_size_));
+                const auto length = decode_quic_varint(byte_view(header_).subspan(type_size_, header_size_ - type_size_));
                 if (!length) {
                     continue;
                 }
@@ -181,7 +191,7 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
                 context_id_[context_id_size_++] = input.front();
                 input = input.subspan(1);
                 --remaining_;
-                const auto context_id = detail::decode_quic_varint(std::span<const char>(context_id_).first(context_id_size_));
+                const auto context_id = decode_quic_varint(byte_view(context_id_).first(context_id_size_));
                 if (!context_id && remaining_ != 0) {
                     continue;
                 }
@@ -196,7 +206,7 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
                 }
                 mode_ = payload_mode::deliver;
                 if (callback_value) {
-                    callback_value(context_value, {type_, std::span<const char>(context_id_).first(context_id_size_), !payload_});
+                    callback_value(context_value, {type_, byte_view(context_id_).first(context_id_size_), !payload_});
                 }
                 if (!payload_) {
                     completed = true;
@@ -241,7 +251,8 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
         throw;
     }
 }
-std::variant<http_datagram_write_plan, http_datagram_error> http_datagram_session::prepare_datagram(http_datagram_mode mode, std::span<const char> payload_value) const noexcept {
+
+std::variant<http_datagram_write_plan, http_datagram_error> http_datagram_session::prepare_datagram(http_datagram_mode mode, byte_view payload_value) const noexcept {
     if (!send_open_) {
         return http_datagram_error::send_closed;
     }
@@ -253,12 +264,13 @@ std::variant<http_datagram_write_plan, http_datagram_error> http_datagram_sessio
     }
     return plan_datagram_capsule(payload_value, udp_payload_context_id);
 }
-std::variant<std::optional<std::span<const char>>, http_datagram_error> http_datagram_session::receive_datagram(http_datagram_mode mode, std::span<const char> input) const noexcept {
+
+std::variant<std::optional<byte_view>, http_datagram_error> http_datagram_session::receive_datagram(http_datagram_mode mode, byte_view input) const noexcept {
     if (!receive_open_) {
         return std::nullopt;
     }
     if (mode == http_datagram_mode::raw) {
-        return std::optional<std::span<const char>>(input);
+        return std::optional<byte_view>(input);
     }
     const auto udp = decode_http_udp_datagram(input);
     if (!udp.has_value()) {
@@ -270,7 +282,7 @@ std::variant<std::optional<std::span<const char>>, http_datagram_error> http_dat
     if (udp->payload_.size() > max_udp_payload_size) {
         return http_datagram_error::payload_too_large;
     }
-    return std::optional<std::span<const char>>(udp->payload_);
+    return std::optional<byte_view>(udp->payload_);
 }
 
 }  // namespace ruvia

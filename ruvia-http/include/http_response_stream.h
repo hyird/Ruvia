@@ -22,11 +22,13 @@ class http_response_trailer_section;
 // trailer rules. The source span must outlive its synchronous consumption.
 class http_response_trailer_section final {
 public:
-    [[nodiscard]] std::span<const http_header_view> fields() const noexcept {
+    constexpr http_response_trailer_section() noexcept = default;
+
+    [[nodiscard]] constexpr std::span<const http_header_view> fields() const noexcept {
         return fields_;
     }
 
-    [[nodiscard]] bool empty() const noexcept {
+    [[nodiscard]] constexpr bool empty() const noexcept {
         return fields_.empty();
     }
 

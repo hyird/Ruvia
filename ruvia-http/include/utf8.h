@@ -69,10 +69,25 @@ struct utf8_sequence final {
     return true;
 }
 
+// Counts Unicode scalar values (each ill-formed maximal subpart counts as one
+// U+FFFD replacement scalar value, matching append_json_string).
+[[nodiscard]] constexpr std::size_t utf8_codepoint_count(std::string_view value) noexcept {
+    std::size_t count = 0;
+    for (std::size_t i = 0; i < value.size();) {
+        ++count;
+        if (static_cast<unsigned char>(value[i]) < 0x80) {
+            ++i;
+            continue;
+        }
+        i += scan_utf8_sequence(value, i).length_;
+    }
+    return count;
+}
+
 // Longest well-formed code-point prefix of at most max_bytes bytes. Stops at
 // the first malformed sequence or a code point cut by the byte limit.
 // The returned view borrows text; owning-string temporaries are rejected.
-[[nodiscard]] constexpr std::string_view utf8_prefix(borrowed_text text, std::size_t max_bytes) noexcept {
+[[nodiscard]] constexpr std::string_view utf8_prefix(borrowed_text text RUVIA_LIFETIMEBOUND, std::size_t max_bytes) noexcept {
     const auto input = text.view();
     const auto limit = max_bytes < input.size() ? max_bytes : input.size();
     std::size_t size = 0;

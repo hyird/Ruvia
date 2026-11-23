@@ -321,7 +321,7 @@ std::string read_first_data(asio::ip::tcp::socket& client) {
     for (;;) {
         std::array<char, ruvia::http2_frame_header_bytes> header_bytes{};
         asio::read(client, asio::buffer(header_bytes));
-        const auto header_value = ruvia::parse_http2_frame_header(header_bytes);
+        const auto header_value = ruvia::parse_http2_frame_header(std::as_bytes(std::span(header_bytes)));
         if (!header_value.has_value()) {
             return std::string{};
         }
@@ -784,9 +784,9 @@ TEST(Ruvia, http2_oversized_request_body_answers_413_without_100_continue) {
         }
         EXPECT_EQ(response_heads, 1U);
         const auto error = ruvia::json_object::parse(body).take_value();
-        const auto status = error.get<ruvia::uint32>("status").take_value();
+        const auto status = error.get<std::uint32_t>("status").take_value();
         const auto code = error.get<ruvia::string>("code").take_value();
-        EXPECT_TRUE(status && static_cast<std::uint32_t>(*status) == 413);
+        EXPECT_TRUE(status && *status == 413);
         EXPECT_TRUE(code && code->view() == "request_body_too_large");
         // The rejection owns its message: a borrowed one would serialise a
         // dead stack slot here.

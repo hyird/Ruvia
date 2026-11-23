@@ -22,12 +22,11 @@
   - [2.8 内存与分配器](#28-内存与分配器)
 - [3. 协程与任务](#3-协程与任务)：`task.h`、`task_scope.h`、`asio_bridge.h`、`operation_scope.h`
 - [4. 事件循环与 Worker](#4-事件循环与-worker)：`event_loop.h`、`worker_ref.h`、`worker_runtime.h`、`failure_report.h`
-- [5. 投递结果与可调用包装](#5-投递结果与可调用包装)：`delivery_result.h`、`move_only_function.h`
-- [6. 取消、时长与定时](#6-取消时长与定时)：`stop_token.h`、`timeout_duration.h`、`operation_options.h`、`worker_timer.h`、`worker_cancellation.h`
-- [7. Worker 等待原语](#7-worker-等待原语)：`wait_result.h`、`channel.h`、`one_shot.h`、`worker_signal.h`、`pool_lease.h`、`worker_wait.h`、`suspend_race.h`、`waiter_list.h`
+- [5. 生命周期标注、投递结果与可调用包装](#5-生命周期标注投递结果与可调用包装)：`lifetimebound.h`、`delivery_result.h`、`move_only_function.h`、`function_ref.h`
+- [6. 取消、时长、定时与操作中断](#6-取消时长定时与操作中断)：`stop_token.h`、`timeout_duration.h`、`operation_options.h`、`worker_timer.h`、`worker_cancellation.h`、`operation_interrupt.h`
+- [7. Worker 等待与槽位池原语](#7-worker-等待与槽位池原语)：`wait_result.h`、`channel.h`、`one_shot.h`、`worker_signal.h`、`pool_lease.h`、`slot_pool.h`、`worker_wait.h`、`suspend_race.h`
 - [8. 阻塞卸载](#8-阻塞卸载)：`blocking_pool.h`
-- [9. 字节视图](#9-字节视图)：`byte_view.h`
-- [10. 示例索引](#10-示例索引)
+- [9. 示例索引](#9-示例索引)
 
 ---
 
@@ -62,7 +61,7 @@ target_link_libraries(my_tool PRIVATE ruvia::core)
 
 - **编译定义一致**：凡包含 Asio 的翻译单元都必须看到上述四个定义，不得在使用方取消或改写。
 - **Sanitizer 构建**：检测到 `-fsanitize=address|thread|memory|hwaddress` 时 mimalloc 以普通归档链接，由 sanitizer 接管分配。
-- **公开宏**：本 target 的公开头不定义任何项目宏；唯一的条件编译是 `_WIN32` 下的 [`worker_runtime::prepare_thread_join`](#api-worker-runtime-h)。
+- **公开宏**：`lifetimebound.h` 提供编译器诊断属性宏 [`RUVIA_LIFETIMEBOUND`](#api-lifetimebound-h)；唯一的平台条件编译是 `_WIN32` 下的 [`worker_runtime::prepare_thread_join`](#api-worker-runtime-h)。
 
 ### 1.3 最短接入
 
@@ -121,29 +120,31 @@ flowchart LR
 | --- | --- | --- | --- |
 | `task.h` | 协程 | `task`、`task_awaiter` | [3.1](#api-task-h) |
 | `task_scope.h` | 结构化并发 | `task_scope`、`task_scope::join_operation` | [3.2](#api-task-scope-h) |
-| `asio_bridge.h` | Asio 互操作 | `task_completion_result`、`async_start`、`as_awaitable` | [3.3](#api-asio-bridge-h) |
-| `operation_scope.h` | 宿主操作域 | 仅 `detail` | [3.4](#api-operation-scope-h) |
+| `asio_bridge.h` | Asio 互操作 | `task_completion_result`、`asio_completion`、`asio_completion_awaiter`、`async_asio`、`asio_executor`、`close_socket`、`try_parse_asio_ip_address`、`parse_asio_ip_address`、`async_start`、`as_awaitable` | [3.3](#api-asio-bridge-h) |
+| `operation_scope.h` | 宿主操作域 | `operation_scope`、`operation_scope::join_operation`、`capability_link`、`capability_registration` | [3.4](#api-operation-scope-h) |
 | `event_loop.h` | 事件循环 | `root_task`、`event_loop_submit_rejected`、`event_loop_submit_result`、`event_loop_stop_registration`、`event_loop`、`event_loop_attachment_options`、`event_loop_attachment`、`event_loop_pool_options`、`event_loop_pool` | [4.1](#api-event-loop-h) |
-| `worker_ref.h` | 派发端点 | `worker_id_type`、`worker_selection_hash`、`worker_ref` | [4.2](#api-worker-ref-h) |
+| `worker_ref.h` | 派发端点 | `worker_id_type`、`worker_selection_hash`、`worker_shutdown_observer`、`worker_shutdown_registration`、`worker_ref` | [4.2](#api-worker-ref-h) |
 | `worker_runtime.h` | 底层 Worker 生命周期 | `worker_runtime_state`、`worker_io_policy`、`worker_runtime_options`、`worker_runtime_hooks`、`worker_runtime`、`worker_group`、`collect_thread_heap` | [4.3](#api-worker-runtime-h) |
 | `failure_report.h` | 失败文本与上报 | `error_code_text`、`system_error_text`、`report_unhandled_failure`、`equivalent_failures` | [4.4](#api-failure-report-h) |
-| `delivery_result.h` | 投递结果 | `delivery_result`、`post_status`、`post_result` | [5.1](#api-delivery-result-h) |
-| `move_only_function.h` | 可调用包装 | `move_only_function` | [5.2](#api-move-only-function-h) |
+| `lifetimebound.h` | 生命周期属性 | `RUVIA_LIFETIMEBOUND` | [5.1](#api-lifetimebound-h) |
+| `delivery_result.h` | 投递结果 | `delivery_result`、`post_status`、`post_result` | [5.2](#api-delivery-result-h) |
+| `move_only_function.h` | 拥有型可调用包装 | `move_only_function` | [5.3](#api-move-only-function-h) |
+| `function_ref.h` | 零分配可调用借用视图 | `function_ref` | [5.4](#api-function-ref-h) |
 | `stop_token.h` | 取消 | `stop_registration`、`stop_token`、`stop_source`、`stop_group` | [6.1](#api-stop-token-h) |
 | `timeout_duration.h` | 时长 | `saturating_duration_cast`、`timeout_duration`、`deadline_after`、`ceil_milliseconds` | [6.2](#api-timeout-duration-h) |
 | `operation_options.h` | 操作上限 | `operation_timeout`、`operation_options`、`override_operation_options`、`linked_operation_options`、`operation_deadline`、`deadline_lifecycle` | [6.3](#api-operation-options-h) |
 | `worker_timer.h` | 定时器与睡眠 | `worker_timer_cancellation`、`worker_timer_status`、`worker_timer_registration`、`wait_bounds`、`sleep_status`、`sleep_for`、`sleep_until`、`sleep_operation` | [6.4](#api-worker-timer-h) |
 | `worker_cancellation.h` | 跨线程取消投递 | `worker_cancellation_target`、`make_worker_cancellation_target`、`worker_cancellation_dispatch`、`worker_cancellation_post`、`worker_cancellation_post_is_inline`、`worker_cancellation_registration` | [6.5](#api-worker-cancellation-h) |
+| `operation_interrupt.h` | 可中断 I/O 操作构件 | `operation_lane_lease`、`claim_operation_lane`、`start_linked_operation`、`bound_operation_options`、`make_operation_link`、`operation_interrupt_source`、`operation_interrupt_cause`、`operation_interrupt`、`operation_steps` | [6.6](#api-operation-interrupt-h) |
 | `wait_result.h` | 等待结果 | `wait_status`、`wait_result` | [7.1](#api-wait-result-h) |
 | `channel.h` | 有界 MPSC 通道 | `channel_send_status`、`channel_options`、`channel_send_result`、`channel_send_operation`、`channel_sender`、`channel_receiver`、`make_channel` | [7.2](#api-channel-h) |
 | `one_shot.h` | 单次交付 | `one_shot_complete_status`、`one_shot_complete_result`、`one_shot_completion`、`one_shot_receiver`、`make_one_shot` | [7.3](#api-one-shot-h) |
 | `worker_signal.h` | 同 Worker 通知 | `worker_signal`、`worker_signal::wait_operation` | [7.4](#api-worker-signal-h) |
 | `pool_lease.h` | 槽位租约 | `pool_lease_scheduler`、`pool_lease_acquire_operation` | [7.5](#api-pool-lease-h) |
-| `worker_wait.h` | 等待原语构件 | `worker_wait_slot`、`worker_single_wait_awaiter`、`worker_shutdown_registered`、`worker_wait_state`、`make_worker_wait_state` | [7.6](#api-worker-wait-h) |
-| `suspend_race.h` | 挂起竞争裁决 | 仅 `detail` | [7.7](#api-suspend-race-h) |
-| `waiter_list.h` | 侵入式等待队列 | 仅 `detail` | [7.8](#api-waiter-list-h) |
+| `slot_pool.h` | 连接槽位池编排 | `pool_slot_abort_reason`、`slot_pool_policy`、`slot_pool` | [7.6](#api-slot-pool-h) |
+| `worker_wait.h` | 等待原语构件 | `worker_wait_slot`、`worker_single_wait_awaiter`、`worker_shutdown_registered`、`worker_wait_state`、`make_worker_wait_state` | [7.7](#api-worker-wait-h) |
+| `suspend_race.h` | 挂起竞争裁决 | `suspend_race_state` | [7.8](#api-suspend-race-h) |
 | `blocking_pool.h` | 阻塞卸载 | `blocking_pool_options`、`blocking_pool_stats`、`blocking_pool`、`blocking_status`、`describe_blocking_status`、`blocking_operation_rejected`、`blocking_result`、`blocking_callable`、`run_blocking`、`run_blocking_joined` | [8.1](#api-blocking-pool-h) |
-| `byte_view.h` | 字节视图 | `as_bytes`、`as_chars` | [9.1](#api-byte-view-h) |
 
 ---
 
@@ -234,7 +235,8 @@ flowchart LR
 | `event_loop::worker() const&` | 返回循环内部端点的引用 | 右值 `worker() const&&` 改为返回副本 |
 | `linked_operation_options::options()` | 返回内部选项的引用 | `options() const&&` |
 | `worker_cancellation_registration` | `shared_ptr` 所指目标 | 以 `shared_ptr&&` / `const shared_ptr&&` 构造 |
-| `as_bytes` / `as_chars` | 底层字符或字节存储 | 临时拥有型字符/字节连续范围与非空 `std::initializer_list` |
+| `function_ref` | 左值可调用对象或 `move_only_function` | 右值可调用对象与右值 `move_only_function` |
+| `slot_pool` | `worker_ref` | `slot_pool(owner_type&, std::size_t, worker_ref&&)` |
 
 - **左值限定宿主**：`task_scope`、`worker_runtime`、`delivery_result`、`wait_result`、`blocking_result`、`root_task` 等以 `&` / `const&` 暴露借用访问，并删除右值重载；右值只经 `take_*()` 提取。各节“已删除重载”列出完整清单。
 
@@ -382,31 +384,66 @@ flowchart LR
 <a id="api-asio-bridge-h"></a>
 ### 3.3 `asio_bridge.h`
 
-源码：[../ruvia-core/include/asio_bridge.h](../ruvia-core/include/asio_bridge.h)。把 `task<T>` 作为 Asio 异步操作启动或适配为 `asio::awaitable<T>`。反向把 Asio 回调式操作适配为 Ruvia 等待物的胶水是构建内部头，不安装、不属于公开 API。
+源码：[../ruvia-core/include/asio_bridge.h](../ruvia-core/include/asio_bridge.h)。双向桥接 `task<T>` 与 standalone Asio：既支持把回调式 Asio 异步操作适配为 Ruvia 协程等待物，也支持把 `task<T>` 作为 Asio 异步操作启动或适配为 `asio::awaitable<T>`，并提供 Worker 原生执行器、TCP socket 确定性关闭与严格 IP 字面量解析。
+
+**`template <typename result_type> class asio_completion final`**：拥有 `std::error_code` 与（非 `void` 时的）部分进度结果（如已传输字节数），不可赋值。
 
 | 声明 | 契约 |
 | --- | --- |
+| `explicit asio_completion(std::error_code code) noexcept requires std::is_void_v<result_type>;` | 仅 `void` 完成 |
+| `asio_completion(std::error_code code, result_type value) noexcept(...) requires(!std::is_void_v<result_type>);` | 同时保存错误码与结果 |
+| `[[nodiscard]] std::error_code code() const noexcept;` | 完成错误码 |
+| `[[nodiscard]] bool ok() const noexcept;`、`[[nodiscard]] bool failed() const noexcept;` | `!code()` / `static_cast<bool>(code())` |
+| `[[nodiscard]] const result_type& value() const& noexcept RUVIA_LIFETIMEBOUND;` | 左值只读借用（右值 `const&& = delete`） |
+| `[[nodiscard]] result_type take_value() && noexcept(...);` | 右值提取结果 |
+
+**`template <typename result_type, typename initiate_type> class asio_completion_awaiter final`**：`async_asio` 返回的单次等待物；不可复制、不可移动、不可取址（`operator&() = delete`），内部通过 [`suspend_race_state`](#api-suspend-race-h) 裁决同步完成与挂起竞争。
+
+**自由函数与类型别名**
+
+| 声明 | 契约 |
+| --- | --- |
+| `template <typename result_type = void, typename initiate_type> [[nodiscard]] auto async_asio(initiate_type&& initiate);` | 把回调式 Asio 发起闭包适配为 Ruvia 协程等待物；`initiate` 接收一个形如 `(std::error_code[, result_type])` 的处理器，`co_await` 返回 `asio_completion<result_type>` |
+| `[[nodiscard]] asio::io_context::executor_type asio_executor(const worker_ref& worker);` | 取得绑定 Worker 的原生 `io_context` 执行器；空或已分离 `worker_ref` 抛 `std::logic_error`，停机排空期间仍可取得以完成已准入操作 |
+| `inline void close_socket(asio::ip::tcp::socket& socket) noexcept;` | 依次 `cancel`、`shutdown(shutdown_both)`、`close` 并忽略底层错误码 |
+| `[[nodiscard]] std::optional<asio::ip::address> try_parse_asio_ip_address(std::string_view text) noexcept;` | 严格解析完整 IP 字面量（拒绝内嵌 NUL、方括号、端口与前导零 IPv4 段） |
+| `[[nodiscard]] inline asio::ip::address parse_asio_ip_address(std::string_view text);` | 严格入口：非法字面量抛 `std::invalid_argument` |
 | `template <typename T> using task_completion_result = std::conditional_t<std::is_void_v<T>, std::exception_ptr, std::variant<T, std::exception_ptr>>;` | 值在前、失败在后；`void` 任务直接以 `std::exception_ptr` 满足 Asio disposition |
 | `template <typename T, typename completion_token_type> auto async_start(task<T> task_value, completion_token_type&& token);` | 完成签名：`void` 为 `void(std::exception_ptr)`，否则为 `void(task_completion_result<T>&&)` |
 | `template <typename T> [[nodiscard]] asio::awaitable<T> as_awaitable(task<T> task_value);` | 供 `co_spawn` 等 Asio 协程所有者使用；失败时从 awaitable 重抛；`void` 任务不增加包装帧 |
 
-- **类型约束**：三者都要求 `T` 为 `void` 或可 `noexcept` 移动构造。
+- **类型约束**：`task_completion_result`、`async_start`、`as_awaitable` 要求 `T` 为 `void` 或可 `noexcept` 移动构造。
 - **启动线程**：`async_start` 在实际发起的线程内联启动任务；`deferred` 等延迟令牌构造时不启动。发起空任务或作用域已失效的任务时抛 `std::logic_error`，不调用完成处理器。
-- **交付**：完成总是经处理器关联执行器 `asio::post` 交付，即使任务同步完成；操作状态使用处理器关联分配器。
+- **交付**：`async_start` 完成总是经处理器关联执行器 `asio::post` 交付，即使任务同步完成；操作状态使用处理器关联分配器。
 - **回收顺序**：交付前先提取结果并回收协程帧与操作状态，再调用处理器；拥有型处理器可在析构中安全发布外部就绪。
-- **令牌**：回调、`use_awaitable`、`use_future`、`deferred` 与自定义令牌均可用；`event_loop::submit` 基于 `async_start`。
 
 <a id="api-operation-scope-h"></a>
 ### 3.4 `operation_scope.h`
 
-源码：[../ruvia-core/include/operation_scope.h](../ruvia-core/include/operation_scope.h)。本头只声明 `ruvia::detail` 符号（`operation_scope`、`capability_link`、`capability_owner`、`capability_registration`），无非 `detail` 公开 API。它是 `ruvia::web` 请求、客户端与会话等宿主回收冷协程帧、在宿主结束时使借用能力失效的机制。
+源码：[../ruvia-core/include/operation_scope.h](../ruvia-core/include/operation_scope.h)。Worker 亲和的宿主操作域：统一管理单个宿主（请求、客户端、会话等）签发的冷 `task` 帧与借用能力句柄，不含运行期子任务调度（运行中子任务归 [`task_scope`](#api-task-scope-h)）。
 
-宿主返回的 `task<T>` 对使用方的可观察契约：
+**`class operation_scope final`**（不可复制、不可移动）
 
-- **冷任务丢弃**：宿主关闭时其未启动任务被丢弃；之后 `co_await` 该任务抛 `std::logic_error("capability operation scope has expired")`。
-- **单次启动**：宿主绑定任务只能启动一次。
-- **线程绑定**：宿主绑定 Worker 时，在其他线程启动、完成或丢弃该任务触发 `std::terminate()`。
-- **结构化子任务**：宿主任务可直接交给 [`task_scope::spawn`](#api-task-scope-h)；运行中的子任务仍归 `task_scope` 管理。
+| 声明 | 契约 |
+| --- | --- |
+| `operation_scope() noexcept = default;`、`~operation_scope();` | 析构等同 `close()` |
+| `void close() noexcept;` | 封闭作用域并丢弃冷帧；若仍有已启动未完成的绑定操作则 `std::terminate()` |
+| `void seal() noexcept;` | 封闭新准入并丢弃冷帧，允许已启动操作继续运行，能力链接保持有效直到它们结束 |
+| `[[nodiscard]] join_operation close_and_join() & noexcept;` | 单次调用（右值 `&& = delete`）：`seal()` 后挂起等待全部已启动操作与能力清理退役（支持清理回调重入） |
+| `[[nodiscard]] bool active() const noexcept;`、`[[nodiscard]] bool has_pending_operations() const noexcept;` | 是否仍活跃 / 是否有挂接操作 |
+| `void bind_worker(const worker_ref& worker) & noexcept;` | 在注册任何操作前固定单个 Worker（临时 `worker_ref` 与右值作用域重载 `= delete`）；跨线程启动、完成或丢弃冷帧均触发 `std::terminate()` |
+| `template <typename T> [[nodiscard]] task<T> attach(task<T> task_value) &;` | 把冷任务挂入本作用域（右值作用域 `&& = delete`）；作用域关闭时丢弃仍处于冷态的帧，之后 `co_await` 抛 `std::logic_error("capability operation scope has expired")` |
+
+**`class capability_link final` 与 `template <auto expire_member> class capability_registration final`**
+
+| 声明 | 契约 |
+| --- | --- |
+| `capability_registration()`、`capability_registration(operation_scope& scope, owner_type& owner) noexcept` | 零分配侵入式挂入 `scope`；作用域过期时在绑定 Worker 上调用一次 `(owner.*expire_member)()` |
+| `capability_registration(const capability_registration& other, owner_type& rebound) noexcept` / 移动同形重载 | 宿主复制或移动时显式重绑新 `owner` 地址；禁止隐式复制或移动，须声明在宿主负载成员之后以先摘链再析构 |
+| `void bind(operation_scope& scope, owner_type& owner) noexcept;` | 绑定或重绑作用域与宿主 |
+| `void require_active() const;` | 能力已随作用域过期时抛 `std::logic_error` |
+| `[[nodiscard]] operation_scope& scope() const& RUVIA_LIFETIMEBOUND;` | 借用所属作用域（`const&& = delete`） |
+| `template <typename T> [[nodiscard]] task<T> attach(task<T> task_value) const&;` | 校验活跃后把冷任务挂入所属作用域（`const&& = delete`） |
 
 ---
 
@@ -469,7 +506,7 @@ flowchart LR
 | `const worker_ref& worker() const&& = delete;` | 禁止从右值循环借用 Worker 端点 |
 | `void report_failure(std::exception_ptr failure) const noexcept;` | 上报终止性运行时失败，不在调用线程抛出；空指针忽略；无效句柄转 `report_unhandled_failure` |
 | `template <typename fn_type> [[nodiscard]] bool defer_cleanup(fn_type&& fn) const;` | 循环级冷路径资源清理，`fn` 须为 `void()` 可调用 |
-| `template <typename T> [[nodiscard]] event_loop_submit_result<T> submit(task<T> task_value) const;` | 有界提交；`T` 为 `void` 或可 `noexcept` 移动构造 |
+| `template <typename T> [[nodiscard]] event_loop_submit_result<T> submit(task<T> task_value) const;` | 有界提交；支持 `void` 与任意可移动结果类型 `T` |
 | `template <typename fn_type> [[nodiscard]] event_loop_stop_registration on_stop(fn_type&& fn) const;` | `fn&` 可调用且返回 `task<void>`，`std::decay_t<fn_type>` 可移动构造 |
 
 - **提交准入**：`submit` 先取有界槽位，再分配完成状态并移动任务；`queue_full` 或 `stopping`（含无效循环）时不分配，原样退回冷任务。
@@ -555,17 +592,21 @@ flowchart LR
 | --- | --- |
 | `using worker_id_type = std::uint64_t;` | Worker 身份类型 |
 | `[[nodiscard]] std::uint64_t worker_selection_hash(std::string_view key) noexcept;` | 64 位 FNV-1a，跨平台结果一致；供 `event_loop_pool::loop_for` 与 Web `worker_for`（见 [ruvia-web.md](ruvia-web.md#api-app-h)）共用 |
+| `template <typename owner_type> concept worker_shutdown_observer` | 提供 `noexcept` 的 `worker_stopping()` 和/或 `worker_stopping_complete()` 两阶段停机回调 |
+| `class worker_shutdown_registration final` | 零分配 O(1) 侵入式停机登记节点（不可复制、不可移动）；须作为共享所有者的首个成员声明，以确保其他成员析构后才解链 |
 
 **`class worker_ref final`**：可复制；只持有派发端点，不拥有 Worker 的 `io_context`。
 
 | 声明 | 契约 |
 | --- | --- |
 | `worker_ref() noexcept = default;` | 空端点 |
+| `[[nodiscard]] static worker_ref current() noexcept;` | 返回当前调用线程正在运行的 Worker 端点；非 Worker 线程返回空端点 |
 | `[[nodiscard]] bool valid() const noexcept;` | 执行上下文仍附着 |
 | `[[nodiscard]] bool accepting() const noexcept;` | 仍接受新工作 |
 | `[[nodiscard]] bool is_current() const noexcept;` | 调用线程正在运行该 Worker |
 | `[[nodiscard]] worker_id_type id() const noexcept;` | 进程内唯一、从 1 开始；空端点为 `0` |
 | `[[nodiscard]] ruvia::blocking_pool* blocking_pool() const noexcept;` | 该 Worker 事件循环使用的阻塞池，无池或空端点为 `nullptr`；池所有者保证其至少与 Worker 同寿 |
+| `template <worker_shutdown_observer owner_type> [[nodiscard]] bool register_shutdown(const std::shared_ptr<owner_type>& owner, worker_shutdown_registration std::type_identity_t<owner_type>::* registration) const;` | 将 `owner->*registration` 链入 Worker 停机登记表（仅持弱引用）；Worker 已停止接收或空端点返回 `false`，空指针抛 `std::invalid_argument`，重复登记抛 `std::logic_error` |
 | `[[nodiscard]] post_status post_factory(move_only_function<move_only_function<void()>()> factory) const;` | 通用有界投递 |
 | `template <typename payload_type, typename wrap_type> [[nodiscard]] delivery_result<payload_type, post_status, post_status::accepted> post_payload(payload_type payload, wrap_type wrap) const;` | 类型化负载投递；`wrap&` 以 `payload_type&&` 可调用且结果可转换为 `move_only_function<void()>` |
 | `template <typename fn_type> [[nodiscard]] post_result<> post(fn_type&& fn) const;` | 已构建可调用对象的投递；`fn` 须为 `void()` 可调用 |
@@ -697,10 +738,19 @@ flowchart LR
 
 ---
 
-## 5. 投递结果与可调用包装
+## 5. 生命周期标注、投递结果与可调用包装
+
+<a id="api-lifetimebound-h"></a>
+### 5.1 `lifetimebound.h`
+
+源码：[../ruvia-core/include/lifetimebound.h](../ruvia-core/include/lifetimebound.h)。返回借用视图或引用的参数/接收者生命周期诊断属性宏。
+
+| 声明 | 契约 |
+| --- | --- |
+| `#define RUVIA_LIFETIMEBOUND ...` | 按 `clang::lifetimebound` → `msvc::lifetimebound` → `gnu::lifetimebound` 依次启用编译器悬垂借用诊断，均不支持时展开为空；预先定义的同名宏保持不变 |
 
 <a id="api-delivery-result-h"></a>
-### 5.1 `delivery_result.h`
+### 5.2 `delivery_result.h`
 
 源码：[../ruvia-core/include/delivery_result.h](../ruvia-core/include/delivery_result.h)。post、send、complete、start 的统一有界投递结果。
 
@@ -729,7 +779,7 @@ flowchart LR
 | `template <typename signature_type = void()> using post_result = delivery_result<move_only_function<signature_type>, post_status, post_status::accepted>;` | `worker_ref::post` 与 `blocking_pool::post` 的结果，拒绝时退回可调用对象 |
 
 <a id="api-move-only-function-h"></a>
-### 5.2 `move_only_function.h`
+### 5.3 `move_only_function.h`
 
 源码：[../ruvia-core/include/move_only_function.h](../ruvia-core/include/move_only_function.h)。带小对象内联的仅移动可调用包装。
 
@@ -752,9 +802,26 @@ flowchart LR
 - **`const` 调用**：`const` 包装仍可调用可变目标；并发调用须由目标自行同步。
 - **引用结果**：引用签名只接受直接返回兼容引用的目标（允许增加 cv 限定与派生到基类转换），不从返回值或转换临时量生成引用；各工具链约束一致。需要自定义引用转换（含按值返回 `std::reference_wrapper`）时，用显式 `-> T&` / `-> const T&` 的适配 lambda 返回实际存活对象；包装不延长其寿命。值签名仍允许正常隐式结果转换。
 
+<a id="api-function-ref-h"></a>
+### 5.4 `function_ref.h`
+
+源码：[../ruvia-core/include/function_ref.h](../ruvia-core/include/function_ref.h)。2 指针大小、平凡可复制、零分配的非拥有型可调用视图，支持 `R(Args...)` 与 `R(Args...) noexcept` 签名。
+
+**`template <typename signature_type, ...> class function_ref final`**
+
+| 声明 | 契约 |
+| --- | --- |
+| `constexpr function_ref() noexcept = default;`、`constexpr function_ref(std::nullptr_t) noexcept;` | 空视图 |
+| `constexpr function_ref(const move_only_function<signature_type>& owner RUVIA_LIFETIMEBOUND) noexcept;` | 借用非空左值 `move_only_function`（空包装保持空视图）；右值重载 `= delete` |
+| `template <typename callable_type> constexpr function_ref(callable_type& callable RUVIA_LIFETIMEBOUND) noexcept;` | 借用左值可调用对象；所有右值可调用对象构造函数 `= delete`，编译期阻断悬垂临时闭包 |
+| `template <auto function_value> [[nodiscard]] static constexpr function_ref from_function() noexcept;` | 从编译期函数常量构造无捕获视图（`raw_target() == nullptr`） |
+| `[[nodiscard]] static constexpr function_ref from_raw(void* target, invoke_type invoke) noexcept;` | 从原始目标指针与调用跳板构造；与 `raw_target()` / `raw_invoke()` 配对用于类型擦除桥接 |
+| `[[nodiscard]] constexpr explicit operator bool() const noexcept;` | 是否非空；与 `nullptr` 及同类型 `function_ref` 支持 `==` |
+| `R operator()(Args... args) const noexcept(is_noexcept);` | 精确单次转发参数并调用目标；调用空视图触发 `std::terminate()` |
+
 ---
 
-## 6. 取消、时长与定时
+## 6. 取消、时长、定时与操作中断
 
 <a id="api-stop-token-h"></a>
 ### 6.1 `stop_token.h`
@@ -1035,9 +1102,26 @@ flowchart LR
 | `void arm(const stop_token& token);` | 仅一次（重复或 `reset()` 后 `std::terminate()`）；可取消时注册 `worker_cancellation_post`；已请求的停止内联交付，因此须先绑定所有者状态再 `arm` |
 | `void reset() noexcept;` | join 回调后清除身份（`identity` 仍为本 id 时置 0）；迟到的投递不会命中复用的槽位 |
 
+<a id="api-operation-interrupt-h"></a>
+### 6.6 `operation_interrupt.h`
+
+源码：[../ruvia-core/include/operation_interrupt.h](../ruvia-core/include/operation_interrupt.h)。单通道互斥租约、宿主级链接取消与运行期 Worker 亲和 I/O 超时/取消中断构件。
+
+| 声明 | 契约 |
+| --- | --- |
+| `class operation_lane_lease final` | 基于 `bool& active` 的移动唯一互斥租约；已被占用时 `operator bool()` 为 `false` 且不改动原状态，析构自动归零 |
+| `[[nodiscard]] inline operation_lane_lease claim_operation_lane(bool& active, const char* in_progress_message);` | 获取通道互斥租约，已被占用时抛 `std::logic_error(in_progress_message)` |
+| `template <typename start_type> [[nodiscard]] auto start_linked_operation(const operation_options& options, const stop_token& host_stop, start_type start);` | 将操作选项与宿主 `host_stop` 合并后启动：仅一侧可停止或两侧相同时零帧透传，两侧独立可停止时分配轻量包装协程持有 `linked_operation_options` 直至完成 |
+| `[[nodiscard]] inline operation_options bound_operation_options(const operation_options& options, const stop_token& host_stop);` | 用户令牌可停止时保留 `options`，否则替换为 `host_stop` |
+| `[[nodiscard]] inline std::unique_ptr<const linked_operation_options> make_operation_link(const operation_options& options, const stop_token& host_stop);` | 为跨调用存活的资源（流、事务）按需分配链接取消，单源足够时返回 `nullptr` |
+| `class operation_interrupt_source final` | 固定地址的宿主级运行中操作中断路由表（不可复制、不可移动），析构自动分离 `worker_cancellation_target` |
+| `enum class operation_interrupt_cause : std::uint8_t { cancelled, timed_out };` | 中断原因枚举 |
+| `class operation_interrupt final` | 单个运行中操作的截止期定时器与停止令牌守卫：构造时令牌已停止立即抛 `std::system_error(operation_canceled)`；运行中首次触发在绑定 Worker 上记录原因并调用一次 `interrupt(target)`；提供 `interrupted()`、`cause()`、`throw_if_interrupted()` 与 `throw_cause(...)` |
+| `class operation_steps final` | 多阶段操作共享剩余截止期与同一 `stop_token`：`try_next()` / `next(operation_name)` 生成下一步 `operation_options`，`interrupted_by(cause)` / `interrupted(error)` 判定异常是否源于本操作自身的截止期或停止令牌 |
+
 ---
 
-## 7. Worker 等待原语
+## 7. Worker 等待与槽位池原语
 
 <a id="api-wait-result-h"></a>
 ### 7.1 `wait_result.h`
@@ -1284,8 +1368,19 @@ flowchart LR
 - **超时**：超时的等待者不影响其他排队者；已过的截止期使饱和获取立即超时。
 - **取消**：停止请求按等待者 id 经 [`worker_cancellation_post`](#api-worker-cancellation-h) 送达 Worker；在该 Worker 上请求时在 `request_stop()` 返回前提交 `cancelled`，跨线程请求在后续轮次提交；恢复总在后续轮次。
 
+<a id="api-slot-pool-h"></a>
+### 7.6 `slot_pool.h`
+
+源码：[../ruvia-core/include/slot_pool.h](../ruvia-core/include/slot_pool.h)。Worker 亲和且地址固定的连接槽位池编排模板：组合 [`pool_lease_scheduler`](#api-pool-lease-h)、按操作 id 寻址的跨线程取消投递与每槽独立截止期定时器，供 HTTP 客户端、数据库连接池与 Redis 连接池统一复用。
+
+| 声明 | 契约 |
+| --- | --- |
+| `enum class pool_slot_abort_reason : std::uint8_t { none, cancelled, closing };` | 槽位中止状态 |
+| `template <typename policy_type> concept slot_pool_policy` | 提供 `owner_type`、`deadline_kind_type` 以及静态钩子 `throw_acquire_failure(const_owner, status)`、`throw_aborted(const_owner, reason)`、`expire_slot(owner, slot, kind) noexcept`、`cancel_slot(owner, slot) noexcept` |
+| `template <slot_pool_policy policy_type> class slot_pool final` | 构造期一次性分配 `slot_count` 槽位（拒绝右值 `worker_ref`）；提供 `acquire(...)`（返回 `acquire_awaiter`）、无挂起 `try_acquire()`、`release(slot)`、`close()` / `closing()`、RAII `lease_guard` 与 `cancellation_guard`、`aborted(slot)` / `throw_if_aborted(slot)`，以及槽位级截止期 `arm_deadline` / `clear_deadline` / `poll_deadline` / `deadline_kind` |
+
 <a id="api-worker-wait-h"></a>
-### 7.6 `worker_wait.h`
+### 7.7 `worker_wait.h`
 
 源码：[../ruvia-core/include/worker_wait.h](../ruvia-core/include/worker_wait.h)。单挂起等待者的 Worker 绑定等待构件；`channel` 接收与 `one_shot` 等待即由其组合，外部原语可按同一契约组合超时、取消与 `worker_stopping`。
 
@@ -1300,7 +1395,7 @@ flowchart LR
 
 | 声明 | 契约 |
 | --- | --- |
-| `template <typename state_type> concept worker_shutdown_registered` | 满足 `detail::worker_shutdown_observer`（提供 `noexcept` 的 `worker_stopping()` 和/或 `worker_stopping_complete()`），且有类型为 `detail::worker_shutdown_registration`、名为 `shutdown_registration_` 的数据成员 |
+| `template <typename state_type> concept worker_shutdown_registered` | 满足 [`worker_shutdown_observer`](#api-worker-ref-h)，且有类型为 [`worker_shutdown_registration`](#api-worker-ref-h)、名为 `shutdown_registration_` 的数据成员 |
 | `template <typename state_type, typename T> concept worker_wait_state` | `T` 可平凡移动构造；满足 `worker_shutdown_registered`；`const_state.worker()` 返回 `const worker_ref&`；`state.lock_state()` 可调用；`state.wait_slot()` 返回 `worker_wait_slot<T, state_type>&` |
 | `template <typename state_type, typename... arg_types> [[nodiscard]] std::shared_ptr<state_type> make_worker_wait_state(arg_types&&... args);` | 以 `args` 构造状态（其构造须绑定 `worker()` 返回的 Worker），并把 `shutdown_registration_` 链入 Worker 停机登记；Worker 已停止接收抛 `std::runtime_error` |
 
@@ -1336,14 +1431,18 @@ flowchart LR
 - **锁约束**：停止回调自行获取状态锁；在该锁内（如负载移动或析构中）请求停止会自死锁。
 
 <a id="api-suspend-race-h"></a>
-### 7.7 `suspend_race.h`
+### 7.8 `suspend_race.h`
 
-源码：[../ruvia-core/include/suspend_race.h](../ruvia-core/include/suspend_race.h)。本头只声明 `ruvia::detail::suspend_race_state`，无非 `detail` 公开 API。它以 `await_suspend` 的返回值作为“先完成后挂起 / 先挂起后完成”竞争的唯一裁决，被 `channel`、`pool_lease`、`worker_wait` 的等待物组合。
+源码：[../ruvia-core/include/suspend_race.h](../ruvia-core/include/suspend_race.h)。“先完成后挂起 / 先挂起后完成”双向竞争的确定性状态机，供自定义协程等待物（如 `asio_completion_awaiter`、`channel`、`pool_lease`、`worker_wait`）复用，防止同步完成回调在 `await_suspend` 返回前直接恢复并销毁当前帧。
 
-<a id="api-waiter-list-h"></a>
-### 7.8 `waiter_list.h`
+**`template <typename T> class suspend_race_state final`**（不可复制、不可移动，须由调用方单线程或持锁串行访问）
 
-源码：[../ruvia-core/include/waiter_list.h](../ruvia-core/include/waiter_list.h)。本头只声明 `ruvia::detail::waiter_link` 与 `ruvia::detail::waiter_list`，无非 `detail` 公开 API。它是 `pool_lease_acquire_operation` 与 `channel_send_operation` 共用的侵入式 FIFO，排队不分配；两者的公开基类即 `waiter_link`。
+| 声明 | 契约 |
+| --- | --- |
+| `[[nodiscard]] bool suspend(std::coroutine_handle<> continuation) noexcept;` | 在发起异步操作后的 `await_suspend` 末尾调用：仍未完成时记录 `continuation` 并返回 `true`（挂起）；已同步完成时返回 `false`（不挂起，直接进 `await_resume`） |
+| `[[nodiscard]] bool complete(T&& value);` | 提交完成值（移动异常时回滚原状态）：先于 `suspend` 到达时缓存结果并返回 `false`；后于 `suspend` 到达时保存结果并返回 `true`，由调用方唤醒续体 |
+| `[[nodiscard]] std::coroutine_handle<> continuation() const noexcept;` | 先挂起后完成路径下读取已登记的续体句柄 |
+| `[[nodiscard]] T take_value() & noexcept(std::is_nothrow_move_constructible_v<T>);` | 从左值提取完成结果并标记已消费（右值 `&& = delete`） |
 
 ---
 
@@ -1451,27 +1550,7 @@ flowchart LR
 
 ---
 
-## 9. 字节视图
-
-<a id="api-byte-view-h"></a>
-### 9.1 `byte_view.h`
-
-源码：[../ruvia-core/include/byte_view.h](../ruvia-core/include/byte_view.h)。同一段字节的显式视图转换，不解码、不校验字符集。
-
-| 声明 | 契约 |
-| --- | --- |
-| `[[nodiscard]] inline std::span<const std::byte> as_bytes(std::string_view text) noexcept;` | 字符视图转字节视图 |
-| `template <typename range_type> std::span<const std::byte> as_bytes(range_type&&) = delete;` | 拒绝元素为 `char` 的右值连续非借用范围（含 `std::string&&`、`std::vector<char>&&`） |
-| `template <typename element_type> std::span<const std::byte> as_bytes(std::initializer_list<element_type>) = delete;` | 拒绝 `std::initializer_list<char>`；`as_bytes({})` 仍表示空视图 |
-| `[[nodiscard]] inline std::string_view as_chars(std::span<const std::byte> bytes_value) noexcept;` | 字节视图转字符视图 |
-| `template <typename range_type> std::string_view as_chars(range_type&&) = delete;` | 拒绝元素为 `std::byte` 的右值连续非借用范围（如 `std::vector<std::byte>&&`） |
-| `template <typename element_type> std::string_view as_chars(std::initializer_list<element_type>) = delete;` | 拒绝具名 `std::byte` 初始化列表和非空字节花括号列表；`as_chars({})` 仍表示空 span |
-
-- **借用**：返回视图借用原存储，调用方须保持底层存储存活到消费完成；已删除重载不能拦截已悬垂的视图。
-
----
-
-## 10. 示例索引
+## 9. 示例索引
 
 | 示例 | 演示的 core API |
 | --- | --- |

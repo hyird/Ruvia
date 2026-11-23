@@ -1,7 +1,12 @@
 #pragma once
 
+#include <coroutine>
 #include <exception>
 #include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -12,12 +17,19 @@
 #include <asio/awaitable.hpp>
 #include <asio/bind_allocator.hpp>
 #include <asio/disposition.hpp>
+#include <asio/io_context.hpp>
+#include <asio/ip/address.hpp>
+#include <asio/ip/tcp.hpp>
 #include <asio/post.hpp>
 #include <asio/use_awaitable.hpp>
 
+#include "lifetimebound.h"
+#include "suspend_race.h"
 #include "task.h"
 
 namespace ruvia {
+
+class worker_ref;
 
 // The completion argument of async_start(). Void tasks complete with
 // std::exception_ptr, which satisfies Asio's disposition concept directly;
@@ -27,6 +39,152 @@ namespace ruvia {
 template <typename t_type>
     requires detail::asio_task_result<t_type>
 using task_completion_result = std::conditional_t<std::is_void_v<t_type>, std::exception_ptr, std::variant<t_type, std::exception_ptr>>;
+
+// Asio completion signatures always provide an error code and may also provide
+// a result that remains meaningful on partial failure (for example transferred
+// bytes). The completion therefore owns both fields. Void completions carry
+// only the error code: the value accessors and the two-argument constructor
+// exist only for a non-void result_type.
+template <typename result_type>
+class asio_completion final {
+    using result_storage_type = std::conditional_t<std::is_void_v<result_type>, std::monostate, result_type>;
+
+public:
+    explicit asio_completion(std::error_code code) noexcept
+        requires std::is_void_v<result_type>
+        :
+        error_code_(code),
+        result_{} {}
+
+    asio_completion(std::error_code code, result_storage_type value) noexcept(std::is_nothrow_move_constructible_v<result_storage_type>)
+        requires(!std::is_void_v<result_type>)
+        :
+        error_code_(code),
+        result_(std::move(value)) {}
+
+    asio_completion(const asio_completion&) = default;
+    asio_completion(asio_completion&&) = default;
+    asio_completion& operator=(const asio_completion&) = delete;
+    asio_completion& operator=(asio_completion&&) = delete;
+
+    [[nodiscard]] std::error_code code() const noexcept {
+        return error_code_;
+    }
+
+    [[nodiscard]] bool ok() const noexcept {
+        return !error_code_;
+    }
+
+    [[nodiscard]] bool failed() const noexcept {
+        return static_cast<bool>(error_code_);
+    }
+
+    [[nodiscard]] const result_storage_type& value() const& noexcept RUVIA_LIFETIMEBOUND
+        requires(!std::is_void_v<result_type>)
+    {
+        return result_;
+    }
+    const result_storage_type& value() const&& = delete;
+
+    [[nodiscard]] result_storage_type take_value() && noexcept(std::is_nothrow_move_constructible_v<result_storage_type>)
+        requires(!std::is_void_v<result_type>)
+    {
+        return std::move(result_);
+    }
+
+private:
+    std::error_code error_code_;
+    [[no_unique_address]] result_storage_type result_;
+};
+
+// The single-use awaiter of one completion-based Asio operation, as returned
+// by async_asio(). It owns the initiation and the completion state until the
+// operation finishes, and is neither copyable, movable, nor addressable; an
+// owner that keeps it beyond one await-expression constructs it in place
+// (for example std::optional::emplace) from the initiation.
+template <typename result_type, typename initiate_type>
+class asio_completion_awaiter final {
+public:
+    explicit asio_completion_awaiter(initiate_type initiate) :
+        initiate_(std::move(initiate)) {}
+    asio_completion_awaiter(const asio_completion_awaiter&) = delete;
+    asio_completion_awaiter& operator=(const asio_completion_awaiter&) = delete;
+    asio_completion_awaiter(asio_completion_awaiter&&) = delete;
+    asio_completion_awaiter& operator=(asio_completion_awaiter&&) = delete;
+    void operator&() const = delete;
+
+    [[nodiscard]] bool await_ready() const noexcept {
+        return false;
+    }
+
+    // If initiate_ throws, the exception propagates from the await-expression
+    // directly ([expr.await]/5), without an exception_ptr side channel.
+    //
+    // An asio initiation may complete synchronously (for example a closed
+    // socket or a resolver cache hit), invoking the completion handler before
+    // await_suspend returns. Resuming the continuation from inside that window
+    // would run the coroutine while it is still suspended-by-await_suspend and
+    // potentially destroy its frame before this function returns. The
+    // suspend_race_state records the completion instead; the return value of
+    // await_suspend then reports the actual race order, so a synchronous
+    // completion is consumed by await_resume without resuming at all.
+    [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation) {
+        if constexpr (std::is_void_v<result_type>) {
+            initiate_([this, continuation](std::error_code ec, auto&&...) mutable {
+                if (state_.complete(asio_completion<void>(ec))) {
+                    continuation.resume();
+                }
+            });
+        } else {
+            initiate_([this, continuation](std::error_code ec, result_type result_value) mutable {
+                if (state_.complete(asio_completion<result_type>(ec, std::move(result_value)))) {
+                    continuation.resume();
+                }
+            });
+        }
+        return state_.suspend(continuation);
+    }
+
+    [[nodiscard]] asio_completion<result_type> await_resume() {
+        return state_.take_value();
+    }
+
+private:
+    initiate_type initiate_;
+    suspend_race_state<asio_completion<result_type>> state_;
+};
+
+// Adapts a completion-based Asio operation for a Ruvia coroutine. The
+// initiation receives one handler taking (std::error_code[, result_type]).
+template <typename result_type = void, typename initiate_type>
+[[nodiscard]] auto async_asio(initiate_type&& initiate) {
+    return asio_completion_awaiter<result_type, std::decay_t<initiate_type>>(std::forward<initiate_type>(initiate));
+}
+
+// The worker's io_context executor for native I/O bound to that worker. It
+// borrows the runtime's io_context: finish its operations before the runtime
+// or attachment retires. Empty or detached worker refs throw std::logic_error;
+// stopping workers still expose it so already admitted operations can finish.
+[[nodiscard]] asio::io_context::executor_type asio_executor(const worker_ref& worker);
+
+// Close a TCP socket and cancel any outstanding I/O.
+inline void close_socket(asio::ip::tcp::socket& socket) noexcept {
+    std::error_code ignored;
+    socket.cancel(ignored);
+    socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignored);
+    socket.close(ignored);
+}
+
+// Parse a complete textual IP address, rejecting embedded NUL bytes, bracketed
+// forms, ports, and partial or padded IPv4 octets.
+[[nodiscard]] std::optional<asio::ip::address> try_parse_asio_ip_address(std::string_view text) noexcept;
+
+[[nodiscard]] inline asio::ip::address parse_asio_ip_address(std::string_view text) {
+    if (const auto parsed = try_parse_asio_ip_address(text)) {
+        return *parsed;
+    }
+    throw std::invalid_argument("invalid IP address literal");
+}
 
 }  // namespace ruvia
 

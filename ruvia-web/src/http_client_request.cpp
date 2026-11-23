@@ -203,7 +203,7 @@ void http_client_request_storage::resolve_route(const http_client_config_storage
         .authority_ = authority_origin ? std::string_view(route_authority_) : std::string_view(config.authority_),
         // An alias without a fixed origin (or dial target) dials the authority.
         .dial_host_ = config.dial_host_.empty() ? authority_host : std::string_view(config.dial_host_),
-        .dial_port_ = config.dial_port_ != 0 ? config.dial_port_ : origin_value.port(),
+        .dial_port_ = config.dial_port_ != 0 ? config.dial_port_ : origin_value.port().value(),
         .server_name_ = {},
         .alias_origin_ = true,
         .alias_transport_ = true,
@@ -887,11 +887,11 @@ namespace {
 }
 }  // namespace
 
-http_client_ref::http_client_ref(detail::http_client_pool& pool, detail::operation_scope& scope) noexcept :
+http_client_ref::http_client_ref(detail::http_client_pool& pool, ::ruvia::operation_scope& scope) noexcept :
     pool_(&pool),
     registration_(scope, *this) {}
 
-http_client_ref::http_client_ref(detail::http_client_pool& pool, detail::operation_scope& scope, operation_options options) noexcept :
+http_client_ref::http_client_ref(detail::http_client_pool& pool, ::ruvia::operation_scope& scope, operation_options options) noexcept :
     pool_(&pool),
     options_(std::move(options)),
     registration_(scope, *this) {}
@@ -916,7 +916,7 @@ http_client_ref http_client_ref::with_options(operation_options options) const {
     return copy;
 }
 
-http_client_ref http_client_ref::bind_caller_scope(detail::operation_scope& scope, const stop_token& host_stop) && noexcept {
+http_client_ref http_client_ref::bind_caller_scope(::ruvia::operation_scope& scope, const stop_token& host_stop) && noexcept {
     http_client_ref bound(*pool_, scope, std::move(options_));
     bound.pool_owner_ = std::move(pool_owner_);
     bound.registry_ = registry_;

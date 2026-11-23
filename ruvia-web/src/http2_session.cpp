@@ -23,13 +23,13 @@
 #include <asio/error.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "borrowed_text.h"
-#include "callback_ref.h"
 #include "connection_lifecycle.h"
 #include "connection_scanner.h"
 #include "context_access.h"
 #include "event_loop.h"
+#include "function_ref.h"
 #include "http1_session_state.h"
 #include "http2_connection.h"
 #include "http_client_pool.h"
@@ -42,6 +42,7 @@
 #include "http_response.h"
 #include "http_response_stream.h"
 #include "inbound_buffer.h"
+#include "inbound_buffer_ops.h"
 #include "io_operation.h"
 #include "middleware.h"
 #include "multiplexed_session.h"
@@ -1386,7 +1387,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
             const auto* code = std::get_if<http2_error_code>(&error);
             reset_stream_no_throw(stream_id, code != nullptr ? *code : http2_error_code::cancel);
         };
-        request_stream_control stream_control{callback_access::bind<void(request_reset_code)>(reset_request)};
+        request_stream_control stream_control{function_ref<void(request_reset_code)>(reset_request)};
         admission_services.bind_stream_control(stream_control);
         admission_services.bind_request_channels({
             .interim_output_ = &interim_output,

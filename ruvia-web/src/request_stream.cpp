@@ -29,7 +29,7 @@ struct request_stream_access final {
         return request_stream(context_value, response, accept_tunnel, accept_websocket);
     }
 
-    [[nodiscard]] static detail::operation_scope::join_operation close(request_stream& stream) noexcept {
+    [[nodiscard]] static ::ruvia::operation_scope::join_operation close(request_stream& stream) noexcept {
         return stream.operation_scope_.close_and_join();
     }
 };
@@ -208,7 +208,7 @@ task<websocket_accept_result> request_stream::accept_websocket_impl(websocket_ro
     co_return co_await (*accept_websocket_)(*endpoint.websocket());
 }
 
-detail::operation_lane_lease request_stream::claim_websocket_accept() {
+operation_lane_lease request_stream::claim_websocket_accept() {
     auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_), "response stream output operation is already in progress");
     if (accept_websocket_ == nullptr) {
         throw std::logic_error("accept_websocket() requires an Upgrade or extended CONNECT request");

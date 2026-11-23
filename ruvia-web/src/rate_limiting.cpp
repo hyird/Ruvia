@@ -36,7 +36,7 @@ constexpr std::uintptr_t fallback_route_scope = 2;
 
 [[nodiscard]] rate_limit_hash_key random_hash_key() {
     rate_limit_hash_key key{};
-    if (!fill_random_bytes(std::span<unsigned char>(reinterpret_cast<unsigned char*>(key.data()), sizeof(key)))) {
+    if (!fill_random_bytes(std::as_writable_bytes(std::span(key)))) {
         throw std::runtime_error("rate limit hash key generation failed");
     }
     return key;
@@ -458,6 +458,16 @@ void apply_rate_limit_headers(http_response& response, const rate_limit_decision
     detail::set_unsigned_header(response, "X-RateLimit-Limit", decision.limit());
     detail::set_unsigned_header(response, "X-RateLimit-Remaining", decision.remaining());
     detail::set_unsigned_header(response, "X-RateLimit-Reset", decision.reset_after_seconds());
+}
+
+void apply_rate_limit_headers(context_response_editor& response, const rate_limit_decision& decision) {
+    std::array<char, max_decimal_size> buffer;
+    if (!decision.allowed()) {
+        response.header("Retry-After", format_decimal(buffer, decision.retry_after_seconds()));
+    }
+    response.header("X-RateLimit-Limit", format_decimal(buffer, decision.limit()));
+    response.header("X-RateLimit-Remaining", format_decimal(buffer, decision.remaining()));
+    response.header("X-RateLimit-Reset", format_decimal(buffer, decision.reset_after_seconds()));
 }
 
 struct sliding_window_rate_limiter::impl_type final {

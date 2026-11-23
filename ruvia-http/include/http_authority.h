@@ -64,14 +64,14 @@ public:
         return port_kind_;
     }
 
-    [[nodiscard]] constexpr std::optional<std::uint16_t> port() const noexcept {
-        return port_kind_ == http_authority_port_kind::value ? std::optional<std::uint16_t>(port_) : std::nullopt;
+    [[nodiscard]] constexpr std::optional<port_number> port() const noexcept {
+        return port_kind_ == http_authority_port_kind::value ? std::optional<port_number>(port_number(port_)) : std::nullopt;
     }
 
     // Returns the explicit port or caller fallback. This numeric observation
     // alone does not preserve the absent/empty versus explicit-zero distinction.
-    [[nodiscard]] constexpr std::uint16_t effective_port(port_number default_port) const noexcept {
-        return port_kind_ == http_authority_port_kind::value ? port_ : default_port.value();
+    [[nodiscard]] constexpr port_number effective_port(port_number default_port) const noexcept {
+        return port_kind_ == http_authority_port_kind::value ? port_number(port_) : default_port;
     }
 
 private:
@@ -91,12 +91,12 @@ private:
     http_host_kind host_kind_{http_host_kind::reg_name};
 };
 
-[[nodiscard]] std::optional<http_authority_view> parse_http_authority(borrowed_text value, http_authority_policy policy = http_authority_policy::rfc) noexcept;
+[[nodiscard]] std::optional<http_authority_view> parse_http_authority(borrowed_text value RUVIA_LIFETIMEBOUND, http_authority_policy policy = http_authority_policy::rfc) noexcept;
 
 // Parses a Host-field authority without userinfo and borrows its host text.
 // The host retains brackets around an IP literal. An invalid authority has no
 // value; a syntactically valid empty host remains an engaged empty view.
-[[nodiscard]] std::optional<std::string_view> parse_http_authority_host(borrowed_text value) noexcept;
+[[nodiscard]] std::optional<std::string_view> parse_http_authority_host(borrowed_text value RUVIA_LIFETIMEBOUND) noexcept;
 
 // Compares HTTP authorities using case-insensitive host syntax and the supplied
 // scheme default port, checked before narrowing like other port inputs.
@@ -139,13 +139,13 @@ public:
         return host_;
     }
 
-    [[nodiscard]] constexpr std::uint16_t port() const noexcept {
+    [[nodiscard]] constexpr port_number port() const noexcept {
         return port_;
     }
 
 private:
     std::string_view host_;
-    std::uint16_t port_;
+    port_number port_;
     http_scheme scheme_;
 };
 

@@ -102,6 +102,8 @@ void reject_pg_syntax_function(std::string_view name) {
             return a.double_value() == b.double_value();
         case db_value_type::bool_:
             return a.bool_value() == b.bool_value();
+        case db_value_type::bytes:
+            return std::ranges::equal(a.bytes(), b.bytes());
     }
     return false;
 }
@@ -319,7 +321,7 @@ static_assert(std::ranges::is_sorted(pg_function_parameter_cast_table, {}, &pg_f
 // boolean values retain their category; strings retain SQL context because a
 // reused parameter may already have been typed by an earlier reference.
 [[nodiscard]] pg_parameter_cast pg_operator_operand_cast(const db_query_node& node, pg_parameter_cast cast) noexcept {
-    if (!is_untyped_value(node) || node.value_.type() == db_value_type::string) {
+    if (!is_untyped_value(node) || node.value_.type() == db_value_type::string || node.value_.type() == db_value_type::bytes) {
         return pg_parameter_cast::context;
     }
     const auto type = node.value_.type();
@@ -514,6 +516,9 @@ private:
                 break;
             case db_value_type::string:
                 sql_ += "::text";
+                break;
+            case db_value_type::bytes:
+                sql_ += "::bytea";
                 break;
             case db_value_type::null:
                 break;

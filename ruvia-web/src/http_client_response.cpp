@@ -452,7 +452,7 @@ void publish_http_client_final_head(http_client_response_state& state_value, cli
 #endif
     auto* const tunnel = state_value.tunnel_ ? &*state_value.tunnel_ : nullptr;
     if (tunnel != nullptr) {
-        if (head.opens_tunnel_ && tunnel->udp_ && validate_http_connect_udp_response(state_value.protocol_version_, state_value.status_.status().value(), state_value.headers_).has_value()) {
+        if (head.opens_tunnel_ && tunnel->udp_ && validate_http_connect_udp_response(state_value.protocol_version_, state_value.status_.status(), state_value.headers_).has_value()) {
             throw http_client_error(make_error_code(http_client_errc::protocol_error), "invalid CONNECT-UDP response head");
         }
         tunnel->accepted_ = head.opens_tunnel_;
@@ -1036,7 +1036,7 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
                 prepare_forwarded_response_head(state_value, *output.forwarded_);
             };
             try {
-                if (co_await streaming_access::commit_prepared(output.writer_, callback_access::bind<void()>(prepare), state_value.downstream_step(steps)) == stream_commit_result::completed) {
+                if (co_await streaming_access::commit_prepared(output.writer_, function_ref<void()>(prepare), state_value.downstream_step(steps)) == stream_commit_result::completed) {
                     co_return;
                 }
             } catch (...) {
@@ -1109,11 +1109,11 @@ task<http_client_response_bytes> http_client_response::collect_body(std::size_t 
     return state_value.body_operation_scope_.attach(state_value.collect_body<http_client_response_bytes>(max_bytes, std::move(operation)));
 }
 
-detail::operation_scope& http_client_response::body_scope() & {
+::ruvia::operation_scope& http_client_response::body_scope() & {
     return require_response_body_state(state_).body_operation_scope_;
 }
 
-bool http_client_response::try_parse_ready_response_body(detail::http_client_response_state& state_value, std::size_t max_bytes, const operation_options& operation, detail::callback_ref<void(std::string_view)> parse) {
+bool http_client_response::try_parse_ready_response_body(detail::http_client_response_state& state_value, std::size_t max_bytes, const operation_options& operation, function_ref<void(std::string_view)> parse) {
     const auto effective_limit = std::min(max_bytes, state_value.buffered_limit_);
     const operation_deadline deadline(operation.timeout_);
     if (!state_value.receive_complete() && !state_value.exceeds_body_limit(effective_limit) && !operation.stop_token_.stop_requested() && !deadline.expired()) {
@@ -1131,12 +1131,12 @@ bool http_client_response::try_parse_ready_response_body(detail::http_client_res
     return true;
 }
 
-task<void> http_client_response::parse_response_body(detail::http_client_response_state& state, std::size_t max_bytes, operation_options operation, detail::callback_ref<void(std::string_view)> parse) {
+task<void> http_client_response::parse_response_body(detail::http_client_response_state& state, std::size_t max_bytes, operation_options operation, function_ref<void(std::string_view)> parse) {
     return state.collect_body<void>(max_bytes, std::move(operation), parse);
 }
 
 template <typename result_type>
-result_type detail::http_client_response_state::finish_collection(std::size_t effective_limit, callback_ref<void(std::string_view)> parse) {
+result_type detail::http_client_response_state::finish_collection(std::size_t effective_limit, function_ref<void(std::string_view)> parse) {
     auto& state_value = *this;
     state_value.rethrow_response_failure();
     if (state_value.pool_closed_) {
@@ -1191,7 +1191,7 @@ result_type detail::http_client_response_state::finish_collection(std::size_t ef
 }
 
 template <typename result_type>
-task<result_type> detail::http_client_response_state::collect_body(std::size_t max_bytes, operation_options operation, callback_ref<void(std::string_view)> parse) {
+task<result_type> detail::http_client_response_state::collect_body(std::size_t max_bytes, operation_options operation, function_ref<void(std::string_view)> parse) {
     auto& state_value = *this;
     auto activity = claim_operation_lane(state_value.body_operation_active_, "HTTP client response body operation is already active");
     const operation_deadline deadline(operation.timeout_);
@@ -1245,7 +1245,7 @@ task<void> http_client_response::pipe_to(request_stream& output, operation_optio
     return pipe_to_destination(output.context_, output.stream(), output.operation_scope_, std::move(operation));
 }
 
-task<void> http_client_response::pipe_to_destination(context& output, response_stream_writer& writer, detail::operation_scope& destination, operation_options operation) {
+task<void> http_client_response::pipe_to_destination(context& output, response_stream_writer& writer, ::ruvia::operation_scope& destination, operation_options operation) {
     if (state_ == nullptr) {
         throw std::logic_error("response owner has moved");
     }

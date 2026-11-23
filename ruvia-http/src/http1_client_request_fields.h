@@ -23,7 +23,7 @@ struct http1_client_request_field_facts final {
     http_field_section_budget section_;
     detail::request_field_state fields_{detail::request_field_framing::http1};
     detail::http_connection_options connection_options_;
-    detail::http_upgrade_protocols upgrade_protocols_;
+    http_upgrade_protocols upgrade_protocols_;
     std::string_view first_upgrade_value_{};
     std::size_t upgrade_value_bytes_{0};
     std::size_t upgrade_field_count_{0};

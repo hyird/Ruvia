@@ -9,7 +9,7 @@
 #include <asio/ip/tcp.hpp>
 #include <openssl/ssl.h>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "connection_scanner.h"
 #include "task.h"
 #include "timeout_duration.h"

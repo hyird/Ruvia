@@ -104,7 +104,7 @@ TEST(Ruvia, db_entity_numeric_overflow_preserves_value_null_and_unset) {
             value.set<"signed_value">((std::numeric_limits<std::uint64_t>::max)());
         });
         check_rejected([&] {
-            value.set<"signed_value">(ruvia::int64{above_signed});
+            value.set<"signed_value">(above_signed);
         });
         check_rejected([&] {
             value.set<"unsigned_value">(-1);
@@ -117,9 +117,6 @@ TEST(Ruvia, db_entity_numeric_overflow_preserves_value_null_and_unset) {
         });
         check_rejected([&] {
             value.set<"real_value">(-(std::numeric_limits<double>::max)());
-        });
-        check_rejected([&] {
-            value.set<"real_value">(ruvia::double_value{(std::numeric_limits<double>::max)()});
         });
         EXPECT_EQ(value.is_set<"signed_value">(), state != 0);
         EXPECT_EQ(value.is_set<"unsigned_value">(), state != 0);
@@ -175,7 +172,7 @@ TEST(Ruvia, db_entity_numeric_set_accepts_representable_boundaries_and_scalar_wr
     numeric_input_entity value;
     const auto minimum = static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::min)());
     const auto maximum = static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::max)());
-    value.set<"signed_value">(ruvia::int64{minimum});
+    value.set<"signed_value">(minimum);
     EXPECT_EQ(value.get<"signed_value">(), minimum);
     value.set<"signed_value">(maximum);
     EXPECT_EQ(value.get<"signed_value">(), (std::numeric_limits<std::int32_t>::max)());
@@ -184,7 +181,7 @@ TEST(Ruvia, db_entity_numeric_set_accepts_representable_boundaries_and_scalar_wr
     value.set<"values">(std::vector<std::int64_t>({minimum, static_cast<std::int64_t>(maximum)}));
     EXPECT_EQ(value.get<"values">()[0], minimum);
     EXPECT_EQ(value.get<"values">()[1], (std::numeric_limits<std::int32_t>::max)());
-    value.set<"real_value">(ruvia::double_value{static_cast<double>((std::numeric_limits<float>::max)())});
+    value.set<"real_value">(static_cast<double>((std::numeric_limits<float>::max)()));
     EXPECT_EQ(value.get<"real_value">(), (std::numeric_limits<float>::max)());
     value.set<"real_value">(std::numeric_limits<double>::infinity());
     EXPECT_EQ(value.get<"real_value">(), std::numeric_limits<float>::infinity());

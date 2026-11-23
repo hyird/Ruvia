@@ -8,15 +8,15 @@
 #include <asio/error.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "task.h"
 #include "timeout_duration.h"
 #include "worker_ref.h"
 #include "worker_timer.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
-client_happy_eyeballs::client_happy_eyeballs(const worker_ref& worker, const asio::ip::tcp::socket::executor_type& executor, const asio::ip::tcp::resolver::results_type& addresses) :
+happy_eyeballs_dialer::happy_eyeballs_dialer(const worker_ref& worker, const asio::ip::tcp::socket::executor_type& executor, const asio::ip::tcp::resolver::results_type& addresses) :
     worker_(worker),
     changed_(worker),
     attempts_() {
@@ -24,20 +24,20 @@ client_happy_eyeballs::client_happy_eyeballs(const worker_ref& worker, const asi
         return;
     }
     attempts_.reserve(addresses.size());
-    client_address_sequence sequence(addresses);
+    address_family_interleaver sequence(addresses);
     while (auto endpoint = sequence.next()) {
         attempts_.emplace_back(executor, *endpoint);
     }
 }
 
-client_happy_eyeballs::~client_happy_eyeballs() {
+happy_eyeballs_dialer::~happy_eyeballs_dialer() {
     delay_.cancel();
     if (active_ != 0) {
         std::terminate();
     }
 }
 
-void client_happy_eyeballs::close_active() noexcept {
+void happy_eyeballs_dialer::close_active() noexcept {
     for (auto& current : attempts_) {
         if (current.active_) {
             close_socket(current.socket_);
@@ -45,7 +45,7 @@ void client_happy_eyeballs::close_active() noexcept {
     }
 }
 
-void client_happy_eyeballs::cancel() noexcept {
+void happy_eyeballs_dialer::cancel() noexcept {
     if (cancelled_) {
         return;
     }
@@ -59,12 +59,12 @@ void client_happy_eyeballs::cancel() noexcept {
     changed_.notify();
 }
 
-void client_happy_eyeballs::schedule_next() noexcept {
+void happy_eyeballs_dialer::schedule_next() noexcept {
     if (next_ == attempts_.size() || cancelled_ || winner_) {
         return;
     }
     try {
-        if (delay_.schedule(worker_, deadline_after(client_connection_attempt_delay), [this](worker_timer_status outcome) noexcept {
+        if (delay_.schedule(worker_, deadline_after(happy_eyeballs_attempt_delay), [this](worker_timer_status outcome) noexcept {
             on_delay(outcome);
         })) {
             return;
@@ -75,7 +75,7 @@ void client_happy_eyeballs::schedule_next() noexcept {
     cancel();
 }
 
-void client_happy_eyeballs::start_next() noexcept {
+void happy_eyeballs_dialer::start_next() noexcept {
     if (next_ == attempts_.size() || cancelled_ || winner_) {
         return;
     }
@@ -98,7 +98,7 @@ void client_happy_eyeballs::start_next() noexcept {
     schedule_next();
 }
 
-void client_happy_eyeballs::on_delay(worker_timer_status outcome) noexcept {
+void happy_eyeballs_dialer::on_delay(worker_timer_status outcome) noexcept {
     if (outcome == worker_timer_status::cancelled) {
         cancel();
         return;
@@ -107,7 +107,7 @@ void client_happy_eyeballs::on_delay(worker_timer_status outcome) noexcept {
     changed_.notify();
 }
 
-void client_happy_eyeballs::on_connect(std::size_t index, const std::error_code& error) noexcept {
+void happy_eyeballs_dialer::on_connect(std::size_t index, const std::error_code& error) noexcept {
     auto& current = attempts_[index];
     if (!current.active_ || active_ == 0) {
         std::terminate();
@@ -122,8 +122,6 @@ void client_happy_eyeballs::on_connect(std::size_t index, const std::error_code&
         if (error && error != asio::error::operation_aborted) {
             last_error_ = error;
             if (!cancelled_ && !winner_) {
-                // RFC 8305 section 5: a fast failure must not leave the next
-                // address waiting for the remainder of the attempt delay.
                 delay_.cancel();
                 launch_ready_ = true;
             }
@@ -133,12 +131,12 @@ void client_happy_eyeballs::on_connect(std::size_t index, const std::error_code&
     changed_.notify();
 }
 
-task<client_happy_eyeballs_result> client_happy_eyeballs::connect() & {
+task<happy_eyeballs_result> happy_eyeballs_dialer::connect() & {
     if (cancelled_) {
-        co_return client_happy_eyeballs_result{{}, asio::error::operation_aborted};
+        co_return happy_eyeballs_result{{}, asio::error::operation_aborted};
     }
     if (attempts_.empty()) {
-        co_return client_happy_eyeballs_result{{}, asio::error::host_not_found};
+        co_return happy_eyeballs_result{{}, asio::error::host_not_found};
     }
     start_next();
     for (;;) {
@@ -152,18 +150,18 @@ task<client_happy_eyeballs_result> client_happy_eyeballs::connect() & {
                 if (failure_) {
                     std::rethrow_exception(failure_);
                 }
-                co_return client_happy_eyeballs_result{{}, asio::error::operation_aborted};
+                co_return happy_eyeballs_result{{}, asio::error::operation_aborted};
             }
         } else if (winner_) {
             if (active_ == 0) {
                 auto socket = std::move(attempts_[*winner_].socket_);
-                co_return client_happy_eyeballs_result{std::move(socket), {}};
+                co_return happy_eyeballs_result{std::move(socket), {}};
             }
         } else if (active_ == 0 && next_ == attempts_.size()) {
-            co_return client_happy_eyeballs_result{{}, last_error_ ? last_error_ : std::error_code(asio::error::host_unreachable)};
+            co_return happy_eyeballs_result{{}, last_error_ ? last_error_ : std::error_code(asio::error::host_unreachable)};
         }
         co_await changed_.wait();
     }
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

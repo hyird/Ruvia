@@ -4,12 +4,15 @@
 
 #include <chrono>
 #include <concepts>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #include "borrowed_text.h"
+#include "http_cookie.h"
 #include "middleware.h"
+#include "operation_options.h"
 #include "task.h"
 
 namespace ruvia::detail {
@@ -64,6 +67,8 @@ private:
 // Before the response head is sent, persists changes with the configured TTL
 // or deletes the session. A new session mints a random ID in an HttpOnly cookie.
 // The blob format is the application's; pair it with JSON if desired.
+class redis_executor;
+
 struct session_config final {
     std::string redis_alias_{"default"};
     std::string cookie_name_{"sid"};
@@ -71,6 +76,65 @@ struct session_config final {
     // Must be positive and representable in std::chrono::milliseconds;
     // otherwise construction throws std::invalid_argument.
     std::chrono::seconds ttl_{std::chrono::hours(24)};
+    std::string path_{"/"};
+    std::string domain_{};
+    cookie_same_site same_site_{cookie_same_site::lax};
+    // nullopt selects Secure from connection.scheme() == https; an explicit
+    // bool forces emit or omit.
+    std::optional<bool> secure_{};
+    // Optional HMAC secret: when non-empty, signs the session ID cookie and
+    // verifies incoming cookies with constant-time HMAC-SHA256 before Redis lookup.
+    std::string secret_{};
+};
+
+// Standalone Redis session store for custom handlers, WebSocket handshakes, or
+// standalone routers that manage session lifecycles outside session_middleware.
+class session_store final {
+public:
+    explicit session_store(const session_config& config = {});
+
+    [[nodiscard]] std::string_view cookie_name() const& noexcept RUVIA_LIFETIMEBOUND {
+        return cookie_name_;
+    }
+    std::string_view cookie_name() const&& = delete;
+    [[nodiscard]] std::string_view key_prefix() const& noexcept RUVIA_LIFETIMEBOUND {
+        return key_prefix_;
+    }
+    std::string_view key_prefix() const&& = delete;
+    [[nodiscard]] std::chrono::seconds ttl() const noexcept {
+        return ttl_;
+    }
+
+    // Extracts and (when secret_ is configured) verifies the 48-hex session ID
+    // from a raw cookie value; returns nullopt if invalid or tampered.
+    [[nodiscard]] std::optional<std::string_view> verify_cookie_id(std::string_view cookie_value RUVIA_LIFETIMEBOUND) const noexcept;
+    // Formats the raw or HMAC-signed cookie value for `session_id`.
+    [[nodiscard]] std::string format_cookie_value(std::string_view session_id) const;
+    [[nodiscard]] cookie_options cookie_attributes(bool connection_secure) const noexcept;
+    [[nodiscard]] cookie_options deletion_cookie_attributes(bool connection_secure) const noexcept;
+
+    // Mints a fresh 48-hex session ID, stores `payload` under TTL, and returns the new ID.
+    [[nodiscard]] task<std::string> create(const redis_executor& redis, std::string_view payload, operation_options options = {}) const;
+    // Loads the payload for a validated 48-hex `session_id`, or nullopt if absent/invalid.
+    [[nodiscard]] task<std::optional<std::string>> load(const redis_executor& redis, std::string_view session_id, operation_options options = {}) const;
+    // Atomically rotates `old_session_id` -> fresh 48-hex ID with `payload` and TTL;
+    // returns nullopt if `old_session_id` already expired or was revoked.
+    [[nodiscard]] task<std::optional<std::string>> rotate(const redis_executor& redis, std::string_view old_session_id, std::string_view payload, operation_options options = {}) const;
+    [[nodiscard]] task<bool> destroy(const redis_executor& redis, std::string_view session_id, operation_options options = {}) const;
+
+private:
+    friend class session_middleware;
+    friend struct detail::session_access;
+
+    std::string redis_alias_;
+    std::string cookie_name_;
+    std::string key_prefix_;
+    std::chrono::seconds ttl_;
+    std::string path_;
+    std::string domain_;
+    cookie_same_site same_site_;
+    std::optional<bool> secure_;
+    std::string secret_;
 };
 
 class session_middleware final {
@@ -88,12 +152,7 @@ public:
 private:
     friend struct detail::session_access;
 
-    [[nodiscard]] static const session_config& validate(const session_config& source);
-
-    std::string redis_alias_;
-    std::string cookie_name_;
-    std::string key_prefix_;
-    std::chrono::seconds ttl_;
+    session_store store_;
 };
 
 }  // namespace ruvia

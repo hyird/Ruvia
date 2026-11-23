@@ -73,8 +73,12 @@ namespace ruvia::detail {
     return digits != 0 && parsed_value >= 8 && parsed_value <= 15 ? std::optional<int>(parsed_value) : std::nullopt;
 }
 
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
 std::optional<permessage_deflate_params> parse_permessage_deflate_params(std::string_view element) noexcept {
-    const auto name = http_header_token_before_parameters(element);
+    const auto name = detail::http_header_token_before_parameters(element);
     if (!http_ascii_equals_ignore_case(name, "permessage-deflate")) {
         return std::nullopt;
     }
@@ -93,7 +97,7 @@ std::optional<permessage_deflate_params> parse_permessage_deflate_params(std::st
                     if (params.server_max_window_bits_.has_value()) {
                         return false;
                     }
-                    params.server_max_window_bits_ = websocket_deflate_window_bits(parameter_value);
+                    params.server_max_window_bits_ = detail::websocket_deflate_window_bits(parameter_value);
                     return params.server_max_window_bits_.has_value();
                 }
                 if (http_ascii_equals_ignore_case(parameter_name, "client_max_window_bits")) {
@@ -102,7 +106,7 @@ std::optional<permessage_deflate_params> parse_permessage_deflate_params(std::st
                     }
                     params.client_max_window_bits_present_ = true;
                     if (has_value) {
-                        params.client_max_window_bits_ = websocket_deflate_window_bits(parameter_value);
+                        params.client_max_window_bits_ = detail::websocket_deflate_window_bits(parameter_value);
                         return params.client_max_window_bits_.has_value();
                     }
                     return true;
@@ -131,6 +135,10 @@ std::optional<permessage_deflate_params> parse_permessage_deflate_params(std::st
     });
     return valid ? std::optional(params) : std::nullopt;
 }
+
+}  // namespace ruvia
+
+namespace ruvia::detail {
 
 // Server role: an offered client_max_window_bits, with or without a value, is
 // accepted but never echoed in the response.
@@ -430,13 +438,13 @@ namespace {
 
 // A Sec-WebSocket-Key is the canonical padded base64 of a 16-byte nonce
 // (RFC 6455 section 4.1), so exactly 24 characters.
-[[nodiscard]] std::optional<std::array<std::uint8_t, 16>> decode_websocket_key(std::string_view key) noexcept {
+[[nodiscard]] std::optional<std::array<std::byte, 16>> decode_websocket_key(std::string_view key) noexcept {
     key = http_trim_ows(key);
-    std::array<std::uint8_t, 16> nonce{};
+    std::array<std::byte, 16> nonce{};
     if (key.size() != 24) {
         return std::nullopt;
     }
-    const auto decoded = http_base64_decode(key, nonce, http_base64_charset::standard, http_base64_padding::required);
+    const auto decoded = base64_decode(key, nonce, base64_charset::standard, base64_padding::required);
     if (!decoded || *decoded != nonce.size()) {
         return std::nullopt;
     }
@@ -481,8 +489,8 @@ websocket_handshake_validation_result validate_http1_websocket_handshake(const h
     }
 
     detail::http_connection_options connection_options;
-    detail::http_upgrade_protocols upgrade_protocols;
-    detail::websocket_request_header_validator websocket_headers(detail::http_field_list_role::recipient);
+    http_upgrade_protocols upgrade_protocols;
+    detail::websocket_request_header_validator websocket_headers(http_field_list_role::recipient);
     std::string_view key;
     std::size_t key_count = 0;
     bool websocket_upgrade = false;
@@ -492,16 +500,16 @@ websocket_handshake_validation_result validate_http1_websocket_handshake(const h
         const auto kind = detail::http_request_access::header_kind(request, i);
         const auto& header_value = headers[i];
         if (kind == detail::http_field_kind::connection) {
-            if (connection_options.parse_field(header_value.value(), detail::http_connection_field_role::request_recipient) != detail::http_field_list_parse_status::ok) {
+            if (connection_options.parse_field(header_value.value(), detail::http_connection_field_role::request_recipient) != http_field_list_parse_status::ok) {
                 return websocket_handshake_error::invalid_request;
             }
         } else if (kind == detail::http_field_kind::upgrade) {
-            if (upgrade_protocols.parse_field(header_value.value(), detail::http_field_list_role::recipient, [&websocket_upgrade](const detail::http_upgrade_protocol& protocol) noexcept {
+            if (upgrade_protocols.parse_field(header_value.value(), http_field_list_role::recipient, [&websocket_upgrade](const http_upgrade_protocol& protocol) noexcept {
                 if (protocol.version_.empty() && http_ascii_equals_ignore_case(protocol.name_, "websocket")) {
                     websocket_upgrade = true;
                 }
                 return true;
-            }) != detail::http_field_list_parse_status::ok) {
+            }) != http_field_list_parse_status::ok) {
                 return websocket_handshake_error::invalid_request;
             }
         } else if (kind == detail::http_field_kind::sec_websocket_key) {
@@ -618,18 +626,27 @@ constexpr std::uint64_t max_sha1_message_bytes = (std::numeric_limits<std::uint6
 }
 
 }  // namespace
+}  // namespace ruvia::detail
 
-void encode_websocket_accept(websocket_accept_key_type& output, std::string_view key) {
+namespace ruvia {
+
+void encode_websocket_accept(std::span<char, 28> output, std::string_view key) {
     // Check the raw view before trimming: http_trim_ows() must inspect the last
-    // byte, and callers of this detail helper are not otherwise required to
-    // prove that a view's advertised size is backed by a full object. The
-    // SHA-1 length field is measured in bits and is only 64 bits wide.
-    if (key.size() > (std::numeric_limits<std::size_t>::max)() - websocket_guid.size() || key.size() > max_sha1_message_bytes - websocket_guid.size()) {
+    // byte, and callers are not otherwise required to prove that a view's
+    // advertised size is backed by a full object. The SHA-1 length field is
+    // measured in bits and is only 64 bits wide.
+    if (key.size() > (std::numeric_limits<std::size_t>::max)() - detail::websocket_guid.size() || key.size() > detail::max_sha1_message_bytes - detail::websocket_guid.size()) {
         throw std::length_error("WebSocket accept input is too large");
     }
     key = http_trim_ows(key);
-    const auto digest = sha1(key, websocket_guid);
-    http_base64_encode(output.data(), std::span<const std::uint8_t>(digest));
+    const auto digest = detail::sha1(key, detail::websocket_guid);
+    (void)base64_encode(output, as_bytes(std::span<const std::uint8_t>(digest)));
 }
 
-}  // namespace ruvia::detail
+std::string compute_websocket_accept(std::string_view key) {
+    websocket_accept_key output{};
+    encode_websocket_accept(output, key);
+    return std::string(output.data(), output.size());
+}
+
+}  // namespace ruvia

@@ -982,16 +982,16 @@ TEST(Ruvia, http_connect_udp_default_template_requires_target_segments) {
 TEST(Ruvia, http_connect_udp_upgrade_handshake_requires_capsule_negotiation) {
     const std::array fields{ruvia::http_header_view{"Host", "example.test"}, ruvia::http_header_view{"Connection", "Upgrade"}, ruvia::http_header_view{"Upgrade", "connect-udp"}, ruvia::http_header_view{"Capsule-Protocol", "?1;version=1"}};
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http11, {.authority_ = "example.test", .target_ = "/proxy", .headers_ = fields}).has_value());
-    EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, 101, fields).has_value());
+    EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, ruvia::http_status::switching_protocols, fields).has_value());
     EXPECT_TRUE(ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http10, {.authority_ = "example.test", .target_ = "/proxy", .headers_ = fields}).has_value());
     EXPECT_TRUE(ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http11, {.method_ = "CONNECT", .authority_ = "example.test", .target_ = "/proxy", .headers_ = fields}).has_value());
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, 200, fields).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, ruvia::http_status::ok, fields).has_value());
     EXPECT_TRUE(!ruvia::parse_http_capsule_protocol("?1, ?0").has_value());
     EXPECT_TRUE(!ruvia::parse_http_capsule_protocol("true").has_value());
     const auto disabled = ruvia::parse_http_capsule_protocol("?0");
     EXPECT_TRUE(disabled.has_value() && !*disabled);
     const std::array bad_resp{ruvia::http_header_view{"Upgrade", "websocket"}};
-    const auto resp_err = ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, 101, bad_resp);
+    const auto resp_err = ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, ruvia::http_status::switching_protocols, bad_resp);
     EXPECT_TRUE(resp_err == ruvia::http_connect_udp_error::invalid_response);
     const auto abs_req = ruvia::make_http_request("GET", "https://example.test/.well-known/masque/udp/192.0.2.1/443/", fields, {});
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(abs_req).has_value());
@@ -1001,9 +1001,9 @@ TEST(Ruvia, http_connect_udp_upgrade_handshake_requires_capsule_negotiation) {
 TEST(Ruvia, http_udp_capsule_session_checks_context_size_and_half_close) {
     ruvia::http_datagram_session session;
     const std::string payload = "udp";
-    const auto plan = session.prepare_datagram(ruvia::http_datagram_mode::connect_udp, payload);
+    const auto plan = session.prepare_datagram(ruvia::http_datagram_mode::connect_udp, ruvia::as_bytes(payload));
     EXPECT_TRUE(plan.index() == 0);
-    std::string wire(std::get<0>(plan).prefix());
+    std::string wire(ruvia::as_chars(std::get<0>(plan).prefix()));
     wire.append(payload);
     std::string capsule;
     struct capsule_capture final {
@@ -1011,28 +1011,28 @@ TEST(Ruvia, http_udp_capsule_session_checks_context_size_and_half_close) {
         bool datagram_{true};
     } captured{capsule};
     ruvia::http_capsule_decoder decoder;
-    const auto status = decoder.feed(wire, true, [](void* context, ruvia::http_capsule_event event) {
+    const auto status = decoder.feed(ruvia::as_bytes(wire), true, [](void* context, ruvia::http_capsule_event event) {
         auto& capture = *static_cast<capsule_capture*>(context);
         capture.datagram_ = capture.datagram_ && event.type_ == ruvia::http_datagram_capsule_type;
         if (!event.payload_.empty()) {
-            capture.bytes_.append(event.payload_.data(), event.payload_.size());
+            capture.bytes_.append(ruvia::as_chars(event.payload_));
         }
     }, &captured);
     EXPECT_TRUE(captured.datagram_);
     EXPECT_TRUE(status.holds<ruvia::decode_complete>());
     const auto value = std::string_view(capsule);
-    const auto received = session.receive_datagram(ruvia::http_datagram_mode::connect_udp, value);
+    const auto received = session.receive_datagram(ruvia::http_datagram_mode::connect_udp, ruvia::as_bytes(value));
     EXPECT_TRUE(received.index() == 0 && std::get<0>(received));
-    EXPECT_TRUE(std::string_view(std::get<0>(received)->data(), std::get<0>(received)->size()) == payload);
+    EXPECT_TRUE(ruvia::as_chars(*std::get<0>(received)) == payload);
     capsule[0] = 2;
-    const auto dropped = session.receive_datagram(ruvia::http_datagram_mode::connect_udp, value);
+    const auto dropped = session.receive_datagram(ruvia::http_datagram_mode::connect_udp, ruvia::as_bytes(value));
     EXPECT_TRUE(dropped.index() == 0 && !std::get<0>(dropped));
     const std::string too_large(65528, 'x');
-    EXPECT_TRUE(session.prepare_datagram(ruvia::http_datagram_mode::connect_udp, too_large).index() != 0);
+    EXPECT_TRUE(session.prepare_datagram(ruvia::http_datagram_mode::connect_udp, ruvia::as_bytes(too_large)).index() != 0);
     session.close_send();
     session.close_receive();
-    EXPECT_TRUE(session.prepare_datagram(ruvia::http_datagram_mode::connect_udp, payload).index() != 0);
-    const auto closed = session.receive_datagram(ruvia::http_datagram_mode::connect_udp, value);
+    EXPECT_TRUE(session.prepare_datagram(ruvia::http_datagram_mode::connect_udp, ruvia::as_bytes(payload)).index() != 0);
+    const auto closed = session.receive_datagram(ruvia::http_datagram_mode::connect_udp, ruvia::as_bytes(value));
     EXPECT_TRUE(closed.index() == 0 && !std::get<0>(closed));
 }
 
@@ -1129,9 +1129,9 @@ TEST(Ruvia, http_connect_udp_http2_uses_extended_connect_without_upgrade_fields)
     invalid = request;
     invalid.headers_ = upgrade_fields;
     EXPECT_TRUE(ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http2, invalid).has_value());
-    EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, fields).has_value());
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 101, fields).has_value());
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, upgrade_fields).has_value());
+    EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, ruvia::http_status::ok, fields).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, ruvia::http_status::switching_protocols, fields).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, ruvia::http_status::ok, upgrade_fields).has_value());
 
     ruvia::http_response response;
     response.status(ruvia::http_status::created);
@@ -1148,22 +1148,22 @@ TEST(Ruvia, http_connect_udp_http2_uses_extended_connect_without_upgrade_fields)
 TEST(Ruvia, http_connect_udp_recipient_treats_capsule_protocol_as_optional) {
     const std::array upgrade{ruvia::http_header_view{"Host", "example.test"}, ruvia::http_header_view{"Connection", "Upgrade"}, ruvia::http_header_view{"Upgrade", "connect-udp"}};
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http11, {.authority_ = "example.test", .target_ = "/proxy", .headers_ = upgrade}).has_value());
-    EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, 101, std::span<const ruvia::http_header_view>(upgrade).subspan(1)).has_value());
+    EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, ruvia::http_status::switching_protocols, std::span<const ruvia::http_header_view>(upgrade).subspan(1)).has_value());
     for (const auto value : {"1", "?0", "\"yes\""}) {
         const std::array ignored{ruvia::http_header_view{"Capsule-Protocol", value}};
         const ruvia::http_request_head_view request{.method_ = "CONNECT", .protocol_ = "connect-udp", .authority_ = "example.test", .target_ = "/proxy", .headers_ = ignored};
         EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http2, request).has_value());
-        EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, ignored).has_value());
+        EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, ruvia::http_status::ok, ignored).has_value());
     }
     const std::array duplicate{ruvia::http_header_view{"Capsule-Protocol", "?1"}, ruvia::http_header_view{"Capsule-Protocol", "?1"}};
-    EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, duplicate).has_value());
-    EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, std::span<const ruvia::http_header_view>{}).has_value());
+    EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, ruvia::http_status::ok, duplicate).has_value());
+    EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, ruvia::http_status::ok, std::span<const ruvia::http_header_view>{}).has_value());
 }
 
 TEST(Ruvia, http_connect_udp_rejects_statuses_that_cannot_start_capsule_protocol) {
     const std::array capsule{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
     for (const std::uint16_t status : {std::uint16_t{204}, std::uint16_t{205}, std::uint16_t{206}}) {
-        EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, status, capsule) == ruvia::http_connect_udp_error::invalid_response);
+        EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, ruvia::http_status_code(status), capsule) == ruvia::http_connect_udp_error::invalid_response);
         ruvia::http_response response;
         response.status(ruvia::http_status_code(status));
         EXPECT_TRUE(ruvia::prepare_http_connect_udp_response(std::move(response), ruvia::http_protocol_version::http2).index() != 0);
@@ -1216,7 +1216,7 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
     EXPECT_TRUE(ruvia::validate_http_connect_udp_request_to_send(ruvia::http_protocol_version::http2, {.method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = "https", .authority_ = "example.test", .target_ = "/proxy", .headers_ = h2_keep_alive}).has_value());
     const std::array valid_capsule{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
     EXPECT_TRUE(ruvia::validate_http_connect_udp_request_to_send(ruvia::http_protocol_version::http2, {.method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = "not a valid scheme!", .authority_ = "example.test", .target_ = "/proxy", .headers_ = valid_capsule}).has_value());
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, h2_keep_alive).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, ruvia::http_status::ok, h2_keep_alive).has_value());
     ruvia::http_response h2_resp;
     h2_resp.status(ruvia::http_status::ok);
     h2_resp.header("Keep-Alive", "timeout=5");
@@ -1238,7 +1238,7 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
         ruvia::http_header_view{"Upgrade", ", connect-udp,"},
         ruvia::http_header_view{"Capsule-Protocol", "?1"},
     };
-    EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, 101, empty_elem_resp).has_value());
+    EXPECT_TRUE(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, ruvia::http_status::switching_protocols, empty_elem_resp).has_value());
 
     // RFC 9297 3.2: a Capsule Protocol message that carries Content-Length is
     // malformed regardless of its value.
@@ -1252,7 +1252,7 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
         ruvia::http_header_view{"Content-Length", "5"},
     };
     EXPECT_TRUE(ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http2, {.method_ = "CONNECT", .protocol_ = "connect-udp", .scheme_ = "https", .authority_ = "example.test", .target_ = "/proxy", .headers_ = cl5_req}).has_value());
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, cl0_req).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, ruvia::http_status::ok, cl0_req).has_value());
 
     // RFC 9110 7.8: Upgrade is ignored on HTTP/1.0 requests.
     ruvia::http1_server_request_parser h10_parser;
@@ -1280,7 +1280,7 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
     };
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(ruvia::http_protocol_version::http2, h2_te_req).has_value());
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request_to_send(ruvia::http_protocol_version::http2, h2_te_req).has_value());
-    EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, h2_te_trailers).has_value());
+    EXPECT_TRUE(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, ruvia::http_status::ok, h2_te_trailers).has_value());
     const std::array h2_te_gzip{
         ruvia::http_header_view{"Capsule-Protocol", "?1"},
         ruvia::http_header_view{"te", "gzip"},
@@ -1331,7 +1331,7 @@ void capsule(void* context_value, ruvia::http_capsule_event event) {
     auto& capture_value = *static_cast<capture*>(context_value);
     capture_value.type_ = event.type_;
     if (!event.payload_.empty()) {
-        capture_value.body_.append(event.payload_.data(), event.payload_.size());
+        capture_value.body_.append(ruvia::as_chars(event.payload_));
     }
     capture_value.ends_ += event.end_capsule_;
 }
@@ -1372,7 +1372,7 @@ concept receives_datagram = requires(const ruvia::http_datagram_session& session
     session.receive_datagram(ruvia::http_datagram_mode::raw, std::forward<input_type>(input));
 };
 
-using datagram_list_ref = const std::initializer_list<char>&;
+using datagram_list_ref = const std::initializer_list<std::byte>&;
 static_assert(!decodes_udp_datagram<datagram_list_ref>);
 static_assert(!prepares_datagram<datagram_list_ref>);
 static_assert(!receives_datagram<datagram_list_ref>);
@@ -1380,50 +1380,50 @@ static_assert(!receives_datagram<datagram_list_ref>);
 }  // namespace
 
 TEST(Ruvia, http_udp_datagram_context_prefix_roundtrips) {
-    std::array<char, 8> prefix{};
+    std::array<std::byte, 8> prefix{};
     for (const auto id : {std::uint64_t{0}, std::uint64_t{63}, std::uint64_t{64}, std::uint64_t{16384}, (std::uint64_t{1} << 30), (std::uint64_t{1} << 62) - 1}) {
         const auto encoded = ruvia::encode_http_udp_datagram_prefix(prefix, id);
         EXPECT_TRUE(encoded.index() == 0);
-        const auto decoded = ruvia::decode_http_udp_datagram(std::span<const char>(prefix).first(std::get<0>(encoded)));
+        const auto decoded = ruvia::decode_http_udp_datagram(std::span<const std::byte>(prefix).first(std::get<0>(encoded)));
         EXPECT_TRUE(decoded.has_value());
         EXPECT_EQ(decoded->context_id_, id);
         EXPECT_TRUE(decoded->payload_.empty());
     }
-    EXPECT_TRUE(!ruvia::decode_http_udp_datagram({}).has_value());
+    EXPECT_TRUE(!ruvia::decode_http_udp_datagram(ruvia::byte_view{}).has_value());
     EXPECT_TRUE(ruvia::encode_http_udp_datagram_prefix(prefix, std::uint64_t{1} << 62).index() != 0);
 }
 TEST(Ruvia, http_capsule_incremental_unknown_empty_and_datagram) {
     std::array<char, 16> prefix{};
-    auto count = ruvia::encode_http_capsule_header(prefix, 0x1234, 5);
+    auto count = ruvia::encode_http_capsule_header(ruvia::as_mutable_bytes(std::span(prefix)), 0x1234, 5);
     std::string wire(prefix.data(), std::get<0>(count));
     wire += "hello";
-    auto empty = ruvia::encode_http_capsule_header(prefix, 0, 0);
+    auto empty = ruvia::encode_http_capsule_header(ruvia::as_mutable_bytes(std::span(prefix)), 0, 0);
     wire.append(prefix.data(), std::get<0>(empty));
     ruvia::http_capsule_decoder decoder;
     capture capture_state;
     for (const char& byte : wire) {
-        EXPECT_TRUE(decoder.feed({&byte, 1}, false, capsule, &capture_state).holds<ruvia::decode_need_input>());
+        EXPECT_TRUE(decoder.feed(ruvia::as_bytes(std::string_view(&byte, 1)), false, capsule, &capture_state).holds<ruvia::decode_need_input>());
     }
     EXPECT_EQ(capture_state.body_, std::string("hello"));
     EXPECT_EQ(capture_state.ends_, 2u);
-    EXPECT_TRUE(decoder.feed({}, true, capsule, &capture_state).holds<ruvia::decode_complete>());
+    EXPECT_TRUE(decoder.feed(ruvia::byte_view{}, true, capsule, &capture_state).holds<ruvia::decode_complete>());
     ruvia::http_capsule_decoder lambda_decoder;
     capture lambda_capture;
-    EXPECT_TRUE(lambda_decoder.feed(wire, true, [&](ruvia::http_capsule_event event) {
+    EXPECT_TRUE(lambda_decoder.feed(ruvia::as_bytes(wire), true, [&](ruvia::http_capsule_event event) {
         capsule(&lambda_capture, event);
     }).holds<ruvia::decode_complete>());
     EXPECT_EQ(lambda_capture.body_, std::string("hello"));
     EXPECT_EQ(lambda_capture.ends_, 2u);
     ruvia::http_capsule_decoder pull_lambda_decoder;
     capture pull_lambda_capture;
-    const auto pull_first = pull_lambda_decoder.feed_one(wire, true, [&](ruvia::http_capsule_event event) {
+    const auto pull_first = pull_lambda_decoder.feed_one(ruvia::as_bytes(wire), true, [&](ruvia::http_capsule_event event) {
         capsule(&pull_lambda_capture, event);
     });
     EXPECT_TRUE(pull_first.holds<ruvia::http_capsule_boundary>());
     EXPECT_EQ(pull_lambda_capture.body_, std::string("hello"));
 }
 TEST(Ruvia, http_capsule_truncated_and_length_limit_are_terminal) {
-    const std::array prefix{char(0), char(3)};
+    const std::array prefix{std::byte{0}, std::byte{3}};
     ruvia::http_capsule_decoder limit({.max_capsule_bytes_ = 2});
     const auto limit_result = limit.feed(prefix, false, nullptr, nullptr);
     const auto* limit_failure = limit_result.get_if<ruvia::http_capsule_decode_failure>();
@@ -1436,24 +1436,24 @@ TEST(Ruvia, http_capsule_truncated_and_length_limit_are_terminal) {
 
 TEST(Ruvia, http_capsule_decoder_state_and_reset) {
     std::array<char, 16> prefix{};
-    const auto count = ruvia::encode_http_capsule_header(prefix, 0x1234, 5);
+    const auto count = ruvia::encode_http_capsule_header(ruvia::as_mutable_bytes(std::span(prefix)), 0x1234, 5);
     std::string wire(prefix.data(), std::get<0>(count));
     wire += "hello";
 
     ruvia::http_capsule_decoder decoder;
     EXPECT_TRUE(decoder.state() == ruvia::decoder_state::active);
     capture first;
-    EXPECT_TRUE(decoder.feed(wire, true, capsule, &first).holds<ruvia::decode_complete>());
+    EXPECT_TRUE(decoder.feed(ruvia::as_bytes(wire), true, capsule, &first).holds<ruvia::decode_complete>());
     EXPECT_TRUE(decoder.state() == ruvia::decoder_state::finished);
     EXPECT_EQ(first.body_, std::string("hello"));
     // A finished decoder replays its terminal result without consuming input.
-    const auto replayed = decoder.feed(wire, true, capsule, &first);
+    const auto replayed = decoder.feed(ruvia::as_bytes(wire), true, capsule, &first);
     EXPECT_TRUE(replayed.holds<ruvia::decode_complete>() && replayed.consumed_bytes() == 0);
     EXPECT_EQ(first.body_, std::string("hello"));
 
     decoder.reset();
     EXPECT_TRUE(decoder.state() == ruvia::decoder_state::active);
-    const auto cut = decoder.feed(std::span<const char>(wire).first(wire.size() - 1), true, nullptr, nullptr);
+    const auto cut = decoder.feed(ruvia::as_bytes(wire).first(wire.size() - 1), true, nullptr, nullptr);
     const auto* cut_failure = cut.get_if<ruvia::http_capsule_decode_failure>();
     EXPECT_TRUE(cut_failure != nullptr && cut_failure->error() == ruvia::http_capsule_decode_error::truncated);
     EXPECT_TRUE(decoder.state() == ruvia::decoder_state::failed);
@@ -1461,7 +1461,7 @@ TEST(Ruvia, http_capsule_decoder_state_and_reset) {
     decoder.reset();
     EXPECT_TRUE(decoder.state() == ruvia::decoder_state::active);
     capture second;
-    EXPECT_TRUE(decoder.feed(wire, true, capsule, &second).holds<ruvia::decode_complete>());
+    EXPECT_TRUE(decoder.feed(ruvia::as_bytes(wire), true, capsule, &second).holds<ruvia::decode_complete>());
     EXPECT_TRUE(decoder.state() == ruvia::decoder_state::finished);
     EXPECT_EQ(second.body_, std::string("hello"));
 }
@@ -1470,7 +1470,7 @@ TEST(Ruvia, http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_afte
     std::array<char, 16> header;
     std::string wire;
     for (const auto& item : std::array<std::pair<std::uint64_t, std::string_view>, 3>{{{0x123456789ULL, "first"}, {0, ""}, {7, "last"}}}) {
-        const auto encoded = ruvia::encode_http_capsule_header(header, item.first, item.second.size());
+        const auto encoded = ruvia::encode_http_capsule_header(ruvia::as_mutable_bytes(std::span(header)), item.first, item.second.size());
         wire.append(header.data(), std::get<0>(encoded));
         wire.append(item.second);
     }
@@ -1481,7 +1481,7 @@ TEST(Ruvia, http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_afte
         std::string all_payload;
         while (offset != wire.size()) {
             const auto count = std::min(block, wire.size() - offset);
-            const auto result_value = decoder.feed_one(std::span<const char>(wire).subspan(offset, count), offset + count == wire.size(), capsule, &captured);
+            const auto result_value = decoder.feed_one(ruvia::as_bytes(wire).subspan(offset, count), offset + count == wire.size(), capsule, &captured);
             EXPECT_TRUE(result_value.consumed_bytes() > 0 && result_value.consumed_bytes() <= count);
             offset += result_value.consumed_bytes();
             if (result_value.holds<ruvia::http_capsule_boundary>()) {
@@ -1497,11 +1497,11 @@ TEST(Ruvia, http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_afte
         }
         EXPECT_EQ(complete_value, std::size_t{3});
         EXPECT_EQ(captured.ends_, std::size_t{3});
-        const auto ended = decoder.feed_one({}, true, capsule, &captured);
+        const auto ended = decoder.feed_one(ruvia::byte_view{}, true, capsule, &captured);
         EXPECT_TRUE(ended.holds<ruvia::decode_complete>() && ended.consumed_bytes() == 0);
     }
     ruvia::http_capsule_decoder truncated;
-    const std::array partial{char(0), char(3), char('a')};
+    const std::array partial{std::byte{0}, std::byte{3}, std::byte{'a'}};
     const auto result_value = truncated.feed_one(partial, true, nullptr, nullptr);
     const auto* truncated_failure = result_value.get_if<ruvia::http_capsule_decode_failure>();
     EXPECT_TRUE(truncated_failure != nullptr && truncated_failure->error() == ruvia::http_capsule_decode_error::truncated && result_value.consumed_bytes() == partial.size());
@@ -1513,7 +1513,7 @@ TEST(Ruvia, http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_afte
 TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limit) {
     std::array<char, 16> header;
     const auto append_capsule = [&](std::string& wire, std::uint64_t type, std::string_view value) {
-        const auto encoded = ruvia::encode_http_capsule_header(header, type, value.size());
+        const auto encoded = ruvia::encode_http_capsule_header(ruvia::as_mutable_bytes(std::span(header)), type, value.size());
         wire.append(header.data(), std::get<0>(encoded));
         wire.append(value);
     };
@@ -1530,7 +1530,7 @@ TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limi
         std::size_t offset{};
         while (offset != wire.size()) {
             const auto count = std::min(block, wire.size() - offset);
-            const auto result_value = decoder.feed_one(std::span<const char>(wire).subspan(offset, count), offset + count == wire.size(), capsule, &captured, ruvia::http_capsule_retention::udp_payloads);
+            const auto result_value = decoder.feed_one(ruvia::as_bytes(wire).subspan(offset, count), offset + count == wire.size(), capsule, &captured, ruvia::http_capsule_retention::udp_payloads);
             EXPECT_TRUE(!result_value.holds<ruvia::http_capsule_decode_failure>());
             if (result_value.holds<ruvia::http_capsule_decode_failure>()) {
                 break;
@@ -1553,7 +1553,7 @@ TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limi
     append_capsule(datagrams, 0, "\x03kept");
     ruvia::http_capsule_decoder decoder({.max_capsule_bytes_ = 100});
     capture captured;
-    EXPECT_TRUE(decoder.feed(datagrams, true, capsule, &captured, ruvia::http_capsule_retention::datagrams).holds<ruvia::decode_complete>());
+    EXPECT_TRUE(decoder.feed(ruvia::as_bytes(datagrams), true, capsule, &captured, ruvia::http_capsule_retention::datagrams).holds<ruvia::decode_complete>());
     EXPECT_EQ(captured.body_, std::string("\x03kept"));
     EXPECT_EQ(captured.ends_, std::size_t{1});
 
@@ -1563,7 +1563,7 @@ TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limi
         std::string oversized;
         append_capsule(oversized, retention == ruvia::http_capsule_retention::all ? 0x17 : 0, std::string("\0", 1) + std::string(200, 'o'));
         ruvia::http_capsule_decoder limited({.max_capsule_bytes_ = 100});
-        const auto limited_result = limited.feed(oversized, false, nullptr, nullptr, retention);
+        const auto limited_result = limited.feed(ruvia::as_bytes(oversized), false, nullptr, nullptr, retention);
         const auto* limited_failure = limited_result.get_if<ruvia::http_capsule_decode_failure>();
         EXPECT_TRUE(limited_failure != nullptr && limited_failure->error() == ruvia::http_capsule_decode_error::limit_exceeded);
     }
@@ -1572,20 +1572,20 @@ TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limi
 TEST(Ruvia, http_datagram_capsule_channel_frames_opaque_payloads_and_obeys_half_close) {
     ruvia::http_datagram_session session;
     const std::string_view opaque("\1\0\xff", 3);
-    const auto plan = session.prepare_datagram(ruvia::http_datagram_mode::raw, std::span(opaque.data(), opaque.size()));
+    const auto plan = session.prepare_datagram(ruvia::http_datagram_mode::raw, ruvia::as_bytes(opaque));
     EXPECT_TRUE(plan.index() == 0);
     const auto received = session.receive_datagram(ruvia::http_datagram_mode::raw, std::get<0>(plan).payload());
     EXPECT_TRUE(received.index() == 0 && std::get<0>(received).has_value());
-    EXPECT_TRUE(std::string_view(std::get<0>(received)->data(), std::get<0>(received)->size()) == opaque);
-    const auto empty = session.prepare_datagram(ruvia::http_datagram_mode::raw, {});
+    EXPECT_TRUE(ruvia::as_chars(*std::get<0>(received)) == opaque);
+    const auto empty = session.prepare_datagram(ruvia::http_datagram_mode::raw, ruvia::byte_view{});
     EXPECT_TRUE(empty.index() == 0);
     const auto empty_received = session.receive_datagram(ruvia::http_datagram_mode::raw, std::get<0>(empty).payload());
     EXPECT_TRUE(empty_received.index() == 0 && std::get<0>(empty_received).has_value() && std::get<0>(empty_received)->empty());
     session.close_receive();
-    const auto closed = session.receive_datagram(ruvia::http_datagram_mode::raw, opaque);
+    const auto closed = session.receive_datagram(ruvia::http_datagram_mode::raw, ruvia::as_bytes(opaque));
     EXPECT_TRUE(closed.index() == 0 && !std::get<0>(closed).has_value());
     session.close_send();
-    EXPECT_TRUE(session.prepare_datagram(ruvia::http_datagram_mode::raw, {}).index() != 0);
+    EXPECT_TRUE(session.prepare_datagram(ruvia::http_datagram_mode::raw, ruvia::byte_view{}).index() != 0);
 }
 
 namespace {

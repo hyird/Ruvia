@@ -34,7 +34,7 @@
 #include <asio/write.hpp>
 
 #include "app.h"
-#include "asio_completion.h"
+#include "asio_bridge.h"
 #include "content_decoding_fixture.h"
 #include "context.h"
 #include "controller.h"

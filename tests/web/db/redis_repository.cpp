@@ -1007,8 +1007,8 @@ TEST(Ruvia, redis_entity_rejects_numeric_overflow_without_changing_identity_or_f
     EXPECT_TRUE(id_rejected);
     EXPECT_EQ(value.get<"id">(), 7);
     // 绑定层接受的有限 double，仍可能无法表示为实体的 float 字段。
-    const auto oversized = ruvia::parse_json<ruvia::double_value>("1.7976931348623157e308").take_value();
-    EXPECT_EQ(oversized.value_, (std::numeric_limits<double>::max)());
+    const auto oversized = ruvia::parse_json<double>("1.7976931348623157e308").take_value();
+    EXPECT_EQ(oversized, (std::numeric_limits<double>::max)());
     for (int state = 0; state != 3; ++state) {
         if (state == 1) {
             value.set_null<"score">();
@@ -1028,7 +1028,7 @@ TEST(Ruvia, redis_entity_rejects_numeric_overflow_without_changing_identity_or_f
             EXPECT_EQ(value.get<"score">(), 1.5F);
         }
     }
-    value.set<"id">(ruvia::int64{(std::numeric_limits<std::int32_t>::min)()});
+    value.set<"id">(static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::min)()));
     EXPECT_EQ(value.get<"id">(), (std::numeric_limits<std::int32_t>::min)());
 }
 

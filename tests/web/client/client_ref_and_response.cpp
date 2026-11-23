@@ -348,7 +348,7 @@ TEST(Ruvia, http_client_response_and_body_moved_from_throw_logic_error) {
     }
 }
 
-RUVIA_MODEL(fluent_client_body_rule, RUVIA_REQUIRED_FIELD(body, ruvia::string, RUVIA_MIN(5, "body too short")));
+RUVIA_MODEL(fluent_client_body_rule, RUVIA_REQUIRED_FIELD(body, ruvia::string, RUVIA_MIN_BYTES(5, "body too short")));
 RUVIA_MODEL(fluent_client_missing_field, RUVIA_REQUIRED_FIELD(missing_field, ruvia::string));
 
 RUVIA_MODEL(fluent_client_observation, RUVIA_REQUIRED_FIELD(method, ruvia::string), RUVIA_REQUIRED_FIELD(body, ruvia::string), RUVIA_REQUIRED_FIELD(query, ruvia::string), RUVIA_REQUIRED_FIELD(single_header, ruvia::string), RUVIA_REQUIRED_FIELD(span_header, ruvia::string), RUVIA_REQUIRED_FIELD(authorization, ruvia::string), RUVIA_REQUIRED_FIELD(proxy_authorization, ruvia::string), RUVIA_REQUIRED_FIELD(cookie, ruvia::string), RUVIA_REQUIRED_FIELD(content_type, ruvia::string), RUVIA_REQUIRED_FIELD(authority, ruvia::string));

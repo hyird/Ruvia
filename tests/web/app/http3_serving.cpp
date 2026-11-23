@@ -75,9 +75,9 @@ std::span<const std::byte> byte_view(std::string_view value) {
 }
 
 std::string udp_capsule(std::string_view payload) {
-    std::array<char, 16> prefix{};
+    std::array<std::byte, 16> prefix{};
     const auto encoded = ruvia::encode_http_capsule_header(prefix, ruvia::http_datagram_capsule_type, payload.size() + 1);
-    std::string result(prefix.data(), std::get<std::size_t>(encoded));
+    std::string result(reinterpret_cast<const char*>(prefix.data()), std::get<std::size_t>(encoded));
     result.push_back('\0');
     result.append(payload);
     return result;

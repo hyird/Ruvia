@@ -11,9 +11,12 @@
 #include <asio/post.hpp>
 
 #include "asio_bridge.h"
-#include "asio_completion.h"
+#include "channel.h"
 #include "event_loop.h"
+#include "function_ref.h"
 #include "move_only_function.h"
+#include "operation_interrupt.h"
+#include "slot_pool.h"
 #include "worker_cancellation.h"
 #include "worker_runtime.h"
 #include "worker_wait.h"
@@ -497,4 +500,171 @@ TEST(Ruvia, noexcept_function_preserves_mutable_target_through_const_owner) {
     EXPECT_FALSE(source);
     EXPECT_EQ(destination(), 5);
     EXPECT_EQ(destination(), 6);
+}
+
+namespace core_public_surface_test {
+
+struct move_counted final {
+    int value_{0};
+    int moves_{0};
+
+    explicit move_counted(int value) noexcept :
+        value_(value) {}
+    move_counted(const move_counted&) = delete;
+    move_counted& operator=(const move_counted&) = delete;
+    move_counted(move_counted&& other) noexcept :
+        value_(other.value_),
+        moves_(other.moves_ + 1) {}
+    move_counted& operator=(move_counted&&) = delete;
+};
+
+struct throwing_move_result final {
+    int value_{0};
+
+    explicit throwing_move_result(int value) noexcept :
+        value_(value) {}
+    throwing_move_result(const throwing_move_result&) = delete;
+    throwing_move_result& operator=(const throwing_move_result&) = delete;
+    throwing_move_result(throwing_move_result&& other) noexcept(false) :
+        value_(other.value_) {}
+    throwing_move_result& operator=(throwing_move_result&&) = delete;
+};
+
+[[nodiscard]] int double_value(int value) noexcept {
+    return value * 2;
+}
+
+struct slot_driver final {
+    enum class deadline_kind : std::uint8_t {
+        io,
+    };
+
+    struct policy final {
+        using owner_type = slot_driver;
+        using deadline_kind_type = deadline_kind;
+
+        [[noreturn]] static void throw_acquire_failure(const slot_driver&, ruvia::wait_status) {
+            throw std::runtime_error("acquire failed");
+        }
+        [[noreturn]] static void throw_aborted(const slot_driver&, ruvia::pool_slot_abort_reason) {
+            throw std::runtime_error("slot aborted");
+        }
+        static void expire_slot(slot_driver& owner, std::size_t slot, deadline_kind) noexcept {
+            owner.expired_slot_ = slot;
+        }
+        static void cancel_slot(slot_driver& owner, std::size_t slot) noexcept {
+            owner.cancelled_slot_ = slot;
+        }
+    };
+
+    std::optional<std::size_t> expired_slot_;
+    std::optional<std::size_t> cancelled_slot_;
+};
+
+ruvia::task<throwing_move_result> make_throwing_move_task(int value) {
+    co_return throwing_move_result(value);
+}
+
+ruvia::task<bool> verify_core_public_primitives(ruvia::event_loop loop) {
+    const auto current = ruvia::worker_ref::current();
+    if (!current.valid() || current.id() != loop.worker().id()) {
+        co_return false;
+    }
+    auto exec = ruvia::asio_executor(current);
+    bool posted = false;
+    const auto completion = co_await ruvia::async_asio([&](auto handler) {
+        asio::post(exec, [&, h = std::move(handler)]() mutable {
+            posted = true;
+            h(std::error_code{});
+        });
+    });
+    if (!completion.ok() || !posted) {
+        co_return false;
+    }
+
+    // Rvalue channel_sender supports send_wait directly.
+    auto [sender, receiver] = ruvia::make_channel<int>(current, {.capacity_ = 1});
+    if (!(co_await std::move(sender).send_wait(19)).accepted()) {
+        co_return false;
+    }
+    const auto received = co_await receiver.receive();
+    if (!received.has_value() || received.value() != 19) {
+        co_return false;
+    }
+
+    // Public slot_pool + cancellation_guard.
+    slot_driver owner;
+    ruvia::slot_pool<slot_driver::policy> pool(owner, 1, current);
+    const auto slot = co_await pool.acquire(ruvia::operation_deadline{}, std::nullopt, {});
+    ruvia::slot_pool<slot_driver::policy>::lease_guard lease(pool, slot);
+    ruvia::stop_source cancel_source;
+    {
+        ruvia::slot_pool<slot_driver::policy>::cancellation_guard guard(pool, slot, cancel_source.token());
+        cancel_source.request_stop();
+    }
+    if (owner.cancelled_slot_ != slot || !pool.aborted(slot)) {
+        co_return false;
+    }
+
+    // Public operation_interrupt + operation_lane_lease.
+    bool active = false;
+    auto lane = ruvia::claim_operation_lane(active, "busy");
+    bool interrupted_flag = false;
+    ruvia::operation_interrupt_source source;
+    ruvia::stop_source op_stop;
+    {
+        ruvia::operation_interrupt interrupt(source, current, {.stop_token_ = op_stop.token()}, &interrupted_flag, [](void* raw) noexcept {
+            *static_cast<bool*>(raw) = true;
+        }, "custom io");
+        op_stop.request_stop();
+        if (!interrupted_flag || interrupt.cause() != ruvia::operation_interrupt_cause::cancelled) {
+            co_return false;
+        }
+    }
+    co_return active;
+}
+
+}  // namespace core_public_surface_test
+
+TEST(Ruvia, function_ref_forwards_by_value_once_and_rejects_rvalue_callables) {
+    using namespace core_public_surface_test;
+
+    static_assert(!std::is_constructible_v<ruvia::function_ref<int()>, decltype([] {
+        return 1;
+    })>);
+    static_assert(!std::is_constructible_v<ruvia::function_ref<int()>, ruvia::move_only_function<int()>&&>);
+
+    auto consume = [](move_counted item) noexcept {
+        return item.value_ * 10 + item.moves_;
+    };
+    const ruvia::function_ref<int(move_counted) noexcept> view(consume);
+    ASSERT_TRUE(static_cast<bool>(view));
+    // 1 move into operator() parameter, 0 extra moves through the thunk.
+    EXPECT_EQ(view(move_counted(4)), 41);
+
+    constexpr auto fn_view = ruvia::function_ref<int(int) noexcept>::from_function<&double_value>();
+    EXPECT_EQ(fn_view(9), 18);
+
+    const ruvia::move_only_function<int()> empty_owner{};
+    const ruvia::function_ref<int()> empty_ref(empty_owner);
+    EXPECT_FALSE(static_cast<bool>(empty_ref));
+    EXPECT_EQ(empty_ref, nullptr);
+}
+
+TEST(Ruvia, public_core_primitives_compose_interrupt_slot_pool_and_executor) {
+    using namespace core_public_surface_test;
+
+    EXPECT_FALSE(ruvia::worker_ref::current().valid());
+
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 16});
+    loops.start();
+    const auto loop = loops.loop(0);
+
+    // event_loop::submit accepts value types with potentially-throwing move constructors.
+    auto submitted = loop.submit(make_throwing_move_task(77)).take_value();
+    EXPECT_EQ(std::move(submitted).take_value().value_, 77);
+
+    auto verify = loop.submit(verify_core_public_primitives(loop)).take_value();
+    EXPECT_TRUE(std::move(verify).take_value());
+    loops.join();
 }

@@ -383,7 +383,7 @@ struct http_client_config final {
     // entry replaces an earlier one of the same name; max_cookies_ and
     // max_cookie_bytes_ bound the result. Explicit caller Cookie fields are
     // combined independently of the stored jar.
-    std::vector<http_header_view> cookies_;
+    std::vector<http_header> cookies_;
 };
 
 // Protocol and connection-pool failures of the HTTP client. An operation's

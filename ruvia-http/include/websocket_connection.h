@@ -134,11 +134,21 @@ struct websocket_client_deflate_offer final {
 class websocket_message final {
 public:
     // Construct a zero-copy message over caller-owned payload storage, rejecting
-    // direct owning-string temporaries. Keep that storage alive and unchanged
-    // until the view, or a send operation borrowing it, is no longer in use.
+    // direct owning temporaries. Keep that storage alive and unchanged until the
+    // view, or a send operation borrowing it, is no longer in use.
     [[nodiscard]] static constexpr websocket_message borrow(websocket_opcode opcode, borrowed_text payload_value) noexcept {
         return websocket_message(opcode, payload_value.view());
     }
+
+    template <typename bytes_type>
+        requires(!std::convertible_to<bytes_type&&, borrowed_text> && std::convertible_to<bytes_type&&, borrowed_bytes>)
+    [[nodiscard]] static websocket_message borrow(websocket_opcode opcode, bytes_type&& payload_value) noexcept {
+        const borrowed_bytes borrowed(std::forward<bytes_type>(payload_value));
+        return websocket_message(opcode, as_chars(borrowed.view()));
+    }
+
+    template <detail::http_temporary_owning_range<std::byte> range_type>
+    static websocket_message borrow(websocket_opcode, range_type&&) = delete;
 
     websocket_message(const websocket_message&) noexcept = default;
     websocket_message& operator=(const websocket_message&) noexcept = default;
@@ -155,6 +165,10 @@ public:
     // outlive the current message.
     [[nodiscard]] constexpr std::string_view payload() const noexcept {
         return payload_;
+    }
+
+    [[nodiscard]] byte_view payload_bytes() const noexcept {
+        return as_bytes(payload_);
     }
 
     [[nodiscard]] bool text() const noexcept {
@@ -226,7 +240,7 @@ enum class websocket_output_consume_status : std::uint8_t { pending,
     out_of_range };
 enum class websocket_connection_role : std::uint8_t { server,
     client };
-using websocket_mask_key_type = std::array<char, 4>;
+using websocket_mask_key_type = std::array<std::byte, 4>;
 // Client transports must supply a fresh cryptographically random key per call.
 // The context is borrowed and must outlive the connection. Failure is fatal to
 // the transport: operations may throw and the caller must abort the connection.
@@ -241,8 +255,14 @@ public:
     [[nodiscard]] constexpr std::string_view bytes() const noexcept {
         return bytes_;
     }
+    [[nodiscard]] byte_view frame_bytes() const noexcept {
+        return as_bytes(bytes_);
+    }
     [[nodiscard]] constexpr std::string_view borrowed_bytes() const noexcept {
         return borrowed_bytes_;
+    }
+    [[nodiscard]] byte_view borrowed_payload_bytes() const noexcept {
+        return as_bytes(borrowed_bytes_);
     }
     // Total pending bytes: what consume_output() takes once both are written.
     [[nodiscard]] constexpr std::size_t size() const noexcept {
@@ -268,6 +288,9 @@ public:
     [[nodiscard]] constexpr std::string_view payload() const noexcept {
         return payload_;
     }
+    [[nodiscard]] byte_view payload_bytes() const noexcept {
+        return as_bytes(payload_);
+    }
 
 private:
     friend class websocket_event;
@@ -280,6 +303,9 @@ class websocket_pong_event final {
 public:
     [[nodiscard]] constexpr std::string_view payload() const noexcept {
         return payload_;
+    }
+    [[nodiscard]] byte_view payload_bytes() const noexcept {
+        return as_bytes(payload_);
     }
 
 private:
@@ -457,15 +483,27 @@ struct websocket_frame_options final {
 };
 
 // A frame payload websocket_connection::submit_frame() queues by reference
-// instead of copying. Construction rejects temporary owning strings, whose
+// instead of copying. Construction rejects temporary owning containers, whose
 // bytes would expire before the transport writes them.
 class websocket_borrowed_payload final {
 public:
     explicit constexpr websocket_borrowed_payload(borrowed_text bytes) noexcept :
-        bytes_(bytes) {}
+        bytes_(bytes.view()) {}
+
+    template <typename bytes_type>
+        requires(!std::convertible_to<bytes_type&&, borrowed_text> && std::convertible_to<bytes_type&&, borrowed_bytes>)
+    explicit websocket_borrowed_payload(bytes_type&& bytes) noexcept :
+        bytes_(as_chars(borrowed_bytes(std::forward<bytes_type>(bytes)).view())) {}
+
+    template <detail::http_temporary_owning_range<std::byte> range_type>
+    explicit websocket_borrowed_payload(range_type&&) = delete;
 
     [[nodiscard]] constexpr std::string_view bytes() const noexcept {
         return bytes_.view();
+    }
+
+    [[nodiscard]] byte_view raw_bytes() const noexcept {
+        return as_bytes(bytes_.view());
     }
 
 private:
@@ -538,6 +576,14 @@ public:
     // taken before reclaiming consumed input storage.
     [[nodiscard]] websocket_feed_status feed(std::string_view input) &;
     websocket_feed_status feed(std::string_view) && = delete;
+    template <typename bytes_type>
+        requires(!std::convertible_to<bytes_type&&, std::string_view> && std::convertible_to<bytes_type&&, byte_view>)
+    [[nodiscard]] websocket_feed_status feed(bytes_type&& input) & {
+        return feed(as_chars(byte_view(std::forward<bytes_type>(input))));
+    }
+    template <typename bytes_type>
+        requires(!std::convertible_to<bytes_type&&, std::string_view> && std::convertible_to<bytes_type&&, byte_view>)
+    websocket_feed_status feed(bytes_type&&) && = delete;
     [[nodiscard]] std::optional<websocket_event> next_event() & RUVIA_LIFETIMEBOUND;
     std::optional<websocket_event> next_event() && = delete;
     [[nodiscard]] std::size_t needed_input_bytes() const noexcept;
@@ -582,6 +628,11 @@ public:
     // liveness_mode() reports inactive.
     // This form copies the payload into the connection's output before returning.
     [[nodiscard]] websocket_frame_submit_status submit_frame(websocket_opcode opcode, std::string_view payload, websocket_frame_options options = {});
+    template <typename bytes_type>
+        requires(!std::convertible_to<bytes_type&&, std::string_view> && std::convertible_to<bytes_type&&, byte_view>)
+    [[nodiscard]] websocket_frame_submit_status submit_frame(websocket_opcode opcode, bytes_type&& payload, websocket_frame_options options = {}) {
+        return submit_frame(opcode, as_chars(byte_view(std::forward<bytes_type>(payload))), options);
+    }
     // The same submission queuing an uncompressed, unmasked payload by
     // reference: output_plan() exposes it as borrowed_bytes() after the frame
     // header. Its bytes must stay alive and unchanged until consume_output()

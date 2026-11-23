@@ -8,7 +8,7 @@
 #include "task.h"
 #include "worker_ref.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 // Keeps a reentrant join from publishing retirement during frame/capability
 // cleanup. Its registration is a value, not a frame-owner base class.
@@ -144,7 +144,7 @@ void operation_scope::resume_joiner() noexcept {
     const auto resume = [continuation] {
         continuation.resume();
     };
-    if ((bound_worker != nullptr ? *bound_worker : worker_ref_access::current()).defer_completion(resume)) {
+    if ((bound_worker != nullptr ? *bound_worker : worker_ref::current()).defer_completion(resume)) {
         return;
     }
     // No attached event loop owns this thread (or its context has detached):
@@ -289,6 +289,8 @@ void operation_scope::unlink(detail::scoped_operation_registration& operation) n
     operation.next_ = nullptr;
 }
 
+namespace detail {
+
 scoped_operation_registration::scoped_operation_registration(scoped_operation_registration&& other, void* new_frame_target) noexcept {
     if (other.phase_ == phase::running || other.phase_ == phase::retiring) {
         std::terminate();
@@ -409,4 +411,6 @@ void scoped_operation_registration::retire_frame() noexcept {
     }
 }
 
-}  // namespace ruvia::detail
+}  // namespace detail
+
+}  // namespace ruvia

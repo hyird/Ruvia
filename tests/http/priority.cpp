@@ -37,7 +37,8 @@ TEST(Ruvia, http_structured_scanner_borrows_contiguous_tokens_and_resets_reused_
     ASSERT_TRUE(parser.consume(','));
     parser.ows();
     ASSERT_TRUE(parser.member(item));
-    EXPECT_EQ(item.kind_, ruvia::http_structured_item::kind_type::other);
+    EXPECT_EQ(item.kind_, ruvia::http_structured_item::kind_type::decimal);
+    EXPECT_EQ(item.decimal_.milli_value_, 1250);
     EXPECT_TRUE(item.text().empty());
     EXPECT_TRUE(parser.empty());
 }
@@ -143,12 +144,13 @@ TEST(Ruvia, http_priority_repeated_fields_preserve_separators_and_empty_values) 
 }
 
 TEST(Ruvia, http_priority_http2_frame_roundtrips_and_output_bounds) {
-    std::array<char, 64> bytes_value{};
+    std::array<std::byte, 64> bytes_value{};
     auto h2 = ruvia::encode_http2_priority_update(bytes_value, 5, {.urgency_ = 1, .incremental_ = true});
     EXPECT_TRUE((h2.index() == 0));
     auto decoded = ruvia::decode_http2_priority_update(std::span(bytes_value).subspan(9, std::get<0>(h2) - 9));
     EXPECT_TRUE((decoded.index() == 0) && std::get<0>(decoded).element_id_ == 5 && !std::get<0>(decoded).push_ && std::get<0>(decoded).fields_.urgency_ == 1);
-    EXPECT_TRUE((ruvia::encode_http_priority(std::span(bytes_value).first(1), {.urgency_ = 2}).index() != 0));
+    std::array<char, 64> text_buf{};
+    EXPECT_TRUE((ruvia::encode_http_priority(std::span(text_buf).first(1), {.urgency_ = 2}).index() != 0));
     EXPECT_TRUE((ruvia::encode_http2_priority_update(bytes_value, 0, {}).index() != 0));
 }
 

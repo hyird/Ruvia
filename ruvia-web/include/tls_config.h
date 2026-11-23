@@ -21,8 +21,9 @@ namespace ruvia {
 // chain, and the key). Mixing the sources, or naming only half of one, throws
 // std::invalid_argument. Paths must not be empty or contain NUL; they reach
 // OpenSSL and the database drivers as UTF-8, so a native Windows name never
-// narrows through the ANSI code page. In-memory PEM serves HTTPS listeners
-// only: database, Redis and HTTP clients read identity files and reject it.
+// narrows through the ANSI code page. HTTPS listeners and OpenSSL-backed
+// clients (HTTP, TCP, Redis) accept both file paths and in-memory PEM; native
+// database drivers read identity files directly and reject in-memory PEM.
 // A non-empty password decrypts the key; its binary bytes, including
 // embedded NUL, are preserved. Listener configuration stages these bytes;
 // starting/adding a listener, replacing identities and certificate-store

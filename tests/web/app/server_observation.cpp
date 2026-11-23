@@ -77,7 +77,7 @@ public:
     void add(const ruvia::tls_client_hello_record& hello) {
         const auto message = hello.message();
         std::lock_guard lock(mutex_);
-        client_hellos_.push_back({hello.connection_id(), std::string(hello.local().address().to_string()), hello.local().port(), std::string(hello.remote().address().to_string()), hello.remote().port(), hello.quic(), std::string(reinterpret_cast<const char*>(message.data()), message.size())});
+        client_hellos_.push_back({hello.connection_id(), std::string(hello.local().address().to_string()), hello.local().port().value(), std::string(hello.remote().address().to_string()), hello.remote().port().value(), hello.quic(), std::string(reinterpret_cast<const char*>(message.data()), message.size())});
     }
 
     void add(const ruvia::http2_input_record& input) {

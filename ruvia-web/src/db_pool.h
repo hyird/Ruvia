@@ -276,8 +276,8 @@ public:
     task<std::optional<db_row>> read_stream_row(std::size_t slot, std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_options& options);
     task<void> close_stream(std::size_t slot, const operation_options& options);
     void abort_stream(std::size_t slot) noexcept;
-    task<db_rows> query_on_transaction_slot(std::size_t slot, std::string sql, std::vector<db_value> params, const operation_options& options);
-    task<db_exec_result> execute_on_transaction_slot(std::size_t slot, std::string sql, std::vector<db_value> params, const operation_options& options);
+    task<db_rows> query_on_transaction_slot(std::size_t slot, std::string sql, std::vector<db_value> params, const operation_options& options, bool keep_on_command_failure = false, bool* lease_kept = nullptr);
+    task<db_exec_result> execute_on_transaction_slot(std::size_t slot, std::string sql, std::vector<db_value> params, const operation_options& options, bool keep_on_command_failure = false, bool* lease_kept = nullptr);
     task<db_transaction> begin_transaction(operation_options operation_options_value, db_transaction_options transaction_options);
     task<void> commit_transaction(std::size_t slot, const operation_options& options);
     task<void> rollback_transaction(std::size_t slot, const operation_options& options);
@@ -472,7 +472,7 @@ private:
     };
 
     template <typename result_type>
-    task<result_type> run_on_transaction_slot(std::size_t index, std::string sql, std::vector<db_value> params, const operation_options& options, statement_hook_type<result_type> statement);
+    task<result_type> run_on_transaction_slot(std::size_t index, std::string sql, std::vector<db_value> params, const operation_options& options, statement_hook_type<result_type> statement, bool keep_on_command_failure, bool* lease_kept);
     task<void> finish_transaction(std::size_t index, std::string_view command, const operation_options& options);
     task<void> retire_failed_transaction_slot(std::size_t index, const operation_deadline& timeout, const std::exception_ptr& failure);
     task<void> open_slot(std::size_t index, const operation_deadline& timeout);

@@ -13,7 +13,6 @@
 #include "operation_options.h"
 #include "stop_token.h"
 #include "wait_result.h"
-#include "waiter_list.h"
 #include "worker_cancellation.h"
 #include "worker_dispatcher.h"
 #include "worker_ref.h"
@@ -28,51 +27,61 @@ public:
     static constexpr std::size_t no_free_slot = static_cast<std::size_t>(-1);
     static constexpr std::size_t slot_leased = static_cast<std::size_t>(-2);
 
-    // FIFO of the suspended acquires of one pool_lease_scheduler. The
-    // scheduler is only ever touched from its worker thread, so the queue
-    // needs no synchronization.
     class waiter_queue_type final {
     public:
         void enqueue(pool_lease_acquire_operation& waiter) noexcept {
-            waiters_.push_back(waiter);
+            waiter.previous_ = tail_;
+            waiter.next_ = nullptr;
+            waiter.queued_ = true;
+            if (tail_ != nullptr) {
+                tail_->next_ = std::addressof(waiter);
+            } else {
+                head_ = std::addressof(waiter);
+            }
+            tail_ = std::addressof(waiter);
         }
 
         void remove(pool_lease_acquire_operation& waiter) noexcept {
-            (void)waiters_.remove(waiter);
+            if (!waiter.queued_) {
+                return;
+            }
+            if (waiter.previous_ != nullptr) {
+                waiter.previous_->next_ = waiter.next_;
+            } else {
+                head_ = waiter.next_;
+            }
+            if (waiter.next_ != nullptr) {
+                waiter.next_->previous_ = waiter.previous_;
+            } else {
+                tail_ = waiter.previous_;
+            }
+            waiter.previous_ = nullptr;
+            waiter.next_ = nullptr;
+            waiter.queued_ = false;
         }
 
-        // Commit the freed slot to the next waiter before deferring its continuation.
-        // Cancellation and closure cannot replace this result after the handoff.
         [[nodiscard]] bool commit_handoff(std::size_t index, std::coroutine_handle<>& continuation) noexcept {
             continuation = {};
-            auto* waiter = waiters_.front();
-            if (waiter == nullptr) {
+            if (head_ == nullptr) {
                 return false;
             }
-            continuation = waiter->resolve(acquire_result_type::from_value(index));
+            continuation = head_->resolve(acquire_result_type::from_value(index));
             return true;
         }
 
-        // Commits the cancellation of a still-queued acquire and resumes it in
-        // a later worker turn.
         void cancel(const worker_ref& worker, std::uint64_t id) noexcept {
-            auto* waiter = waiters_.find_if([id](const pool_lease_acquire_operation& queued) noexcept {
-                return queued.waiter_id_ == id;
-            });
-            if (waiter == nullptr) {
-                return;
-            }
-            if (auto continuation = waiter->resolve(acquire_result_type::from_status(wait_status::cancelled))) {
-                worker.defer_resume(continuation);
+            for (auto* waiter = head_; waiter != nullptr; waiter = waiter->next_) {
+                if (waiter->waiter_id_ == id) {
+                    if (auto continuation = waiter->resolve(acquire_result_type::from_status(wait_status::cancelled))) {
+                        worker.defer_resume(continuation);
+                    }
+                    return;
+                }
             }
         }
 
-        // Commit closure or shutdown for the entire current queue and resume
-        // every waiter in a later worker turn, as release() does: closure runs
-        // inside the owner's own teardown, which must finish before any waiter
-        // observes it.
         void complete_all(const worker_ref& worker, wait_status status) noexcept {
-            while (auto* waiter = waiters_.front()) {
+            while (auto* waiter = head_) {
                 if (auto continuation = waiter->resolve(acquire_result_type::from_status(status))) {
                     worker.defer_resume(continuation);
                 }
@@ -80,7 +89,8 @@ public:
         }
 
     private:
-        detail::waiter_list<pool_lease_acquire_operation> waiters_;
+        pool_lease_acquire_operation* head_{nullptr};
+        pool_lease_acquire_operation* tail_{nullptr};
     };
 
     impl_type(std::size_t pool_size, const worker_ref& worker_value) :
@@ -91,7 +101,7 @@ public:
             next_free_[i] = free_head_;
             free_head_ = i;
         }
-        if (!detail::worker_ref_access::register_shutdown(worker_, waiter_state_, &waiter_state_type::shutdown_registration_)) {
+        if (!worker_.register_shutdown(waiter_state_, &waiter_state_type::shutdown_registration_)) {
             waiter_state_->stopping_ = true;
         }
     }
@@ -113,12 +123,10 @@ public:
         }
 
         // First member: unlinks from the worker registry after every other member is gone.
-        detail::worker_shutdown_registration shutdown_registration_;
+        worker_shutdown_registration shutdown_registration_;
         worker_ref worker_;
         waiter_queue_type queue_;
-        // Hops a stop requested on any thread to the worker by waiter id.
         std::shared_ptr<worker_cancellation_target<waiter_state_type>> cancellation_target_;
-        // Worker-affine: set once the shutdown notification reaches the worker.
         bool stopping_{false};
 
         void stop_waiters() noexcept {
@@ -126,15 +134,12 @@ public:
             queue_.complete_all(worker_, wait_status::worker_stopping);
         }
 
-        // The notification may arrive on the stopping thread; the queue is
-        // touched only on the worker.
         void worker_stopping() noexcept {
             if (worker_.is_current()) {
                 stop_waiters();
                 return;
             }
             try {
-                // A detached worker has already retired every suspended acquire.
                 (void)worker_.defer_completion([retained = shared_from_this()] {
                     retained->stop_waiters();
                 });
@@ -150,7 +155,6 @@ public:
 
     using cancellation_target_type = worker_cancellation_target<waiter_state_type>;
 
-    // Checks in order: closed, cancelled, a free slot, worker stopping, deadline.
     [[nodiscard]] std::optional<acquire_result_type> try_acquire(const wait_bounds& bounds) {
         if (closing_) {
             return acquire_result_type::from_status(wait_status::closed);
@@ -234,7 +238,7 @@ pool_lease_acquire_operation::pool_lease_acquire_operation(pool_lease_acquire_op
 
 pool_lease_acquire_operation::~pool_lease_acquire_operation() {
     if (owner_ != nullptr) {
-        if (queued()) {
+        if (queued_) {
             cancel_registrations();
         }
         --owner_->reserved_acquires_;
@@ -258,7 +262,7 @@ std::coroutine_handle<> pool_lease_acquire_operation::resolve(wait_result<std::s
 }
 
 void pool_lease_acquire_operation::on_end(wait_status status) noexcept {
-    if (queued()) {
+    if (queued_) {
         if (auto continuation = resolve(wait_result<std::size_t>::from_status(status))) {
             owner_->worker_.defer_resume(continuation);
         }
@@ -280,12 +284,9 @@ bool pool_lease_acquire_operation::await_ready() {
 }
 
 bool pool_lease_acquire_operation::await_suspend(std::coroutine_handle<> continuation) {
-    // Nothing ran between await_ready and here, so the pool is still saturated.
     auto& waiter_state = *owner_->waiter_state_;
     waiter_state.queue_.enqueue(*this);
 
-    // The deadline timer can unlink the waiter directly on the worker. A timer
-    // queue that stops, before or after arming, ends the wait as worker_stopping.
     bool armed = false;
     try {
         armed = bounds_.arm_deadline<pool_lease_acquire_operation, &pool_lease_acquire_operation::on_end>(*this);
@@ -296,8 +297,6 @@ bool pool_lease_acquire_operation::await_suspend(std::coroutine_handle<> continu
     if (!armed) {
         (void)resolve(wait_result<std::size_t>::from_status(wait_status::worker_stopping));
     } else if (bounds_.token().stoppable()) {
-        // A stop on any thread hops to the worker by waiter id; one already
-        // requested, or requested on the worker, commits before returning.
         using target_type = pool_lease_scheduler::impl_type::cancellation_target_type;
         static_assert(worker_cancellation_post_is_inline<target_type>);
         waiter_id_ = waiter_state.cancellation_target_->next_operation_id();
