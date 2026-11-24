@@ -12,6 +12,7 @@
 #include <variant>
 #include <vector>
 
+#include "borrowed_text.h"
 #include "byte_view.h"
 #include "http1_chunked_body.h"
 #include "http1_server_response.h"
@@ -36,6 +37,17 @@
 #include "http3_connection.h"
 #include "http3_quic_connection.h"
 #endif
+
+TEST(RuviaHttpPrimitives, static_text_bytes_borrow_literal_without_terminator) {
+    static constexpr char literal[] = "a\0b";
+    constexpr ruvia::static_text text{literal};
+
+    const auto bytes = text.bytes();
+    const auto characters = ruvia::as_chars(bytes);
+    EXPECT_EQ(characters.data(), literal);
+    EXPECT_EQ(characters, std::string_view(literal, sizeof(literal) - 1));
+    EXPECT_TRUE(ruvia::static_text{}.bytes().empty());
+}
 
 TEST(RuviaHttpPrimitives, quic_varint_roundtrips_all_width_boundaries) {
     constexpr std::array<std::pair<std::uint64_t, std::size_t>, 8> cases{{

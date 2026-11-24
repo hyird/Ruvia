@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -22,7 +23,6 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
-#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #endif
@@ -60,6 +60,15 @@ namespace {
     return static_cast<ngtcp2_duration>(value.count());
 }
 
+[[nodiscard]] constexpr std::uint16_t convert_port_byte_order(std::uint16_t port) noexcept {
+    static_assert(std::endian::native == std::endian::little || std::endian::native == std::endian::big);
+    if constexpr (std::endian::native == std::endian::little) {
+        return static_cast<std::uint16_t>((port << 8) | (port >> 8));
+    } else {
+        return port;
+    }
+}
+
 struct native_path_buffer final {
     sockaddr_storage local_storage_{};
     sockaddr_storage remote_storage_{};
@@ -72,13 +81,13 @@ struct native_path_buffer final {
         if (addr.family() == ip_address_family::ipv4) {
             auto* sin = reinterpret_cast<sockaddr_in*>(&storage);
             sin->sin_family = AF_INET;
-            sin->sin_port = htons(endpoint.port().value());
+            sin->sin_port = convert_port_byte_order(endpoint.port().value());
             std::memcpy(&sin->sin_addr, bytes.data(), bytes.size());
             return static_cast<ngtcp2_socklen>(sizeof(sockaddr_in));
         }
         auto* sin6 = reinterpret_cast<sockaddr_in6*>(&storage);
         sin6->sin6_family = AF_INET6;
-        sin6->sin6_port = htons(endpoint.port().value());
+        sin6->sin6_port = convert_port_byte_order(endpoint.port().value());
         sin6->sin6_scope_id = addr.scope_id();
         std::memcpy(&sin6->sin6_addr, bytes.data(), bytes.size());
         return static_cast<ngtcp2_socklen>(sizeof(sockaddr_in6));
@@ -104,14 +113,14 @@ struct native_path_buffer final {
         std::memcpy(&sin, address.addr, sizeof(sin));
         std::array<std::uint8_t, 4> octets{};
         std::memcpy(octets.data(), &sin.sin_addr, octets.size());
-        return ip_endpoint{ip_address::ipv4(octets), port_number{ntohs(sin.sin_port)}};
+        return ip_endpoint{ip_address::ipv4(octets), port_number{convert_port_byte_order(sin.sin_port)}};
     }
     if (address.addr->sa_family == AF_INET6 && address.addrlen >= sizeof(sockaddr_in6)) {
         sockaddr_in6 sin6{};
         std::memcpy(&sin6, address.addr, sizeof(sin6));
         std::array<std::uint8_t, 16> octets{};
         std::memcpy(octets.data(), &sin6.sin6_addr, octets.size());
-        return ip_endpoint{ip_address::ipv6(octets, sin6.sin6_scope_id), port_number{ntohs(sin6.sin6_port)}};
+        return ip_endpoint{ip_address::ipv6(octets, sin6.sin6_scope_id), port_number{convert_port_byte_order(sin6.sin6_port)}};
     }
     return {};
 }

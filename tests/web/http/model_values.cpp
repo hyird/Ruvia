@@ -241,7 +241,9 @@ TEST(Ruvia, model_floating_construction_and_assignment_preserve_explicit_nonfini
     floating_nullable model;
     model.set<"single">(infinity);
     model.set<"real">(nan);
-    EXPECT_TRUE(std::isinf(*model.get<"single">()));
+    EXPECT_EQ(*model.get<"single">(), std::numeric_limits<float>::infinity());
+    model.set<"single">(-infinity);
+    EXPECT_EQ(*model.get<"single">(), -std::numeric_limits<float>::infinity());
     EXPECT_TRUE(std::isnan(*model.get<"real">()));
     EXPECT_TRUE(!model.is_null<"single">() && !model.is_null<"real">());
     EXPECT_EQ(ruvia::to_json(model), R"({"single":null,"real":null})");

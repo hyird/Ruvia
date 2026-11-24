@@ -56,8 +56,8 @@ public:
         return value_;
     }
 
-    [[nodiscard]] constexpr byte_view bytes() const noexcept {
-        return std::as_bytes(std::span<const char>(value_.data(), value_.size()));
+    [[nodiscard]] byte_view bytes() const noexcept {
+        return as_bytes(value_);
     }
 
 private:

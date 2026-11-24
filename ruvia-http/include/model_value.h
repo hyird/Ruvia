@@ -175,11 +175,20 @@ template <typename target_type, std::floating_point input_type>
     constexpr auto source_max = (std::numeric_limits<input_type>::max)();
     constexpr auto target_max = (std::numeric_limits<target_type>::max)();
     if constexpr (source_max > target_max) {
-        if ((input > target_max || input < -target_max) && input <= source_max && input >= -source_max) {
+        const bool outside_target = input > target_max || input < -target_max;
+        // MSVC can fold a cast even on a path skipped for infinite inputs.
+        const auto converted = static_cast<target_type>(outside_target ? input_type{} : input);
+        if (!outside_target) {
+            return converted;
+        }
+        if (input <= source_max && input >= -source_max) {
             throw std::out_of_range("model floating value is out of range");
         }
+        constexpr auto infinity = std::numeric_limits<target_type>::infinity();
+        return input > 0 ? infinity : -infinity;
+    } else {
+        return static_cast<target_type>(input);
     }
-    return static_cast<target_type>(input);
 }
 
 struct model_value_factory;
