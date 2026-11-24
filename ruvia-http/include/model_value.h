@@ -171,21 +171,20 @@ template <typename target_type, typename input_type>
 }
 
 template <typename target_type, std::floating_point input_type>
-[[nodiscard]] constexpr target_type checked_model_float(input_type input) noexcept((std::numeric_limits<input_type>::max)() <= (std::numeric_limits<target_type>::max)()) {
+[[nodiscard]] target_type checked_model_float(input_type input) noexcept((std::numeric_limits<input_type>::max)() <= (std::numeric_limits<target_type>::max)()) {
     constexpr auto source_max = (std::numeric_limits<input_type>::max)();
     constexpr auto target_max = (std::numeric_limits<target_type>::max)();
     if constexpr (source_max > target_max) {
-        const bool outside_target = input > target_max || input < -target_max;
-        // MSVC can fold a cast even on a path skipped for infinite inputs.
-        const auto converted = static_cast<target_type>(outside_target ? input_type{} : input);
-        if (!outside_target) {
-            return converted;
-        }
-        if (input <= source_max && input >= -source_max) {
+        if ((input > target_max || input < -target_max) && input <= source_max && input >= -source_max) {
             throw std::out_of_range("model floating value is out of range");
         }
-        constexpr auto infinity = std::numeric_limits<target_type>::infinity();
-        return input > 0 ? infinity : -infinity;
+#if defined(_MSC_VER) && !defined(__clang__)
+        // Prevent MSVC from folding the narrowing cast for rejected constants (C4756).
+        const volatile input_type checked_input = input;
+        return static_cast<target_type>(checked_input);
+#else
+        return static_cast<target_type>(input);
+#endif
     } else {
         return static_cast<target_type>(input);
     }
