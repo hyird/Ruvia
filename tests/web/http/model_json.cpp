@@ -1465,28 +1465,26 @@ public:
     RUVIA_GET("/request-binding-header-tags", tags, ruvia::header_model<tags_binding_input>);
     RUVIA_ROUTES_END
 
-    ruvia::task<ruvia::http_response> tags(ruvia::context& c) {
-        const auto& input = c.request().validated<tags_binding_input>();
+    ruvia::task<ruvia::http_response> tags(ruvia::context& c, const tags_binding_input& input) {
         if (!input.is_present<"tags">() && !input.is_present<"numbers">()) {
             co_return c.text("absent");
         }
         co_return c.json(input);
     }
 
-    ruvia::task<ruvia::http_response> dynamic(ruvia::context& c) {
-        co_return c.json(c.request().validated<dynamic_binding_body>());
+    ruvia::task<ruvia::http_response> dynamic(ruvia::context& c, const dynamic_binding_body& body) {
+        co_return c.json(body);
     }
 
-    ruvia::task<ruvia::http_response> echo(ruvia::context& c) {
-        co_return c.json(c.request().validated<request_binding_body>());
+    ruvia::task<ruvia::http_response> echo(ruvia::context& c, const request_binding_body& body) {
+        co_return c.json(body);
     }
 
-    ruvia::task<ruvia::http_response> strict_nested(ruvia::context& c) {
-        co_return c.json(c.request().validated<ruvia::test::nested_model_envelope>());
+    ruvia::task<ruvia::http_response> strict_nested(ruvia::context& c, const ruvia::test::nested_model_envelope& body) {
+        co_return c.json(body);
     }
 
-    ruvia::task<ruvia::http_response> patch(ruvia::context& c) {
-        const auto& body = c.request().validated<patch_binding_body>();
+    ruvia::task<ruvia::http_response> patch(ruvia::context& c, const patch_binding_body& body) {
         if (!body.is_present<"remark">()) {
             co_return c.text("unchanged");
         }
@@ -1496,13 +1494,40 @@ public:
         co_return c.text(body.get<"remark">()->view());
     }
 
-    ruvia::task<ruvia::http_response> update(ruvia::context& c) {
-        const auto& params = c.request().validated<request_binding_params>();
-        const auto& body = c.request().validated<request_binding_body>();
+    ruvia::task<ruvia::http_response> update(ruvia::context& c, const request_binding_params& params, const request_binding_body& body) {
         auto response = co_await make_response(params.get<"id">().view(), body.get<"name">().view());
         co_return c.json(response);
     }
 };
+
+class grouped_binding_controller final {
+public:
+    RUVIA_CONTROLLER_GROUP("/grouped-binding", ruvia::path_model<request_binding_params>)
+    RUVIA_ROUTES_BEGIN(grouped_binding_controller)
+    RUVIA_GROUP_BEGIN("/nested", ruvia::query_model<tags_binding_input>)
+    RUVIA_GROUP_BEGIN("/items", ruvia::header_model<request_binding_out>)
+    RUVIA_POST("/:id", combine, ruvia::json_body<request_binding_body>);
+    RUVIA_GROUP_END
+    RUVIA_GROUP_END
+    RUVIA_ROUTES_END
+
+private:
+    ruvia::task<ruvia::http_response> combine(ruvia::context& c, const request_binding_params& path, const tags_binding_input& query, const request_binding_out& headers, const request_binding_body& body) const {
+        const auto combined = co_await make_response(path.get<"id">().view(), body.get<"name">().view());
+        if (!query.get<"tags">() || headers.get<"id">().view() != path.get<"id">().view()) {
+            co_return c.text("unexpected route inputs");
+        }
+        co_return c.json(combined);
+    }
+};
+
+TEST(Ruvia, grouped_route_injects_validated_models_in_outer_to_inner_order) {
+    ruvia::test_app app;
+    app.controllers<grouped_binding_controller>();
+    const auto response = app.dispatch(ruvia::test_request::post("/grouped-binding/nested/items/42?tags=active").header("id", "42").header("name", "from-header").json(R"({"name":"checked"})"));
+    EXPECT_EQ(response.status(), ruvia::http_status::ok);
+    EXPECT_EQ(response.body(), R"({"id":"42","name":"checked"})");
+}
 
 TEST(Ruvia, request_binding_enforces_defaults_and_exposes_patch_states) {
     ruvia::test_app app;

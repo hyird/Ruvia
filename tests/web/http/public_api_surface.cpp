@@ -83,6 +83,21 @@ RUVIA_MODEL(
 using unprocessable_patch_json = ruvia::json_body<patch_item_input, false, 422>;
 using unprocessable_strict_patch_json = ruvia::strict_json_body<patch_item_input, 422>;
 
+template <typename callback, typename... modifiers>
+concept accepts_post = requires(ruvia::router& routes, callback fn) { routes.template post<modifiers...>("/", fn); };
+
+using typed_post = ruvia::task<ruvia::http_response> (*)(ruvia::context&, const patch_item_input&);
+using string_post = ruvia::task<ruvia::http_response> (*)(ruvia::context&, const std::string&);
+using validate_only_post = ruvia::task<ruvia::http_response> (*)(ruvia::context&);
+static_assert(accepts_post<typed_post, unprocessable_patch_json>);
+static_assert(accepts_post<validate_only_post, unprocessable_patch_json>);
+static_assert(!accepts_post<string_post, unprocessable_patch_json>);
+static_assert(!accepts_post<typed_post>);
+
+template <typename request_type>
+concept has_unchecked_model_lookup = requires(request_type request) { request.template validated<patch_item_input>(); };
+static_assert(!has_unchecked_model_lookup<ruvia::context_request>);
+
 class public_surface_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/public-api-surface")
@@ -95,8 +110,8 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::task<ruvia::http_response> patch_item(ruvia::context& c) {
-        co_return c.json(c.request().validated<patch_item_input>());
+    ruvia::task<ruvia::http_response> patch_item(ruvia::context& c, const patch_item_input& body) {
+        co_return c.json(body);
     }
 
     ruvia::task<ruvia::http_response> ping(ruvia::context& c) {
@@ -298,6 +313,9 @@ TEST(Ruvia, standalone_router_mounts_macro_controllers_and_test_app_exposes_work
         standalone_router->get("/backend", [](ruvia::context& c) -> ruvia::task<ruvia::http_response> {
             co_return c.text("from-standalone-router");
         });
+        standalone_router->get<ruvia::query_model<patch_item_input>>("/typed", [](ruvia::context& c, const patch_item_input& input) -> ruvia::task<ruvia::http_response> {
+            co_return c.text(input.get<"title">().view());
+        });
         standalone_router->freeze();
 
         standalone_server = std::make_unique<ruvia::http_server>(
@@ -340,6 +358,10 @@ TEST(Ruvia, standalone_router_mounts_macro_controllers_and_test_app_exposes_work
             auto resp = co_await upstream_client.ref("upstream").get("/public-api-surface/ping").send();
             const auto body = co_await resp.collect_body();
             auto text = std::string(body.text());
+            auto typed = co_await upstream_client.ref("upstream").get("/typed?title=received").send();
+            EXPECT_EQ(typed.status(), ruvia::http_status::ok);
+            const auto typed_body = co_await typed.collect_body();
+            EXPECT_EQ(typed_body.text(), "received");
             co_await upstream_client.shutdown();
             co_return text;
         };

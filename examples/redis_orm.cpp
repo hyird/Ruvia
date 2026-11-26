@@ -55,8 +55,7 @@ private:
         response.set<"name">(user_value.get<"name">().view());
         response.set<"age">(user_value.get<"age">());
     }
-    ruvia::task<ruvia::http_response> create(ruvia::context& c) {
-        const auto& request = c.request().validated<create_cached_user>();
+    ruvia::task<ruvia::http_response> create(ruvia::context& c, const create_cached_user& request) {
         cached_user user_value;
         user_value.set<"id">(request.get<"id">().view());
         user_value.set<"name">(request.get<"name">().view());

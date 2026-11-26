@@ -525,10 +525,10 @@ private:
     std::vector<std::byte> items_;
 };
 
-inline outbound_bytes::outbound_bytes(const class bytes& value) :
+inline outbound_bytes::outbound_bytes(const ruvia::bytes& value) :
     storage_(std::in_place_type<std::string>, as_chars(value.view())) {}
 
-inline outbound_bytes::outbound_bytes(class bytes&& value) noexcept :
+inline outbound_bytes::outbound_bytes(ruvia::bytes&& value) noexcept :
     storage_(std::in_place_type<std::vector<std::byte>>, std::move(value).take_bytes()) {}
 
 inline outbound_bytes::outbound_bytes(const string& value) :

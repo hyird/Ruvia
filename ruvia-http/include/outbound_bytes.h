@@ -50,14 +50,14 @@ public:
     template <typename source_type>
         requires(!std::same_as<std::remove_cvref_t<source_type>, outbound_bytes> &&
             !std::same_as<source_type, std::vector<std::byte>> &&
-            !std::same_as<std::remove_cvref_t<source_type>, bytes> &&
+            !std::same_as<std::remove_cvref_t<source_type>, ruvia::bytes> &&
             !std::convertible_to<source_type&&, std::string_view> &&
             std::convertible_to<source_type&&, byte_view>)
     outbound_bytes(source_type&& raw_bytes) :
         storage_(std::in_place_type<std::string>, as_chars(byte_view(std::forward<source_type>(raw_bytes)))) {}
 
-    outbound_bytes(const bytes& value);
-    outbound_bytes(bytes&& value) noexcept;
+    outbound_bytes(const ruvia::bytes& value);
+    outbound_bytes(ruvia::bytes&& value) noexcept;
     outbound_bytes(const string& value);
     outbound_bytes(string&& value);
 

@@ -357,8 +357,7 @@ private:
         co_return c.body(std::move(reply));
     }
 
-    ruvia::task<ruvia::http_response> echo(ruvia::context& c) {
-        const auto& body = c.request().validated<testing_facade_echo>();
+    ruvia::task<ruvia::http_response> echo(ruvia::context& c, const testing_facade_echo& body) {
         const auto value = body.get<"value">().has_value() ? body.get<"value">()->view() : std::string_view("missing");
         if (const auto independent = c.request().header("X-Test-Independent")) {
             std::string reply;

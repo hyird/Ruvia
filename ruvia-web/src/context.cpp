@@ -1449,8 +1449,11 @@ std::optional<std::string_view> context_request::param(std::string_view name) co
     return storage.route_params_->get(name);
 }
 
-std::optional<std::string_view> context_request::negotiate(negotiable_field field, argument_list<std::string_view> offers) const noexcept {
-    const auto supported = offers.span();
+namespace {
+
+template <typename offer_type>
+std::optional<std::string_view> select_offer(context_request::negotiable_field field, std::span<const offer_type> supported, std::span<const http_header_view> headers) noexcept {
+    using negotiable_field = context_request::negotiable_field;
     if (supported.empty()) {
         return std::nullopt;
     }
@@ -1465,7 +1468,6 @@ std::optional<std::string_view> context_request::negotiate(negotiable_field fiel
     std::array<std::string_view, inline_value_capacity> inline_values{};
     std::size_t matching_count = 0;
     bool saw_header = false;
-    const auto headers = context_->request_.headers();
     for (const auto& header_field : headers) {
         if (!http_ascii_equals_ignore_case(header_field.name(), header_name)) {
             continue;
@@ -1488,7 +1490,7 @@ std::optional<std::string_view> context_request::negotiate(negotiable_field fiel
     std::optional<std::string_view> best;
     int best_quality = 0;
     const bool use_inline_values = matching_count <= inline_values.size();
-    for (const auto offered : supported) {
+    for (const std::string_view offered : supported) {
         http_accept_match match;
         http_accepted_encoding_quality encoding_quality;
         const auto accumulate = [&](std::string_view field_value) noexcept {
@@ -1526,6 +1528,16 @@ std::optional<std::string_view> context_request::negotiate(negotiable_field fiel
     // An empty Accept-Encoding accepts identity; other empty negotiation fields
     // match no representation.
     return best;
+}
+
+}  // namespace
+
+std::optional<std::string_view> context_request::negotiate(negotiable_field field, std::initializer_list<borrowed_text> offers) const noexcept {
+    return select_offer(field, std::span(offers), context_->request_.headers());
+}
+
+std::optional<std::string_view> context_request::negotiate_views(negotiable_field field, std::span<const std::string_view> offers) const noexcept {
+    return select_offer(field, offers, context_->request_.headers());
 }
 
 namespace detail {

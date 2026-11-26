@@ -51,8 +51,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::task<ruvia::http_response> create(ruvia::context& c) {
-        const auto& note = c.request().validated<note_request>();
+    ruvia::task<ruvia::http_response> create(ruvia::context& c, const note_request& note) {
         ++c.worker_state<note_counter>().stored_;
         co_return c.body(note.get<"text">().has_value() ? note.get<"text">()->view() : "empty", {.status_ = ruvia::http_status::created});
     }

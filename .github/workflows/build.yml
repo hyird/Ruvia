@@ -129,6 +129,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check outbound_bytes with GCC
+        run: |
+          g++ -std=c++20 -Werror -fsyntax-only -Iruvia-http/include -Iruvia-core/include -x c++ - <<'CPP'
+          #include "outbound_bytes.h"
+          #include "model_value.h"
+          static_assert(std::constructible_from<ruvia::outbound_bytes, const ruvia::bytes&>);
+          static_assert(std::is_nothrow_constructible_v<ruvia::outbound_bytes, ruvia::bytes&&>);
+          static_assert(std::same_as<decltype(std::declval<const ruvia::outbound_bytes&>().bytes()), ruvia::byte_view>);
+          CPP
+
       - name: Setup musl build
         id: setup
         uses: ./.github/actions/setup-build
@@ -156,6 +166,16 @@ jobs:
             -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/llvm.cmake" \
             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET" \
             -DVCPKG_HOST_TRIPLET="$VCPKG_HOST_TRIPLET"
+
+      - name: Check controller model signatures
+        run: |
+          flags=(-std=c++20 -Werror -fsyntax-only -Iruvia-web/include -Iruvia-http/include -Iruvia-core/include)
+          source=tests/web/http/controller_model_signature.cpp
+          "$CXX" "${flags[@]}" "$source"
+          if "$CXX" "${flags[@]}" -DRUVIA_TEST_MISMATCHED_MODEL "$source"; then
+            echo "A controller accepted a model its route never validated" >&2
+            exit 1
+          fi
 
       - name: Save shared vcpkg binary cache
         if: ${{ !cancelled() && steps.setup.outputs.vcpkg-cache-hit != 'true' }}

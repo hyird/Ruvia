@@ -75,14 +75,11 @@ private:
 
     // Echo the requested changes: omission means leave unchanged, null means
     // clear, and a concrete value means assign. No raw JSON inspection needed.
-    ruvia::task<ruvia::http_response> patch_profile(ruvia::context& c) {
-        const auto& patch = c.request().validated<profile_changes>();
+    ruvia::task<ruvia::http_response> patch_profile(ruvia::context& c, const profile_changes& patch) {
         co_return c.json(patch);
     }
 
-    ruvia::task<ruvia::http_response> register_user(ruvia::context& c) {
-        const auto& request = c.request().validated<register_request>();
-
+    ruvia::task<ruvia::http_response> register_user(ruvia::context& c, const register_request& request) {
         register_response response;
         response.set<"username">(request.get<"username">().view());
         const auto& roles = request.get<"roles">();
@@ -112,8 +109,7 @@ private:
         co_return c.text("no feedback body\n");
     }
 
-    ruvia::task<ruvia::http_response> contact(ruvia::context& c) {
-        const auto& form = c.request().validated<contact_form>();
+    ruvia::task<ruvia::http_response> contact(ruvia::context& c, const contact_form& form) {
         std::string body;
         body.append("message from ");
         body.append(form.get<"name">() ? form.get<"name">()->view() : "anonymous");
@@ -121,8 +117,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::task<ruvia::http_response> search(ruvia::context& c) {
-        const auto& query = c.request().validated<search_query>();
+    ruvia::task<ruvia::http_response> search(ruvia::context& c, const search_query& query) {
         const auto request_query = c.request().query("q");
         std::string body;
         body.append("search=");
@@ -145,8 +140,7 @@ private:
         co_return c.json(root);
     }
 
-    ruvia::task<ruvia::http_response> category_by_id(ruvia::context& c) {
-        const auto& params = c.request().validated<category_params>();
+    ruvia::task<ruvia::http_response> category_by_id(ruvia::context& c, const category_params& params) {
         std::string body;
         body.append("category=");
         body.append(params.get<"id">().view());
@@ -154,8 +148,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::task<ruvia::http_response> headers(ruvia::context& c) {
-        const auto& headers = c.request().validated<request_headers>();
+    ruvia::task<ruvia::http_response> headers(ruvia::context& c, const request_headers& headers) {
         std::string body;
         body.append("request-id=");
         body.append(headers.get<"request_id">().view());
@@ -163,8 +156,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::task<ruvia::http_response> cookies(ruvia::context& c) {
-        const auto& cookies = c.request().validated<preferences_cookie>();
+    ruvia::task<ruvia::http_response> cookies(ruvia::context& c, const preferences_cookie& cookies) {
         std::string body;
         body.append("theme=");
         body.append(cookies.get<"theme">().view());

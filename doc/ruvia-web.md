@@ -1484,8 +1484,8 @@ public:
 | `RUVIA_CONTROLLER_GROUP(prefix, ...)` | `private:`；静态 `constexpr std::string_view ruvia_controller_group_prefix() noexcept` 与静态 `ruvia_controller_group_middlewares()` | `prefix` 须可构造 `borrowed_text`；`...` 为控制器级 `route_modifier` 类型列表，作用于本控制器全部路由；省略本宏等价于空前缀、无中间件 |
 | `RUVIA_ROUTES_BEGIN(controller_type)` | `private:`；类型别名 `ruvia_controller_type`、`ruvia_controller_access_type`；友元注册访问类；开始私有成员函数 `void register_routes(::ruvia::detail::router&)` 的函数体，并以控制器组前缀与中间件创建根作用域 `ruvia_route_scope` | `controller_type` 必须是外围类自身（`static_assert`：“RUVIA_ROUTES_BEGIN must name its enclosing controller”）；必须以 `RUVIA_ROUTES_END` 结束 |
 | `RUVIA_ROUTES_END` | 关闭 `register_routes` 函数体；声明 `inline static const bool ruvia_controller_registered_`，其初始化把本控制器的注册描述加入进程注册表 | 控制器须 `final` 且可默认构造；注册发生在静态初始化期 |
-| `RUVIA_GROUP_BEGIN(prefix, ...)` | 打开语句块，在当前作用域下创建嵌套组并以同名 `ruvia_route_scope` 遮蔽外层 | `prefix` 须可构造 `borrowed_text`；`...` 为组级修饰类型；可多层嵌套，前缀与中间件逐层累加 |
-| `RUVIA_GROUP_END` | `}` | 关闭最近的 `RUVIA_GROUP_BEGIN` |
+| `RUVIA_GROUP_BEGIN(prefix, ...)` | 在当前作用域内注册一组子路由 | `prefix` 须可构造 `borrowed_text`；`...` 为组级修饰类型；可多层嵌套，前缀与中间件逐层累加 |
+| `RUVIA_GROUP_END` | 结束最近一层路由组的注册 | 与 `RUVIA_GROUP_BEGIN` 配对 |
 | `RUVIA_GET(path, handler, ...)` | 在当前作用域注册 `http_known_method::get` 路由 | 处理器见下表“方法路由处理器”；同时提供隐式 `HEAD` |
 | `RUVIA_POST(path, handler, ...)` | 注册 `post` 路由 | 同上，无隐式 `HEAD` |
 | `RUVIA_PUT(path, handler, ...)` | 注册 `put` 路由 | 同上 |
@@ -1496,14 +1496,14 @@ public:
 | `RUVIA_METHOD(method_token, path, handler, ...)` | 以 `http_known_method::unknown` + 精确 token 注册扩展方法路由 | token 区分大小写、须合法且不属于已分类方法；`path` 须为静态路径 |
 | `RUVIA_ALL(path, handler, ...)` | 语句块：对 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`、`OPTIONS` 各注册一次 | 不含 `HEAD`（`GET` 已提供隐式 `HEAD`）；`path` 只求值一次 |
 | `RUVIA_ON(methods, paths, handler, ...)` | 语句块：对“方法列表 × 路径列表”笛卡尔积逐一注册 | `methods` 为带括号的 `http_known_method` 值列表，`paths` 为带括号的路径列表；各至少一项；路径须可构造 `borrowed_text`（可转换为 `string_view` 但不能借用的实参，如临时 `std::string`，重载被删除） |
-| `RUVIA_GET_WS(path, handler, ...)` | 注册 `GET` WebSocket 路由（HTTP/1.1 Upgrade 与扩展 CONNECT） | 处理器须为 `task<void>(context&)`；`...` 的首项可为一个 [`websocket_route_config`](#api-websocket-h) 表达式，其余为修饰类型；首项为类型时全部视为修饰类型 |
-| `RUVIA_CONNECT(authority, handler, ...)` | 注册普通 `CONNECT` 隧道路由（协议为空） | 处理器须为 `task<void>(context&)`；`...` 首项可为 [`http_tunnel_route_config`](#api-http-tunnel-h) 表达式；authority 为 `host:port` 或 `"*"` |
+| `RUVIA_GET_WS(path, handler, ...)` | 注册 `GET` WebSocket 路由（HTTP/1.1 Upgrade 与扩展 CONNECT） | 处理器须返回 `task<void>`；`...` 的首项可为一个 [`websocket_route_config`](#api-websocket-h) 表达式，其余为修饰类型；首项为类型时全部视为修饰类型 |
+| `RUVIA_CONNECT(authority, handler, ...)` | 注册普通 `CONNECT` 隧道路由（协议为空） | 处理器须返回 `task<void>`；`...` 首项可为 [`http_tunnel_route_config`](#api-http-tunnel-h) 表达式；authority 为 `host:port` 或 `"*"` |
 | `RUVIA_CONNECT_PROTOCOL(protocol, path, handler, ...)` | 注册扩展 `CONNECT` 协议隧道路由 | 同上；`protocol` 仅 `"connect-udp"`，否则注册抛 `std::invalid_argument` |
 
-| 处理器类别 | 接受的成员函数签名 | 编译期诊断 |
+| 处理器类别 | 返回类型 | 参数 |
 | --- | --- | --- |
-| 方法路由（`RUVIA_GET`…`RUVIA_OPTIONS`、`RUVIA_METHOD`、`RUVIA_ALL`、`RUVIA_ON`） | `task<http_response> name(context&)` 或 `task<void> name(context&)`，均可带 `const` | 非 `context&` 参数或其他返回类型：“handler must take context& and return task<http_response> or task<void>”；`task<Model>`：提示用 `c.json(model)` |
-| 流式/升级/隧道（`task<void>` 方法路由、`RUVIA_GET_WS`、`RUVIA_CONNECT`、`RUVIA_CONNECT_PROTOCOL`） | `task<void> name(context&)`（可 `const`） | “stream/upgrade/tunnel handler must take context& and return task<void>” |
+| 方法路由（`RUVIA_GET`…`RUVIA_OPTIONS`、`RUVIA_METHOD`、`RUVIA_ALL`、`RUVIA_ON`） | `task<http_response>` 或 `task<void>` | 首参为 `context&`，其后可接收[已校验模型](#api-model-binding-h)；支持 `const` 成员函数 |
+| WebSocket 与隧道（`RUVIA_GET_WS`、`RUVIA_CONNECT`、`RUVIA_CONNECT_PROTOCOL`） | `task<void>` | 同上 |
 
 - **返回类型语义**：返回 `task<http_response>` 的路由为缓冲响应路由；返回 `task<void>` 的方法路由为响应流路由，处理器通过 [`c.stream()` / `c.stream_text()` / `c.stream_sse()`](#api-context-h) 输出；WebSocket/隧道处理器在握手完成后运行，经 `c.websocket()` / `c.tunnel()` 访问会话。
 - **`handler` 实参**：本控制器成员函数的非限定名；宏生成 `&ruvia_controller_type::handler` 并绑定到当前 worker 实例 `this`。
@@ -1584,6 +1584,7 @@ ruvia::http_server server(loop,
     {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); }});
 ```
 
+- **处理器参数**：缓冲与流式路由的闭包均以 `context&` 为首参，需要消费校验结果时追加[模型参数](#api-model-binding-h)。
 - **升级路由**：WebSocket/隧道路由的中间件链终端经 `request_stream::accept_websocket()` / `accept_tunnel()` 握手（CONNECT 回 `200`，HTTP/1.1 Upgrade 回 `101`），再以 `c.websocket()` / `c.tunnel()` 运行处理器；握手被拒绝或请求未提供升级时回答 `400`，不运行处理器。见 [`request_stream.h`](#api-request-stream-h)。
 - **借入客户端与状态**：`bind_*` 把调用方拥有的客户端/状态借给本 router 分发的请求，使 `c.redis(alias)`、`c.db(alias)`、`c.http_client(alias)`、`c.worker_state<T>()` 以及 [`session_middleware`](#api-session-h) 等基于它们的中间件在独立 `http_server` 下可用。借入任一客户端后，客户端查找只在本 router 借入集合内解析；借入任一状态后，状态查找同理；未借入的类别沿用宿主注册。
 - **借入约束**：客户端必须运行在本 router 的 worker 上（否则 `std::invalid_argument`）；同类别别名唯一，`"default"` 为无别名查找所指；客户端与状态须覆盖全部分发——在服务本 router 的宿主 shutdown 完成后才关闭或销毁。
@@ -1603,12 +1604,12 @@ ruvia::http_server server(loop,
 | `~router()` | 最后一个所有者的析构在所属 worker 上执行 |
 | `router(const router&) = delete` / `operator=(const router&) = delete` / `router(router&&) = delete` / `operator=(router&&) = delete` | 地址固定持有，不可复制或移动 |
 | `template <typename... controller_types> requires(sizeof...(controller_types) > 0) router& controllers() & RUVIA_LIFETIMEBOUND` | 挂载宏声明的控制器（`RUVIA_ROUTES_BEGIN`…`RUVIA_ROUTES_END`）；`freeze()` 时在本 router 构造每个控制器的独立实例（右值重载 `&& = delete`） |
-| `template <route_modifier... modifiers> router& add(std::string_view method, std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND` | 缓冲响应路由；`method` 为区分大小写的 HTTP token，扩展方法同样仅允许静态路径；路径与回调在返回前被拥有；`modifiers` 与控制器路由列表含义相同（右值重载 `&& = delete`） |
-| `template <route_modifier... modifiers> router& get/post/put/patch/delete_/head/options(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND` | 对应标准 HTTP 方法的便捷缓冲路由入口（均带 `&& = delete`） |
-| `template <route_modifier... modifiers> router& stream(std::string_view method, std::string_view path, router_stream_handler handler) & RUVIA_LIFETIMEBOUND` | 响应流路由（`task<void>` 处理器；`&& = delete`） |
-| `template <route_modifier... modifiers> router& websocket(std::string_view path, router_stream_handler handler, websocket_route_config config = {}) &` | WebSocket 路由：HTTP/1.1 Upgrade `GET` 或扩展 CONNECT（RFC 8441、RFC 9220）；对应 `RUVIA_GET_WS`（`&& = delete`） |
-| `template <route_modifier... modifiers> router& connect(std::string_view authority, router_stream_handler handler, http_tunnel_route_config config = {}) &` | 普通 `CONNECT`：精确 `host:port` 或 `"*"`（RFC 9110 §9.3.6），终端以 `200` 建立隧道；对应 `RUVIA_CONNECT`（`&& = delete`） |
-| `template <route_modifier... modifiers> router& connect_protocol(std::string_view protocol, std::string_view path, router_stream_handler handler, http_tunnel_route_config config = {}) &` | 扩展 CONNECT 协议；`"connect-udp"`（RFC 9298）同时接受 HTTP/1.1 Upgrade（`101`）并隐含 HTTP Datagrams；对应 `RUVIA_CONNECT_PROTOCOL`（`&& = delete`） |
+| `template <route_modifier... modifiers, typename fn_type = router_handler> router& add(std::string_view method, std::string_view path, fn_type&& handler) & RUVIA_LIFETIMEBOUND` | 缓冲响应路由；`method` 为区分大小写的 HTTP token，扩展方法同样仅允许静态路径；路径与回调在返回前被拥有；`modifiers` 与控制器路由列表含义相同（右值重载 `&& = delete`） |
+| `template <route_modifier... modifiers, typename fn_type = router_handler> router& get/post/put/patch/delete_/head/options(std::string_view path, fn_type&& handler) & RUVIA_LIFETIMEBOUND` | 对应标准 HTTP 方法的便捷缓冲路由入口（均带 `&& = delete`） |
+| `template <route_modifier... modifiers, typename fn_type = router_stream_handler> router& stream(std::string_view method, std::string_view path, fn_type&& handler) & RUVIA_LIFETIMEBOUND` | 响应流路由（`task<void>` 处理器；`&& = delete`） |
+| `template <route_modifier... modifiers, typename fn_type = router_stream_handler> router& websocket(std::string_view path, fn_type&& handler, websocket_route_config config = {}) &` | WebSocket 路由：HTTP/1.1 Upgrade `GET` 或扩展 CONNECT（RFC 8441、RFC 9220）；对应 `RUVIA_GET_WS`（`&& = delete`） |
+| `template <route_modifier... modifiers, typename fn_type = router_stream_handler> router& connect(std::string_view authority, fn_type&& handler, http_tunnel_route_config config = {}) &` | 普通 `CONNECT`：精确 `host:port` 或 `"*"`（RFC 9110 §9.3.6），终端以 `200` 建立隧道；对应 `RUVIA_CONNECT`（`&& = delete`） |
+| `template <route_modifier... modifiers, typename fn_type = router_stream_handler> router& connect_protocol(std::string_view protocol, std::string_view path, fn_type&& handler, http_tunnel_route_config config = {}) &` | 扩展 CONNECT 协议；`"connect-udp"`（RFC 9298）同时接受 HTTP/1.1 Upgrade（`101`）并隐含 HTTP Datagrams；对应 `RUVIA_CONNECT_PROTOCOL`（`&& = delete`） |
 | `router& bind_redis(std::string_view alias, const redis_client& client) &` | 仅 `RUVIA_ENABLE_REDIS`：按别名借入同 worker 的 [`redis_client`](#api-redis-executor-h)（右值 router 与右值 `redis_client&&` 重载均 `= delete`） |
 | `router& bind_db(std::string_view alias, const db_client& client) &` | 仅 `RUVIA_ENABLE_DATABASE`：按别名借入 [`db_client`](#api-db-executor-h)（右值 router 与右值 `db_client&&` 重载均 `= delete`） |
 | `router& bind_http_client(std::string_view alias, const http_client& client) &` | 借入 [`http_client`](#api-http-client-h)；`alias` 在本 router 中命名该客户端的默认配置（右值 router 与右值 `http_client&&` 重载均 `= delete`） |
@@ -1708,7 +1709,7 @@ auto sub = co_await c.dispatch({.method_ = "GET", .target_ = "/api/internal/prof
 // sub.status(), sub.body(), sub.header("Content-Type")
 ```
 
-- **请求状态**：绑定对象与返回句柄都须留在中间件协程帧内跨越 `co_await next_value()`；绑定临时对象编译期拒绝；同一类型一个槽，内层再次绑定遮蔽外层直到内层句柄销毁。与 `req().validated<T>()` 互不相通，手工绑定无法冒充校验结果。
+- **请求状态**：绑定对象与返回句柄都须留在中间件协程帧内跨越 `co_await next_value()`；绑定临时对象编译期拒绝；同一类型一个槽，内层再次绑定遮蔽外层直到内层句柄销毁。处理器的[模型参数](#api-model-binding-h)只接受路由校验器产生的值。
 - **子请求**：`dispatch()` 在当前 worker 重入不可变路由表，鉴权、校验与中间件在新 context 中运行；只接受 origin-form 目标与缓冲请求/响应正文；输入在返回冷操作前复制；取消合并 `stop_token_` 与调用方 context 的 token；子请求处理器无总执行超时。
 - **子请求的 `406` 回退**：`dispatch()` 等待应用错误处理器完成；若它返回文件正文，抛 `std::logic_error`，不将文件当作缓冲正文交付。
 
@@ -1870,7 +1871,7 @@ auto sub = co_await c.dispatch({.method_ = "GET", .target_ = "/api/internal/prof
 | `http_priority priority() const noexcept` | 初始 RFC 9218 Priority 字段 |
 | `enum class negotiable_field : std::uint8_t { media_type, language, encoding, charset }` | 协商字段：`media_type` 按媒体范围；`language` 按 RFC 4647 基本过滤；`charset` 匹配 token 或 `*`；`encoding` 处理编码别名与 identity 默认可接受性 |
 | `std::optional<std::string_view> header(std::string_view name) const` | 首个同名头（不区分大小写） |
-| `std::optional<std::string_view> negotiate(negotiable_field field, argument_list<std::string_view> offers) const noexcept` | 按客户端权重选出调用方提供的候选，服务器顺序打破平局；字段缺失选首个候选；无可接受者为 `nullopt` |
+| `std::optional<std::string_view> negotiate(negotiable_field field, std::initializer_list<borrowed_text> offers) const noexcept` / `negotiate(negotiable_field, range_type&& offers) const noexcept` | 按客户端权重选择候选，平局按服务器顺序，字段缺失时选首个，无可接受候选返回 `nullopt`。结果借用所选候选的字符，使用期间须保持字符存活且不变。花括号列表接受字面量和字符串左值，拒绝拥有字符的临时字符串。范围重载接受可转为 `std::span<const std::string_view>` 的左值容器或借用范围。 |
 | `std::optional<std::string_view> query(std::string_view name) const` | 首个查询参数（已解码） |
 | `std::span<const std::string_view> queries(std::string_view name) const` | 全部同名查询参数 |
 | `std::optional<std::string_view> cookie(std::string_view name) const` | 首个同名 Cookie |
@@ -1892,7 +1893,6 @@ auto sub = co_await c.dispatch({.method_ = "GET", .target_ = "/api/internal/prof
 | `task<void> discard_body(operation_options operation = {}) const` | 丢弃剩余正文 |
 | `template <typename t_type> task<std::optional<t_type>> json_if(operation_options operation = {}) const` | `t_type` 须为 `RUVIA_MODEL`（[`model.h`](ruvia-http.md#api-model-h)）；Content-Type 不匹配为 `nullopt`（兼容 `application/json` 与 `application/*+json`），格式错误抛 400，规则违反抛携带 issues 的 `http_error` |
 | `template <typename t_type> task<std::optional<t_type>> form_if(operation_options operation = {}) const` | 同上，表单 |
-| `template <typename t_type> const t_type& validated() const` | 路由校验中间件已解析校验的模型；不存在抛 `std::logic_error` |
 | `task<std::vector<multipart_part>> multipart(operation_options operation = {}) const` | 缓冲并解析 `multipart/form-data`，解码受支持的 Content-Encoding；扁平表示，无点路径或数组/分组解释（[`multipart_part`](ruvia-http.md#api-http-multipart-h)） |
 
 #### 7.1.6 `ruvia::request_exchange<host_type>`
@@ -4009,7 +4009,8 @@ co_await client.shutdown();
 
 **定位要点**
 
-- **六类请求来源**：`json_body` / `strict_json_body`、`form_body`、`query_model`、`path_model`、`header_model`（大小写不敏感匹配字段名）、`cookie_model` 均为编译期定型的 [`middleware`](#api-middleware-h)，直接写入控制器、路由组或 `router` 的修饰列表，解析成功后可通过 `c.request().validated<T>()` 只读借用。
+- **绑定来源**：在控制器、路由组或显式 `router` 的路由上声明下表中的模型校验器。校验成功后，处理器在 `context&` 后以 `const T&` 借用模型，引用在本次处理器调用期间有效。
+- **编译期匹配**：有多个模型时，参数顺序按控制器、外层组、内层组、路由排列，同层按修饰器的书写顺序排列。仅需校验时，处理器可只接收 `context&`。
 - **零拷贝借用请求缓冲**：JSON 与表单绑定默认以 `model_string_storage::borrowed` 解析，未转义的 `ruvia::string` 字段直接零拷贝借用当前请求的缓冲正文（在请求生命周期内安全有效）。
 - **媒体类型与字符集防线**：`is_json_media_type` 同时接受 `application/json` 与结构化后缀 `application/*+json`（RFC 6838 §4.2.8，如 `application/problem+json`、`application/vnd.api+json`）；`is_form_urlencoded_media_type` 接受 `application/x-www-form-urlencoded`。两者均要求合法 `Content-Type` 语法，且显式提供 `charset` 参数时仅允许 `utf-8`（大小写不敏感），不匹配时抛 HTTP `415`。
 - **可定制校验状态码**：模板参数 `validation_status` 默认 `400`（如可定制为 `422`），结构/字段/规则校验失败统一抛出携带完整 `validation_issues` 的 [`http_error`](#api-http-error-h)（`code = "validation_failed"`）。
@@ -4033,12 +4034,10 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::task<ruvia::http_response> create(ruvia::context& c) {
-        const auto& body = c.request().validated<create_user_req>();
+    ruvia::task<ruvia::http_response> create(ruvia::context& c, const create_user_req& body) {
         co_return c.json(body, {.status_ = ruvia::http_status::created});
     }
-    ruvia::task<ruvia::http_response> list(ruvia::context& c) {
-        const auto& q = c.request().validated<page_query>();
+    ruvia::task<ruvia::http_response> list(ruvia::context& c, const page_query& q) {
         co_return c.json(q);
     }
 };

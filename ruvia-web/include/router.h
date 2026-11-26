@@ -1,9 +1,11 @@
 #pragma once
 
 #include <array>
+#include <concepts>
 #include <memory>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "controller.h"
@@ -34,6 +36,50 @@ class router_state;
 
 using router_handler = move_only_function<task<http_response>(context&)>;
 using router_stream_handler = move_only_function<task<void>(context&)>;
+
+namespace detail {
+
+template <typename result_type, typename fn_type, typename... model_types>
+constexpr bool accepts_route_models(route_model_arguments<model_types...>) noexcept {
+    using target_type = std::decay_t<fn_type>;
+    using signature = task<result_type>(context&, const model_types&...);
+    if constexpr (sizeof...(model_types) == 0) {
+        return false;
+    } else if constexpr (std::is_class_v<target_type>) {
+        // Resolve even a generic or overloaded call operator against the exact
+        // model types. Implicit conversions could otherwise conceal a mismatch.
+        constexpr bool mutable_call = requires { static_cast<task<result_type> (target_type::*)(context&, const model_types & ...)>(&target_type::operator()); };
+        constexpr bool const_call = requires { static_cast<task<result_type> (target_type::*)(context&, const model_types & ...) const>(&target_type::operator()); };
+        constexpr bool mutable_lvalue_call = requires { static_cast<task<result_type> (target_type::*)(context&, const model_types & ...) &>(&target_type::operator()); };
+        constexpr bool const_lvalue_call = requires { static_cast<task<result_type> (target_type::*)(context&, const model_types & ...) const&>(&target_type::operator()); };
+        return mutable_call || const_call || mutable_lvalue_call || const_lvalue_call;
+    } else {
+        return std::is_convertible_v<target_type, signature*>;
+    }
+}
+
+template <typename fn_type, typename result_type, typename... modifiers>
+concept router_callback = std::constructible_from<move_only_function<task<result_type>(context&)>, fn_type> || accepts_route_models<result_type, fn_type>(route_models<modifiers...>());
+
+template <typename result_type, typename fn_type, typename... model_types>
+move_only_function<task<result_type>(context&)> bind_router_callback(fn_type&& fn, route_model_arguments<model_types...> models) {
+    if constexpr (accepts_route_models<result_type, fn_type>(decltype(models){})) {
+        using target_type = std::remove_cvref_t<fn_type>;
+        using typed_callback = move_only_function<task<result_type>(context&, const model_types&...)>;
+        if constexpr (std::is_pointer_v<target_type> || std::same_as<target_type, typed_callback>) {
+            if (!fn) {
+                return nullptr;
+            }
+        }
+        return [callback = std::forward<fn_type>(fn)](context& c) mutable {
+            return decltype(models)::invoke(callback, c);
+        };
+    } else {
+        return std::forward<fn_type>(fn);
+    }
+}
+
+}  // namespace detail
 
 // An explicitly owned, worker-local route engine, independent of application
 // and controller discovery. Configure and freeze on its owner worker, then
@@ -69,105 +115,117 @@ public:
     // Methods are case-sensitive HTTP tokens. Extension methods have the same
     // static-path restriction as controller routes. Paths and callbacks are
     // owned before return; modifiers reuse controller middleware/body policies.
-    template <route_modifier... modifiers>
-    router& add(std::string_view method, std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+        requires detail::router_callback<fn_type, http_response, modifiers...>
+    router& add(std::string_view method, std::string_view path, fn_type&& handler) & RUVIA_LIFETIMEBOUND {
         const std::array<detail::controller_middleware_descriptor, sizeof...(modifiers)> descriptors{detail::make_route_modifier_descriptor<modifiers>()...};
-        return add_buffered(method, path, std::move(handler), descriptors);
+        return add_buffered(method, path, detail::bind_router_callback<http_response>(std::forward<fn_type>(handler), detail::route_models<modifiers...>()), descriptors);
     }
-    template <route_modifier... modifiers>
-    router& add(std::string_view, std::string_view, router_handler) && = delete;
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+    router& add(std::string_view, std::string_view, fn_type&&) && = delete;
 
-    template <route_modifier... modifiers>
-    router& get(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
-        return add<modifiers...>("GET", path, std::move(handler));
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+        requires detail::router_callback<fn_type, http_response, modifiers...>
+    router& get(std::string_view path, fn_type&& handler) & RUVIA_LIFETIMEBOUND {
+        return add<modifiers...>("GET", path, std::forward<fn_type>(handler));
     }
-    template <route_modifier... modifiers>
-    router& get(std::string_view, router_handler) && = delete;
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+    router& get(std::string_view, fn_type&&) && = delete;
 
-    template <route_modifier... modifiers>
-    router& post(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
-        return add<modifiers...>("POST", path, std::move(handler));
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+        requires detail::router_callback<fn_type, http_response, modifiers...>
+    router& post(std::string_view path, fn_type&& handler) & RUVIA_LIFETIMEBOUND {
+        return add<modifiers...>("POST", path, std::forward<fn_type>(handler));
     }
-    template <route_modifier... modifiers>
-    router& post(std::string_view, router_handler) && = delete;
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+    router& post(std::string_view, fn_type&&) && = delete;
 
-    template <route_modifier... modifiers>
-    router& put(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
-        return add<modifiers...>("PUT", path, std::move(handler));
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+        requires detail::router_callback<fn_type, http_response, modifiers...>
+    router& put(std::string_view path, fn_type&& handler) & RUVIA_LIFETIMEBOUND {
+        return add<modifiers...>("PUT", path, std::forward<fn_type>(handler));
     }
-    template <route_modifier... modifiers>
-    router& put(std::string_view, router_handler) && = delete;
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+    router& put(std::string_view, fn_type&&) && = delete;
 
-    template <route_modifier... modifiers>
-    router& patch(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
-        return add<modifiers...>("PATCH", path, std::move(handler));
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+        requires detail::router_callback<fn_type, http_response, modifiers...>
+    router& patch(std::string_view path, fn_type&& handler) & RUVIA_LIFETIMEBOUND {
+        return add<modifiers...>("PATCH", path, std::forward<fn_type>(handler));
     }
-    template <route_modifier... modifiers>
-    router& patch(std::string_view, router_handler) && = delete;
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+    router& patch(std::string_view, fn_type&&) && = delete;
 
-    template <route_modifier... modifiers>
-    router& delete_(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
-        return add<modifiers...>("DELETE", path, std::move(handler));
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+        requires detail::router_callback<fn_type, http_response, modifiers...>
+    router& delete_(std::string_view path, fn_type&& handler) & RUVIA_LIFETIMEBOUND {
+        return add<modifiers...>("DELETE", path, std::forward<fn_type>(handler));
     }
-    template <route_modifier... modifiers>
-    router& delete_(std::string_view, router_handler) && = delete;
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+    router& delete_(std::string_view, fn_type&&) && = delete;
 
-    template <route_modifier... modifiers>
-    router& head(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
-        return add<modifiers...>("HEAD", path, std::move(handler));
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+        requires detail::router_callback<fn_type, http_response, modifiers...>
+    router& head(std::string_view path, fn_type&& handler) & RUVIA_LIFETIMEBOUND {
+        return add<modifiers...>("HEAD", path, std::forward<fn_type>(handler));
     }
-    template <route_modifier... modifiers>
-    router& head(std::string_view, router_handler) && = delete;
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+    router& head(std::string_view, fn_type&&) && = delete;
 
-    template <route_modifier... modifiers>
-    router& options(std::string_view path, router_handler handler) & RUVIA_LIFETIMEBOUND {
-        return add<modifiers...>("OPTIONS", path, std::move(handler));
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+        requires detail::router_callback<fn_type, http_response, modifiers...>
+    router& options(std::string_view path, fn_type&& handler) & RUVIA_LIFETIMEBOUND {
+        return add<modifiers...>("OPTIONS", path, std::forward<fn_type>(handler));
     }
-    template <route_modifier... modifiers>
-    router& options(std::string_view, router_handler) && = delete;
+    template <route_modifier... modifiers, typename fn_type = router_handler>
+    router& options(std::string_view, fn_type&&) && = delete;
 
-    template <route_modifier... modifiers>
-    router& stream(std::string_view method, std::string_view path, router_stream_handler handler) & RUVIA_LIFETIMEBOUND {
+    template <route_modifier... modifiers, typename fn_type = router_stream_handler>
+        requires detail::router_callback<fn_type, void, modifiers...>
+    router& stream(std::string_view method, std::string_view path, fn_type&& handler) & RUVIA_LIFETIMEBOUND {
         const std::array<detail::controller_middleware_descriptor, sizeof...(modifiers)> descriptors{detail::make_route_modifier_descriptor<modifiers>()...};
-        return add_stream(method, path, std::move(handler), descriptors);
+        return add_stream(method, path, detail::bind_router_callback<void>(std::forward<fn_type>(handler), detail::route_models<modifiers...>()), descriptors);
     }
-    template <route_modifier... modifiers>
-    router& stream(std::string_view, std::string_view, router_stream_handler) && = delete;
+    template <route_modifier... modifiers, typename fn_type = router_stream_handler>
+    router& stream(std::string_view, std::string_view, fn_type&&) && = delete;
 
     // The WebSocket route of `path`: an HTTP/1.1 Upgrade GET or an extended
     // CONNECT (RFC 8441, RFC 9220). The terminal after the route's middleware
     // negotiates through request_stream::accept_websocket(); the handler then
     // runs on context::websocket(). A rejected handshake answers 400 without
     // the handler, as does a request to the path offering no upgrade.
-    template <route_modifier... modifiers>
-    router& websocket(std::string_view path, router_stream_handler handler, websocket_route_config config = {}) & {
+    template <route_modifier... modifiers, typename fn_type = router_stream_handler>
+        requires detail::router_callback<fn_type, void, modifiers...>
+    router& websocket(std::string_view path, fn_type&& handler, websocket_route_config config = {}) & {
         const std::array<detail::controller_middleware_descriptor, sizeof...(modifiers)> descriptors{detail::make_route_modifier_descriptor<modifiers>()...};
-        return add_websocket(path, std::move(handler), std::move(config), descriptors);
+        return add_websocket(path, detail::bind_router_callback<void>(std::forward<fn_type>(handler), detail::route_models<modifiers...>()), std::move(config), descriptors);
     }
-    template <route_modifier... modifiers>
-    router& websocket(std::string_view, router_stream_handler, websocket_route_config = {}) && = delete;
+    template <route_modifier... modifiers, typename fn_type = router_stream_handler>
+    router& websocket(std::string_view, fn_type&&, websocket_route_config = {}) && = delete;
 
     // CONNECT to an exact host:port authority, or "*" for any (RFC 9110
     // §9.3.6). The terminal establishes the tunnel with 200 through
     // request_stream::accept_tunnel(); the handler then runs on
     // context::tunnel().
-    template <route_modifier... modifiers>
-    router& connect(std::string_view authority, router_stream_handler handler, http_tunnel_route_config config = {}) & {
+    template <route_modifier... modifiers, typename fn_type = router_stream_handler>
+        requires detail::router_callback<fn_type, void, modifiers...>
+    router& connect(std::string_view authority, fn_type&& handler, http_tunnel_route_config config = {}) & {
         const std::array<detail::controller_middleware_descriptor, sizeof...(modifiers)> descriptors{detail::make_route_modifier_descriptor<modifiers>()...};
-        return add_tunnel({}, authority, std::move(handler), config, descriptors);
+        return add_tunnel({}, authority, detail::bind_router_callback<void>(std::forward<fn_type>(handler), detail::route_models<modifiers...>()), config, descriptors);
     }
-    template <route_modifier... modifiers>
-    router& connect(std::string_view, router_stream_handler, http_tunnel_route_config = {}) && = delete;
+    template <route_modifier... modifiers, typename fn_type = router_stream_handler>
+    router& connect(std::string_view, fn_type&&, http_tunnel_route_config = {}) && = delete;
 
     // An extended CONNECT protocol on `path`; "connect-udp" (RFC 9298) also
     // accepts its HTTP/1.1 Upgrade (with 101) and implies HTTP Datagrams.
-    template <route_modifier... modifiers>
-    router& connect_protocol(std::string_view protocol, std::string_view path, router_stream_handler handler, http_tunnel_route_config config = {}) & {
+    template <route_modifier... modifiers, typename fn_type = router_stream_handler>
+        requires detail::router_callback<fn_type, void, modifiers...>
+    router& connect_protocol(std::string_view protocol, std::string_view path, fn_type&& handler, http_tunnel_route_config config = {}) & {
         const std::array<detail::controller_middleware_descriptor, sizeof...(modifiers)> descriptors{detail::make_route_modifier_descriptor<modifiers>()...};
-        return add_tunnel(protocol, path, std::move(handler), config, descriptors);
+        return add_tunnel(protocol, path, detail::bind_router_callback<void>(std::forward<fn_type>(handler), detail::route_models<modifiers...>()), config, descriptors);
     }
-    template <route_modifier... modifiers>
-    router& connect_protocol(std::string_view, std::string_view, router_stream_handler, http_tunnel_route_config = {}) && = delete;
+    template <route_modifier... modifiers, typename fn_type = router_stream_handler>
+    router& connect_protocol(std::string_view, std::string_view, fn_type&&, http_tunnel_route_config = {}) && = delete;
 
     // use(), use_at(), use_worker_state(), on_error(), on_not_found() and
     // rate_limit() are the dispatch_configuration members application shares.

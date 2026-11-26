@@ -48,6 +48,27 @@ using ruvia::http_header_view;
 
 namespace {
 
+template <typename offer_type>
+concept negotiates_braced_offer = requires(const ruvia::context_request& request, offer_type&& offer) {
+    request.negotiate(ruvia::context_request::negotiable_field::media_type, {std::forward<offer_type>(offer)});
+};
+
+template <typename offers_type>
+concept negotiates_offer_range = requires(const ruvia::context_request& request, offers_type&& offers) {
+    request.negotiate(ruvia::context_request::negotiable_field::media_type, std::forward<offers_type>(offers));
+};
+
+static_assert(negotiates_braced_offer<const char (&)[10]>);
+static_assert(negotiates_braced_offer<std::string&>);
+static_assert(!negotiates_braced_offer<std::string>);
+static_assert(!negotiates_braced_offer<const std::string>);
+static_assert(negotiates_offer_range<std::array<std::string_view, 1>&>);
+static_assert(negotiates_offer_range<std::span<const std::string_view>>);
+static_assert(negotiates_offer_range<std::initializer_list<std::string_view>&>);
+static_assert(!negotiates_offer_range<std::array<std::string_view, 1>>);
+static_assert(!negotiates_braced_offer<std::array<std::string_view, 1>>);
+static_assert(!negotiates_offer_range<std::initializer_list<std::string_view>>);
+
 template <typename headers_type = std::initializer_list<http_header_view>>
 ruvia::test_request make_request(std::string_view target, const headers_type& headers = {}, std::string_view method = "GET") {
     auto request = ruvia::test_request::method(method, target);
@@ -68,6 +89,22 @@ std::optional<std::string_view> negotiate_encoding(std::initializer_list<http_he
 }
 
 }  // namespace
+
+TEST(Ruvia, context_negotiate_borrows_the_selected_offer_after_dispatch) {
+    const std::string selected_offer = "application/problem+json";
+    auto request = make_request("/", {http_header_view{"Accept", selected_offer}});
+    std::optional<std::string_view> selected;
+    const auto response = ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+        EXPECT_FALSE(context_value.request().negotiate(ruvia::context_request::negotiable_field::media_type, {}).has_value());
+        selected = context_value.request().negotiate(ruvia::context_request::negotiable_field::media_type, {"text/html", selected_offer});
+        context_value.respond(context_value.body({.status_ = ruvia::http_status::no_content}));
+        co_return;
+    });
+    EXPECT_EQ(response.status(), ruvia::http_status::no_content);
+    ASSERT_TRUE(selected.has_value());
+    EXPECT_EQ(*selected, selected_offer);
+    EXPECT_EQ(selected->data(), selected_offer.data());
+}
 
 TEST(Ruvia, context_request_priority_combines_repeated_field_values_before_parsing) {
     auto request = make_request("/", {http_header_view{"Priority", "extra=\"alpha"}, http_header_view{"X-Other", "ignored"}, http_header_view{"priority", "beta\", u=1, i"}});

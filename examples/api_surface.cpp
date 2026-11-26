@@ -297,8 +297,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::task<ruvia::http_response> json_message(ruvia::context& c) {
-        const auto& json = c.request().validated<surface_json_message>();
+    ruvia::task<ruvia::http_response> json_message(ruvia::context& c, const surface_json_message& json) {
         const auto raw = co_await c.request().body_text();
         std::string body;
         body.append("json-value bytes=");

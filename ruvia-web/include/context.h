@@ -7,8 +7,10 @@
 #include <exception>
 #include <filesystem>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -70,6 +72,8 @@ class redis_executor;
 class session;
 #endif
 namespace detail {
+template <typename... model_types>
+struct route_model_arguments;
 class context_request_storage;
 class context_request_body_source;
 class context_response_output;
@@ -413,9 +417,15 @@ public:
         encoding,
         charset };
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
-    // Client weights select a caller-owned supported value; server order breaks
-    // ties. An absent field selects the first offer, no acceptable offer is nullopt.
-    [[nodiscard]] std::optional<std::string_view> negotiate(negotiable_field field, argument_list<std::string_view> offers) const noexcept;
+    // The result borrows the selected offer's characters; keep them alive and
+    // unchanged while using it. Server order breaks ties, a missing field selects
+    // the first offer, and no acceptable offer yields nullopt.
+    [[nodiscard]] std::optional<std::string_view> negotiate(negotiable_field field, std::initializer_list<borrowed_text> offers) const noexcept;
+    template <std::ranges::borrowed_range range_type>
+        requires std::convertible_to<range_type&&, std::span<const std::string_view>>
+    [[nodiscard]] std::optional<std::string_view> negotiate(negotiable_field field, range_type&& offers) const noexcept {
+        return negotiate_views(field, std::forward<range_type>(offers));
+    }
     [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const;
     [[nodiscard]] std::span<const std::string_view> queries(std::string_view name) const;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
@@ -467,8 +477,6 @@ public:
     [[nodiscard]] task<std::optional<t_type>> json_if(operation_options operation = {}) const;
     template <typename t_type>
     [[nodiscard]] task<std::optional<t_type>> form_if(operation_options operation = {}) const;
-    template <typename t_type>
-    [[nodiscard]] const t_type& validated() const;
 
     // Multipart remains a flat protocol representation, without dotted paths
     // or implicit array/group interpretation. multipart() buffers the content
@@ -480,6 +488,8 @@ private:
     friend class context;
     explicit constexpr context_request(const context& context_value RUVIA_LIFETIMEBOUND) noexcept :
         context_(&context_value) {}
+
+    [[nodiscard]] std::optional<std::string_view> negotiate_views(negotiable_field field, std::span<const std::string_view> offers) const noexcept;
 
     template <typename t_type>
     [[nodiscard]] static std::optional<t_type> parse_typed(std::optional<std::string_view> raw, void (*fail)());
@@ -804,6 +814,8 @@ private:
     friend class request_exchange;
     friend class request_stream;
     friend class context_request;
+    template <typename... model_types>
+    friend struct detail::route_model_arguments;
     friend class context_response_editor;
     friend class http_client_response;
     friend struct detail::context_access;
@@ -865,9 +877,7 @@ public:
     // time. One type is one slot: binding T again inside a nested scope shadows
     // the outer binding until the inner handle dies.
     //
-    // Deliberately disjoint from request().validated<T>(): that answers "a validator
-    // produced and checked this", and hand-bound state must never be able to
-    // impersonate it.
+    // Hand-bound state never satisfies a validated route handler argument.
     template <typename t_type>
     [[nodiscard]] request_state_binding<t_type> bind_request_state(const t_type& value);
 
@@ -1081,11 +1091,6 @@ template <typename t_type>
 task<std::optional<t_type>> context_request::form_if(operation_options operation) const {
     static_assert(detail::is_model<t_type>, "form body type must use RUVIA_MODEL");
     return context_->operation_scope_.attach(detail::parse_optional_request_model<validation_target::form, t_type>(*context_, std::move(operation)));
-}
-
-template <typename t_type>
-inline const t_type& context_request::validated() const {
-    return context_->request_bindings().get_validated<t_type>();
 }
 
 }  // namespace ruvia

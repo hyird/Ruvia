@@ -40,10 +40,8 @@ using ::ruvia::route_stream_handler;
 namespace ruvia::detail {
 
 // Two kinds share one intrusive list but never answer each other's lookups.
-// c.request().validated<T>() means "a validator produced and checked this"; if a
-// hand-bound request-state value of the same type could satisfy it, that
-// guarantee would silently become a lie. Keeping the kinds disjoint preserves
-// both contracts on one mechanism.
+// Only validators supply model arguments to route handlers. Hand-bound state
+// of the same type must not satisfy a validated argument.
 enum class request_binding_kind : std::uint8_t {
     validated_model,
     request_state,
